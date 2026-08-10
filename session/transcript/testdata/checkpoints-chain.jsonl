@@ -2,7 +2,7 @@
 {"type":"file-history-snapshot","messageId":"c1c1c1c1-0001-4001-8001-000000000001","snapshot":{"messageId":"c1c1c1c1-0001-4001-8001-000000000001","trackedFileBackups":{},"timestamp":"2026-08-06T09:00:00.000Z"},"isSnapshotUpdate":false}
 {"type":"assistant","uuid":"a5515747-0002-4002-8002-000000000002","parentUuid":"c1c1c1c1-0001-4001-8001-000000000001","timestamp":"2026-08-06T09:00:05.000Z","isSidechain":false,"message":{"role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"done"}]}}
 {"type":"queue-operation","operation":"enqueue","timestamp":"2026-08-06T09:00:06.000Z","content":"a queued message, recorded with no uuid of its own"}
-{"type":"attachment","timestamp":"2026-08-06T09:00:07.000Z","attachment":{"type":"file","path":"notes.md"}}
+{"type":"attachment","uuid":"a77ac4ed-0006-4006-8006-000000000006","timestamp":"2026-08-06T09:00:07.000Z","attachment":{"type":"file","path":"notes.md"}}
 {"type":"ai-title","timestamp":"2026-08-06T09:00:08.000Z","title":"a generated conversation title"}
 {"type":"last-prompt","timestamp":"2026-08-06T09:00:09.000Z","prompt":"first prompt"}
 {"type":"mode","timestamp":"2026-08-06T09:00:10.000Z","mode":"acceptEdits"}

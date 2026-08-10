@@ -183,6 +183,24 @@ func TestMaterializeFork_RefusesAnIncompleteSeed(t *testing.T) {
 	}
 }
 
+// An empty prompt is refused before the subprocess, because claude's own refusal
+// is unhelpful here: driven on 2.1.226, `-p ""` exits 1 with "No deferred tool
+// marker found in the resumed session ... Provide a prompt to continue the
+// conversation" — true, and about a mechanism a fork has nothing to do with.
+func TestMaterializeFork_RefusesAnEmptyPrompt(t *testing.T) {
+	for _, prompt := range []string{"", "   ", "\n"} {
+		// Nil executor again: reaching it would panic.
+		err := MaterializeFork(context.Background(), nil, "claude", "/work", "", testSeed(), prompt)
+		if err == nil {
+			t.Errorf("MaterializeFork accepted the prompt %q", prompt)
+			continue
+		}
+		if !strings.Contains(err.Error(), "needs a prompt") {
+			t.Errorf("prompt %q: error = %v, want it to name the requirement", prompt, err)
+		}
+	}
+}
+
 var uuidV4 = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
 // claude validates the id itself ("Error: Invalid session ID. Must be a valid

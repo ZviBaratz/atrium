@@ -118,10 +118,15 @@ func TestLoadCheckpoints_FixtureShapes(t *testing.T) {
 // TestLoadCheckpoints_ForkPointWalksBackToAChainEntry is the regression guard for
 // the finding that cost #644 a probe run: a transcript ROW is not necessarily a
 // chain entry. Between the assistant turn and the next prompt this fixture puts
-// every uuid-less row type the real corpus produces — queue-operation, attachment,
+// the non-chain row types the real corpus produces — queue-operation, attachment,
 // ai-title, last-prompt, mode, summary — then a sidechain assistant turn, which
 // does carry a uuid but is not on the main chain, and finally a queue-operation
 // row that carries a uuid of its own *and* nests a user entry inside itself.
+//
+// The attachment row carries a uuid because a real one does: a driven 2.1.226
+// transcript put three of them between a prompt and its reply. That is why the
+// reader tests the row's TYPE rather than the presence of an id, and why "the last
+// row with a uuid" is a wrong implementation rather than a merely inelegant one.
 //
 // So four wrong implementations are separated from the right one. "The row before
 // the prompt" lands on the queue row; "any uuid-bearing row" lands on it too (the

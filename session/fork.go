@@ -78,7 +78,13 @@ func forkArgv(seed ForkSeed, prompt string) []string {
 //
 // It runs in workDir — the new session's worktree — because that is what decides
 // which project directory the fork is filed in, and the interactive session that
-// resumes it will be looking there.
+// resumes it will be looking there. Driven on 2.1.226: a fork run from a directory
+// outside the source's project lands under sanitizeCWD of its OWN cwd, and
+// --resume takes the source's absolute path across that boundary quite happily.
+//
+// prompt must be non-empty. An empty one is not a cheap way to materialize the
+// fork without spending a turn — claude exits 1 with "Provide a prompt to continue
+// the conversation" and writes nothing.
 //
 // Deliberately not runClaudeHeadless, which is built for the opposite job: that
 // one puts claude under a throwaway $HOME, drops CLAUDE_CONFIG_DIR and passes
@@ -87,6 +93,13 @@ func forkArgv(seed ForkSeed, prompt string) []string {
 func MaterializeFork(ctx context.Context, executor cmd.Executor, claudePath, workDir, claudeConfigDir string, seed ForkSeed, prompt string) error {
 	if seed.SourceTranscript == "" || seed.CutEntryID == "" || seed.NewSessionID == "" {
 		return fmt.Errorf("incomplete fork seed")
+	}
+	// Refused here rather than left to claude, which answers an empty prompt with
+	// "No deferred tool marker found in the resumed session" — a true statement about
+	// a mechanism this call has nothing to do with, and the last thing a reader
+	// chasing a failed fork needs to be told.
+	if strings.TrimSpace(prompt) == "" {
+		return fmt.Errorf("a fork needs a prompt: the print run that materializes it will not run without one")
 	}
 
 	c := exec.CommandContext(ctx, claudePath, forkArgv(seed, prompt)...)

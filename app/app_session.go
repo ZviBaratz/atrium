@@ -1536,10 +1536,13 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 		ov.SetVariantError("forking spawns one session only")
 		return nil
 	}
-	// The fork's print run is what materializes the truncated conversation, and a
-	// print run asks something — so a fork needs a first prompt in a way an ordinary
-	// create does not, where the field is explicitly optional. Refused here, with the
-	// form open, rather than discovered as a failed start after a worktree was built.
+	// The fork's print run is what materializes the truncated conversation, and it
+	// refuses to run without a prompt — driven on claude 2.1.226, `-p ""` exits 1
+	// with "Provide a prompt to continue the conversation" and writes no transcript
+	// at all. So a fork needs a first prompt in a way an ordinary create does not,
+	// where the field is explicitly optional, and the requirement is claude's rather
+	// than a house rule. Refused here with the form open, rather than discovered as
+	// a failed start after a worktree was built.
 	//
 	// After the fan-out check, not before: a form with both problems has to be told
 	// about the counts, because that refusal rides the row the counts are on while

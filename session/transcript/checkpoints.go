@@ -60,11 +60,14 @@ type Checkpoint struct {
 	// the prompt and drop only its answer.
 	//
 	// It is deliberately not "the previous line". The transcript interleaves rows
-	// carrying no uuid at all — queue-operation, attachment, ai-title, last-prompt,
-	// mode — so the row physically before a prompt is routinely one of those, and
-	// naming it makes Claude exit 1 with "No message found with message.uuid of".
-	// Sidechain (subagent) entries are skipped for the same reason they are skipped
-	// as anchors: they are not on the main chain.
+	// that are not chain entries — queue-operation, attachment, ai-title,
+	// last-prompt, mode — so the row physically before a prompt is routinely one of
+	// those, and naming it makes Claude exit 1 with "No message found with
+	// message.uuid of". Most carry no uuid, but not all: an attachment row carries
+	// one and still is not a chain entry (observed in a driven 2.1.226 transcript,
+	// three of them between a prompt and its reply). So the test is the row's TYPE,
+	// not the presence of an id. Sidechain (subagent) entries are skipped for the
+	// same reason they are skipped as anchors: they are not on the main chain.
 	//
 	// Empty for the oldest checkpoint, which has nothing before it to keep.
 	ForkAtID string
@@ -330,10 +333,11 @@ func countOutside(touched map[string]struct{}) int {
 // checkpoint row is labelled from (user rows only) and the running
 // previous-entry link Checkpoint.ForkAtID is built from (both).
 //
-// The uuid test is the load-bearing one. Most rows in a transcript are neither
-// user nor assistant — queue-operation, attachment, ai-title, last-prompt, mode
-// — and they carry no uuid at all, so anything selecting a cut point by position
-// rather than by this test picks a row Claude cannot resolve.
+// The type test is the load-bearing one, and "has a uuid" is not a substitute for
+// it. Most rows in a transcript are neither user nor assistant — queue-operation,
+// attachment, ai-title, last-prompt, mode — and while most of those carry no uuid,
+// attachment rows do, and sit between a prompt and its reply. Selecting a cut point
+// by position, or by "the last row with an id", picks one Claude cannot resolve.
 //
 // Sidechain (subagent) entries are skipped: a checkpoint is never anchored to
 // one, they are not on the main chain a resume replays, and skipping them keeps
