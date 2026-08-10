@@ -237,9 +237,10 @@ invariant is computed from it (#648, #665). The const names (`codexApprovalPane2
 doc comments still carry it too — the datum was added *beside* the prose, not swapped for
 it, so the table is the authority and the rest is description. The drift-sites skill does
 the same for its counts, which `keys/skill_counts_test.go` holds to the tree. Where a value
-must stay in prose, one file owns it and the rest cite that file. Reasons are not exempt from checking, only from this remedy — verify a reason
-against the mechanism, per the first review rule above. And correct a claim by grepping
-the *claim*, not the sentence in front of you: in #646 a fix landed in `registry.go` and
+must stay in prose, one file owns it and the rest cite that file. Reasons are not exempt
+from checking, only from this remedy — verify a reason against the mechanism, per the
+first review rule above. And correct a claim by grepping the *claim*, not the sentence in
+front of you: in #646 a fix landed in `registry.go` and
 left `registry_test.go` repeating the same two false things, in the file whose own
 fixtures disproved them, under a commit message saying "Both corrected". Cite the PR, not
 the *branch* commit: this repo squash-merges, so a pre-merge SHA is never an ancestor of
