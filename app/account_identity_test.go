@@ -97,7 +97,7 @@ func TestStartNewSession_RefusesMismatchedIdentity(t *testing.T) {
 	h := pinnedHome(t, "me@personal.com", "me@work.com")
 
 	before := h.list.NumInstances()
-	_, err := h.startNewSession("s", t.TempDir(), true, "echo", "", "", nil, false)
+	_, err := h.startNewSession("s", t.TempDir(), true, "echo", "", "", nil, false, nil)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "me@personal.com")
@@ -153,7 +153,7 @@ func TestStartNewSession_GatesTheRotatedMember(t *testing.T) {
 	require.Equal(t, "work-1", first.ClaudeAccountName())
 
 	before := h.list.NumInstances()
-	_, err := h.startNewSession("s2", t.TempDir(), true, "echo", "", "", nil, false)
+	_, err := h.startNewSession("s2", t.TempDir(), true, "echo", "", "", nil, false, nil)
 	require.Error(t, err, "rotation landed on work-2, whose dir holds the wrong login")
 	assert.Contains(t, err.Error(), "work-2")
 	assert.Equal(t, before, h.list.NumInstances())
@@ -172,7 +172,7 @@ func TestStartNewSession_GatesAPickerPin(t *testing.T) {
 	})
 
 	pin := &overlay.AccountSelection{Pool: "work", Member: &h.appConfig.ClaudeAccounts[1]}
-	_, err := h.startNewSession("s", t.TempDir(), true, "echo", "", "", pin, false)
+	_, err := h.startNewSession("s", t.TempDir(), true, "echo", "", "", pin, false, nil)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "work-2")

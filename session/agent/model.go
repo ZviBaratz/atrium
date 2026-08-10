@@ -100,5 +100,15 @@ func withFlag(program, name, value string) string {
 	return strings.Join(out, " ") + " " + name + " " + value
 }
 
+// WithResumeFlag returns program with `--resume id` applied (see withFlag) — the
+// launch command for a session whose conversation was seeded from a fork (#644).
+//
+// It is pinned into the persisted program rather than applied per launch because
+// resuming an id keeps that id, so the pin stays correct for the session's whole
+// life: every relaunch, pause/resume and resurrection loads the same conversation
+// with no extra plumbing. The claude adapter's Resume reads it back and declines
+// to add --continue beside it.
+func WithResumeFlag(program, id string) string { return withFlag(program, "--resume", id) }
+
 // WithModelFlag returns program with `--model model` applied (see withFlag).
 func WithModelFlag(program, model string) string { return withFlag(program, "--model", model) }

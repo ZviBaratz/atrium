@@ -57,28 +57,34 @@ func TestLoadCheckpoints_FixtureShapes(t *testing.T) {
 	// Files/Outside accumulate down the list — each row is what the session had
 	// touched by the end of that turn — so the expectations rise and never fall.
 	want := []Checkpoint{
-		// A session's first checkpoint legitimately tracks nothing yet.
-		{MessageID: "11111111-1111-4111-8111-111111111111", Label: "First prompt", Files: 0, Outside: 0, At: mustStamp(t, "2026-08-05T10:00:00.100Z")},
+		// A session's first checkpoint legitimately tracks nothing yet, and has
+		// nothing before it to fork from.
+		{MessageID: "11111111-1111-4111-8111-111111111111", Label: "First prompt", Files: 0, Outside: 0, At: mustStamp(t, "2026-08-05T10:00:00.100Z"), ForkAtID: ""},
 		// isSnapshotUpdate rewrites a snapshot in place, so the later record for this
 		// messageId wins — 5 paths, 3 of them outside — and it applies at the row's
 		// original position, not where the rewrite happens to sit in the file.
 		// promptSource is "suggestion_accepted" — filtering on "typed" would drop it.
-		{MessageID: "22222222-2222-4222-8222-222222222222", Label: "Second prompt with extra spaces", Files: 5, Outside: 3, At: mustStamp(t, "2026-08-05T10:05:01Z")},
+		// Its fork point is the assistant turn that answered the first prompt.
+		{MessageID: "22222222-2222-4222-8222-222222222222", Label: "Second prompt with extra spaces", Files: 5, Outside: 3, At: mustStamp(t, "2026-08-05T10:05:01Z"), ForkAtID: "aaaa1111-1111-4111-8111-111111111111"},
 		// A tool-result turn has no labelable text, and its payload quotes a snapshot
 		// record back at the reader. +3 new paths from its map and +1 from its delta.
-		{MessageID: "33333333-3333-4333-8333-333333333333", Label: "", Files: 9, Outside: 3, At: mustStamp(t, "2026-08-05T10:10:00Z")},
+		{MessageID: "33333333-3333-4333-8333-333333333333", Label: "", Files: 9, Outside: 3, At: mustStamp(t, "2026-08-05T10:10:00Z"), ForkAtID: "22222222-2222-4222-8222-222222222222"},
 		// A slash-command turn: markup stripped down to the command. Its map holds
 		// only a path already counted, so the total holds.
-		{MessageID: "44444444-4444-4444-8444-444444444444", Label: "/simplify", Files: 9, Outside: 3, Provisional: true, At: mustStamp(t, "2026-08-05T10:15:00Z")},
+		{MessageID: "44444444-4444-4444-8444-444444444444", Label: "/simplify", Files: 9, Outside: 3, Provisional: true, At: mustStamp(t, "2026-08-05T10:15:00Z"), ForkAtID: "33333333-3333-4333-8333-333333333333"},
 		// Anchored to a sidechain entry, which is skipped — so the label is empty and
-		// the time falls back to the snapshot's own. +1 path, and it is outside.
-		{MessageID: "55555555-5555-4555-8555-555555555555", Label: "", Files: 10, Outside: 4, At: mustStamp(t, "2026-08-05T10:20:00.070Z")},
+		// the time falls back to the snapshot's own. +1 path, and it is outside. Not
+		// being on the main chain, it is also not forkable.
+		{MessageID: "55555555-5555-4555-8555-555555555555", Label: "", Files: 10, Outside: 4, At: mustStamp(t, "2026-08-05T10:20:00.070Z"), ForkAtID: ""},
 		// No anchor in the transcript at all, and an empty map: the running total is
-		// what carries, which is the whole reason a later row cannot read as 0.
-		{MessageID: "66666666-6666-4666-8666-666666666666", Label: "", Files: 10, Outside: 4, At: mustStamp(t, "2026-08-05T10:25:00Z")},
+		// what carries, which is the whole reason a later row cannot read as 0. With
+		// no chain entry of its own there is no cut point either.
+		{MessageID: "66666666-6666-4666-8666-666666666666", Label: "", Files: 10, Outside: 4, At: mustStamp(t, "2026-08-05T10:25:00Z"), ForkAtID: ""},
 		// Anchor found, but its timestamp is unparseable: label applies, time
-		// falls back.
-		{MessageID: "77777777-7777-4777-8777-777777777777", Label: "an anchor with an unparseable timestamp", Files: 10, Outside: 4, At: mustStamp(t, "2026-08-05T10:30:00Z")},
+		// falls back. Its fork point steps back over the sidechain entry between
+		// them to /simplify — the chain walk skips subagent turns, not just the
+		// anchor lookup.
+		{MessageID: "77777777-7777-4777-8777-777777777777", Label: "an anchor with an unparseable timestamp", Files: 10, Outside: 4, At: mustStamp(t, "2026-08-05T10:30:00Z"), ForkAtID: "44444444-4444-4444-8444-444444444444"},
 	}
 	if len(got.List) != len(want) {
 		t.Fatalf("got %d checkpoints, want %d: %+v", len(got.List), len(want), got.List)
@@ -103,6 +109,77 @@ func TestLoadCheckpoints_FixtureShapes(t *testing.T) {
 		if !g.At.Equal(w.At) {
 			t.Errorf("row %d (%s): At = %s, want %s", i, w.MessageID, g.At, w.At)
 		}
+		if g.ForkAtID != w.ForkAtID {
+			t.Errorf("row %d (%s): ForkAtID = %q, want %q", i, w.MessageID, g.ForkAtID, w.ForkAtID)
+		}
+	}
+}
+
+// TestLoadCheckpoints_ForkPointWalksBackToAChainEntry is the regression guard for
+// the finding that cost #644 a probe run: a transcript ROW is not necessarily a
+// chain entry. Between the assistant turn and the next prompt this fixture puts
+// the non-chain row types the real corpus produces — queue-operation, attachment,
+// ai-title, last-prompt, mode, summary — then a sidechain assistant turn, which
+// does carry a uuid but is not on the main chain, and finally a queue-operation
+// row that carries a uuid of its own *and* nests a user entry inside itself.
+//
+// The attachment row carries a uuid because a real one does: a driven 2.1.226
+// transcript put three of them between a prompt and its reply. That is why the
+// reader tests the row's TYPE rather than the presence of an id, and why "the last
+// row with a uuid" is a wrong implementation rather than a merely inelegant one.
+//
+// So four wrong implementations are separated from the right one. "The row before
+// the prompt" lands on the queue row; "any uuid-bearing row" lands on it too (the
+// byte prefilter admits it, because the NESTED entry carries the marker — only the
+// decoded top-level type rejects it, the same trap decodeSnapshot documents);
+// "the last row carrying any id-shaped field" lands on summary's leafUuid; and
+// "MessageID itself" keeps the prompt it was meant to drop. Claude answers the
+// first three with `No message found with message.uuid of` and exit 1, and the
+// fourth *silently* — it is a valid entry, just the wrong one.
+func TestLoadCheckpoints_ForkPointWalksBackToAChainEntry(t *testing.T) {
+	const cwd = "/home/zvi/chain"
+	root := checkpointRoot(t, cwd, loadFixture(t, "checkpoints-chain.jsonl"))
+
+	got, err := LoadCheckpoints(context.Background(), "claude", cwd, Options{Root: root})
+	if err != nil {
+		t.Fatalf("LoadCheckpoints: %v", err)
+	}
+	if len(got.List) != 2 {
+		t.Fatalf("got %d checkpoints, want 2: %+v", len(got.List), got.List)
+	}
+
+	const (
+		firstPrompt  = "c1c1c1c1-0001-4001-8001-000000000001"
+		mainAssist   = "a5515747-0002-4002-8002-000000000002"
+		sidechain    = "51de0000-0003-4003-8003-000000000003"
+		summaryLeaf  = "deadbeef-0009-4009-8009-000000000009"
+		queueRow     = "5751e400-0005-4005-8005-000000000005"
+		secondPrompt = "c2c2c2c2-0004-4004-8004-000000000004"
+	)
+	if got.List[0].ForkAtID != "" {
+		t.Errorf("oldest checkpoint: ForkAtID = %q, want empty — nothing precedes it", got.List[0].ForkAtID)
+	}
+	second := got.List[1]
+	if second.MessageID != secondPrompt {
+		t.Fatalf("row 1: MessageID = %q, want %q", second.MessageID, secondPrompt)
+	}
+	switch second.ForkAtID {
+	case mainAssist: // right
+	case "":
+		t.Errorf("row 1: ForkAtID is empty — the walk-back gave up instead of stepping over the six uuid-less rows")
+	case sidechain:
+		t.Errorf("row 1: ForkAtID = the sidechain turn %q — the chain walk must skip subagent entries, not just the anchor lookup", sidechain)
+	case queueRow:
+		t.Errorf("row 1: ForkAtID = the queue-operation row %q — it nests a user entry, so the byte prefilter admits it and only the decoded TOP-LEVEL type can reject it", queueRow)
+	case summaryLeaf:
+		t.Errorf("row 1: ForkAtID = summary's leafUuid %q — only a `uuid` on a user/assistant row is a chain entry", summaryLeaf)
+	case secondPrompt:
+		t.Errorf("row 1: ForkAtID = MessageID — --resume-session-at keeps the entry it names, so this would keep the very prompt the fork drops")
+	default:
+		t.Errorf("row 1: ForkAtID = %q, want %q (the main-chain assistant turn)", second.ForkAtID, mainAssist)
+	}
+	if second.ForkAtID == firstPrompt {
+		t.Errorf("row 1: ForkAtID = the first prompt — the fork would drop its answer too")
 	}
 }
 

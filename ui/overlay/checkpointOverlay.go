@@ -26,15 +26,17 @@ type CheckpointRow struct {
 	Outside int
 }
 
-// CheckpointOverlay lists a Claude session's native checkpoints, newest first,
-// and lets the user jump into the session to act on one. It is read-only by
-// design: Atrium enumerates checkpoints, and Claude's own Esc-Esc restores them —
-// the only surface that can rewind code and conversation together (#385). Hence
-// the single action, attach.
+// CheckpointOverlay lists a Claude session's native checkpoints, newest first.
+// Two things can be done with a row. Attaching jumps into the session so Claude's
+// own Esc-Esc can restore one — Atrium never rewinds a checkpoint itself, because
+// Claude's rewind is the only surface that can take code and conversation back
+// together (#385). Forking seeds a *new* Atrium session from the conversation as
+// it stood before that checkpoint's prompt (#644), which leaves this session
+// untouched and is therefore still not a restore.
 //
 // Like the QueueOverlay it is a dumb view: the app pushes a snapshot in via
-// SetRows and reads intent back out (AttachRequested/RefreshRequested). It holds
-// no session type.
+// SetRows and reads intent back out (AttachRequested/ForkRequested/
+// RefreshRequested). It holds no session type.
 type CheckpointOverlay struct {
 	title      string
 	rows       []CheckpointRow
@@ -46,15 +48,20 @@ type CheckpointOverlay struct {
 	width      int
 	height     int
 	attachReq  bool
+	forkReq    bool
 	refreshReq bool
 }
 
-// checkpointTimeFormat is deliberately absolute and now-independent: a
+// CheckpointTimeFormat is deliberately absolute and now-independent: a
 // "3h ago" column would re-render differently every run and could not be pinned
 // by a frame golden.
-const checkpointTimeFormat = "Jan _2 15:04"
+//
+// Exported because the fork form's heading stamps the chosen checkpoint with it
+// (#644). That heading exists to be read against the row the cursor was on, so
+// the two must be the same format, not two spellings that agree today.
+const CheckpointTimeFormat = "Jan _2 15:04"
 
-// checkpointTimeWidth is the rendered width of checkpointTimeFormat ("Aug  5
+// checkpointTimeWidth is the rendered width of CheckpointTimeFormat ("Aug  5
 // 10:00"), used to keep the label column aligned.
 const checkpointTimeWidth = 12
 
@@ -156,6 +163,17 @@ func (c *CheckpointOverlay) HandleKeyPress(msg tea.KeyPressMsg) (shouldClose boo
 			c.attachReq = true
 		}
 		return false
+	case "f":
+		// Gated on the same condition as enter, and for a weaker version of the same
+		// reason: the cursor is meaningless until the rows exist, so a press in the
+		// gap would fork from whatever row happened to land under index 0. Whether
+		// the selected checkpoint can be forked at all is the app's to answer — it
+		// holds the chain entry the cut needs, and says so in a notice, exactly as it
+		// does for an attach it has to refuse.
+		if !c.loading {
+			c.forkReq = true
+		}
+		return false
 	case "r":
 		c.refreshReq = true
 		return false
@@ -169,6 +187,15 @@ func (c *CheckpointOverlay) HandleKeyPress(msg tea.KeyPressMsg) (shouldClose boo
 func (c *CheckpointOverlay) AttachRequested() bool {
 	r := c.attachReq
 	c.attachReq = false
+	return r
+}
+
+// ForkRequested reports whether a fork was armed since the last call and clears
+// the flag (read-once), so the app acts on each press exactly once. Read against
+// SelectedIndex: the app holds the checkpoint table in the order it pushed rows.
+func (c *CheckpointOverlay) ForkRequested() bool {
+	r := c.forkReq
+	c.forkReq = false
 	return r
 }
 
@@ -272,8 +299,8 @@ func (c *CheckpointOverlay) Render() string {
 	return box.Render(b.String())
 }
 
-// checkpointFooterHints is the footer's ladder, widest first (71, 64, 53, 50, 42,
-// 24 cells). One fixed string truncated would not do: on an 80-column terminal —
+// checkpointFooterHints is the footer's ladder, widest first (80, 73, 62, 59, 48,
+// 33 cells). One fixed string truncated would not do: on an 80-column terminal —
 // the 80×24 floor the frame goldens capture — the app sizes the box to 0.7×80 = 56,
 // so inner is 50 and truncating the full line dropped everything from `(then Esc
 // Esc` on, including `esc close`, the only key out of a state that hides the hint
@@ -282,29 +309,36 @@ func (c *CheckpointOverlay) Render() string {
 // It sheds in order of what a user can find without being told, and the order is
 // the whole point rather than a detail: `j/k move` first, because arrows work too
 // and the cursor is visible; then `r reload`, because esc and a fresh `H` reach the
-// same place; then the Esc-Esc reminder, last, because it is the one thing on this
+// same place; then the Esc-Esc reminder, because it is the one thing on this
 // surface nothing else teaches — the timeline is read-only, so an attach the user
-// does not know to follow with Esc Esc leads nowhere. `esc close` never goes.
+// does not know to follow with Esc Esc leads nowhere. `enter attach`, `f fork` and
+// `esc close` never go: the first two are the surface's only actions, and neither
+// key is in keys.Registry, so this footer is the *only* place either is written
+// down — no `?` cheatsheet row, no palette entry, no README table.
 //
 // Wording compresses before a clause is shed, but only while the reminder stays a
 // parenthetical on `enter attach` — that is what says *once you are in there, press
 // Esc Esc*. Freestanding, `· Esc Esc rewinds ·` reads as a key Atrium itself
-// honours, which is the one idea this whole surface exists to correct. The 50-cell
-// rung exists because 50 is exactly what the default terminal gives, and dropping
-// `r reload` there is not free: re-opening pays another whole-transcript scan,
-// which is the same cost the attach path is careful not to charge twice.
+// honours, which is the one idea this whole surface exists to correct.
+//
+// The 48-cell rung is the load-bearing one, because 50 is exactly what the default
+// terminal gives. It sheds `r reload` there, which is not free — re-opening pays
+// another whole-transcript scan — and is a change from before #644 added `f fork`:
+// the tightest line keeping the reminder, the fork key and `r reload` together is
+// 54 cells, four over budget, so one of the three had to go at the default size.
+// `r reload` is the one with another route to the same place.
 //
 // Which rung a width lands on is therefore load-bearing, not cosmetic: a rung that
 // restores a clause a wider rung had already shed reads as a ladder while
 // behaving like a shuffle. TestCheckpointFooter_ShedsMonotonically is that
 // invariant; the 80×24 golden is where it shows.
 var checkpointFooterHints = []string{
-	"j/k move · enter attach (then Esc Esc to rewind) · r reload · esc close",
-	"j/k move · enter attach (Esc Esc rewinds) · r reload · esc close",
-	"enter attach (Esc Esc rewinds) · r reload · esc close",
-	"enter attach (then Esc Esc) · r reload · esc close",
-	"enter attach (Esc Esc rewinds) · esc close",
-	"enter attach · esc close",
+	"j/k move · enter attach (then Esc Esc to rewind) · f fork · r reload · esc close",
+	"j/k move · enter attach (Esc Esc rewinds) · f fork · r reload · esc close",
+	"enter attach (Esc Esc rewinds) · f fork · r reload · esc close",
+	"enter attach (then Esc Esc) · f fork · r reload · esc close",
+	"enter attach (then Esc Esc) · f fork · esc close",
+	"enter attach · f fork · esc close",
 }
 
 // checkpointFooter is the widest rung of checkpointFooterHints that fits in inner
@@ -352,7 +386,7 @@ func hiddenRowSummary(above, below int) string {
 func (c *CheckpointOverlay) renderRow(row CheckpointRow, width int) string {
 	stamp := "unknown"
 	if !row.When.IsZero() {
-		stamp = row.When.Format(checkpointTimeFormat)
+		stamp = row.When.Format(CheckpointTimeFormat)
 	}
 	summary := checkpointFileSummary(row)
 	label := row.Label

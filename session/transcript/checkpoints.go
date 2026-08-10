@@ -53,6 +53,24 @@ type Checkpoint struct {
 	// still rewrite. Recorded for completeness; the overlay does not distinguish
 	// them.
 	Provisional bool
+	// ForkAtID is the chain entry to hand Claude's `--resume-session-at` to fork
+	// the conversation *before* this checkpoint's prompt: the last uuid-bearing
+	// chain entry preceding MessageID in file order. That flag keeps everything up
+	// to and *including* the entry it names, so naming MessageID itself would keep
+	// the prompt and drop only its answer.
+	//
+	// It is deliberately not "the previous line". The transcript interleaves rows
+	// that are not chain entries — queue-operation, attachment, ai-title,
+	// last-prompt, mode — so the row physically before a prompt is routinely one of
+	// those, and naming it makes Claude exit 1 with "No message found with
+	// message.uuid of". Most carry no uuid, but not all: an attachment row carries
+	// one and still is not a chain entry (observed in a driven 2.1.226 transcript,
+	// three of them between a prompt and its reply). So the test is the row's TYPE,
+	// not the presence of an id. Sidechain (subagent) entries are skipped for the
+	// same reason they are skipped as anchors: they are not on the main chain.
+	//
+	// Empty for the oldest checkpoint, which has nothing before it to keep.
+	ForkAtID string
 }
 
 // Checkpoints is the checkpoint enumeration for one session.
@@ -126,8 +144,30 @@ func LoadCheckpoints(ctx context.Context, program, workingDir string, opts Optio
 		byID    = map[string]int{}          // messageId → index in snaps
 		anchors = map[string]anchorRecord{} // user uuid → label/timestamp
 		deltas  = map[string][]string{}     // snapshotMessageId → tracked paths
+		// prevChain is chain-entry uuid → the uuid of the chain entry before it, the
+		// value Checkpoint.ForkAtID is read from. First occurrence wins: a uuid's
+		// place in the chain is where it first appears, and a later rewrite of the
+		// same row does not move it.
+		prevChain = map[string]string{}
+		lastChain string
 	)
 	if _, err := scanTail(ctx, path, maxBytes, func(line []byte) {
+		// Chain entries are tested first so a user row is decoded once rather than
+		// twice — the anchor record is built from the same decode. A snapshot or
+		// delta line fails the type test here and falls through untouched.
+		if raw, ok := decodeChainEntry(line); ok {
+			if _, seen := prevChain[raw.UUID]; !seen {
+				prevChain[raw.UUID] = lastChain
+			}
+			lastChain = raw.UUID
+			if raw.Type == "user" {
+				anchors[raw.UUID] = anchorRecord{
+					label: checkpointLabel(raw.Message),
+					at:    parseStamp(raw.Timestamp),
+				}
+			}
+			return
+		}
 		if raw, ok := decodeSnapshot(line); ok {
 			// Last record for a messageId wins: Claude rewrites a snapshot in
 			// place (isSnapshotUpdate) rather than superseding it with a new id.
@@ -142,9 +182,6 @@ func LoadCheckpoints(ctx context.Context, program, workingDir string, opts Optio
 		if id, trackingPath, ok := decodeDelta(line); ok {
 			deltas[id] = append(deltas[id], trackingPath)
 			return
-		}
-		if uuid, rec, ok := decodeAnchor(line); ok {
-			anchors[uuid] = rec
 		}
 	}); err != nil {
 		return Checkpoints{}, err
@@ -170,6 +207,7 @@ func LoadCheckpoints(ctx context.Context, program, workingDir string, opts Optio
 			Files:       len(touched),
 			Outside:     countOutside(touched),
 		}
+		cp.ForkAtID = prevChain[cp.MessageID]
 		// Snapshot and anchor records appear in either order, so the join waits
 		// until the whole file has been read.
 		if rec, ok := anchors[cp.MessageID]; ok {
@@ -236,6 +274,11 @@ var deltaMarker = []byte(`file-history-delta`)
 // anchorMarker prefilters candidate user entries the same way.
 var anchorMarker = []byte(`"type":"user"`)
 
+// assistantMarker prefilters candidate assistant entries. Together with
+// anchorMarker it covers the two entry types that form the conversation chain —
+// the only rows Claude's `--resume-session-at` will accept as a cut point.
+var assistantMarker = []byte(`"type":"assistant"`)
+
 // decodeSnapshot decodes one file-history-snapshot line.
 //
 // The type check after the prefilter is not belt-and-braces: a tool_result payload
@@ -285,24 +328,35 @@ func countOutside(touched map[string]struct{}) int {
 	return n
 }
 
-// decodeAnchor decodes one user entry into the label and timestamp a checkpoint
-// row shows. Sidechain (subagent) entries are skipped: a checkpoint is never
-// anchored to one, and skipping them keeps the anchor map to the main thread.
-func decodeAnchor(line []byte) (string, anchorRecord, bool) {
-	if !bytes.Contains(line, anchorMarker) {
-		return "", anchorRecord{}, false
+// decodeChainEntry decodes one conversation-chain entry — a user or assistant
+// row carrying a uuid. It serves two readers at once: the anchor record a
+// checkpoint row is labelled from (user rows only) and the running
+// previous-entry link Checkpoint.ForkAtID is built from (both).
+//
+// The type test is the load-bearing one, and "has a uuid" is not a substitute for
+// it. Most rows in a transcript are neither user nor assistant — queue-operation,
+// attachment, ai-title, last-prompt, mode — and while most of those carry no uuid,
+// attachment rows do, and sit between a prompt and its reply. Selecting a cut point
+// by position, or by "the last row with an id", picks one Claude cannot resolve.
+//
+// Sidechain (subagent) entries are skipped: a checkpoint is never anchored to
+// one, they are not on the main chain a resume replays, and skipping them keeps
+// both the anchor map and the chain link to the main thread.
+func decodeChainEntry(line []byte) (rawAnchor, bool) {
+	if !bytes.Contains(line, anchorMarker) && !bytes.Contains(line, assistantMarker) {
+		return rawAnchor{}, false
 	}
 	var raw rawAnchor
 	if err := json.Unmarshal(line, &raw); err != nil {
-		return "", anchorRecord{}, false
+		return rawAnchor{}, false
 	}
-	if raw.Type != "user" || raw.UUID == "" || raw.IsSidechain {
-		return "", anchorRecord{}, false
+	if raw.UUID == "" || raw.IsSidechain {
+		return rawAnchor{}, false
 	}
-	return raw.UUID, anchorRecord{
-		label: checkpointLabel(raw.Message),
-		at:    parseStamp(raw.Timestamp),
-	}, true
+	if raw.Type != "user" && raw.Type != "assistant" {
+		return rawAnchor{}, false
+	}
+	return raw, true
 }
 
 // checkpointLabel extracts a one-line label from a user entry's message.

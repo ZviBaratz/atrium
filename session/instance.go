@@ -8,6 +8,7 @@ import (
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/internal/teardown"
 	"github.com/ZviBaratz/atrium/log"
+	"github.com/ZviBaratz/atrium/session/agent"
 	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/session/tmux"
 	"github.com/ZviBaratz/atrium/session/transcript"
@@ -147,6 +148,18 @@ type Instance struct {
 	Branch string
 	// Program is the program to run in the instance.
 	Program string
+	// forkSeed, when non-nil, seeds this session's conversation from a checkpoint of
+	// another one (#644). It is consumed by the first Start and deliberately not
+	// persisted: SaveInstances stores only Started() instances, so a fork that never
+	// completed leaves nothing in state.json to resume from — and one that did
+	// completed carries the conversation in Program's --resume pin instead, which is
+	// the durable form.
+	forkSeed *ForkSeed
+	// forkPrompt is the turn the fork's print run takes. The forked conversation is
+	// materialized by that run, so it is the session's real first prompt rather than
+	// a throwaway — it is asked once, headlessly, and the interactive session opens
+	// on its answer.
+	forkPrompt string
 	// Height is the height of the instance.
 	Height int
 	// Width is the width of the instance.
@@ -1354,6 +1367,14 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		i.Branch = branchName
 	}
 
+	// Pin the forked conversation into the launch command before the tmux session is
+	// built from it. The id is known up front — it was minted at submit — so this
+	// does not wait on the fork run below; what waits is the launch itself, which
+	// never happens if that run fails.
+	if firstTimeSetup && i.forkSeed != nil {
+		i.Program = agent.WithResumeFlag(i.Program, i.forkSeed.NewSessionID)
+	}
+
 	i.mu.RLock()
 	existing := i.tmuxSession
 	i.mu.RUnlock()
@@ -1428,6 +1449,29 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 			// it does run somewhere the config can route on, so it still gets the
 			// environment.
 			i.applySessionEnv(i.WorkingDir())
+		}
+
+		// Materialize a forked conversation, between the worktree existing (the fork
+		// is filed under the project directory its cwd resolves to, which must be this
+		// session's) and the agent being launched to read it.
+		//
+		// It is a network call, and it is allowed to fail the whole start. That is the
+		// point: --resume-session-at is honoured only in print mode, so this run is the
+		// only place the truncation can be made to happen *and* be checked. A session
+		// that launched anyway would be a working agent seeded from the end of someone
+		// else's conversation, with nothing on screen saying so — strictly worse than
+		// one that never appeared. The deferred handler above tears the worktree down
+		// with the rest, so the refusal leaves nothing behind.
+		if i.forkSeed != nil {
+			if err := forkConversation(i.baseContext(), i.WorkingDir(), i.claudeConfigDir, *i.forkSeed, i.forkPrompt); err != nil {
+				if wt != nil {
+					if cleanupErr := wt.Cleanup(); cleanupErr != nil {
+						err = fmt.Errorf("%w (cleanup error: %w)", err, cleanupErr)
+					}
+				}
+				setupErr = fmt.Errorf("failed to fork the conversation: %w", err)
+				return setupErr
+			}
 		}
 
 		// Create new session

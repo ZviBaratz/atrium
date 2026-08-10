@@ -380,7 +380,18 @@ var claude = &Adapter{
 
 	// tmux word-splits the trailing command string itself, so appending to the
 	// single program argv element is sufficient — no shell wrapping.
-	Resume:        func(program string) string { return program + " --continue" },
+	//
+	// A program that already pins the conversation to resume is left alone. A
+	// fork-from-checkpoint session carries `--resume <id>` for its whole life
+	// (resuming an id keeps that id, so the pin never goes stale — see
+	// session/fork.go), and appending --continue beside it would hand claude two
+	// different answers to "which conversation?" on every resurrection.
+	Resume: func(program string) string {
+		if hasFlag(program, "--resume") || hasFlag(program, "-r") {
+			return program
+		}
+		return program + " --continue"
+	},
 	HookSupport:   true,
 	HeadlessNamer: true, // `claude -p` with a JSON envelope (session/naming.go)
 }
