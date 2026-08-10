@@ -221,7 +221,14 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 	// Per-session Claude account badge: accent for a routed account, dim for the
 	// default/fallback. Shown only when an account was resolved (empty = feature
 	// off / legacy session).
-	if acct := i.ClaudeAccountName(); acct != "" && !r.hideClaudeAccountBadge {
+	//
+	// Width-sanitized like the name and the note, and for the same reason: an account
+	// name is free text from config, and a ZWJ/variation-selector emoji cluster
+	// measures as one 2-cell glyph here while a terminal whose font lacks the combined
+	// glyph renders it far wider — which overflows the pane into the accumulating ghost
+	// rows theme.SanitizeWidth documents. No width guard in this package can see it,
+	// because a test measures with the same library that mis-measures.
+	if acct := theme.SanitizeWidth(i.ClaudeAccountName()); acct != "" && !r.hideClaudeAccountBadge {
 		acctColor := th.Palette.Accent
 		if i.ClaudeAccountIsDefault() {
 			acctColor = th.Palette.FgDim
@@ -267,8 +274,9 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 	// agyIdx records where it landed so it can YIELD below — this is the one chip in
 	// the cluster that is dropped rather than squeezed; see the fit check before
 	// composeLine.
+	// Width-sanitized, like the Claude badge above — same free-text-from-config risk.
 	agyIdx := -1
-	if acct := i.AgyAccountName(); acct != "" && i.AgyConfigDir() != "" && runsAgy(i) {
+	if acct := theme.SanitizeWidth(i.AgyAccountName()); acct != "" && i.AgyConfigDir() != "" && runsAgy(i) {
 		agyIdx = len(right1)
 		right1 = append(right1, p.seg(" agy:"+acct+" ", th.Palette.Accent))
 	}

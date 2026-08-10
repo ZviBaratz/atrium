@@ -1310,9 +1310,11 @@ list:
   where bwrap does not apply — macOS, or Linux without bubblewrap, per the bullet
   below — the route is still shown, because whether `bwrap` is on `PATH` is decided
   at launch and not recorded on the session. On a list pane too narrow to hold the
-  badge and the session name, the badge is the one that goes: an account is an
-  identifier you can look up in the `@` panel, where the name is how you find the
-  session at all.
+  badge and the session name, the badge is the one that goes — the name is how you
+  find the session at all — so widen the pane to read it back. The `@` panel's
+  routing preview is *not* a substitute: it resolves the current config for a repo,
+  which is what a **new** session there would get, not what an existing session
+  pinned.
 - Unlike Claude accounts there is no pool and no default/fallback state, so the badge
   has no dim form; and account clustering (`[` / `]`, the `account` group mode) keys
   on the Claude account alone, so an `agy` badge is never folded into a cluster

@@ -189,6 +189,38 @@ func TestListString_AgyBadgeCannotBreakThePanelFrame(t *testing.T) {
 	}
 }
 
+// TestRender_AccountBadgesAreWidthSanitized covers the one hazard on this row that
+// no width assertion in this package can reach. An account name is free text from
+// config, and a ZWJ / variation-selector / skin-tone emoji cluster measures as a
+// single 2-cell glyph to lipgloss, x/ansi and go-runewidth alike, while a terminal
+// whose font lacks the combined glyph renders the components separately and far
+// wider — overflowing the pane into the ghost rows theme.SanitizeWidth documents.
+//
+// What this test does NOT prove is the thing that actually matters: that the row
+// renders at the width it measures. Every measuring library here shares the wrong
+// answer, so a frame guard passes either way — TestListString_AgyBadgeCannotBreakThe
+// PanelFrame included, which is why its name is a claim about the badge and not about
+// every string that can reach the row. What is assertable is that the sanitizer ran:
+// the joiners are gone from the rendered row, so the cluster is decomposed into
+// standalone emoji that every renderer and the terminal measure identically.
+//
+// Both account badges, because they are the same defect one line apart.
+func TestRender_AccountBadgesAreWidthSanitized(t *testing.T) {
+	// Escapes, not the literal characters: they are invisible in source, and
+	// staticcheck's ST1018 rejects them for exactly that reason.
+	const (
+		zwj    = "\u200d"
+		vs16   = "\ufe0f"
+		family = "\U0001F468" + zwj + "\U0001F469" + zwj + "\U0001F467" // man+woman+girl, joined
+	)
+	inst := agyInst(t, "emoji-account", "/tmp/api", "agy", family+" work", family+vs16+" grav")
+	row := agyRow(t, 80, inst)
+
+	require.Contains(t, row, "agy:", "precondition: the badge is on the row at all")
+	require.NotContains(t, row, zwj, "a zero-width joiner must never reach the row")
+	require.NotContains(t, row, vs16, "…nor a variation selector")
+}
+
 // fullyBadgedAgyRow renders an agy session carrying the full right cluster —
 // Claude account, agy account, AUTO, model, effort, permission — at `width`
 // columns. withAgy is the control: the identical row minus the agy route, which is
@@ -341,22 +373,29 @@ func TestRender_AgyBadgeLadderStaysExact(t *testing.T) {
 	t.Cleanup(theme.SetGlyphSet(theme.GlyphSetPlain))
 	theme.SetGlyphSet(theme.GlyphSetPlain)
 
+	// A run of "Z", for the reason the yield test uses one: no other cell on this row
+	// can contain a Z, so "is any of the name left?" is a substring test that can
+	// actually fail. A descriptive name cannot carry that assertion — every letter in
+	// it also appears in "gemini-3-pro", "max" or "accept-edits", so the negative
+	// control below would pass against a row whose name had been emptied entirely.
+	const name = "ZZZZZZZZZZZZZZZZZ"
+
 	threshold := 0
 	for w := 10; w <= 140 && threshold == 0; w++ {
-		if strings.Contains(fullyBadgedAgyRow(t, w, "agy-account-badge", true), "agy:") {
+		if strings.Contains(fullyBadgedAgyRow(t, w, name, true), "agy:") {
 			threshold = w
 		}
 	}
 	require.NotZero(t, threshold, "the badge must appear at some width")
 	t.Logf("the agy badge appears from %d columns up", threshold)
 
-	under := fullyBadgedAgyRow(t, threshold-1, "agy-account-badge", true)
+	under := fullyBadgedAgyRow(t, threshold-1, name, true)
 	require.NotContains(t, under, "agy:", "one column under the threshold the badge must be gone")
-	require.Contains(t, strings.Split(under, "\n")[0], "a",
+	require.Contains(t, strings.Split(under, "\n")[0], "Z",
 		"…and the name it yielded to must still be there")
 
 	for _, w := range []int{threshold, threshold + 1, threshold + 2, threshold + 7, 100, 120} {
-		row := fullyBadgedAgyRow(t, w, "agy-account-badge", true)
+		row := fullyBadgedAgyRow(t, w, name, true)
 		for i, line := range strings.Split(row, "\n") {
 			require.Equalf(t, w, ansi.StringWidth(line),
 				"line %d at %d columns must be exactly %d cells:\n%s", i, w, w, row)
