@@ -5,6 +5,14 @@
 #   GO=/path/to/go just test
 go := env_var_or_default("GO", "go")
 
+# Make a recipe's arguments available as "$@" so quoting survives into the shell.
+# Recipes that keep using {{args}} are unaffected — the setting only changes what
+# "$@" means, and nothing else here refers to it. It is a setting rather than the
+# per-recipe [positional-arguments] attribute because the setting shipped in just
+# 0.9.1 (2021) and the attribute in 1.29.0 (2024); like the assignments above, an
+# unsupported construct here is a parse error that breaks EVERY recipe, not one.
+set positional-arguments
+
 # Local builds stamp the version from git so `atrium version` tells the truth.
 # Release builds get the tag via GoReleaser instead (see .goreleaser.yaml).
 version := `git describe --tags --always --dirty 2>/dev/null | sed 's/^v//' || echo dev`
@@ -63,6 +71,30 @@ bench pattern='.' *pkgs='./...':
 # tmux, jq) and drives a real tmux server. UPDATE=1 refreshes the golden.
 smoke:
     GO={{go}} bash test/smoke/run.sh
+
+# Drive a real agent CLI at a width ladder and capture its panes, for re-verifying
+# session/agent/ heuristics (#647). Re-driving is the ONLY thing that detects
+# heuristic rot — VerifiedVersion is a record, not a tripwire (registry.go's header).
+# Opt-in only — NOT part of `test`/`ci`: it starts a real tmux server, drives a real
+# authenticated CLI and spends real API turns. Start with `just drive-agent help`.
+# Run `just drive-agent reap-all` if an interrupted ladder stranded a server.
+#
+# ${@+"$@"} rather than {{args}}, and that is load-bearing rather than style. just
+# splices {{args}} into the recipe line as raw text, so a quoted argument is re-split
+# by the shell: `just drive-agent send 'run: rm -f x'` would reach the script as five
+# arguments and type only "run:". Every verb here takes prose — a prompt to send, a
+# regex to wait for — so the whole surface is affected, and the failure is silent
+# (a truncated prompt is still a prompt). `set positional-arguments` at the top of
+# this file is what makes "$@" the recipe's arguments.
+#
+# The ${@+…} wrapper is for the no-argument case. just runs recipes under `sh -cu`,
+# and in bash 3.2 — which is what /bin/sh is on macOS — `"$@"` with no positional
+# parameters is an "unbound variable" error under set -u (fixed in 4.4). So a bare
+# `just drive-agent`, the form the comment above sends people to, would be the one
+# invocation that dies there.
+# Drive a real agent CLI at a width ladder and capture its panes (#647).
+drive-agent *args:
+    bash scripts/drive-agent.sh ${@+"$@"}
 
 # Render the README demo GIFs from the committed tapes (docs/demos/*.tape).
 # Opt-in only — NOT part of `test`/`ci`: needs the same non-Go deps as `smoke`
