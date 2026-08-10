@@ -240,13 +240,11 @@ the same for its counts, which `keys/skill_counts_test.go` holds to the tree. Wh
 must stay in prose, one file owns it and the rest cite that file. Reasons are not exempt
 from checking, only from this remedy — verify a reason against the mechanism, per the
 first review rule above. And correct a claim by grepping the *claim*, not the sentence in
-front of you: in #646 a fix landed in `registry.go` and
-left `registry_test.go` repeating the same two false things, in the file whose own
-fixtures disproved them, under a commit message saying "Both corrected". Cite the PR, not
-the *branch* commit: this repo squash-merges, so a pre-merge SHA is never an ancestor of
-`main` and `git show` fails on it in a fresh clone. It is not gone — GitHub keeps
-`refs/pull/N/head`, so `git fetch origin refs/pull/N/head` reaches it — but that needs the
-PR number, so cite the number and skip the step. A squashed SHA on `main` is fine.
+front of you: in #646 a fix landed in `registry.go` and left `registry_test.go` repeating
+the same two false things, in the file whose own fixtures disproved them, under a commit
+message saying "Both corrected". Cite the PR, not the *branch* commit: a squash-merged
+PR's branch SHAs never land on `main`, so a bare one strands anyone who has only `main`.
+Recovering it (`git fetch origin refs/pull/N/head`) needs the PR number anyway.
 
 For the general discipline of proving a TUI change is right — why a passing Go suite
 cannot see width, reflow, colour, or a click that hit the neighbouring row — use the
