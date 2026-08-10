@@ -16,6 +16,7 @@ import (
 
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/session/transcript"
 	"github.com/ZviBaratz/atrium/ui/overlay"
 
@@ -235,19 +236,43 @@ func (m *home) forkFromCheckpoint() (tea.Model, tea.Cmd) {
 		return m, m.handleInfoNotice("this session's transcript could not be located — reload the timeline")
 	}
 
+	path := target.GetRepoPath()
+	if path == "" {
+		path = target.Path
+	}
 	pf := &pendingFork{
 		sourceTitle:      target.Title,
 		sourceTranscript: m.checkpointSource.Path,
 		cutEntryID:       cp.ForkAtID,
 		droppedMessageID: cp.MessageID,
 		at:               cp.At,
-	}
-	path := target.GetRepoPath()
-	if path == "" {
-		path = target.Path
+		sourceBranch:     m.forkBaseBranch(target, path),
 	}
 	m.dismissCheckpointOverlay()
 	return m.openForkForm(path, pf)
+}
+
+// forkBaseBranch is the branch a fork of target should be based on: target's own
+// branch, when it still exists in path.
+//
+// The existence check is the reason this is a function rather than a field read. A
+// session's branch can be gone by the time it is forked — merged and deleted is the
+// normal end of a session's life, and this repo squash-merges with
+// delete-branch-on-merge — and naming a base that does not exist fails the worktree
+// build after the form is submitted, which is far worse than defaulting to HEAD. A
+// direct session has no branch at all.
+//
+// "" means "use the form's ordinary default", which is what the picker already shows.
+func (m *home) forkBaseBranch(target *session.Instance, path string) string {
+	if target == nil || target.IsDirect() || target.Branch == "" || path == "" {
+		return ""
+	}
+	if !git.LocalBranchExists(m.ctx, path, target.Branch) {
+		log.InfoLog.Printf("fork: %q's branch %q is gone; basing the fork on the repo default",
+			target.Title, target.Branch)
+		return ""
+	}
+	return target.Branch
 }
 
 // handleCheckpointsState routes a key to the timeline and acts on what it armed.

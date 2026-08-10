@@ -40,6 +40,22 @@ func newPicker(async bool) Picker {
 	return Picker{visibleRows: defaultPickerRows, async: async}
 }
 
+// SetFilter replaces the filter text and reacts exactly as a keystroke would, so an
+// async picker bumps its version and the results already in flight for the old text
+// are rejected on arrival rather than landing on top of the new ones.
+//
+// It is for seeding a filter the user did not type — the fork form pointing the
+// branch picker at a session's own branch (#657). Anything driven by keys goes
+// through the key handlers, which own the cursor semantics this deliberately leaves
+// alone.
+func (p *Picker) SetFilter(s string) {
+	p.filter = s
+	p.onEdit()
+}
+
+// Filter is the current filter text.
+func (p *Picker) Filter() string { return p.filter }
+
 // Focus gives the picker focus.
 func (p *Picker) Focus() { p.focused = true }
 
