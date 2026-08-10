@@ -1017,7 +1017,9 @@ cmd_emit() {
 		printf '// %s is the %s screen of %s %s at width %s, captured %s by\n' \
 			"$name" "$label" "$BIN" "$VERSION" "$width" "$CAPTURED"
 		printf '// scripts/drive-agent.sh (#647). RENAME ME: this file names fixtures\n'
-		printf '// semantically and puts the width in the doc comment, not the identifier.%s\n' "$redacted"
+		printf '// semantically, not by width. FILE ME: the width above is prose, and prose\n'
+		printf '// is what #648 found rotting — add this capture to paneCoverage in\n'
+		printf '// pane_width_test.go so its width is a datum the invariant can read.%s\n' "$redacted"
 
 		# Two things break a Go raw string literal, per the spec. A backtick
 		# terminates it, and there is no escape for one. A CARRIAGE RETURN is silently
