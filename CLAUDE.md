@@ -238,9 +238,9 @@ file. Reasons are not exempt from checking, only from this remedy — verify a r
 against the mechanism, per the first review rule above. And correct a claim by grepping
 the *claim*, not the sentence in front of you: in #646 a fix landed in `registry.go` and
 left `registry_test.go` repeating the same two false things, in the file whose own
-fixtures disproved them, under a commit message saying "Both corrected". Cite a PR, not
-a SHA — this repo squash-merges, so a branch commit resolves for whoever wrote it and
-for nobody else.
+fixtures disproved them, under a commit message saying "Both corrected". Cite the PR, not
+the *branch* commit: this repo squash-merges, so a pre-merge SHA never becomes an ancestor
+of `main` and resolves only for whoever wrote it. The squashed commit on `main` is fine.
 
 For the general discipline of proving a TUI change is right — why a passing Go suite
 cannot see width, reflow, colour, or a click that hit the neighbouring row — use the
