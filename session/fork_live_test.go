@@ -36,9 +36,13 @@ const (
 )
 
 // liveFork returns the sandboxed config dir and the source conversation's working
-// directory, or skips. Both come from the harness rather than being built here: a
-// Go test that shelled out to build its own conversation would be the harness,
-// written twice.
+// directory, or skips.
+//
+// The harness supplies both because the source cannot be built here, or anywhere
+// else in Go: a checkpoint is a file-history snapshot and `claude -p` does not write
+// them, so the source has to be an existing interactive conversation copied into a
+// sandbox. That is the harness's job, and doing it here would be the harness written
+// twice.
 func liveFork(t *testing.T) (configDir, srcDir string) {
 	t.Helper()
 	if os.Getenv(liveForkEnv) != "1" {
@@ -285,8 +289,9 @@ func liveForkInstance(t *testing.T, configDir string, seed ForkSeed, prompt stri
 
 // The harness is expected to have left the source conversation in a shape these
 // tests can read. Stated as its own check so a setup failure reads as one rather
-// than as three unrelated assertion failures.
-func TestLiveFork_HarnessBuiltAUsableSource(t *testing.T) {
+// than as four unrelated assertion failures — which is exactly how the first run of
+// this harness reported that its print-mode source had no checkpoints at all.
+func TestLiveFork_HarnessSuppliedAUsableSource(t *testing.T) {
 	configDir, srcDir := liveFork(t)
 	cps, cp := liveCheckpoint(t, configDir, srcDir)
 
