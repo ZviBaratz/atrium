@@ -66,9 +66,10 @@ get_latest_version() {
     # runs as `main "$@" || exit 1` and errexit is suppressed inside a `||` list — the
     # branch survives by grace of the call site rather than by anything written here.
     #
-    # Caveat this does not fix: the caller uses `VERSION=$(get_latest_version)`, so the
-    # message below lands in VERSION instead of the terminal and the run continues with
-    # it as the version string. Pre-existing, and out of scope for a shellcheck pass.
+    # Two pre-existing faults this does NOT fix, both from the same subshell (#656):
+    # the caller uses `VERSION=$(get_latest_version)`, so the message below lands in
+    # VERSION rather than the terminal and the run continues with it as the version
+    # string, and API_RESPONSE never reaches the parent for download_release to quote.
     #
     # stderr is deliberately not merged into the capture: -sS already prints curl's
     # error to the terminal, and this value is parsed for "tag_name" below.
@@ -181,10 +182,17 @@ extract_and_install() {
     # old `echo "$(… version)"` reported echo's exit status, which left a binary that
     # could not run — wrong arch, truncated asset — printing a success banner and a
     # blank line, then exiting 0. Testing it here reports that as the failure it is.
+    # stderr is deliberately not merged in: this value is printed as the version line
+    # below, so a loader warning from a binary that runs-but-complains would be spliced
+    # into it. Left on the terminal, it still reaches the user in both outcomes.
     local installed_version
-    if ! installed_version=$("$bin_dir/$INSTALL_NAME${extension}" version 2>&1); then
-        echo "Installed to $bin_dir/$INSTALL_NAME${extension}, but it could not run:"
-        echo "$installed_version"
+    if ! installed_version=$("$bin_dir/$INSTALL_NAME${extension}" version); then
+        echo "Installed to $bin_dir/$INSTALL_NAME${extension}, but it could not run."
+        if [ "$UPGRADE_MODE" = true ]; then
+            # The old binary was removed above and `atr` already repointed, so there is
+            # nothing left to fall back to — say so, because that changes the fix.
+            echo "The previous '$INSTALL_NAME' has already been replaced; reinstall a known-good version to recover."
+        fi
         exit 1
     fi
 

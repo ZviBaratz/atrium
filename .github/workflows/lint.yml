@@ -58,9 +58,15 @@ jobs:
           version: latest
 
   # The only job here that can see a .sh file: build, vet, gofmt and golangci-lint are
-  # all blind to them, and ten committed scripts are load-bearing (#652). Runs at
-  # shellcheck's default severity, which includes style/note — the whole repo is clean
-  # at it, so a threshold would only be a discount taken before anyone saw the bill.
+  # all blind to them, and the committed scripts are load-bearing yet rarely run by
+  # hand (#652). The count lives in the job's own output, not in this comment, so it
+  # cannot go stale the next time a script is added.
+  #
+  # Runs at shellcheck's default severity, which includes style/note: every committed
+  # *.sh is clean at it, so a threshold would only be a discount taken before anyone
+  # saw the bill. Note the scope is those files only — shell embedded in workflow
+  # `run:` blocks and justfile recipes is not checked, including the SC2086 disable in
+  # the gofmt job above, which still suppresses a checker that never reads this file.
   #
   # Unlike its neighbours this job is NOT required by branch protection yet; make it
   # required once it has reported green across a few PRs.
