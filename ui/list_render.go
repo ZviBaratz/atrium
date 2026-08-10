@@ -231,12 +231,27 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 	// Per-session Antigravity (agy) account badge (#457), on the same axis-identity
 	// footing as the Claude badge above and rendered beside it.
 	//
-	// Shown only on a session that actually RUNS agy. The account is stamped on every
-	// session regardless of program — app's spawn calls SetAgyAccount unconditionally,
-	// and a catch-all agy account matches every repo — but the pinned dir is honoured
-	// only where the launch path resolves the agy adapter (session/tmux's
-	// `if t.adapter.Key == agent.KeyAgy` before wrapAgyBwrap). Badging a claude row
-	// would report a route that does nothing.
+	// It reports the route this session PINNED, and only where one was pinned at all.
+	// Two conditions beyond a non-empty name, because the account is stamped on every
+	// session regardless of program (app's spawn calls SetAgyAccount unconditionally,
+	// and a rule-less agy account is a catch-all matching every repo), and a stamp is
+	// not a route:
+	//
+	//   - the session must RUN agy — the pinned dir reaches wrapAgyBwrap only where
+	//     the launch path resolves the agy adapter (session/tmux's `if t.adapter.Key
+	//     == agent.KeyAgy`), so a claude row would name an account it never uses;
+	//   - the dir must be non-empty — an AgyAccount with no config_dir is reachable
+	//     (the accounts overlay validates only the name, and it renders that state as
+	//     "<name> (inherit ambient env)"), and wrapAgyBwrap no-ops on "", so such a
+	//     session runs on the ambient config like one with no account at all.
+	//
+	// What it deliberately does NOT claim is that the isolation is live. wrapAgyBwrap
+	// also no-ops off Linux and when bwrap is missing from PATH — and the second is a
+	// launch-time LookPath whose result the row does not hold, so gating on GOOS would
+	// fix only one of the two and leave the badge meaning "isolation is active" on
+	// macOS while meaning "the pinned route" on a Linux box without bubblewrap. One
+	// uniform meaning is the honest one; the platform caveat lives in the README
+	// beside the Linux-only note it belongs to.
 	//
 	// Prefixed where the Claude badge is bare, because the two axes are independent
 	// and can both land on one row: two unlabelled names would not say which is which.
@@ -248,7 +263,7 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 	// an open contrast bug on this band (#555).
 	//
 	// Deliberately NOT gated on hideClaudeAccountBadge — see that field's comment.
-	if acct := i.AgyAccountName(); acct != "" && runsAgy(i) {
+	if acct := i.AgyAccountName(); acct != "" && i.AgyConfigDir() != "" && runsAgy(i) {
 		right1 = append(right1, p.seg(" agy:"+acct+" ", th.Palette.Accent))
 	}
 	// Per-session AUTO badge (not while paused) so "yolo" state is unmistakable.

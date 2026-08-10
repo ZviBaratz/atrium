@@ -75,11 +75,36 @@ func TestRender_AgyBadgeAbsentOnANonAgySession(t *testing.T) {
 		"a session that does not run agy must not advertise an agy route")
 }
 
+// TestRender_AgyBadgeAbsentWithoutAPinnedDir is the second half of "a badge must not
+// report a route that does nothing". An AgyAccount with no `config_dir` is reachable
+// — the accounts overlay's validate() rejects only an empty or duplicate NAME, and
+// ResolvedConfigDir expands "" to "" — and the overlay's own routing preview already
+// renders that state as "<name> (inherit ambient env)". wrapAgyBwrap no-ops on an
+// empty dir (session/tmux/agy.go), so such a session runs on the ambient config and
+// is indistinguishable from one with no account at all. Naming it on the row would
+// claim an identity the session does not have.
+func TestRender_AgyBadgeAbsentWithoutAPinnedDir(t *testing.T) {
+	inst, err := session.NewInstance(session.InstanceOptions{Title: "inherit", Path: "/tmp/api", Program: "agy"})
+	require.NoError(t, err)
+	inst.SetAgyAccount("grav-one", "") // a named account whose config_dir is empty
+	require.Equal(t, "grav-one", inst.AgyAccountName(),
+		"precondition: the name IS stamped — the row is what must stay silent")
+	require.NotContains(t, agyRow(t, 80, inst), "agy:",
+		"an account that isolates nothing must not be badged")
+}
+
 // TestRender_AgyBadgeFollowsTheResolvedAgent pins the gate to agent.Resolve rather
-// than to the literal "agy": the same session is launched as a path, under the
-// `antigravity` alias, and with flags appended, and all three are one agent — while
-// a program that merely contains an agy-ish word is not. Without this the gate could
-// be a `== "agy"` comparison and every other guard here would still pass.
+// than to the literal "agy": the same session launched as a path, under the
+// `antigravity` alias, and with flags appended is one agent, while another agent's
+// program is not. Without this the gate could be a `== "agy"` comparison and every
+// other guard here would still pass.
+//
+// Resolve matches an alias as a SUBSTRING of the first token's basename, so a
+// program merely CONTAINING "agy" (`magyar`, a `run-agy.sh` wrapper) resolves to the
+// agy adapter too. That is deliberate — it is how launcher wrappers resolve, and it
+// is the launch path's behaviour as much as the badge's — so it is neither asserted
+// nor worked around here; the point of this table is only that the row and the
+// launch decide by the same function.
 func TestRender_AgyBadgeFollowsTheResolvedAgent(t *testing.T) {
 	for _, tc := range []struct {
 		program string
