@@ -14,19 +14,23 @@ import (
 
 // TestShellScriptsParse runs `bash -n` over every committed shell script.
 //
-// Nothing else in the gate can see a shell mistake: `go build`, `go vet`, gofmt and
-// golangci-lint are all blind to these files, and CI has no shellcheck job. What the
-// repo does carry is inline `# shellcheck disable` directives — in test/smoke/run.sh
-// and scripts/drive-agent.sh — and those SUPPRESS a checker rather than run one, so
-// they leave the gap exactly where it was (#652 tracks closing it). The
-// scripts are also the least-exercised code here: govulncheck.sh runs only in its own
-// workflow, run.sh and render.sh need vhs/ttyd/ffmpeg, and drive-agent.sh is driven by
-// hand when someone re-verifies an agent's heuristics — which may be months apart. A
-// syntax break in any of them would sit undetected until the one moment it is needed.
+// No Go tool in the gate can see a shell mistake: `go build`, `go vet`, gofmt and
+// golangci-lint are all blind to these files. Since #652 the lint workflow carries a
+// `shellcheck` job over the same set, which is where style and correctness findings
+// now come from; the inline `# shellcheck disable` directives in test/smoke/run.sh and
+// scripts/drive-agent.sh are narrow suppressions inside that run rather than, as
+// before, references to a checker nothing ever invoked. The scripts are also the
+// least-exercised code here: govulncheck.sh runs only in its own workflow, run.sh and
+// render.sh need vhs/ttyd/ffmpeg, and drive-agent.sh is driven by hand when someone
+// re-verifies an agent's heuristics — which may be months apart. A syntax break in any
+// of them would sit undetected until the one moment it is needed.
 //
-// This is deliberately syntax-only. It cannot start failing on style the way a
-// shellcheck gate could, so adding it does not change what an unrelated PR is judged
-// on; it only answers "does this file still parse".
+// This stays syntax-only, and that is what it adds over the shellcheck job rather than
+// a weaker copy of it. shellcheck parses with its own parser and does not promise
+// parse-equivalence with the bash that will actually run these scripts; `bash -n` is
+// the only check here that asks the interpreter itself. It is also the only one inside
+// `just test`, so it still answers "does this file parse" on a machine with no
+// shellcheck installed — `just ci` does not require the tool.
 func TestShellScriptsParse(t *testing.T) {
 	bash, err := exec.LookPath("bash")
 	if err != nil {

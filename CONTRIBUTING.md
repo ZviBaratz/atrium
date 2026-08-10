@@ -20,7 +20,11 @@ see everything. If `go` isn't on your `PATH`, prefix with `GO=/path/to/go`.
 just fmt        # format all Go code
 just fmt-check  # what CI checks (non-mutating)
 just lint       # golangci-lint
+just shellcheck # shellcheck over every committed *.sh (CI runs this too)
 ```
+
+`just shellcheck` is not part of `just ci`, so it needs `shellcheck` on your `PATH`
+only when you run it. CI pins 0.11.0; an older local build can disagree with it.
 
 ### Testing
 

@@ -127,6 +127,16 @@ fmt-check:
 vet:
     {{go}} vet ./...
 
+# Checks the same scripts CI does, taken from the index rather than the working tree.
+# CI pins shellcheck 0.11.0; a local build old enough to differ can disagree with it.
+# Deliberately not part of `ci` — CI runs it, `just ci` does not require the tool.
+# Args are flags only (`just shellcheck --severity=error`). Unlike `just lint`, this
+# cannot be narrowed to a path: the file list is appended by xargs, so a path passed
+# here is checked in ADDITION to all of them, not instead.
+# Lint every committed *.sh script (shellcheck; must be on PATH).
+shellcheck *args:
+    git ls-files -z -- '*.sh' | xargs -0 shellcheck {{args}}
+
 # Scan for known vulnerabilities (govulncheck). Allowlists the single documented
 # advisory GO-2026-5932; fails on anything else (see scripts/govulncheck.sh).
 # Needs network for `go run ...@latest`, so — like smoke/snapshot — it is not in `ci`.

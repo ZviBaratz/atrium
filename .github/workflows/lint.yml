@@ -56,3 +56,70 @@ jobs:
         uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa  # v7
         with:
           version: latest
+
+  # The only job here that can see a .sh file: build, vet, gofmt and golangci-lint are
+  # all blind to them, and the committed scripts are load-bearing yet rarely run by
+  # hand (#652). The count lives in the job's own output, not in this comment, so it
+  # cannot go stale the next time a script is added.
+  #
+  # Runs at shellcheck's default severity, which includes style/note: every committed
+  # *.sh is clean at it, so a threshold would only be a discount taken before anyone
+  # saw the bill. Note the scope is those files only — shell embedded in workflow
+  # `run:` blocks and justfile recipes is not checked, including the SC2086 disable in
+  # the gofmt job above, which still suppresses a checker that never reads this file.
+  #
+  # Unlike its neighbours this job is NOT required by branch protection yet; make it
+  # required once it has reported green across a few PRs.
+  #
+  # The version is pinned rather than taken from the runner: ubuntu-24.04 preinstalls
+  # shellcheck 0.9.0, so an unpinned job would grade PRs with a different checker than
+  # `just shellcheck` runs locally, and would change verdicts whenever the image does.
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    env:
+      SHELLCHECK_VERSION: '0.11.0'
+      SHELLCHECK_SHA256: '8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - name: Install shellcheck
+        run: |
+          set -euo pipefail
+          archive="shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          curl --fail --location --silent --show-error -o "$archive" \
+            "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/${archive}"
+          # Check before unpacking: --fail already rejects an HTTP error, but only the
+          # digest rejects a well-served wrong file.
+          echo "${SHELLCHECK_SHA256}  ${archive}" | sha256sum --check --strict -
+          tar -xJf "$archive"
+          sudo install -m 0755 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          rm -rf "$archive" "shellcheck-v${SHELLCHECK_VERSION}"
+      - name: Run shellcheck
+        run: |
+          set -euo pipefail
+          # Assert the pin rather than printing it. The runner image preinstalls its own
+          # shellcheck, so if the install step ever no-ops or that copy wins on PATH, the
+          # job would go on grading PRs with a different checker and the only trace would
+          # be a version line in a green log nobody reads.
+          actual="$(shellcheck --version | awk '/^version:/ {print $2}')"
+          echo "shellcheck ${actual} (pinned ${SHELLCHECK_VERSION})"
+          if [ "$actual" != "$SHELLCHECK_VERSION" ]; then
+            echo "expected the pinned ${SHELLCHECK_VERSION}, got ${actual} — is another shellcheck ahead on PATH?"
+            exit 1
+          fi
+          # The list comes from the index, not a glob or a directory walk, because
+          # "committed" is exactly what this job means — the same argument
+          # shell_syntax_test.go makes for its `bash -n` pass, which keeps the two
+          # lists identical by construction rather than by maintenance. Both select on
+          # the *.sh name: a committed script with a shell shebang and no extension
+          # would be missed by both (none exists today).
+          mapfile -d '' scripts < <(git ls-files -z -- '*.sh')
+          # A job that silently checks nothing passes just as green as one that checks
+          # everything, so an empty match is a failure, not a no-op.
+          if [ "${#scripts[@]}" -eq 0 ]; then
+            echo "git ls-files matched no *.sh — the query is broken, not the tree"
+            exit 1
+          fi
+          printf 'checking %d scripts:\n' "${#scripts[@]}"
+          printf '  %s\n' "${scripts[@]}"
+          shellcheck -- "${scripts[@]}"
