@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/transcript"
 	"github.com/ZviBaratz/atrium/ui/overlay"
 
@@ -319,4 +320,51 @@ func TestForkHeading_SurvivesAn80ColRender(t *testing.T) {
 	newest := forkCheckpoints().List[2]
 	assert.Contains(t, frame, newest.At.Format(overlay.CheckpointTimeFormat),
 		"the 80-column heading lost the checkpoint's timestamp")
+}
+
+// TestForkDoesNotAlsoQueueThePrompt is the regression guard for a defect that
+// every other test in this file was blind to, and that only pressing the key
+// found: the fork's prompt was delivered twice.
+//
+// The print run that materializes the truncated conversation asks the prompt
+// headlessly — that is what makes it the session's real first turn rather than a
+// throwaway. Queuing it as well hands it to deliverReadyPrompts, which types it
+// into the pane once the agent is up, and the fork answers the same question a
+// second time. Nothing failed, nothing was logged, and the session looked correct.
+//
+// The nil-fork arm is the control, and it is what makes this a guard rather than
+// an assertion that spawning queues nothing: without it, deleting the QueuePrompt
+// call outright would pass.
+func TestForkDoesNotAlsoQueueThePrompt(t *testing.T) {
+	const prompt = "carry on from the checkpoint"
+	for _, tc := range []struct {
+		name       string
+		fork       *session.ForkSeed
+		wantQueued int
+	}{
+		{"forked session", &session.ForkSeed{
+			SourceTranscript: "/cfg/projects/-src/s.jsonl",
+			CutEntryID:       "aaaa1111-1111-4111-8111-111111111111",
+			DroppedMessageID: "bbbb2222-2222-4222-8222-222222222222",
+			NewSessionID:     "cccc3333-3333-4333-8333-333333333333",
+		}, 0},
+		{"ordinary session", nil, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := newGateHome(t, gateScenarios()[0])
+			before := h.list.NumInstances()
+
+			// The returned cmd is deliberately not run: it is the background Start, and
+			// what is under test is what startNewSession put on the instance before it.
+			_, err := h.startNewSession("queued", t.TempDir(), true, "echo", "", prompt, nil, false, tc.fork)
+			require.NoError(t, err)
+			require.Equal(t, before+1, h.list.NumInstances(), "the session was not created")
+
+			inst := h.list.GetInstances()[h.list.NumInstances()-1]
+			assert.Equalf(t, tc.wantQueued, inst.QueueLen(),
+				"%s: queued %d prompts, want %d — a fork's prompt is asked by the print run, "+
+					"so queuing it as well types it into the pane a second time",
+				tc.name, inst.QueueLen(), tc.wantQueued)
+		})
+	}
 }

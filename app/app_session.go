@@ -1806,7 +1806,13 @@ func (m *home) startNewSession(title, path string, direct bool, program, branch,
 	if branch != "" {
 		instance.SetBaseBranch(branch)
 	}
-	instance.QueuePrompt(prompt)
+	// A fork's prompt is NOT queued: the print run that materializes the truncated
+	// conversation already asked it, and the session opens on that answer. Queuing it
+	// as well types it into the pane a second time, which reads as the agent being
+	// asked the same thing twice — and is how this was found, by pressing the key.
+	if fork == nil {
+		instance.QueuePrompt(prompt)
+	}
 	instance.SetStatus(session.Loading)
 	finalizer()
 
