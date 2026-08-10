@@ -94,10 +94,13 @@ func describeWidth(w int) string {
 // typo here surfaces as an orphan rather than as silent non-coverage.
 //
 // Entries are POSITIVE only: every capture listed must make its predicate return true. The
-// false-positive direction (a narrow pane that must NOT read as a prompt — agy's slash menu,
-// an answered gate, codex's composer ladders) is guarded per-adapter in the sibling files and
-// is deliberately not generalised here, because no narrow capture of those shapes exists to
-// build a table from.
+// false-positive direction — a narrow pane that must NOT read as a prompt — is guarded
+// per-adapter in the sibling files and is deliberately not generalised here, because the
+// negative shapes are adapter-specific and no table of them would be derivable from the
+// registry the way this one is. Those guards are agy's answered confirmation and idle
+// composer (registry_test.go TestAgyConfirmationPrompt), its slash menu
+// (TestAgySlashMenuIsNotAPrompt), its accepted gate (TestAgyTrustGate) and codex's composer
+// ladders (codex_pane_test.go TestCodexComposersReadAsNeitherPromptNorGate).
 var paneCoverage = map[string][]paneCapture{
 	// claude's gate is one Match (claudeGateVisible) covering the folder-trust dialog and
 	// both MCP-approval shapes, so all five captures belong to the same key.
@@ -308,12 +311,20 @@ func promptMatcherFor(t *testing.T, a *Adapter, name string) PromptMatcher {
 //
 // For prompts it asks the NAMED matcher directly (m.matches) rather than reading the winner
 // out of DetectPrompt, and the distinction is load-bearing in both directions. DetectPrompt
-// returns the FIRST matcher that matches, so a later matcher can never be proven through it —
-// claude's "permission-network" is permanently shadowed by "permission" on every pane
-// carrying its literal. Asking the named matcher is a claim about that matcher's literals,
-// which is what #648 is about; the ordering is a separate claim, asserted separately below so
-// a capture filed under the wrong matcher is reported rather than silently credited to
-// whichever matcher happened to win.
+// returns the FIRST matcher that matches, so on any pane an earlier matcher also claims, a
+// later one cannot be proven through it at all — the width question ("does this literal still
+// reach?") would silently become an ordering question. Asking the named matcher is a claim
+// about that matcher's literals, which is what #648 is about; the ordering is a separate
+// claim, asserted separately below so a capture filed under the wrong matcher is reported
+// rather than silently credited to whichever matcher happened to win.
+//
+// Which pane an ordering hides is not decidable from the table alone. claude's "permission"
+// and "permission-network" both key on the fetch/network family and "permission" is declared
+// first (registry.go:215, :254), but it is the STRICTER of the two — it requires the dialog's
+// own fetch title — so on the sandbox's "Do you want to allow this connection?" it misses and
+// permission-network wins. That is exactly the arrangement registry.go:604 documents and the
+// reason permission-network exists. It is shadowed on the fetch pane and live on the sandbox
+// one, which is why this asks each matcher by name instead of reasoning about the order.
 func fires(t *testing.T, key string, c paneCapture) bool {
 	t.Helper()
 	a, kind := adapterFor(t, key)
@@ -429,19 +440,28 @@ func TestCaptureWidthsAreNotOverstated(t *testing.T) {
 // a rung's evidence was replaced by a copy of its neighbour's.
 func TestNoCoverageKeyListsThePaneOrTheNameTwice(t *testing.T) {
 	for key, captures := range paneCoverage {
-		panes := map[string]string{}
-		names := map[string]bool{}
-		for _, c := range captures {
-			if prev, dup := panes[c.pane]; dup {
-				require.Fail(t, "a coverage key lists the same pane twice",
-					"%s: %s and %s carry identical panes — one rung's evidence is a copy of "+
-						"the other's, so this key proves one fewer width than it lists",
-					key, prev, c.name)
-			}
-			panes[c.pane] = c.name
-			require.False(t, names[c.name], "%s lists the name %s twice", key, c.name)
-			names[c.name] = true
+		requireDistinctCaptures(t, key, captures)
+	}
+}
+
+// requireDistinctCaptures is that check as a helper, because a []paneCapture that does NOT
+// feed paneCoverage needs it just as much: codex's composer ladders are negative evidence and
+// so are absent from the table, which left the guard one file short of the rungs it was
+// written for.
+func requireDistinctCaptures(t *testing.T, label string, captures []paneCapture) {
+	t.Helper()
+	panes := map[string]string{}
+	names := map[string]bool{}
+	for _, c := range captures {
+		if prev, dup := panes[c.pane]; dup {
+			require.Fail(t, "a capture list holds the same pane twice",
+				"%s: %s and %s carry identical panes — one rung's evidence is a copy of "+
+					"the other's, so this list proves one fewer width than it names",
+				label, prev, c.name)
 		}
+		panes[c.pane] = c.name
+		require.False(t, names[c.name], "%s lists the name %s twice", label, c.name)
+		names[c.name] = true
 	}
 }
 

@@ -631,7 +631,10 @@ var (
 	}
 	// The composer ladders are NEGATIVE for prompt detection — these panes must read as
 	// composers, not as prompts — so they carry the width datum but are deliberately not
-	// entries in paneCoverage, which is positive-only.
+	// entries in paneCoverage, which is positive-only. That negative is asserted in
+	// TestCodexComposersReadAsNeitherPromptNorGate below; before it existed, every assertion
+	// on these panes was a readback, and a widened matcher could fire on a live composer
+	// without reddening anything.
 	codexComposerLadder = []paneCapture{
 		{name: "codexTypedComposerPane120", width: 120, note: "one row", pane: codexTypedComposerPane120},
 		{name: "codexTypedComposerPane40", width: 40, note: "two rows", pane: codexTypedComposerPane40},
@@ -717,6 +720,50 @@ func TestCodexLaddersKeepEveryDrivenRung(t *testing.T) {
 		"width 120 codexNumberedListComposerPane120 (three items)",
 	}, ladderRungs(codexNumberedComposerLadder),
 		"a numbered-list prompt was driven single-line and three-item, at 120 and 20")
+}
+
+// The other half of the composer ladders' job, and the half that was missing: these panes
+// must read as NEITHER a prompt nor a gate at every driven width.
+//
+// The readback tests above are blind to it. Widen codex's approval matcher — its Any list
+// already holds "No, continue without", a prefix of ordinary English — and DetectPrompt starts
+// firing on a composer holding a sentence a user actually typed. InputBoxText is unaffected,
+// so the readback stays green while the session parks on needs-input with its queued prompt
+// withheld, or autoyes taps Enter into the composer. Narrowness is not a property of the
+// matcher's own captures; only a negative pane can measure it.
+//
+// The numbered ladder is the sharper case: those composers hold "1." "2." "3." lines, which is
+// the shape codex's menus take number accelerators for (#510).
+func TestCodexComposersReadAsNeitherPromptNorGate(t *testing.T) {
+	for _, ladder := range [][]paneCapture{codexComposerLadder, codexNumberedComposerLadder} {
+		for _, c := range ladder {
+			t.Run(c.label(), func(t *testing.T) {
+				m, ok := codex.DetectPrompt(c.pane)
+				require.False(t, ok,
+					"a live composer must not read as a prompt — %q claimed it", m.Name)
+				_, up := codex.GateUp(c.pane)
+				require.False(t, up, "a live composer is not a startup gate")
+			})
+		}
+	}
+}
+
+// The rungs of a negative ladder are as forgeable as a positive one's, and paneCoverage's
+// distinctness guard cannot see them: negative evidence is by construction absent from that
+// table. Without this, both narrow composer rungs could carry a copy of the 120 pane and the
+// ladder above would still report three driven widths.
+func TestCodexLadderRungsCarryDistinctPanes(t *testing.T) {
+	for _, l := range []struct {
+		name     string
+		captures []paneCapture
+	}{
+		{"codexTrustGateLadder", codexTrustGateLadder},
+		{"codexApprovalLadder", codexApprovalLadder},
+		{"codexComposerLadder", codexComposerLadder},
+		{"codexNumberedComposerLadder", codexNumberedComposerLadder},
+	} {
+		requireDistinctCaptures(t, l.name, l.captures)
+	}
 }
 
 // The defect, at the adapter boundary. Before #510 every one of these read false — codex's
