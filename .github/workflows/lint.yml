@@ -1,7 +1,7 @@
 name: Lint
 
 on:
-  # No paths filter on purpose: golangci-lint and gofmt are required by branch
+  # No paths filter on purpose: every job in this file is required by branch
   # protection, so they must report on every PR. A path-filtered required check
   # never reports on a docs/web-only PR and blocks the merge (see build.yml).
   push:
@@ -68,8 +68,9 @@ jobs:
   # `run:` blocks and justfile recipes is not checked, including the SC2086 disable in
   # the gofmt job above, which still suppresses a checker that never reads this file.
   #
-  # Unlike its neighbours this job is NOT required by branch protection yet; make it
-  # required once it has reported green across a few PRs.
+  # Required by branch protection, like its neighbours — which is why this file carries
+  # no `paths:` filter (see the header): a required check that never reports on a
+  # docs-only PR blocks the merge.
   #
   # The version is pinned rather than taken from the runner: ubuntu-24.04 preinstalls
   # shellcheck 0.9.0, so an unpinned job would grade PRs with a different checker than
