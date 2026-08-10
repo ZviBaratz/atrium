@@ -41,6 +41,19 @@ type BranchPicker struct {
 	// target is what the selected directory turned out to be, and so which
 	// inertNote explains the absent base (see targetKind).
 	target targetKind
+	// preferred is a branch to select as soon as results arrive, used by the fork
+	// form to point a new session at the conversation's own branch (#657).
+	//
+	// It applies to the FIRST result set only, matched or not, and is then dropped.
+	// That bound is the whole design: selection here is positional and the list is
+	// re-delivered on every debounced filter edit, so a preference that outlived its
+	// first delivery would drag the cursor back each time the user typed — a picker
+	// that fights the person using it. One delivery is also exactly what the seeding
+	// caller needs, since it seeds the filter that produces that delivery.
+	preferred string
+	// preferenceArmed distinguishes "no preference" from "preferred was applied and
+	// cleared", so the one-shot cannot be re-armed by an empty name.
+	preferenceArmed bool
 }
 
 // NewBranchPicker creates a new empty branch picker. It starts in the loading state
@@ -209,6 +222,17 @@ func (bp *BranchPicker) SetError(version uint64) {
 	bp.errored = true
 }
 
+// PreferBranch asks the picker to select name when the next result set arrives.
+// One-shot — see the field comment on preferred. An empty name is a no-op rather
+// than an arm, so a caller with nothing to prefer changes nothing.
+func (bp *BranchPicker) PreferBranch(name string) {
+	if name == "" {
+		return
+	}
+	bp.preferred = name
+	bp.preferenceArmed = true
+}
+
 // SetResults updates the branch list with search results.
 // version must match filterVersion for the results to be accepted (prevents stale updates).
 func (bp *BranchPicker) SetResults(branches []string, version uint64) {
@@ -234,6 +258,28 @@ func (bp *BranchPicker) SetResults(branches []string, version uint64) {
 
 	// Clamp the cursor to the freshly delivered result set.
 	bp.clampCursor(len(bp.visibleItems()))
+
+	// Apply a one-shot preference, then drop it whether or not it matched. Exact
+	// comparison, not the case-insensitive containment the search uses: a preference
+	// for "main" must never land on "maintenance", and the caller knows the branch's
+	// real name because it read it off a live session.
+	//
+	// After the clamp, because this sets a deliberate position the clamp would
+	// otherwise be free to move.
+	if bp.preferenceArmed {
+		want := bp.preferred
+		bp.preferred, bp.preferenceArmed = "", false
+		for i, b := range branches {
+			if b == want {
+				idx := i
+				if bp.showHeadBase {
+					idx++ // item 0 is the HEAD option
+				}
+				bp.cursor = idx
+				break
+			}
+		}
+	}
 }
 
 // visibleItems returns the list of items to display. When showHeadBase is set, the

@@ -276,3 +276,79 @@ func TestBranchPicker_DisabledIgnoresKeys(t *testing.T) {
 	assert.False(t, filterChanged)
 	assert.Empty(t, bp.GetFilter())
 }
+
+// TestBranchPicker_PreferBranch covers the fork form's base-branch default (#657)
+// at the level the app tests cannot reach: with the HEAD option showing.
+//
+// Selection here is positional, and item 0 is the HEAD option whenever it is shown,
+// so a preference that indexes straight into results lands one row short. The app
+// path never exercises that — it seeds a filter that exactly matches, which hides
+// the HEAD option — so without this the offset is unguarded in both directions.
+func TestBranchPicker_PreferBranch(t *testing.T) {
+	t.Run("offsets past the HEAD option", func(t *testing.T) {
+		bp := NewBranchPicker()
+		bp.PreferBranch("feature/b")
+		bp.SetResults([]string{"feature/a", "feature/b", "feature/c"}, bp.filterVersion)
+
+		if got := bp.GetSelectedBranch(); got != "feature/b" {
+			t.Errorf("GetSelectedBranch = %q, want %q — item 0 is the HEAD option, so the "+
+				"preference must index past it", got, "feature/b")
+		}
+	})
+
+	t.Run("matches exactly, not by containment", func(t *testing.T) {
+		// The hazard this feature generates itself: forking session "x" makes "x-fork",
+		// so a repo routinely holds a branch whose name contains another's. Ordered
+		// with the longer name first, since that is what a containment match would take.
+		bp := NewBranchPicker()
+		bp.PreferBranch("zvi/issue-644")
+		bp.SetResults([]string{"zvi/issue-644-fork", "zvi/issue-644"}, bp.filterVersion)
+
+		if got := bp.GetSelectedBranch(); got != "zvi/issue-644" {
+			t.Errorf("GetSelectedBranch = %q, want %q — a fork would be based on its own "+
+				"sibling rather than the conversation's branch", got, "zvi/issue-644")
+		}
+	})
+
+	t.Run("applies to the first result set only", func(t *testing.T) {
+		bp := NewBranchPicker()
+		bp.PreferBranch("feature/b")
+		bp.SetResults([]string{"feature/a", "feature/b"}, bp.filterVersion)
+		bp.SetResults([]string{"feature/b", "feature/a"}, bp.filterVersion)
+
+		if got := bp.GetSelectedBranch(); got == "feature/b" {
+			t.Error("the preference re-applied on a second delivery; it would drag the " +
+				"cursor back on every keystroke while the user filters")
+		}
+	})
+
+	t.Run("an empty name arms nothing", func(t *testing.T) {
+		bp := NewBranchPicker()
+		bp.PreferBranch("")
+		bp.SetResults([]string{"feature/a"}, bp.filterVersion)
+		if got := bp.GetSelectedBranch(); got != "" {
+			t.Errorf("GetSelectedBranch = %q, want the HEAD default", got)
+		}
+	})
+
+	// SetFilter must bump the version, or the search the caller issues for the seeded
+	// filter is indistinguishable from the one already in flight for the old text —
+	// and whichever lands last wins.
+	t.Run("seeding the filter invalidates in-flight results", func(t *testing.T) {
+		bp := NewBranchPicker()
+		stale := bp.filterVersion
+		bp.SetFilter("feature/b")
+		if bp.filterVersion == stale {
+			t.Fatal("SetFilter did not bump the version; a stale search would be accepted")
+		}
+		bp.PreferBranch("feature/b")
+		bp.SetResults([]string{"feature/a", "feature/b"}, stale) // the in-flight one
+		if got := bp.GetSelectedBranch(); got != "" {
+			t.Errorf("results from before the filter was seeded were accepted (selected %q)", got)
+		}
+		bp.SetResults([]string{"feature/a", "feature/b"}, bp.filterVersion)
+		if got := bp.GetSelectedBranch(); got != "feature/b" {
+			t.Errorf("GetSelectedBranch = %q, want %q once the fresh results land", got, "feature/b")
+		}
+	})
+}

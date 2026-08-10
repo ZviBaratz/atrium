@@ -388,6 +388,26 @@ func (t *TextInputOverlay) ClearTargetValidity() {
 	t.directoryPicker.ClearSelectionState()
 }
 
+// PreferBranch points the branch picker at name once its next results arrive, and
+// seeds the filter that produces them.
+//
+// The filter is not decoration here, it is what makes the preference reachable:
+// SearchBranches returns at most MaxBranchSearchResults, ordered by most recent
+// commit, so an unfiltered search in a busy repo need not contain the branch at all.
+// Filtering to its name guarantees it is in the set the preference is applied to —
+// and shows the user why that base is selected.
+//
+// Returns the filter version the caller must run its search under; a search issued
+// under an older version is rejected on arrival.
+func (t *TextInputOverlay) PreferBranch(name string) uint64 {
+	if t.branchPicker == nil || name == "" {
+		return t.BranchFilterVersion()
+	}
+	t.branchPicker.SetFilter(name)
+	t.branchPicker.PreferBranch(name)
+	return t.branchPicker.filterVersion
+}
+
 // GetSelectedBranch returns the selected branch name from the branch picker.
 // Returns empty string if no branch picker is present or "New branch" is selected.
 func (t *TextInputOverlay) GetSelectedBranch() string {

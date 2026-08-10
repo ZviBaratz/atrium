@@ -400,3 +400,187 @@ func TestForkFormSaysThePromptIsRequired(t *testing.T) {
 	assert.Equal(t, overlay.PromptPlaceholderOptional, h.textInputOverlay.PromptPlaceholder(),
 		"an ordinary session's prompt really is optional and must keep saying so")
 }
+
+// TestForkBaseBranch_DefaultsToTheConversationsOwnBranch is #657.
+//
+// A fork inherits a conversation ABOUT some branch's code. Basing its worktree on
+// the repo's default hands it a transcript discussing files the worktree does not
+// contain — which is how the very first real fork went, and the forked agent
+// noticed before a human did.
+//
+// The assertion is deliberately on GetSelectedBranch, the value
+// createSessionFromForm reads to build the worktree, not on what the picker
+// renders: a preference that only moved a highlight would look identical on screen
+// and branch off the wrong commit.
+func TestForkBaseBranch_DefaultsToTheConversationsOwnBranch(t *testing.T) {
+	repo := gitInitRepo(t)
+	runGitIn(t, repo, "branch", "zvi/issue-644")
+	runGitIn(t, repo, "branch", "zvi/unrelated")
+
+	h := openForkTimelineIn(t, repo, "zvi/issue-644")
+	h.handleCheckpointsState(runeKey("f"))
+	require.NotNil(t, h.textInputOverlay)
+	require.Equal(t, "zvi/issue-644", h.pendingFork.sourceBranch)
+
+	// The filter is seeded to the branch name, which is what guarantees it is in the
+	// capped result set at all — SearchBranches returns at most MaxBranchSearchResults,
+	// newest first, so an unfiltered search in a busy repo need not contain it.
+	assert.Equal(t, "zvi/issue-644", h.textInputOverlay.BranchFilter(),
+		"the search was not narrowed to the branch, so the preference may never see it")
+
+	// Results the seeded search would produce, ordered with the fork's own sibling
+	// first: "<title>-fork" is a name this feature generates, so a repo running it
+	// routinely holds a branch whose name contains another's.
+	h.textInputOverlay.SetBranchResults(
+		[]string{"zvi/issue-644-fork", "zvi/unrelated", "zvi/issue-644"},
+		h.textInputOverlay.BranchFilterVersion())
+
+	assert.Equal(t, "zvi/issue-644", h.textInputOverlay.GetSelectedBranch(),
+		"the fork's base is not the conversation's branch — it would branch off the repo default")
+}
+
+// The reissued search has to run under the version PreferBranch left behind.
+// Seeding the filter bumps that version, which invalidates the search
+// openCreateFormSeeded already queued — so without the reissue the picker sits empty
+// forever, and with a stale version the results are dropped on arrival. Neither
+// failure is visible on screen: an empty picker looks like a slow one.
+func TestForkBaseBranch_ResultsFromTheStaleSearchAreRejected(t *testing.T) {
+	repo := gitInitRepo(t)
+	runGitIn(t, repo, "branch", "zvi/issue-644")
+
+	h := openForkTimelineIn(t, repo, "zvi/issue-644")
+	staleVersion := h.textInputOverlay0(t).BranchFilterVersion()
+	h.handleCheckpointsState(runeKey("f"))
+	ov := h.textInputOverlay
+	require.NotNil(t, ov)
+
+	require.NotEqual(t, staleVersion, ov.BranchFilterVersion(),
+		"seeding the filter must bump the version, or the in-flight search wins the race")
+
+	ov.SetBranchResults([]string{"zvi/issue-644"}, staleVersion)
+	assert.Empty(t, ov.GetSelectedBranch(), "results from the pre-seed search were accepted")
+
+	ov.SetBranchResults([]string{"zvi/issue-644"}, ov.BranchFilterVersion())
+	assert.Equal(t, "zvi/issue-644", ov.GetSelectedBranch(),
+		"the fresh search's results did not apply the preference")
+}
+
+// TestForkBaseBranch_TheReissuedSearchRunsUnderTheLiveVersion runs the command the
+// fork open actually returns, rather than hand-delivering results the way the tests
+// above do.
+//
+// That distinction is the whole point. Seeding the filter bumps the picker's
+// version, so a search issued under the version captured *before* the seed is
+// rejected on arrival — and every symptom of that is invisible: the picker just
+// stays empty, which looks like a slow search, and the base silently falls back to
+// HEAD. Only executing the returned command and reading the version off the message
+// can tell the two apart.
+func TestForkBaseBranch_TheReissuedSearchRunsUnderTheLiveVersion(t *testing.T) {
+	repo := gitInitRepo(t)
+	runGitIn(t, repo, "branch", "zvi/issue-644")
+
+	h := openForkTimelineIn(t, repo, "zvi/issue-644")
+	_, cmd := h.handleCheckpointsState(runeKey("f"))
+	ov := h.textInputOverlay
+	require.NotNil(t, ov)
+
+	var searches []branchSearchResultMsg
+	var walk func(tea.Cmd)
+	walk = func(c tea.Cmd) {
+		if c == nil {
+			return
+		}
+		msg := c()
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			for _, sub := range batch {
+				walk(sub)
+			}
+			return
+		}
+		if r, ok := msg.(branchSearchResultMsg); ok {
+			searches = append(searches, r)
+		}
+	}
+	walk(cmd)
+
+	require.NotEmpty(t, searches, "opening the fork form issued no branch search at all")
+	live := ov.BranchFilterVersion()
+	var accepted *branchSearchResultMsg
+	for i := range searches {
+		if searches[i].version == live {
+			accepted = &searches[i]
+		}
+	}
+	require.NotNilf(t, accepted,
+		"every search ran under a stale version (live=%d, issued=%v) — the results would "+
+			"be dropped on arrival and the picker would sit empty", live, searches)
+	assert.Contains(t, accepted.branches, "zvi/issue-644",
+		"the accepted search did not look for the conversation's branch")
+
+	// And feeding it through the real handler selects it, which is the property the
+	// hand-delivered tests assert directly.
+	ov.SetBranchResults(accepted.branches, accepted.version)
+	assert.Equal(t, "zvi/issue-644", ov.GetSelectedBranch())
+}
+
+// textInputOverlay0 is the create form's filter version before the fork opens one,
+// captured from a throwaway form so the "stale" version in the test above is a real
+// prior value rather than a guess at what the counter started on.
+func (m *home) textInputOverlay0(t *testing.T) *overlay.TextInputOverlay {
+	t.Helper()
+	ov, _ := m.newSessionFormOverlay()
+	return ov
+}
+
+// A branch that is gone by fork time — merged and deleted is the ordinary end of a
+// session's life, and this repo squash-merges with delete-branch-on-merge — must
+// fall back to the form's default rather than naming a base the worktree build
+// would then fail on.
+func TestForkBaseBranch_FallsBackWhenTheBranchIsGone(t *testing.T) {
+	repo := gitInitRepo(t)
+	h := openForkTimelineIn(t, repo, "zvi/long-since-merged")
+	h.handleCheckpointsState(runeKey("f"))
+	require.NotNil(t, h.textInputOverlay)
+
+	assert.Empty(t, h.pendingFork.sourceBranch,
+		"a branch that no longer exists must not be offered as a base")
+	h.textInputOverlay.SetBranchResults([]string{"main"}, h.textInputOverlay.BranchFilterVersion())
+	assert.Empty(t, h.textInputOverlay.GetSelectedBranch(),
+		"with no source branch the form keeps its ordinary default (branch off HEAD)")
+}
+
+// The preference is a default, not a pin: it applies to the first result set and is
+// then gone, so a user who filters afterwards is not dragged back to it on every
+// keystroke. Without the one-shot bound the picker fights the person using it.
+func TestForkBaseBranch_IsADefaultNotAPin(t *testing.T) {
+	repo := gitInitRepo(t)
+	runGitIn(t, repo, "branch", "zvi/issue-644")
+	runGitIn(t, repo, "branch", "zvi/other")
+
+	h := openForkTimelineIn(t, repo, "zvi/issue-644")
+	h.handleCheckpointsState(runeKey("f"))
+	ov := h.textInputOverlay
+	require.NotNil(t, ov)
+
+	ov.SetBranchResults([]string{"zvi/issue-644", "zvi/other"}, ov.BranchFilterVersion())
+	require.Equal(t, "zvi/issue-644", ov.GetSelectedBranch())
+
+	// A second delivery, as a filter edit would produce, must not re-snap.
+	ov.SetBranchResults([]string{"zvi/other", "zvi/issue-644"}, ov.BranchFilterVersion())
+	assert.NotEqual(t, "zvi/issue-644", ov.GetSelectedBranch(),
+		"the preference survived its first result set and moved the cursor again")
+}
+
+// openForkTimelineIn opens the timeline on a claude session that lives in repo and
+// claims branch, so the fork's base-branch derivation has something real to read.
+func openForkTimelineIn(t *testing.T, repo, branch string) *home {
+	t.Helper()
+	h, inst := checkpointHome(t)
+	inst.Path = repo
+	inst.Branch = branch
+	h.newSessionPath = repo
+	_, _ = h.openCheckpoints()
+	require.NotNil(t, h.checkpointOverlay)
+	h.handleCheckpointsLoaded(checkpointsLoadedMsg{target: inst, result: forkCheckpoints()})
+	return h
+}

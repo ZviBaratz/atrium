@@ -27,6 +27,12 @@ type pendingFork struct {
 	// at stamps the chosen checkpoint into the form's heading, so a mis-aimed cursor
 	// is visible before a worktree is built rather than after.
 	at time.Time
+	// sourceBranch is the forking session's own branch, which the new worktree
+	// should branch from: the conversation being forked is ABOUT that branch's code,
+	// so branching off the repo's default would hand the fork a transcript that
+	// discusses files its worktree does not contain (#657). Empty for a direct
+	// session, or when the branch no longer exists locally.
+	sourceBranch string
 }
 
 // forkTitleSuffix is appended to the source's title to derive the fork's stem.
@@ -93,6 +99,19 @@ func (m *home) openForkForm(path string, pf *pendingFork) (tea.Model, tea.Cmd) {
 		// field that says "Optional" while the submit refuses it is the form
 		// contradicting itself at the moment the user decides whether to type.
 		m.textInputOverlay.SetPromptPlaceholder(overlay.PromptPlaceholderFork)
+
+		// Point the base at the conversation's own branch. The picker stays free —
+		// this is a default, not a pin — and the seeded filter both guarantees the
+		// branch is in the capped result set and shows why that base is selected.
+		//
+		// The initial branch search openCreateFormSeeded queued ran under the previous
+		// filter version, so it is now stale and will be rejected on arrival; this
+		// reissues it under the version PreferBranch returns. Without the reissue the
+		// picker would sit empty, since nothing else fires a search until a keystroke.
+		if pf.sourceBranch != "" {
+			version := m.textInputOverlay.PreferBranch(pf.sourceBranch)
+			cmd = tea.Batch(cmd, m.runBranchSearch(pf.sourceBranch, version))
+		}
 	}
 	return m, cmd
 }
