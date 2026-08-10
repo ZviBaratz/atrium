@@ -131,8 +131,10 @@ at what is missed rather than at what is already caught:
   true when written and is false now is a defect, and it is the one nothing else here
   can see. So is one that was never true: #665 had to correct "`permission-network` is
   permanently shadowed by `permission`", read off `permission` coming first in claude's
-  `Prompts` when it is the *stricter* predicate and misses the very dialog
-  `permission-network` catches. Order says who is tried first, never who is reachable.
+  `Prompts` when it is the *stricter* predicate and misses the sandbox dialog
+  `permission-network` catches. `DetectPrompt` does return the first match, so order
+  settles it where both fire — on the fetch pane both do, and `permission` wins only by
+  being first. Order plus one predicate is the inference that fails; read both.
 - **Check a claim against the artifact it names, across file boundaries — and a
   comment naming N artifacts is N lookups.** The README naming `/tmp` while the code
   calls `os.TempDir()`, a test docstring promising a guard the assertion does not
@@ -230,17 +232,20 @@ anything. Press it.
 **Prose says why; data says what.** When a comment is about to state a width, a count,
 a path or a list, put the value somewhere a test can read it instead — a struct field,
 a table, a `grep` recipe with a guard beside it. `session/agent/pane_width_test.go` is
-the worked example: fixture width moved out of const names and doc comments into
-`paneCapture.width`, and the coverage invariant is computed from it (#648, #665). The
-drift-sites skill does the same for its counts, which `keys/skill_counts_test.go` holds
-to the tree. Where a value must stay in prose, one file owns it and the rest cite that
-file. Reasons are not exempt from checking, only from this remedy — verify a reason
+the worked example: `paneCapture.width` makes a fixture's width a value, and the coverage
+invariant is computed from it (#648, #665). The const names (`codexApprovalPane28`) and the
+doc comments still carry it too — the datum was added *beside* the prose, not swapped for
+it, so the table is the authority and the rest is description. The drift-sites skill does
+the same for its counts, which `keys/skill_counts_test.go` holds to the tree. Where a value
+must stay in prose, one file owns it and the rest cite that file. Reasons are not exempt from checking, only from this remedy — verify a reason
 against the mechanism, per the first review rule above. And correct a claim by grepping
 the *claim*, not the sentence in front of you: in #646 a fix landed in `registry.go` and
 left `registry_test.go` repeating the same two false things, in the file whose own
 fixtures disproved them, under a commit message saying "Both corrected". Cite the PR, not
-the *branch* commit: this repo squash-merges, so a pre-merge SHA never becomes an ancestor
-of `main` and resolves only for whoever wrote it. The squashed commit on `main` is fine.
+the *branch* commit: this repo squash-merges, so a pre-merge SHA is never an ancestor of
+`main` and `git show` fails on it in a fresh clone. It is not gone — GitHub keeps
+`refs/pull/N/head`, so `git fetch origin refs/pull/N/head` reaches it — but that needs the
+PR number, so cite the number and skip the step. A squashed SHA on `main` is fine.
 
 For the general discipline of proving a TUI change is right — why a passing Go suite
 cannot see width, reflow, colour, or a click that hit the neighbouring row — use the
