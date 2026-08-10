@@ -91,7 +91,12 @@ get_latest_version() {
         err "Failed to connect to GitHub API"
     fi
 
-    if echo "$API_RESPONSE" | grep -q "Not Found"; then
+    # Match the error envelope, not the whole payload: a bare "Not Found" also matches a
+    # release note that happens to mention it ("fix: handle Not Found from the GitHub
+    # API" is an entirely plausible line in this repo's own history), and the releases
+    # JSON carries every release's body. That false positive now aborts the install
+    # rather than merely garbling it, so it is worth being exact about.
+    if echo "$API_RESPONSE" | grep -q '"message": *"Not Found"'; then
         err "No releases found in the repository"
     fi
 
@@ -394,6 +399,12 @@ main() {
     while [[ $# -gt 0 ]]; do
         case $1 in
             --name)
+                # A bare `--name` used to hang forever: `shift 2` with one argument left
+                # shifts nothing and succeeds, so $# never reached 0 and this loop spun.
+                # On the documented `curl … | bash -s -- --name <n>` that is a terminal
+                # sitting silent with no output and no exit — the worst of the failure
+                # paths #656 is about.
+                [ $# -ge 2 ] || err "--name needs a value. Usage: install.sh [--name <n>]"
                 INSTALL_NAME="$2"
                 shift 2
                 ;;
@@ -449,12 +460,18 @@ err() {
 
 # The `|| exit 1` suppresses errexit for every command reachable from main — bash exempts
 # both sides of a `&&`/`||` list, and the exemption propagates into the functions called
-# there — so the `set -e` at the top of this file is inert below this line. Nothing above
-# relies on it: failures are reported explicitly, through `ensure` and `err`, and anything
-# added under main must do the same rather than trusting errexit to catch it.
+# there — so the `set -e` at the top of this file is inert below this line. Anything added
+# under main must therefore report its own failures, through `ensure` or `err`, rather
+# than trusting errexit to catch them.
 #
-# Restoring errexit here is a separate change, because it would make currently-tolerated
-# failures fatal: the profile append in setup_shell_and_path, `which` in
-# check_command_exists, and `tmux -V` in check_tmux_version — the last of which is
-# warning-only by design and must never fail an install (#656).
+# Three sites do not, and would become fatal if this were changed to a bare `main "$@"`,
+# which is why restoring errexit is a separate piece of work rather than a one-word edit:
+#
+#   - the profile append in setup_shell_and_path, which today prints bash's raw
+#     redirection error and installs anyway, reporting success while leaving BIN_DIR off
+#     the user's PATH — the same "failed step, cheerful exit 0" shape as #656;
+#   - `which` in check_command_exists, absent from some minimal images;
+#   - `tmux -V` in check_tmux_version, which is warning-only by design and must never
+#     fail an install. TestInstallScriptInstallsAndUpgrades pins that one, so whoever
+#     makes the change finds a red test rather than a paragraph in an old PR.
 main "$@" || exit 1

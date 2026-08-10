@@ -68,7 +68,7 @@ import (
 // # Verifying that these actually catch #656
 //
 // Run them against the pre-fix script. `go test` keys its cache on files the test process
-// opens, and install.sh reaches bash as a path, so runInstallScript reads it purely to
+// opens, and install.sh reaches bash as a path, so installFixture.run reads it purely to
 // register it as an input — without that, editing only install.sh replays a cached PASS.
 // Belt and braces, pass -count=1:
 //
@@ -79,9 +79,9 @@ import (
 // releasesJSON is a GitHub /releases payload shaped the way install.sh parses it: the
 // first "tag_name" line wins for the version, and every "tag_name" line is listed by the
 // available-versions tip. It has to be pretty-printed one field per line, because the sed
-// that extracts the tag is greedy (`.*"([^"]+)".*`) and so captures the last quoted run on
-// the line. That is a real fragility in install.sh:87, dormant only because the GitHub
-// REST API pretty-prints; it is out of scope here, but the fixture must respect it.
+// in get_latest_version that extracts the tag is greedy (`.*"([^"]+)".*`) and so captures
+// the last quoted run on the line. That is a real fragility, dormant only because the
+// GitHub REST API pretty-prints; it is out of scope here, but the fixture must respect it.
 const releasesJSON = `[
   {
     "upload_url": "https://uploads.github.com/repos/ZviBaratz/atrium/releases/1/assets{?name,label}",
@@ -108,7 +108,13 @@ const releasesJSON = `[
 // It scans the argv for the URL and the -o target rather than indexing it, so a change to
 // either call's flag order cannot quietly turn this into a stub that answers nothing. The
 // match is on the scheme: `%{http_code}` could otherwise be mistaken for a URL.
-const stubCurlScript = `#!/bin/sh
+//
+// The download branch writes the staged HTTP code to stdout before it decides whether to
+// fail, which is what real curl does under `-w '%{http_code}'`: the code goes to stdout
+// and `-sS`'s message to stderr, and install.sh merges the two with 2>&1. Staging it
+// matters — a stub that hardcoded 200 for a simulated 404 would put a false value in the
+// one field the "curl reported:" diagnostic exists to surface.
+const stubCurlScript = `#!/usr/bin/env bash
 printf 'CURLCALL %s\n' "$(printf '%s ' "$@" | tr '\n' ' ')" >> "$CTL_DIR/curl.log"
 
 url=
@@ -133,9 +139,10 @@ case $url in
         ;;
     *)
         code=$(cat "$CTL_DIR/dl_exit")
-        printf '200'
+        http=$(cat "$CTL_DIR/dl_http")
+        printf '%s' "$http"
         if [ "$code" -ne 0 ]; then
-            echo "curl: ($code) The requested URL returned error: 404" >&2
+            echo "curl: ($code) The requested URL returned error: $http" >&2
             exit "$code"
         fi
         cp "$(cat "$CTL_DIR/dl_payload")" "$out"
@@ -147,20 +154,20 @@ esac
 // version it is. The default is far above MIN_TMUX_VERSION rather than just above it, so
 // raising the floor cannot start splicing a too-old warning into the output every other
 // case reads.
-const stubTmuxScript = `#!/bin/sh
+const stubTmuxScript = `#!/usr/bin/env bash
 code=$(cat "$CTL_DIR/tmux_exit")
 [ "$1" = "-V" ] && [ "$code" -eq 0 ] && cat "$CTL_DIR/tmux_version"
 exit "$code"
 `
 
-const stubGhScript = `#!/bin/sh
+const stubGhScript = `#!/usr/bin/env bash
 exit 0
 `
 
 // stubForbiddenScript stands in for the package managers and the privilege escalation
 // install.sh reaches for when a dependency is missing. Reaching one means the stub PATH
 // failed, so it records and refuses rather than doing anything.
-const stubForbiddenScript = `#!/bin/sh
+const stubForbiddenScript = `#!/usr/bin/env bash
 printf 'FORBIDDEN %s %s\n' "$(basename "$0")" "$*" >> "$CTL_DIR/forbidden.log"
 exit 99
 `
@@ -198,8 +205,10 @@ type installFixture struct {
 	ctlDir     string
 	tmpDir     string
 	version    string   // VERSION env var; empty leaves it unset, i.e. "latest"
+	args       []string // command-line arguments for install.sh
 	extraEnv   []string // appended verbatim to the child environment
 	pathPrefix []string // prepended to systemPathDirs
+	timeout    time.Duration
 }
 
 func newInstallFixture(t *testing.T) *installFixture {
@@ -248,6 +257,7 @@ func newInstallFixture(t *testing.T) *installFixture {
 	f.control(t, "api_exit", "0")
 	f.control(t, "api_body", releasesJSON)
 	f.control(t, "dl_exit", "0")
+	f.control(t, "dl_http", "200")
 	f.control(t, "dl_payload", tarballWithAtrium(t, f.ctlDir))
 	f.control(t, "tmux_exit", "0")
 	f.control(t, "tmux_version", "tmux 9.9\n")
@@ -295,9 +305,16 @@ func (f *installFixture) run(t *testing.T) installResult {
 	require.NoError(t, err)
 	require.NotEmpty(t, src, "install.sh is empty; these runs would prove nothing")
 
-	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
+	// A deadline, not a formality: install.sh has had an argument-parsing loop that spun
+	// forever, and a hang has to surface as a failed case rather than as a suite that
+	// never returns.
+	timeout := f.timeout
+	if timeout == 0 {
+		timeout = 60 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "bash", script)
+	cmd := exec.CommandContext(ctx, "bash", append([]string{script}, f.args...)...)
 	cmd.Env = env
 	cmd.Dir = f.tmpDir
 	var stdout, stderr bytes.Buffer
@@ -460,10 +477,13 @@ func TestInstallScriptFailurePaths(t *testing.T) {
 	t.Run("asset missing after resolving latest", func(t *testing.T) {
 		f := newInstallFixture(t)
 		f.control(t, "dl_exit", "22") // curl -f on an HTTP error
+		f.control(t, "dl_http", "404")
 
 		res := f.run(t)
 
 		require.Equal(t, 1, res.exitCode)
+		require.Contains(t, res.stdout, "curl reported: 404",
+			"the HTTP code is the one fact that diagnostic exists to surface")
 		// Both halves of this were broken: API_RESPONSE never left get_latest_version's
 		// subshell, and the tip was gated on a $version main had already resolved away
 		// from "latest", so the block could not run even with a response to print.
@@ -476,6 +496,23 @@ func TestInstallScriptFailurePaths(t *testing.T) {
 		require.Contains(t, res.stdout, "9.9.7")
 	})
 
+	t.Run("--name without a value fails instead of hanging", func(t *testing.T) {
+		// `shift 2` with one argument left shifts nothing and succeeds, so `while [[ $#
+		// -gt 0 ]]` spun forever. On the documented `curl … | bash -s -- --name <n>`
+		// that is a silent terminal that never returns — no output, no exit, nothing to
+		// report. The short deadline is the assertion: a regression here reports a
+		// killed process (-1) rather than wedging the suite for a minute.
+		f := newInstallFixture(t)
+		f.args = []string{"--name"}
+		f.timeout = 15 * time.Second
+
+		res := f.run(t)
+
+		require.Equal(t, 1, res.exitCode, "a flag missing its value must fail fast")
+		require.Contains(t, res.stderr, "--name needs a value")
+		require.Empty(t, res.curlCalls, "argument parsing failed, so nothing should have been fetched")
+	})
+
 	t.Run("asset missing for an explicitly requested version", func(t *testing.T) {
 		// A negative control for the new gate rather than a #656 reproduction: the old
 		// script printed no tip on any path, so this passes either way. It is here so
@@ -486,6 +523,7 @@ func TestInstallScriptFailurePaths(t *testing.T) {
 		f.version = "1.2.3"
 		f.extraEnv = append(f.extraEnv, "API_RESPONSE="+releasesJSON)
 		f.control(t, "dl_exit", "22")
+		f.control(t, "dl_http", "404")
 
 		res := f.run(t)
 
@@ -565,6 +603,27 @@ func TestInstallScriptInstallsAndUpgrades(t *testing.T) {
 			"VERSION is a request to install exactly that, without asking GitHub what is newest")
 		require.Len(t, res.curlCalls, 1)
 		require.Contains(t, res.curlCalls[0], "/v1.2.3/atrium_1.2.3_")
+		require.FileExists(t, filepath.Join(f.binDir, "atrium"))
+	})
+
+	t.Run("a release note mentioning Not Found still installs", func(t *testing.T) {
+		// The "no releases" check greps the whole payload, and the releases JSON carries
+		// every release's body — so a bare `grep -q "Not Found"` rejects a perfectly good
+		// response over a release note. That is not hypothetical for this repo: the line
+		// below is the shape of its own commit titles. Matching the error envelope
+		// instead is what makes this pass.
+		f := newInstallFixture(t)
+		f.control(t, "api_body", `[
+  {
+    "body": "fix: handle Not Found from the GitHub API",
+    "tag_name": "v9.9.9"
+  }
+]`)
+
+		res := f.run(t)
+
+		require.Equal(t, 0, res.exitCode, "stderr was: %s", res.stderr)
+		require.NotContains(t, res.stderr, "No releases found in the repository")
 		require.FileExists(t, filepath.Join(f.binDir, "atrium"))
 	})
 
