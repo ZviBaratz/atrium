@@ -1,0 +1,639 @@
+package agent
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/mattn/go-runewidth"
+	"github.com/stretchr/testify/require"
+)
+
+// #648, and the reason it is a whole file: nothing in this package stopped an adapter's
+// matcher literal from being WIDER than the narrowest pane Atrium can hand an agent, and a
+// literal that does not fit stops firing on a real dialog in silence.
+//
+// That shipped. agy's gate keyed on "Yes, I trust this folder" — 24 cells plus the option
+// row's "> " indent, so it needs 26 columns. At 24 the row renders "> Yes, I trust this
+// fold", GateUp goes false, and because the truncated row STILL opens with ">",
+// isInputBoxLine reports a composer, AwaitingInput returns true, and the queued first prompt
+// is typed into the folder-trust dialog. Nothing floors that width: the agent's detached
+// session is sized to the preview pane (app/app_layout.go GetPreviewSize → ui/list.go
+// SetSessionPreviewSize → session/instance.go SetPreviewSize), the list may take
+// maxListRatio = 0.60 of the terminal (config/state.go), and the remainder is not clamped to
+// any minimum — a 70-column terminal leaves about 24.
+//
+// The reason no test could state that rule is that a capture's WIDTH was never a value. It
+// lived in const names (codexApprovalPane28) and in doc comments ("captured at width 28"),
+// where nothing can read it. The table below makes it a datum, and the tests turn it into
+// the invariant.
+//
+// TWO WAYS TO GET THIS WRONG, both of which pass while the matcher is broken:
+//
+//   - Comparing len(literal) to a width. Truncation is right-to-left, so what binds is
+//     where the distinguishing token ENDS in the line, not how long the matched substring
+//     is: "Navigate · tab" needs the same 20 columns as "↑/↓ Navigate · tab" and dies at
+//     the same 19. TestAgyConfirmationFloorCannotBeLoweredByShorteningTheLiteral states
+//     that truncation model, and nothing here subsumes it — it evaluates a counterfactual
+//     literal on a synthetic 19-column pane, neither of which a table of real captures can
+//     ever contain. Do not "de-duplicate" the two.
+//   - Grepping the pane. Codex WRAPS its gate body instead of truncating it, and
+//     flattenChrome's space-join repairs the wrap — so a raw grep for codex's 43-cell gate
+//     literal misses at ≤40 while the real GateUp holds to 24.
+//
+// So every assertion here runs the PRODUCTION predicate (GateUp / DetectPrompt /
+// HasBusyMarker) against a VERBATIM captured pane. Nothing here reasons about lengths.
+//
+// What this file does NOT reach, stated so the tables are not read as fuller than they are.
+// A Match matcher IS exercised at every width it has captures for, because fires() runs the
+// production predicate — claudeGateVisible holds at 40 and 28 here. What cannot be enumerated
+// is its individual literals: they live inside the func (claudeGateVisible,
+// claudeFetchPermissionVisible, claudeNetworkPermissionVisible, claudeSelectionFooterVisible,
+// claudeLocalPermissionVisible, aiderConfirmVisible and the token helpers they call), so the
+// alternatives ledger below skips them. Beyond that, the width-bearing surfaces outside
+// Prompts/Gates/BusyMarkers — PermissionMode's footer markers, LiveSpinner, SuggestionVisible,
+// PasteCollapsed — have no coverage here at all.
+
+// paneCapture is one verbatim capture plus the width it was driven at.
+type paneCapture struct {
+	// name is the fixture's Go identifier, so a failure names the capture to open.
+	name string
+	// width is the tmux -x the capture ran at. ZERO means the fixture's own provenance
+	// does not record it — which is not the same as "narrow" and must never be read as a
+	// floor. Such a capture still proves its matcher fires; it just cannot say at what
+	// width, so it is excluded from the floor computation and its key is listed in
+	// keysWithNoRecordedCaptureWidth below. That list is the debt #648 exposes: a capture
+	// whose width was never written down can never be evidence about width.
+	width int
+	// note is what is notable at this rung, for the subtest name.
+	note string
+	pane string
+}
+
+// label names the rung in a subtest and in failure text: the width first, because that is
+// what a width failure is about, then the identifier to open and whatever is notable there.
+func (c paneCapture) label() string {
+	s := "width " + describeWidth(c.width) + " " + c.name
+	if c.note != "" {
+		s += " (" + c.note + ")"
+	}
+	return s
+}
+
+func describeWidth(w int) string {
+	if w == 0 {
+		return "unrecorded"
+	}
+	return fmt.Sprintf("%d", w)
+}
+
+// paneCoverage maps a matcher key to the captures on which that matcher's production
+// predicate must fire. Keys are "<adapter>/gate", "<adapter>/busy" and
+// "<adapter>/prompt/<matcher name>" — the same shape the required set is derived in, so a
+// typo here surfaces as an orphan rather than as silent non-coverage.
+//
+// Entries are POSITIVE only: every capture listed must make its predicate return true. The
+// false-positive direction — a narrow pane that must NOT read as a prompt — is guarded
+// per-adapter in the sibling files and is deliberately not generalised here, because the
+// negative shapes are adapter-specific and no table of them would be derivable from the
+// registry the way this one is. Those guards are agy's answered confirmation and idle
+// composer (registry_test.go TestAgyConfirmationPrompt), its slash menu
+// (TestAgySlashMenuIsNotAPrompt), its accepted gate (TestAgyTrustGate) and codex's composer
+// ladders (codex_pane_test.go TestCodexComposersReadAsNeitherPromptNorGate).
+var paneCoverage = map[string][]paneCapture{
+	// claude's gate is one Match (claudeGateVisible) covering the folder-trust dialog and
+	// both MCP-approval shapes, so all five captures belong to the same key.
+	"claude/gate": {
+		{name: "claudeTrustPane", width: 0, note: "folder-trust, 2.1.185", pane: claudeTrustPane},
+		// Neither MCP capture has a usable width. claudeMCPMultiPane's comment carries the
+		// only "110" in the file, in a per-width result table, and that number is not
+		// trustworthy: the pane's widest line is 105 and the box rule spliced inside it is
+		// strings.Repeat("─", 56), where a genuine 110-column capture would draw a
+		// ~110-cell rule. claudeMCPSinglePane records no width at all. Recorded as unknown
+		// rather than propagated — restating a width the artifact contradicts is the defect
+		// class #648 exists to end. (Never infer a capture width from a box rule either;
+		// that is the same guess in reverse.)
+		{name: "claudeMCPSinglePane", width: 0, note: "one server, width claim disputed", pane: claudeMCPSinglePane},
+		{name: "claudeMCPMultiPane", width: 0, note: "many servers, width claim disputed", pane: claudeMCPMultiPane},
+		{name: "claudeMCPWrappedPane", width: 40, note: "title wrapped", pane: claudeMCPWrappedPane},
+		{name: "claudeMCPNarrowPane", width: 28, note: "", pane: claudeMCPNarrowPane},
+	},
+	"claude/busy": {
+		{name: "claudeBusyDefaultPane", width: 100, note: "default chat:cancel binding", pane: claudeBusyDefaultPane},
+		{name: "claudeBusyRebindPane", width: 100, note: "chat:cancel rebound to ctrl+q", pane: claudeBusyRebindPane},
+	},
+	"claude/prompt/permission": {
+		{name: "claudeFetchPane", width: 100, note: "", pane: claudeFetchPane},
+		{name: "claudeFetchNarrowPane", width: 28, note: "", pane: claudeFetchNarrowPane},
+	},
+	"claude/prompt/permission-local": {
+		{name: "claudeWritePermissionPane", width: 0, note: "file write", pane: claudeWritePermissionPane},
+		{name: "claudeBashPermissionPane", width: 0, note: "shell command", pane: claudeBashPermissionPane},
+	},
+	"claude/prompt/plan": {
+		{name: "claudePlanPane", width: 0, note: "", pane: claudePlanPane},
+	},
+	"claude/prompt/model-error": {
+		{name: "claudeModelErrorPane", width: 0, note: "", pane: claudeModelErrorPane},
+	},
+
+	"codex/gate":            codexTrustGateLadder,
+	"codex/prompt/approval": codexApprovalLadder,
+
+	"agy/gate": {
+		{name: "agyTrustGatePane", width: 120, note: "", pane: agyTrustGatePane},
+		{name: "agyTrustGateNarrowPane", width: 28, note: "question truncated away", pane: agyTrustGateNarrowPane},
+		{name: "agyTrustGateSubOptionPane", width: 24, note: "option row itself truncated", pane: agyTrustGateSubOptionPane},
+	},
+	// The confirmation ladder is busy evidence too, and that is not an accident of these
+	// captures: agy keeps "esc to cancel" in its dialogs' OWN footer, which is why an
+	// unmatched agy dialog latches the row Working rather than falling back to idle — the
+	// agy "confirmation" matcher's own comment in registry.go is where that is written down,
+	// not the BusyMarkers block. Listing the ladder here costs nothing and takes agy/busy
+	// from proven-at-120 to proven-at-20.
+	"agy/busy": {
+		{name: "agyBusyPane", width: 120, note: "streaming turn", pane: agyBusyPane},
+		{name: "agyConfirmPane", width: 120, note: "dialog footer", pane: agyConfirmPane},
+		{name: "agyConfirmNarrowPane", width: 40, note: "dialog footer", pane: agyConfirmNarrowPane},
+		{name: "agyConfirmNarrowestPane", width: 28, note: "dialog footer", pane: agyConfirmNarrowestPane},
+		{name: "agyConfirmSubHintPane", width: 24, note: "dialog footer", pane: agyConfirmSubHintPane},
+		{name: "agyConfirmFloorPane", width: 20, note: "dialog footer", pane: agyConfirmFloorPane},
+	},
+	"agy/prompt/confirmation": {
+		{name: "agyConfirmPane", width: 120, note: "", pane: agyConfirmPane},
+		{name: "agyConfirmNarrowPane", width: 40, note: "long command, question out of window", pane: agyConfirmNarrowPane},
+		{name: "agyConfirmNarrowestPane", width: 28, note: "", pane: agyConfirmNarrowestPane},
+		{name: "agyConfirmSubHintPane", width: 24, note: "hint cut to \"tab Ame\"", pane: agyConfirmSubHintPane},
+		{name: "agyConfirmFloorPane", width: 20, note: "hint ends exactly at the literal", pane: agyConfirmFloorPane},
+	},
+}
+
+// paneCoverageExempt is the other direction, and it exists because a `continue` on "no
+// fixtures" would make this invariant vacuous for a third of the matcher table while reading
+// as full coverage — which is the bug #648 is about, one level up. Asserted with
+// require.Equal on the exact set, mirroring TestAutoTapRequiresAnAnchoredMatcher: adding an
+// exemption must be as loud as breaking the rule.
+//
+// Every entry means "no VERBATIM CAPTURE exists for this matcher", never "this matcher is
+// fine". A hand-composed pane is not a capture — codex_pane_test.go's own header puts it
+// best, "a composed pane cannot falsify a predicate it was written to satisfy" — so
+// promoting one here would launder a guess into evidence.
+var paneCoverageExempt = map[string]string{
+	"claude/prompt/permission-network": "shape constructed from the 2.1.210 bundle; a live capture needs sandbox mode " +
+		"(TestClaudeNetworkPermissionNet says so in its own first comment)",
+	"claude/prompt/login-error": "reaching this dialog means revoking auth; the literal was confirmed in the " +
+		"bundle instead, and no pane has ever rendered it here",
+	"claude/prompt/selection": "pinned only against hand-composed panes (TestClaudePrompts), never a capture",
+	"codex/busy":              "pinned only against a hand-composed pane (TestCodexBusyMarker), never a capture",
+
+	"gemini/gate":                "no verbatim capture at ANY width — every gemini pane in this package is hand-written",
+	"gemini/busy":                "no verbatim capture at ANY width",
+	"gemini/prompt/confirmation": "no verbatim capture at ANY width",
+
+	// Not because aider is width-immune — it is not, and saying so would be the kind of
+	// comfortable claim this file exists to stop. aiderConfirmVisible requires the
+	// bottom-most non-empty line to END in "]:", so a narrow hard wrap that leaves the
+	// bracket suffix on its own line kills the matcher exactly the way agy's truncation
+	// did. The reason is simply that no ladder has ever been driven: its shapes were
+	// captured live at 0.86.2, at a width nobody wrote down.
+	"aider/gate":           "no width ladder driven; its one pinned pane is an interpreted line of unrecorded width",
+	"aider/prompt/confirm": "no width ladder driven; its shapes are inline single-line cases in TestAiderConfirmShapes, not named captures",
+}
+
+// wantFloors is the payoff: "the floor is 20" stops being a sentence in a comment and becomes
+// a value this suite computes from real captures and real predicates.
+//
+// Each entry is the NARROWEST recorded capture width at which that matcher's production
+// predicate still fires. Read it as evidence, not as a guarantee — a matcher proven at 28 is
+// not known to survive the 24 a 70-column terminal produces; it is merely untested there.
+// That claude/gate sits at 28 while agy/prompt/confirmation sits at 20 is exactly the kind of
+// thing #648 wanted visible instead of buried.
+//
+// Nor is a floor a promise about everything above it. Codex WRAPS, so a wider rung can fail
+// where a narrower one passes: line-budget effects are not monotonic in width, which is why
+// every rung is asserted rather than just the narrowest.
+//
+// Lowering an entry means new evidence was driven and captured. Raising one means either a
+// literal got wider or a capture was deleted — and both should be loud.
+var wantFloors = map[string]int{
+	"claude/gate":              28,
+	"claude/busy":              100,
+	"claude/prompt/permission": 28,
+
+	"codex/gate":            20,
+	"codex/prompt/approval": 20,
+
+	"agy/gate":                24,
+	"agy/busy":                20,
+	"agy/prompt/confirmation": 20,
+}
+
+// keysWithNoRecordedCaptureWidth are covered by real captures whose provenance never wrote
+// down the width they were driven at. They prove their matcher fires; they prove nothing
+// about width, so they are absent from wantFloors. Listing them is the point: an undocumented
+// capture width is the same defect as an undocumented anything else, and this is where it
+// stops being invisible.
+//
+// claude/prompt/permission-local is the one to drive first. It keys on the footer PAIR
+// "Esc to cancel" + "Tab to amend", and claudeWritePermissionPane's footer line is
+// " Esc to cancel · Tab to amend" — "Tab to amend" ends at column 29. The registry's own
+// busy-marker note records that claude renders a footer with truncate-on-overflow ("at width
+// 30 a busy 2.1.210 pane reads '⏸ manual mode on · esc to …'"). If the dialog footer
+// truncates the same way, this matcher dies just under 30 — above the 28 at which claude's
+// fetch dialog is already captured, and well above the 24 a 70-column terminal produces. That
+// is #512's mechanism in claude, and it is a hypothesis, not a finding: whether this footer
+// truncates or wraps has never been driven. Which is exactly why the width is missing.
+var keysWithNoRecordedCaptureWidth = []string{
+	"claude/prompt/model-error",
+	"claude/prompt/permission-local",
+	"claude/prompt/plan",
+}
+
+// requiredCoverageKeys derives, from the registry itself, every matcher key that owes
+// evidence. Walking `registry` rather than listing adapters is what makes a NEW adapter
+// covered the day it is added instead of the day someone remembers this file — the same
+// property that has kept TestAutoTapRequiresAnAnchoredMatcher from ever drifting.
+func requiredCoverageKeys(t *testing.T) []string {
+	t.Helper()
+	var keys []string
+	for _, a := range registry {
+		if len(a.Gates) > 0 {
+			// The key scheme has no gate discriminator, because Gate — unlike
+			// PromptMatcher — has no Name, and it is not comparable either (Match is a
+			// func), so GateUp's return value cannot identify which gate fired. Every
+			// adapter declares exactly one today (claude's single Match covers trust
+			// AND both MCP shapes). A second one must fail here rather than be silently
+			// half-covered by a key that cannot say which gate it means.
+			require.Len(t, a.Gates, 1,
+				"%s declares %d gates; Gate has no Name, so the \"<adapter>/gate\" key can no "+
+					"longer identify which one is covered — give Gate a discriminator before "+
+					"adding a second", a.Key, len(a.Gates))
+			keys = append(keys, string(a.Key)+"/gate")
+		}
+		if len(a.BusyMarkers) > 0 {
+			keys = append(keys, string(a.Key)+"/busy")
+		}
+		for _, m := range a.Prompts {
+			keys = append(keys, string(a.Key)+"/prompt/"+m.Name)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// adapterFor resolves a coverage key's adapter from the registry.
+func adapterFor(t *testing.T, key string) (*Adapter, string) {
+	t.Helper()
+	adapterKey, kind, _ := strings.Cut(key, "/")
+	for _, cand := range registry {
+		if string(cand.Key) == adapterKey {
+			return cand, kind
+		}
+	}
+	require.Fail(t, "coverage key names no adapter in the registry", "key %q", key)
+	return nil, ""
+}
+
+// promptMatcherFor returns the named matcher of an adapter.
+func promptMatcherFor(t *testing.T, a *Adapter, name string) PromptMatcher {
+	t.Helper()
+	for _, m := range a.Prompts {
+		if m.Name == name {
+			return m
+		}
+	}
+	require.Fail(t, "adapter declares no such prompt matcher", "%s has no %q", a.Key, name)
+	return PromptMatcher{}
+}
+
+// fires runs the production predicate named by key against one capture.
+//
+// For prompts it asks the NAMED matcher directly (m.matches) rather than reading the winner
+// out of DetectPrompt, and the distinction is load-bearing in both directions. DetectPrompt
+// returns the FIRST matcher that matches, so on any pane an earlier matcher also claims, a
+// later one cannot be proven through it at all — the width question ("does this literal still
+// reach?") would silently become an ordering question. Asking the named matcher is a claim
+// about that matcher's literals, which is what #648 is about; the ordering is a separate
+// claim, asserted separately below so a capture filed under the wrong matcher is reported
+// rather than silently credited to whichever matcher happened to win.
+//
+// Which pane an ordering hides is not decidable from the table alone. claude's "permission"
+// and "permission-network" both key on the fetch/network family and "permission" is declared
+// first (registry.go:215, :254), but it is the STRICTER of the two — it requires the dialog's
+// own fetch title — so on the sandbox's "Do you want to allow this connection?" it misses and
+// permission-network wins. That is exactly the arrangement registry.go:604 documents and the
+// reason permission-network exists. It is shadowed on the fetch pane and live on the sandbox
+// one, which is why this asks each matcher by name instead of reasoning about the order.
+func fires(t *testing.T, key string, c paneCapture) bool {
+	t.Helper()
+	a, kind := adapterFor(t, key)
+
+	switch {
+	case kind == "gate":
+		_, up := a.GateUp(c.pane)
+		return up
+	case kind == "busy":
+		return a.HasBusyMarker(c.pane)
+	case strings.HasPrefix(kind, "prompt/"):
+		want := strings.TrimPrefix(kind, "prompt/")
+		m := promptMatcherFor(t, a, want)
+		if !m.matches(c.pane) {
+			return false
+		}
+		// The ordering half. The matcher's own literals hold; if some earlier matcher
+		// also claims this pane, the capture is not exercising what it is filed under.
+		won, ok := a.DetectPrompt(c.pane)
+		require.True(t, ok, "%s: %s matches %q but DetectPrompt found no prompt at all", key, c.name, want)
+		require.Equal(t, want, won.Name,
+			"%s: %s (%s) is matched by %q first, so DetectPrompt never reaches %q — this "+
+				"capture cannot be evidence for the matcher it is filed under",
+			key, c.name, describeWidth(c.width), won.Name, want)
+		return true
+	}
+	require.Fail(t, "coverage key has no predicate", "key %q", key)
+	return false
+}
+
+// narrowAmbiguous measures the terminals these panes were actually captured on: ambiguous
+// East Asian width counts as ONE cell.
+//
+// The explicit Condition is not fussiness — it is the difference between a stable test and
+// one that fails on somebody's laptop for a reason absent from the diff. runewidth.StringWidth
+// (and lipgloss.Width, and ansi.StringWidth) all resolve through a package-level default whose
+// EastAsianWidth is set from the RUNEWIDTH_EASTASIAN environment variable at init. Every agy
+// and codex fixture is full of EAW=Ambiguous runes — · U+00B7, ↑↓ U+2191/93, ─ U+2500,
+// ● U+25CF — so with that variable set the default condition measures agyConfirmFloorPane at
+// about 30 and this file fails on nearly every fixture, for a reason nobody changed.
+//
+// Ambiguous=1 is not merely the convenient choice, it is the one the captures themselves
+// prove: agyConfirmFloorPane came off a 20-column pane whose hint is exactly
+// "  ↑/↓ Navigate · tab". If · and ↑ were two cells that line could not have fitted.
+// TestPaneWidthMeasuresTheTerminalTheCapturesCameFrom pins that reasoning so the choice cannot
+// be quietly reverted.
+var narrowAmbiguous = &runewidth.Condition{EastAsianWidth: false, StrictEmojiNeutral: true}
+
+// paneWidth is the capture's widest line in display cells.
+func paneWidth(pane string) int {
+	widest := 0
+	for _, line := range strings.Split(pane, "\n") {
+		if w := narrowAmbiguous.StringWidth(line); w > widest {
+			widest = w
+		}
+	}
+	return widest
+}
+
+// The measurement model, asserted against the evidence rather than asserted in a comment. A
+// 20-column capture that measures 20 is only possible if its ambiguous-width runes are one
+// cell each — so this fails if the condition above is ever widened, and it holds whatever
+// RUNEWIDTH_EASTASIAN happens to be set to in the environment running it.
+func TestPaneWidthMeasuresTheTerminalTheCapturesCameFrom(t *testing.T) {
+	require.Equal(t, 20, paneWidth(agyConfirmFloorPane),
+		"agy's floor capture came off a 20-column pane; measuring it wider means ambiguous "+
+			"runes are being counted as two cells, which no terminal that produced these "+
+			"captures did")
+	require.Equal(t, 1, narrowAmbiguous.RuneWidth('·'), "U+00B7 is EAW=Ambiguous")
+	require.Equal(t, 1, narrowAmbiguous.RuneWidth('↑'), "U+2191 is EAW=Ambiguous")
+	require.Equal(t, 1, narrowAmbiguous.RuneWidth('─'), "U+2500 is EAW=Ambiguous")
+}
+
+// A capture may render narrower than the pane it was taken from — `capture-pane -p` strips
+// trailing spaces, and a dialog need not reach the edge (codexTrustGatePane120's widest line
+// is 111, codexApprovalPane120's is 94). So the check is an inequality, and it is pointed at
+// the one direction that can lie: a capture LABELLED narrower than it renders would credit a
+// matcher with surviving a width it was never shown, and wantFloors would report that
+// invention as evidence.
+// It stays an inequality, deliberately. An earlier draft also held each key's NARROWEST
+// capture to equality, to close the relabel hole below — but that assertion is unsound rather
+// than merely strict: it forbids the one direction this file calls good news. A newly driven
+// narrow rung whose dialog does not happen to fill the pane measures under its label, is
+// labelled entirely correctly, and would be rejected with "its label must be the width it was
+// driven at". That every narrow rung is tight against its label today is an observation about
+// five keys, not a property of narrow captures.
+//
+// The relabel hole is real — mislabel a capture narrower than it was driven and this test
+// passes while the floor drops on no new evidence — but it is closed by wantFloors instead,
+// which is the right place: a relabel changes a computed floor, so it cannot land without a
+// second, deliberate edit to a pinned number in the same review.
+func TestCaptureWidthsAreNotOverstated(t *testing.T) {
+	for key, captures := range paneCoverage {
+		for _, c := range captures {
+			if c.width == 0 {
+				continue // provenance records no width; nothing to contradict
+			}
+			require.LessOrEqual(t, paneWidth(c.pane), c.width,
+				"%s: %s renders wider than the width %d it is filed under — either the label "+
+					"is wrong or the capture is not the pane it claims to be",
+				key, c.name, c.width)
+		}
+	}
+}
+
+// Nothing in Go binds a paneCapture's name or width to the pane it carries: the fields are
+// prose beside a symbol, and the compiler checks only the symbol. Swap one rung's pane for a
+// sibling's and every other assertion here still holds — the ladder still lists six rungs, the
+// widths still ascend, and the predicate still fires, because the sibling is a real capture of
+// the same dialog. The key would then report six driven widths while exercising five panes.
+//
+// Distinctness is what a test can actually check, and it catches that: a duplicated pane means
+// a rung's evidence was replaced by a copy of its neighbour's.
+func TestNoCoverageKeyListsThePaneOrTheNameTwice(t *testing.T) {
+	for key, captures := range paneCoverage {
+		requireDistinctCaptures(t, key, captures)
+	}
+}
+
+// requireDistinctCaptures is that check as a helper, because a []paneCapture that does NOT
+// feed paneCoverage needs it just as much: codex's composer ladders are negative evidence and
+// so are absent from the table, which left the guard one file short of the rungs it was
+// written for.
+func requireDistinctCaptures(t *testing.T, label string, captures []paneCapture) {
+	t.Helper()
+	panes := map[string]string{}
+	names := map[string]bool{}
+	for _, c := range captures {
+		if prev, dup := panes[c.pane]; dup {
+			require.Fail(t, "a capture list holds the same pane twice",
+				"%s: %s and %s carry identical panes — one rung's evidence is a copy of "+
+					"the other's, so this list proves one fewer width than it names",
+				label, prev, c.name)
+		}
+		panes[c.pane] = c.name
+		require.False(t, names[c.name], "%s lists the name %s twice", label, c.name)
+		names[c.name] = true
+	}
+}
+
+// The coverage question, asked of the registry rather than of this file: which declared
+// matchers own no captured evidence? A `continue` on "no fixtures" would answer it silently
+// and read as full coverage; require.Equal on the exact set makes every gap a decision
+// somebody signed for.
+func TestEveryDeclaredMatcherIsCoveredOrExempt(t *testing.T) {
+	required := requiredCoverageKeys(t)
+
+	// make, not a nil slice: require.Equal distinguishes []string{} from []string(nil), so a
+	// nil accumulator would redden this test on the day the last exemption is finally driven
+	// and paneCoverageExempt empties — punishing the only direction this file calls good news.
+	uncovered := make([]string, 0)
+	for _, key := range required {
+		if _, ok := paneCoverage[key]; ok {
+			continue
+		}
+		uncovered = append(uncovered, key)
+	}
+
+	exempt := make([]string, 0, len(paneCoverageExempt))
+	for key := range paneCoverageExempt {
+		exempt = append(exempt, key)
+	}
+	sort.Strings(exempt)
+
+	require.Equal(t, exempt, uncovered,
+		"the set of matchers with no captured pane changed. Adding one means an adapter "+
+			"declares a literal nothing has ever seen render — drive it (scripts/drive-agent.sh) "+
+			"or add it to paneCoverageExempt WITH the reason. Removing one means deleting "+
+			"evidence")
+
+	// The mirror: coverage that no longer answers to a declared matcher. Without this a
+	// renamed matcher leaves its captures pointing at nothing, uncovered picks up the new
+	// name, and the old entry sits there looking like proof.
+	inRegistry := make(map[string]bool, len(required))
+	for _, key := range required {
+		inRegistry[key] = true
+	}
+	var orphans []string
+	for key := range paneCoverage {
+		if !inRegistry[key] {
+			orphans = append(orphans, key)
+		}
+	}
+	for key := range paneCoverageExempt {
+		if !inRegistry[key] {
+			orphans = append(orphans, key)
+		}
+	}
+	sort.Strings(orphans)
+	require.Empty(t, orphans,
+		"these keys name no matcher the registry declares — a rename left their captures "+
+			"pointing at nothing, which reads as coverage while proving nothing")
+}
+
+// THE invariant. Every declarative literal an adapter ships must still fire on every pane
+// this project has actually captured — including the narrow ones, which is the whole point:
+// agy's gate literal passed every test in the tree until a 24-column capture existed.
+//
+// The predicate is the production one and the pane is verbatim, so this measures the matcher
+// rather than the fixture set. Widen a literal in registry.go past what a narrow rung renders
+// and this fails, naming the adapter, the matcher, the capture and the width.
+func TestEveryCoveredMatcherFiresAtEveryCapturedWidth(t *testing.T) {
+	for key, captures := range paneCoverage {
+		for _, c := range captures {
+			t.Run(key+"/"+c.label(), func(t *testing.T) {
+				require.True(t, fires(t, key, c),
+					"%s does not fire on %s, captured at width %s. A matcher that misses a "+
+						"width Atrium can hand an agent fails silently on a real dialog — and "+
+						"if this is a gate, the truncated option row still reads as a composer, "+
+						"so the queued first prompt is typed into it (#512)",
+					key, c.name, describeWidth(c.width))
+			})
+		}
+	}
+}
+
+// "The floor is 20" was a sentence in a comment. Here it is a number this suite computes from
+// the captures and the predicates, and compares against what we claim to have proven.
+//
+// This is not redundant with the test above even though that one requires every capture to
+// fire. That test cannot see a capture that is no longer there: delete the width-20 rung and
+// it passes with fewer subtests while the proven floor silently rises to 24. Evidence
+// deletion is the direction this test exists for.
+func TestProvenWidthFloorsAreComputedNotClaimed(t *testing.T) {
+	proven := map[string]int{}
+	unrecorded := make([]string, 0) // see the nil-vs-empty note in the coverage test above
+	for key, captures := range paneCoverage {
+		floor := 0
+		for _, c := range captures {
+			if c.width == 0 || !fires(t, key, c) {
+				continue
+			}
+			if floor == 0 || c.width < floor {
+				floor = c.width
+			}
+		}
+		if floor == 0 {
+			unrecorded = append(unrecorded, key)
+			continue
+		}
+		proven[key] = floor
+	}
+	sort.Strings(unrecorded)
+
+	require.Equal(t, wantFloors, proven,
+		"the width each matcher is PROVEN at changed. A raised number means a literal grew "+
+			"past a narrow rung or a capture was deleted; a lowered one means new evidence was "+
+			"driven, and is the only direction to celebrate")
+
+	require.Equal(t, keysWithNoRecordedCaptureWidth, unrecorded,
+		"these matchers have captures but no recorded capture width, so they are evidence "+
+			"about shape and not about width. Re-driving one at a known ladder is how it leaves "+
+			"this list")
+}
+
+// Coverage is per MATCHER, and a matcher's Any list is an alternation: one entry present is
+// enough to fire, so a capture proves the alternative it happens to render and says nothing
+// about its siblings. Left unstated, "codex/prompt/approval covered at 20" reads as though
+// all three decline wordings were verified there; two of them have never been seen at any
+// width.
+//
+// This is a ledger, not a failure. Some alternatives are deliberately unreachable — a
+// deprecation-window variant kept for an older CLI has, by construction, no capture from the
+// current one, and registry.go's header calls that remediation ADDITIVE on purpose. Pinning
+// the set is what keeps that a decision instead of a blind spot: an entry leaving the list
+// means new evidence, an entry arriving means a literal was added on faith.
+func TestUnprovenMatcherAlternativesArePinned(t *testing.T) {
+	unproven := map[string][]string{}
+	for key, captures := range paneCoverage {
+		a, kind := adapterFor(t, key)
+		if !strings.HasPrefix(kind, "prompt/") {
+			continue
+		}
+		m := promptMatcherFor(t, a, strings.TrimPrefix(kind, "prompt/"))
+		// A Match matcher ignores All/Any entirely (PromptMatcher.matches), so its
+		// literals live inside the func where no walk can reach them. Those are named in
+		// this file's header as a stated limit, not silently folded in here.
+		if m.Match != nil || len(m.Any) < 2 {
+			continue
+		}
+		for _, lit := range m.Any {
+			seen := false
+			for _, c := range captures {
+				if strings.Contains(flattenChrome(c.pane, m.Window), lit) {
+					seen = true
+					break
+				}
+			}
+			if !seen {
+				unproven[key] = append(unproven[key], lit)
+			}
+		}
+	}
+
+	require.Equal(t, map[string][]string{
+		// Deliberate, and registry.go says so where the matcher is declared: "No, keep
+		// planning" is the binary's ALTERNATE label for the feedback option, kept for
+		// releases that render it. claudePlanPane shows the other two.
+		"claude/prompt/plan": {"No, keep planning"},
+		// The Pro-plan access restriction. claudeModelErrorPane was driven with a bogus
+		// --model, which is the 404 branch; reaching this one needs a Pro-plan account
+		// asking for a model it may not have.
+		"claude/prompt/model-error": {"is not available with the Claude Pro plan"},
+		// Two of codex's three decline wordings. The ladder drove one command, and which
+		// decline label renders depends on the sandbox/approval mode that command needed —
+		// so covering these means driving a different command, not a different width.
+		"codex/prompt/approval": {"No, continue without", "No, but continue without"},
+	}, unproven,
+		"the set of matcher alternatives no capture has ever rendered changed. A new entry "+
+			"means a literal was added without a pane showing it; a departing entry means "+
+			"something got driven, and only that direction is good news")
+}

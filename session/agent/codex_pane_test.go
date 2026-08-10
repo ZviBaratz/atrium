@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"sort"
 	"strings"
 	"testing"
 
@@ -607,54 +608,162 @@ var codexNumberedListComposerPane20 = strings.Join([]string{
 	"  gpt-5.6-terra def…",
 }, "\n")
 
-// codexDrivenWidths maps a rung's name to the pane captured at that width. Naming the rung
-// rather than numbering it keeps a failure legible: the subtest name says which width broke.
+// The driven ladders. Each rung carries the width it was captured at as a VALUE rather than
+// only in its identifier, so the invariant in pane_width_test.go can reason about it — that
+// conversion is #648, and the trust gate and approval ladders feed paneCoverage directly
+// rather than being listed a second time there.
 var (
-	codexTrustGateLadder = map[string]string{
-		"width 120":                    codexTrustGatePane120,
-		"width 60":                     codexTrustGatePane60,
-		"width 40, headline wrapped":   codexTrustGatePane40,
-		"width 28":                     codexTrustGatePane28,
-		"width 24":                     codexTrustGatePane24,
-		"width 20, 18 non-empty lines": codexTrustGatePane20,
+	codexTrustGateLadder = []paneCapture{
+		{name: "codexTrustGatePane120", width: 120, pane: codexTrustGatePane120},
+		{name: "codexTrustGatePane60", width: 60, pane: codexTrustGatePane60},
+		{name: "codexTrustGatePane40", width: 40, note: "headline wrapped", pane: codexTrustGatePane40},
+		{name: "codexTrustGatePane28", width: 28, pane: codexTrustGatePane28},
+		{name: "codexTrustGatePane24", width: 24, pane: codexTrustGatePane24},
+		{name: "codexTrustGatePane20", width: 20, note: "18 non-empty lines", pane: codexTrustGatePane20},
 	}
-	codexApprovalLadder = map[string]string{
-		"width 120":                        codexApprovalPane120,
-		"width 60":                         codexApprovalPane60,
-		"width 40, decline option wrapped": codexApprovalPane40,
-		"width 28":                         codexApprovalPane28,
-		"width 24":                         codexApprovalPane24,
-		"width 20, decline wrapped 5 ways": codexApprovalPane20,
+	codexApprovalLadder = []paneCapture{
+		{name: "codexApprovalPane120", width: 120, pane: codexApprovalPane120},
+		{name: "codexApprovalPane60", width: 60, pane: codexApprovalPane60},
+		{name: "codexApprovalPane40", width: 40, note: "decline option wrapped", pane: codexApprovalPane40},
+		{name: "codexApprovalPane28", width: 28, pane: codexApprovalPane28},
+		{name: "codexApprovalPane24", width: 24, pane: codexApprovalPane24},
+		{name: "codexApprovalPane20", width: 20, note: "decline wrapped 5 ways", pane: codexApprovalPane20},
 	}
-	codexComposerLadder = map[string]string{
-		"width 120, one row":   codexTypedComposerPane120,
-		"width 40, two rows":   codexTypedComposerPane40,
-		"width 20, three rows": codexTypedComposerPane20,
+	// The composer ladders are NEGATIVE for prompt detection — these panes must read as
+	// composers, not as prompts — so they carry the width datum but are deliberately not
+	// entries in paneCoverage, which is positive-only. That negative is asserted in
+	// TestCodexComposersReadAsNeitherPromptNorGate below; before it existed, every assertion
+	// on these panes was a readback, and a widened matcher could fire on a live composer
+	// without reddening anything.
+	codexComposerLadder = []paneCapture{
+		{name: "codexTypedComposerPane120", width: 120, note: "one row", pane: codexTypedComposerPane120},
+		{name: "codexTypedComposerPane40", width: 40, note: "two rows", pane: codexTypedComposerPane40},
+		{name: "codexTypedComposerPane20", width: 20, note: "three rows", pane: codexTypedComposerPane20},
 	}
 	// Composers holding a numbered-list prompt — the shape a selector-row rule would
-	// have rejected. Kept as its own ladder so its count is guarded separately.
-	codexNumberedComposerLadder = map[string]string{
-		"single line, width 120": codexNumberedComposerPane120,
-		"single line, width 20":  codexNumberedComposerPane20,
-		"three items, width 120": codexNumberedListComposerPane120,
-		"three items, width 20":  codexNumberedListComposerPane20,
+	// have rejected. Kept as its own ladder so its rungs are guarded separately.
+	codexNumberedComposerLadder = []paneCapture{
+		{name: "codexNumberedComposerPane120", width: 120, note: "single line", pane: codexNumberedComposerPane120},
+		{name: "codexNumberedComposerPane20", width: 20, note: "single line", pane: codexNumberedComposerPane20},
+		{name: "codexNumberedListComposerPane120", width: 120, note: "three items", pane: codexNumberedListComposerPane120},
+		{name: "codexNumberedListComposerPane20", width: 20, note: "three items", pane: codexNumberedListComposerPane20},
 	}
 )
 
-// A ladder that can lose a rung silently is not a ladder. Each map above is keyed by a
-// human-readable width, so a deleted entry changes nothing a test can see — the loop simply
-// runs fewer subtests and still passes. These counts are what make "verified at every driven
-// width" a claim the suite can falsify rather than a sentence in a comment. Raising a count
-// means driving codex again and adding the capture; lowering one means deleting evidence,
-// and should be as loud as it is here.
+// ladderRungs is the rung list as data, narrowest first, for the guard below.
+//
+// It yields each rung's full label — width, identifier and note — not just its width. A width
+// alone is not a rung's identity: codexNumberedComposerLadder holds two rungs at 20 and two at
+// 120, separated only by which prompt was typed, so a width list reports "20 20 120 120" no
+// matter which four panes are present. The map this replaced could not be defeated that way
+// (duplicate keys in a map literal are a compile error), and dropping to widths quietly gave
+// that up — a ladder able to lose a rung in silence is the exact thing the guard forbids.
+func ladderRungs(ladder []paneCapture) []string {
+	sorted := append([]paneCapture(nil), ladder...)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].width != sorted[j].width {
+			return sorted[i].width < sorted[j].width
+		}
+		return sorted[i].name < sorted[j].name
+	})
+	rungs := make([]string, 0, len(sorted))
+	for _, c := range sorted {
+		rungs = append(rungs, c.label())
+	}
+	return rungs
+}
+
+// A ladder that can lose a rung silently is not a ladder: a deleted entry changes nothing a
+// test can see — the loop simply runs fewer subtests and still passes. This is what makes
+// "verified at every driven width" a claim the suite can falsify rather than a sentence in a
+// comment. Adding a rung means driving codex again; removing one means deleting evidence, and
+// should be as loud as it is here.
+//
+// Asserted as the exact WIDTH LIST rather than the count it used to be, now that the width is
+// a value: a count says six rungs were expected and five remain, while this says which one
+// went missing. Not subsumed by pane_width_test.go's floor pin, which sees only the NARROWEST
+// rung of the two ladders it consumes — deleting the 60 rung, or any rung of either composer
+// ladder, is invisible there and caught here.
 func TestCodexLaddersKeepEveryDrivenRung(t *testing.T) {
-	require.Len(t, codexNumberedComposerLadder, 4,
-		"a numbered-list prompt was driven single-line and three-item, at 120 and 20")
-	require.Len(t, codexTrustGateLadder, 6, "the trust gate was driven at 120/60/40/28/24/20")
-	require.Len(t, codexApprovalLadder, 6, "the approval overlay was driven at 120/60/40/28/24/20")
-	require.Len(t, codexComposerLadder, 3,
+	require.Equal(t, []string{
+		"width 20 codexTrustGatePane20 (18 non-empty lines)",
+		"width 24 codexTrustGatePane24",
+		"width 28 codexTrustGatePane28",
+		"width 40 codexTrustGatePane40 (headline wrapped)",
+		"width 60 codexTrustGatePane60",
+		"width 120 codexTrustGatePane120",
+	}, ladderRungs(codexTrustGateLadder), "the trust gate was driven at 120/60/40/28/24/20")
+
+	require.Equal(t, []string{
+		"width 20 codexApprovalPane20 (decline wrapped 5 ways)",
+		"width 24 codexApprovalPane24",
+		"width 28 codexApprovalPane28",
+		"width 40 codexApprovalPane40 (decline option wrapped)",
+		"width 60 codexApprovalPane60",
+		"width 120 codexApprovalPane120",
+	}, ladderRungs(codexApprovalLadder), "the approval overlay was driven at 120/60/40/28/24/20")
+
+	require.Equal(t, []string{
+		"width 20 codexTypedComposerPane20 (three rows)",
+		"width 40 codexTypedComposerPane40 (two rows)",
+		"width 120 codexTypedComposerPane120 (one row)",
+	}, ladderRungs(codexComposerLadder),
 		"the composer was driven at 120/40/20 — the widths where the entry occupies one, two "+
 			"and three rows, which is what the readback join has to survive")
+
+	// The ladder that a width list could not guard: two rungs at 20 and two at 120,
+	// distinguished only by which prompt was typed.
+	require.Equal(t, []string{
+		"width 20 codexNumberedComposerPane20 (single line)",
+		"width 20 codexNumberedListComposerPane20 (three items)",
+		"width 120 codexNumberedComposerPane120 (single line)",
+		"width 120 codexNumberedListComposerPane120 (three items)",
+	}, ladderRungs(codexNumberedComposerLadder),
+		"a numbered-list prompt was driven single-line and three-item, at 120 and 20")
+}
+
+// The other half of the composer ladders' job, and the half that was missing: these panes
+// must read as NEITHER a prompt nor a gate at every driven width.
+//
+// The readback tests above are blind to it. Widen codex's approval matcher — its Any list
+// already holds "No, continue without", a prefix of ordinary English — and DetectPrompt starts
+// firing on a composer holding a sentence a user actually typed. InputBoxText is unaffected,
+// so the readback stays green while the session parks on needs-input with its queued prompt
+// withheld, or autoyes taps Enter into the composer. Narrowness is not a property of the
+// matcher's own captures; only a negative pane can measure it.
+//
+// The numbered ladder is the sharper case: those composers hold "1." "2." "3." lines, which is
+// the shape codex's menus take number accelerators for (#510).
+func TestCodexComposersReadAsNeitherPromptNorGate(t *testing.T) {
+	for _, ladder := range [][]paneCapture{codexComposerLadder, codexNumberedComposerLadder} {
+		for _, c := range ladder {
+			t.Run(c.label(), func(t *testing.T) {
+				m, ok := codex.DetectPrompt(c.pane)
+				require.False(t, ok,
+					"a live composer must not read as a prompt — %q claimed it", m.Name)
+				_, up := codex.GateUp(c.pane)
+				require.False(t, up, "a live composer is not a startup gate")
+			})
+		}
+	}
+}
+
+// The rungs of a negative ladder are as forgeable as a positive one's, and paneCoverage's
+// distinctness guard cannot see them: negative evidence is by construction absent from that
+// table. Without this, both narrow composer rungs could carry a copy of the 120 pane and the
+// ladder above would still report three driven widths.
+func TestCodexLadderRungsCarryDistinctPanes(t *testing.T) {
+	for _, l := range []struct {
+		name     string
+		captures []paneCapture
+	}{
+		{"codexTrustGateLadder", codexTrustGateLadder},
+		{"codexApprovalLadder", codexApprovalLadder},
+		{"codexComposerLadder", codexComposerLadder},
+		{"codexNumberedComposerLadder", codexNumberedComposerLadder},
+	} {
+		requireDistinctCaptures(t, l.name, l.captures)
+	}
 }
 
 // The defect, at the adapter boundary. Before #510 every one of these read false — codex's
@@ -668,9 +777,9 @@ func TestCodexLaddersKeepEveryDrivenRung(t *testing.T) {
 // ladder is here rather than a single width: the same entry occupies one row at 120, two at
 // 40 and three at 20.
 func TestCodexComposerVisibleAndReadBack(t *testing.T) {
-	for name, pane := range codexComposerLadder {
-		t.Run(name, func(t *testing.T) {
-			text, ok := codex.InputBoxText(pane)
+	for _, c := range codexComposerLadder {
+		t.Run(c.label(), func(t *testing.T) {
+			text, ok := codex.InputBoxText(c.pane)
 			require.True(t, ok, "a live codex composer must read as an input box (#510)")
 			require.Equal(t, "refactor the parser and add a regression test", text,
 				"the readback must be the typed text with the prompt glyph stripped")
@@ -693,9 +802,9 @@ func TestCodexGhostSuggestionReadsBackAsText(t *testing.T) {
 // lands on the trust screen — and codex's menus take number accelerators, so the first
 // character of a prompt beginning "1." would answer the dialog.
 func TestCodexTrustGateDetectedAtEveryDrivenWidth(t *testing.T) {
-	for name, pane := range codexTrustGateLadder {
-		t.Run(name, func(t *testing.T) {
-			_, up := codex.GateUp(pane)
+	for _, c := range codexTrustGateLadder {
+		t.Run(c.label(), func(t *testing.T) {
+			_, up := codex.GateUp(c.pane)
 			require.True(t, up, "the trust gate must be detected, or a queued prompt is typed into it")
 		})
 	}
@@ -722,12 +831,15 @@ func TestCodexTrustGateHeadlineFallsOutsideTheDefaultWindowAtWidth20(t *testing.
 		"with the default budget the width-20 gate must MISS — if this starts passing, codex "+
 			"stopped wrapping or the budget changed, and GateWindow's comment needs re-measuring")
 
-	for name, pane := range codexTrustGateLadder {
-		if name == "width 20, 18 non-empty lines" {
+	// Keyed on the width rather than on a rung's prose label, now that the width is a
+	// value: the exclusion is a statement about 20 columns, and matching a string meant a
+	// reworded label would silently start asserting the opposite of this test's point.
+	for _, c := range codexTrustGateLadder {
+		if c.width == 20 {
 			continue
 		}
-		_, up := def.GateUp(pane)
-		require.True(t, up, "%s: only the floor rung is out of reach of the default budget", name)
+		_, up := def.GateUp(c.pane)
+		require.True(t, up, "%s: only the floor rung is out of reach of the default budget", c.label())
 	}
 }
 
@@ -737,9 +849,9 @@ func TestCodexTrustGateHeadlineFallsOutsideTheDefaultWindowAtWidth20(t *testing.
 // predicate that rejected one would reject the other. AwaitingInput is where the exclusion
 // lives, which session/tmux's TestAwaitingInputCodex pins end to end.
 func TestCodexTrustGateReadsAsABoxSoGateUpIsTheGuard(t *testing.T) {
-	for name, pane := range codexTrustGateLadder {
-		t.Run(name, func(t *testing.T) {
-			require.True(t, codex.InputBoxVisible(pane),
+	for _, c := range codexTrustGateLadder {
+		t.Run(c.label(), func(t *testing.T) {
+			require.True(t, codex.InputBoxVisible(c.pane),
 				"the gate's selector reads as a box; GateUp, not the box check, is what excludes it")
 		})
 	}
@@ -752,17 +864,19 @@ func TestCodexTrustGateReadsAsABoxSoGateUpIsTheGuard(t *testing.T) {
 // false on every tick, re-typing the prompt into the live composer forever. Both were
 // reachable with a numbered-selector rule in place; neither is with GateUp doing the work.
 func TestCodexNumberedPromptReadsAsAComposerAndReadsBackWhole(t *testing.T) {
+	// Keyed on the rung's note rather than its full label: the expected readback depends on
+	// which prompt was typed, not on the width it was captured at — and that independence is
+	// what the ladder exists to demonstrate.
 	want := map[string]string{
-		"single line, width 120": "1. refactor the parser",
-		"single line, width 20":  "1. refactor the parser",
-		"three items, width 120": "1. refactor the parser 2. add a regression test 3. run just ci",
-		"three items, width 20":  "1. refactor the parser 2. add a regression test 3. run just ci",
+		"single line": "1. refactor the parser",
+		"three items": "1. refactor the parser 2. add a regression test 3. run just ci",
 	}
-	for name, pane := range codexNumberedComposerLadder {
-		t.Run(name, func(t *testing.T) {
-			text, ok := codex.InputBoxText(pane)
+	for _, c := range codexNumberedComposerLadder {
+		t.Run(c.label(), func(t *testing.T) {
+			require.Contains(t, want, c.note, "every rung must name which prompt was typed")
+			text, ok := codex.InputBoxText(c.pane)
 			require.True(t, ok, "a numbered-list prompt is a prompt, not a menu")
-			require.Equal(t, want[name], text,
+			require.Equal(t, want[c.note], text,
 				"the whole prompt must read back, or boxHoldsPrompt never confirms and it is re-typed every tick")
 		})
 	}
@@ -779,9 +893,9 @@ func TestCodexNumberedPromptReadsAsAComposerAndReadsBackWhole(t *testing.T) {
 // "hey there" at this overlay approved the command outright, because "y" is the accelerator
 // for "1. Yes, proceed (y)" and it confirms immediately, with no Enter.
 func TestCodexApprovalDetectedAtEveryDrivenWidth(t *testing.T) {
-	for name, pane := range codexApprovalLadder {
-		t.Run(name, func(t *testing.T) {
-			m, ok := codex.DetectPrompt(pane)
+	for _, c := range codexApprovalLadder {
+		t.Run(c.label(), func(t *testing.T) {
+			m, ok := codex.DetectPrompt(c.pane)
 			require.True(t, ok, "the approval overlay must be detected, or a queued prompt is typed into it")
 			require.Equal(t, "approval", m.Name)
 			require.True(t, m.NoAutoTap, "an unanchored approval must never be Enter-approved (#347)")
