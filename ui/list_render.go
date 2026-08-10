@@ -51,10 +51,19 @@ type InstanceRenderer struct {
 	// the occupancy modes, Instance.CostInfo in "cost" — and is absent whenever
 	// there is none.
 	contextIndicator string
-	// hideAccountBadge suppresses the per-row Claude-account badge. Set by List.String
-	// when account grouping is visually active (mode == account and >1 account), so the
-	// cluster divider + tinted header carry the identity instead of every row repeating it.
-	hideAccountBadge bool
+	// hideClaudeAccountBadge suppresses the per-row Claude-account badge. Set by
+	// List.String when account grouping is visually active (mode == account and >1
+	// account), so the cluster divider + tinted header carry the identity instead of
+	// every row repeating it.
+	//
+	// Claude-specific by name because it is Claude-specific in fact, and the two
+	// account axes are independent: the suppression means "this badge repeats the
+	// divider above it", and the divider labels a Claude account (accountKey →
+	// session.Instance.AccountClusterKey, which reads claudeAccountPool then
+	// claudeAccount). The agy badge is redundant with no divider — nothing clusters
+	// on it — so it is never suppressed. Sharing one bool would make an agy badge
+	// vanish because a session's CLAUDE account happened to match the divider (#457).
+	hideClaudeAccountBadge bool
 }
 
 func (r *InstanceRenderer) setWidth(width int) {
@@ -212,12 +221,64 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 	// Per-session Claude account badge: accent for a routed account, dim for the
 	// default/fallback. Shown only when an account was resolved (empty = feature
 	// off / legacy session).
-	if acct := i.ClaudeAccountName(); acct != "" && !r.hideAccountBadge {
+	//
+	// Width-sanitized like the name and the note, and for the same reason: an account
+	// name is free text from config, and a ZWJ/variation-selector emoji cluster
+	// measures as one 2-cell glyph here while a terminal whose font lacks the combined
+	// glyph renders it far wider — which overflows the pane into the accumulating ghost
+	// rows theme.SanitizeWidth documents. No width guard in this package can see it,
+	// because a test measures with the same library that mis-measures.
+	if acct := theme.SanitizeWidth(i.ClaudeAccountName()); acct != "" && !r.hideClaudeAccountBadge {
 		acctColor := th.Palette.Accent
 		if i.ClaudeAccountIsDefault() {
 			acctColor = th.Palette.FgDim
 		}
 		right1 = append(right1, p.seg(" "+acct+" ", acctColor))
+	}
+	// Per-session Antigravity (agy) account badge (#457), on the same axis-identity
+	// footing as the Claude badge above and rendered beside it.
+	//
+	// It reports the route this session PINNED, and only where one was pinned at all.
+	// Two conditions beyond a non-empty name, because the account is stamped on every
+	// session regardless of program (app's spawn calls SetAgyAccount unconditionally,
+	// and a rule-less agy account is a catch-all matching every repo), and a stamp is
+	// not a route:
+	//
+	//   - the session must RUN agy — the pinned dir reaches wrapAgyBwrap only where
+	//     the launch path resolves the agy adapter (session/tmux's `if t.adapter.Key
+	//     == agent.KeyAgy`), so a claude row would name an account it never uses;
+	//   - the dir must be non-empty — an AgyAccount with no config_dir is reachable
+	//     (the accounts overlay validates only the name, and it renders that state as
+	//     "<name> (inherit ambient env)"), and wrapAgyBwrap no-ops on "", so such a
+	//     session runs on the ambient config like one with no account at all.
+	//
+	// What it deliberately does NOT claim is that the isolation is live. wrapAgyBwrap
+	// also no-ops off Linux and when bwrap is missing from PATH — and the second is a
+	// launch-time LookPath whose result the row does not hold, so gating on GOOS would
+	// fix only one of the two and leave the badge meaning "isolation is active" on
+	// macOS while meaning "the pinned route" on a Linux box without bubblewrap. One
+	// uniform meaning is the honest one; the platform caveat lives in the README
+	// beside the Linux-only note it belongs to.
+	//
+	// Prefixed where the Claude badge is bare, because the two axes are independent
+	// and can both land on one row: two unlabelled names would not say which is which.
+	// The Claude one keeps its bare form — it predates the second axis, and every
+	// row-width guard in this package is calibrated against it.
+	//
+	// Accent, and never FgDim: the agy section has no default/fallback account flag to
+	// mirror (see RestampAgyAccount), so there is no dim state to render — and FgDim is
+	// an open contrast bug on this band (#555).
+	//
+	// Deliberately NOT gated on hideClaudeAccountBadge — see that field's comment.
+	//
+	// agyIdx records where it landed so it can YIELD below — this is the one chip in
+	// the cluster that is dropped rather than squeezed; see the fit check before
+	// composeLine.
+	// Width-sanitized, like the Claude badge above — same free-text-from-config risk.
+	agyIdx := -1
+	if acct := theme.SanitizeWidth(i.AgyAccountName()); acct != "" && i.AgyConfigDir() != "" && runsAgy(i) {
+		agyIdx = len(right1)
+		right1 = append(right1, p.seg(" agy:"+acct+" ", th.Palette.Accent))
 	}
 	// Per-session AUTO badge (not while paused) so "yolo" state is unmistakable.
 	// The badge carries its own background, so wrap it as a pre-rendered chip.
@@ -293,6 +354,38 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 		right1 = append(right1, space)
 	}
 	right1 = append(right1, p.agentSeg(i))
+
+	// The agy badge yields rather than erasing the name. composeLine can only shrink
+	// line 1's single flex segment — the name — so an unbounded second account name in
+	// a cluster that already carries up to eight other chips takes the name to zero and
+	// then overhangs, and the panel clips the far right: measured at a 55-column list
+	// pane, a fully badged row went from "○ my-… work AUTO gemini-3-pro max
+	// accept-edits •" to "○  work agy:grav-one  AUTO gemini-3-pro max acce" — no name at
+	// all and no agent icon. Line 1's job is to say WHICH session this is, so the chip
+	// that costs it that goes.
+	//
+	// Dropping rather than squeezing, and dropping THIS chip, is the argument portSeg
+	// already makes on line 2: an account is an identifier to go look up (the Accounts
+	// overlay's routing preview has it, and it does not change under the user), where
+	// the model/effort/permission chips are live state. The rule is deliberately all-or-
+	// nothing on the name surviving at all rather than a taste threshold, because that
+	// makes it exactly reversible: below the width where the badge fits, the row is
+	// byte-identical to the same session with no agy account, so this feature cannot
+	// make a narrow pane worse than it was before it existed.
+	//
+	// The Claude badge is not given the same rule here. It is the older axis with rows
+	// calibrated against it, and changing when it disappears is a change to every
+	// existing user's list, not to this feature — worth its own issue, not a drive-by.
+	if agyIdx >= 0 && !line1KeepsSomeName(left1, right1, W) {
+		right1 = append(right1[:agyIdx], right1[agyIdx+1:]...)
+		// The AUTO chip prepends a pad when anything precedes it. If the badge was that
+		// anything, the pad is now leading the cluster: invisible (it abuts composeLine's
+		// gap) but it would still cost the name a column, and it is what would otherwise
+		// stop the dropped row from being byte-identical to a no-account row.
+		if agyIdx == 0 && len(right1) > 0 && right1[0].plain == " " {
+			right1 = right1[1:]
+		}
+	}
 
 	line1 := p.composeLine(W, left1, right1)
 
@@ -473,7 +566,7 @@ func (l *List) String() string {
 	accountGroupingVisible := l.AccountClusteringVisible()
 	// Default to showing row badges; the row loop suppresses each one only when it is
 	// redundant with the cluster it renders under (see below).
-	l.renderer.hideAccountBadge = false
+	l.renderer.hideClaudeAccountBadge = false
 	haveAcct := false
 	prevAcct := ""
 	first := true
@@ -535,8 +628,12 @@ func (l *List) String() string {
 				// concrete member, so it is redundant only against a same-named divider. A
 				// session whose account diverges from its repo anchor (a mixed-account
 				// repo) likewise keeps its badge, so the divider/tint never mislabel it.
+				//
+				// Only the Claude badge: the divider labels a Claude account, so it is the
+				// only badge a match can make redundant. The agy badge has no divider to
+				// repeat and is never suppressed here (#457).
 				if accountGroupingVisible {
-					l.renderer.hideAccountBadge = l.items[j].ClaudeAccountName() == accountKey(l.items[start])
+					l.renderer.hideClaudeAccountBadge = l.items[j].ClaudeAccountName() == accountKey(l.items[start])
 				}
 				at := appendBlock(zone.Mark(listRowZoneID(l.items[j]), l.renderer.Render(l.items[j], j+1, j == l.selectedIdx, l.IsMarked(l.items[j]))))
 				if j == l.selectedIdx {

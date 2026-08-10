@@ -1298,7 +1298,27 @@ list:
 
 - Matching rules (`remote_matches`, `path_matches`, list order, the optional rule-less
   catch-all) work exactly as for `claude_accounts` above. The resolved dir is pinned
-  at session creation; editing `agy_accounts` affects only newly created sessions.
+  at session creation, so re-routing a repo affects only newly created sessions;
+  renaming an account in place (same `config_dir`) is re-derived onto existing
+  sessions, as for `claude_accounts`.
+- The pinned account is shown on the session's row as an `agy:<name>` badge, on
+  sessions that run `agy` and pinned a `config_dir`. An account is resolved for every
+  session, but only the Antigravity CLI's launch reaches for it — so a `claude`
+  session carries no badge even under a catch-all `agy` account, and neither does an
+  account with no `config_dir` (which inherits the ambient config and isolates
+  nothing). The badge reports the *pinned route*, not that the isolation is live:
+  where bwrap does not apply — macOS, or Linux without bubblewrap, per the bullet
+  below — the route is still shown, because whether `bwrap` is on `PATH` is decided
+  at launch and not recorded on the session. On a list pane too narrow to hold the
+  badge and the session name, the badge is the one that goes — the name is how you
+  find the session at all — so widen the pane to read it back. The `@` panel's
+  routing preview is *not* a substitute: it resolves the current config for a repo,
+  which is what a **new** session there would get, not what an existing session
+  pinned.
+- Unlike Claude accounts there is no pool and no default/fallback state, so the badge
+  has no dim form; and account clustering (`[` / `]`, the `account` group mode) keys
+  on the Claude account alone, so an `agy` badge is never folded into a cluster
+  divider.
 - Isolation is implemented with [bwrap](https://github.com/containers/bubblewrap)
   (bubblewrap), which bind-mounts the account's `config_dir` over
   `~/.gemini/antigravity-cli` for that session only. **This is Linux-only** — bwrap
