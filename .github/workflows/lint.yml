@@ -91,13 +91,22 @@ jobs:
       - name: Run shellcheck
         run: |
           set -euo pipefail
-          # State which checker produced the verdict, so a log read years from now does
-          # not have to trust the pin above.
-          shellcheck --version
+          # Assert the pin rather than printing it. The runner image preinstalls its own
+          # shellcheck, so if the install step ever no-ops or that copy wins on PATH, the
+          # job would go on grading PRs with a different checker and the only trace would
+          # be a version line in a green log nobody reads.
+          actual="$(shellcheck --version | awk '/^version:/ {print $2}')"
+          echo "shellcheck ${actual} (pinned ${SHELLCHECK_VERSION})"
+          if [ "$actual" != "$SHELLCHECK_VERSION" ]; then
+            echo "expected the pinned ${SHELLCHECK_VERSION}, got ${actual} — is another shellcheck ahead on PATH?"
+            exit 1
+          fi
           # The list comes from the index, not a glob or a directory walk, because
           # "committed" is exactly what this job means — the same argument
           # shell_syntax_test.go makes for its `bash -n` pass, which keeps the two
-          # lists identical by construction rather than by maintenance.
+          # lists identical by construction rather than by maintenance. Both select on
+          # the *.sh name: a committed script with a shell shebang and no extension
+          # would be missed by both (none exists today).
           mapfile -d '' scripts < <(git ls-files -z -- '*.sh')
           # A job that silently checks nothing passes just as green as one that checks
           # everything, so an empty match is a failure, not a no-op.

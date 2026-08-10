@@ -130,8 +130,10 @@ vet:
 # Checks the same scripts CI does, taken from the index rather than the working tree.
 # CI pins shellcheck 0.11.0; a local build old enough to differ can disagree with it.
 # Deliberately not part of `ci` — CI runs it, `just ci` does not require the tool.
-# Scope or configure a run by passing flags: `just shellcheck --severity=error`.
-# Lint every committed shell script (shellcheck; must be on PATH).
+# Args are flags only (`just shellcheck --severity=error`). Unlike `just lint`, this
+# cannot be narrowed to a path: the file list is appended by xargs, so a path passed
+# here is checked in ADDITION to all of them, not instead.
+# Lint every committed *.sh script (shellcheck; must be on PATH).
 shellcheck *args:
     git ls-files -z -- '*.sh' | xargs -0 shellcheck {{args}}
 

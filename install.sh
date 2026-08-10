@@ -177,17 +177,24 @@ extract_and_install() {
         echo "Linked 'atr' -> 'atrium'."
     fi
 
+    # Ask the binary for its version before announcing success, so the two agree. The
+    # old `echo "$(… version)"` reported echo's exit status, which left a binary that
+    # could not run — wrong arch, truncated asset — printing a success banner and a
+    # blank line, then exiting 0. Testing it here reports that as the failure it is.
+    local installed_version
+    if ! installed_version=$("$bin_dir/$INSTALL_NAME${extension}" version 2>&1); then
+        echo "Installed to $bin_dir/$INSTALL_NAME${extension}, but it could not run:"
+        echo "$installed_version"
+        exit 1
+    fi
+
     echo ""
     if [ "$UPGRADE_MODE" = true ]; then
         echo "Successfully upgraded '$INSTALL_NAME' to:"
     else
         echo "Installed as '$INSTALL_NAME':"
     fi
-    # Run it rather than echoing its capture. The old `echo "$(… version)"` reported
-    # echo's exit status, so a freshly installed binary that could not run left the
-    # installer exiting 0 with a blank line where the version should be. As the last
-    # command of this function that status now reaches `main "$@" || exit 1`.
-    "$bin_dir/$INSTALL_NAME${extension}" version
+    echo "$installed_version"
 }
 
 check_command_exists() {
