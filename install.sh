@@ -57,40 +57,61 @@ detect_platform_and_arch() {
     fi
 }
 
+# get_latest_version resolves the newest release, prereleases included, and answers
+# through two globals rather than through stdout: LATEST_VERSION (the tag, leading "v"
+# stripped) and API_RESPONSE (the raw body, which download_release quotes when an asset
+# is missing).
+#
+# Answering through globals is the fix for #656, not a style choice, and it is why this
+# function MUST BE CALLED DIRECTLY — never as `VERSION=$(get_latest_version)`, in a
+# pipeline, or in any other subshell. That is what the caller used to do, and a command
+# substitution is a subshell: every message below landed in VERSION instead of the
+# terminal, the `exit 1` ended only the subshell, and the install carried on with the
+# error text as the version string, asking GitHub for
+# "atrium_Failed to connect to GitHub API_linux_amd64.tar.gz". API_RESPONSE never
+# reached the parent either, so the "Available versions" tip had nothing to print.
+#
+# Failures leave through err(), so they land on stderr and stop the script. Both halves
+# matter: stderr is what survives a caller that captures stdout, and the stopping is the
+# direct call's doing, since `exit` in a normally-called function leaves the whole script
+# even though `main "$@" || exit 1` suppresses errexit throughout (see the note there).
+# On success it prints nothing and returns 0 — a trailing `if` with a false condition and
+# no else branch returns 0, so appending to this function needs care.
+#
+# TestInstallScriptFailurePaths drives every failure below.
+#
+# Testing the curl directly rather than via a following `$?` keeps that branch reachable
+# on its own terms: a bare `VAR=$(curl …)` is a simple command, which errexit would abort
+# before any `$?` check ran.
+#
+# stderr is deliberately not merged into the capture: -sS already prints curl's error to
+# the terminal, and this value is parsed for "tag_name" below.
 get_latest_version() {
-    # Get latest version from GitHub API, including prereleases.
-    #
-    # Testing the curl directly rather than via a following `$?` makes this branch
-    # reachable on its own terms. A bare `VAR=$(curl …)` is a simple command, so under
-    # `set -e` it aborts before any `$?` check runs; what saves it today is that `main`
-    # runs as `main "$@" || exit 1` and errexit is suppressed inside a `||` list — the
-    # branch survives by grace of the call site rather than by anything written here.
-    #
-    # Two pre-existing faults this does NOT fix, both from the same subshell (#656):
-    # the caller uses `VERSION=$(get_latest_version)`, so the message below lands in
-    # VERSION rather than the terminal and the run continues with it as the version
-    # string, and API_RESPONSE never reaches the parent for download_release to quote.
-    #
-    # stderr is deliberately not merged into the capture: -sS already prints curl's
-    # error to the terminal, and this value is parsed for "tag_name" below.
     if ! API_RESPONSE=$(curl -sS "https://api.github.com/repos/ZviBaratz/atrium/releases"); then
-        echo "Failed to connect to GitHub API"
-        exit 1
+        err "Failed to connect to GitHub API"
     fi
 
-    if echo "$API_RESPONSE" | grep -q "Not Found"; then
-        echo "No releases found in the repository"
-        exit 1
+    # Match the error envelope, not the whole payload: a bare "Not Found" also matches a
+    # release note that happens to mention it ("fix: handle Not Found from the GitHub
+    # API" is an entirely plausible line in this repo's own history), and the releases
+    # JSON carries every release's body. That false positive now aborts the install
+    # rather than merely garbling it, so it is worth being exact about.
+    if echo "$API_RESPONSE" | grep -q '"message": *"Not Found"'; then
+        err "No releases found in the repository"
     fi
 
     # Get the first release (latest) from the array
     LATEST_VERSION=$(echo "$API_RESPONSE" | grep -m1 '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' | sed 's/^v//')
     if [ -z "$LATEST_VERSION" ]; then
-        echo "Failed to parse version from GitHub API response:"
-        echo "$API_RESPONSE" | grep -v "upload_url" # Filter out long upload_url line
-        exit 1
+        # The body is the evidence a bug report needs, so it goes out before the verdict
+        # — err prints one line and exits, so nothing after it would run. Both halves go
+        # to stderr so they stay together. `|| true` because grep exits 1 when it selects
+        # nothing (an empty body, or one whose every line matches), which must not
+        # pre-empt the verdict if errexit is ever restored at the bottom of this file.
+        echo "GitHub API response was:" >&2
+        echo "$API_RESPONSE" | grep -v "upload_url" >&2 || true # Drop the long upload_url line
+        err "Failed to parse a version from the GitHub API response above"
     fi
-    echo "$LATEST_VERSION"
 }
 
 download_release() {
@@ -98,6 +119,11 @@ download_release() {
     local binary_url=$2
     local archive_name=$3
     local tmp_dir=$4
+    # What the caller ASKED for, which is not what $version holds: main resolves "latest"
+    # to a concrete number before calling. Gating the tip below on $version is what made
+    # that whole block unreachable on every path (#656). API_RESPONSE stays a global
+    # because it is bulk data produced by get_latest_version, not a per-call input.
+    local requested_version=${5:-}
     local download_output
 
     echo "Downloading binary from $binary_url"
@@ -117,7 +143,7 @@ download_release() {
         echo ""
         echo "Expected asset name: ${archive_name}"
         echo "URL attempted: ${binary_url}"
-        if [ "$version" == "latest" ]; then
+        if [ "$requested_version" == "latest" ]; then
             echo ""
             echo "Tip: Try installing a specific version instead of 'latest'"
             echo "Available versions:"
@@ -373,6 +399,12 @@ main() {
     while [[ $# -gt 0 ]]; do
         case $1 in
             --name)
+                # A bare `--name` used to hang forever: `shift 2` with one argument left
+                # shifts nothing and succeeds, so $# never reached 0 and this loop spun.
+                # On the documented `curl … | bash -s -- --name <n>` that is a terminal
+                # sitting silent with no output and no exit — the worst of the failure
+                # paths #656 is about.
+                [ $# -ge 2 ] || err "--name needs a value. Usage: install.sh [--name <n>]"
                 INSTALL_NAME="$2"
                 shift 2
                 ;;
@@ -391,9 +423,18 @@ main() {
 
     setup_shell_and_path
 
-    VERSION=${VERSION:-"latest"}
+    # Keep the request as well as the answer. download_release's "Available versions"
+    # tip is for someone who asked for "latest", and after this block VERSION holds a
+    # concrete number — so comparing *it* to "latest" down there can never be true, which
+    # is exactly why that block had never run (#656).
+    REQUESTED_VERSION=${VERSION:-"latest"}
+    VERSION="$REQUESTED_VERSION"
     if [[ "$VERSION" == "latest" ]]; then
-        VERSION=$(get_latest_version)
+        # Called directly, not as `VERSION=$(get_latest_version)`: a command substitution
+        # is a subshell, and this function reports through globals and exits through err.
+        # See the note on the function.
+        get_latest_version
+        VERSION="$LATEST_VERSION"
     fi
 
     RELEASE_URL="https://github.com/ZviBaratz/atrium/releases/download/v${VERSION}"
@@ -401,7 +442,7 @@ main() {
     BINARY_URL="${RELEASE_URL}/${ARCHIVE_NAME}"
     TMP_DIR=$(mktemp -d)
 
-    download_release "$VERSION" "$BINARY_URL" "$ARCHIVE_NAME" "$TMP_DIR"
+    download_release "$VERSION" "$BINARY_URL" "$ARCHIVE_NAME" "$TMP_DIR" "$REQUESTED_VERSION"
     extract_and_install "$TMP_DIR" "$ARCHIVE_NAME" "$BIN_DIR" "$EXTENSION"
 }
 
@@ -417,4 +458,20 @@ err() {
     exit 1
 }
 
+# The `|| exit 1` suppresses errexit for every command reachable from main — bash exempts
+# both sides of a `&&`/`||` list, and the exemption propagates into the functions called
+# there — so the `set -e` at the top of this file is inert below this line. Anything added
+# under main must therefore report its own failures, through `ensure` or `err`, rather
+# than trusting errexit to catch them.
+#
+# Three sites do not, and would become fatal if this were changed to a bare `main "$@"`,
+# which is why restoring errexit is a separate piece of work rather than a one-word edit:
+#
+#   - the profile append in setup_shell_and_path, which today prints bash's raw
+#     redirection error and installs anyway, reporting success while leaving BIN_DIR off
+#     the user's PATH — the same "failed step, cheerful exit 0" shape as #656;
+#   - `which` in check_command_exists, absent from some minimal images;
+#   - `tmux -V` in check_tmux_version, which is warning-only by design and must never
+#     fail an install. TestInstallScriptInstallsAndUpgrades pins that one, so whoever
+#     makes the change finds a red test rather than a paragraph in an old PR.
 main "$@" || exit 1
