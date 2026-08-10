@@ -263,7 +263,13 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 	// an open contrast bug on this band (#555).
 	//
 	// Deliberately NOT gated on hideClaudeAccountBadge — see that field's comment.
+	//
+	// agyIdx records where it landed so it can YIELD below — this is the one chip in
+	// the cluster that is dropped rather than squeezed; see the fit check before
+	// composeLine.
+	agyIdx := -1
 	if acct := i.AgyAccountName(); acct != "" && i.AgyConfigDir() != "" && runsAgy(i) {
+		agyIdx = len(right1)
 		right1 = append(right1, p.seg(" agy:"+acct+" ", th.Palette.Accent))
 	}
 	// Per-session AUTO badge (not while paused) so "yolo" state is unmistakable.
@@ -340,6 +346,38 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 		right1 = append(right1, space)
 	}
 	right1 = append(right1, p.agentSeg(i))
+
+	// The agy badge yields rather than erasing the name. composeLine can only shrink
+	// line 1's single flex segment — the name — so an unbounded second account name in
+	// a cluster that already carries up to eight other chips takes the name to zero and
+	// then overhangs, and the panel clips the far right: measured at a 55-column list
+	// pane, a fully badged row went from "○ my-… work AUTO gemini-3-pro max
+	// accept-edits •" to "○  work agy:grav-one  AUTO gemini-3-pro max acce" — no name at
+	// all and no agent icon. Line 1's job is to say WHICH session this is, so the chip
+	// that costs it that goes.
+	//
+	// Dropping rather than squeezing, and dropping THIS chip, is the argument portSeg
+	// already makes on line 2: an account is an identifier to go look up (the Accounts
+	// overlay's routing preview has it, and it does not change under the user), where
+	// the model/effort/permission chips are live state. The rule is deliberately all-or-
+	// nothing on the name surviving at all rather than a taste threshold, because that
+	// makes it exactly reversible: below the width where the badge fits, the row is
+	// byte-identical to the same session with no agy account, so this feature cannot
+	// make a narrow pane worse than it was before it existed.
+	//
+	// The Claude badge is not given the same rule here. It is the older axis with rows
+	// calibrated against it, and changing when it disappears is a change to every
+	// existing user's list, not to this feature — worth its own issue, not a drive-by.
+	if agyIdx >= 0 && !line1KeepsSomeName(left1, right1, W) {
+		right1 = append(right1[:agyIdx], right1[agyIdx+1:]...)
+		// The AUTO chip prepends a pad when anything precedes it. If the badge was that
+		// anything, the pad is now leading the cluster: invisible (it abuts composeLine's
+		// gap) but it would still cost the name a column, and it is what would otherwise
+		// stop the dropped row from being byte-identical to a no-account row.
+		if agyIdx == 0 && len(right1) > 0 && right1[0].plain == " " {
+			right1 = right1[1:]
+		}
+	}
 
 	line1 := p.composeLine(W, left1, right1)
 

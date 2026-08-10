@@ -159,6 +159,39 @@ func collapseSeps(left []rowSeg, idx int) []rowSeg {
 	return out
 }
 
+// line1KeepsSomeName reports whether line 1's flex segment (the name) would still
+// render at least one column OF THE NAME once left's fixed segments and the whole
+// right cluster are paid for. It restates composeLine's own budget — width - fixed -
+// rightW - 1, the 1 being the minimum gap it keeps between the two sides — because a
+// caller deciding whether to keep a chip has to know before composeLine runs, and
+// composeLine reports only by rendering. line2Fits duplicates the same arithmetic
+// for the same reason; both must move if that budget does.
+//
+// A truncated name needs TWO columns, not one. composeLine truncates with
+// runewidth.Truncate(…, budget, "…"), so at a budget of 1 the ellipsis is the entire
+// budget and the row renders a bare "…" where the name should be — the same failure
+// as an empty name wearing a different glyph, not a narrower kind of success. A name
+// already short enough to fit needs no ellipsis, and so needs only its own width.
+func line1KeepsSomeName(left, right []rowSeg, width int) bool {
+	fixed, nameW := 0, 0
+	for _, s := range left {
+		if s.flex {
+			nameW = s.width()
+			continue
+		}
+		fixed += s.width()
+	}
+	rightW := 0
+	for _, s := range right {
+		rightW += s.width()
+	}
+	budget := width - fixed - rightW - 1
+	if nameW <= budget {
+		return true // fits whole: no ellipsis to pay for
+	}
+	return budget >= 2 // truncated: one column of name, one for the ellipsis
+}
+
 // gutterSeg is the leading status column: the state glyph in its state color.
 func (r *InstanceRenderer) gutterSeg(p rowPaint, i *session.Instance) rowSeg {
 	glyph, c := r.stateGlyph(i, p.th)

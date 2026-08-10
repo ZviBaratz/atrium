@@ -246,50 +246,116 @@ func maxWholeName(t *testing.T, width int, withAgy bool) int {
 	return last
 }
 
-// TestRender_AgyBadgeCostsExactlyItsOwnCells is the width claim, measured rather
-// than asserted at one convenient column count. A badge added to a row with a
-// flexible name column is invisible to a total-width test — the flex absorbs it
-// and the assertion still passes while the name silently loses cells (#478/#479 →
-// #501). What is NOT absorbable is the floor: the narrowest width at which the
-// fixed right cluster still fits. The badge must move that floor by exactly its
-// own rendered width and by nothing else.
-func TestRender_AgyBadgeCostsExactlyItsOwnCells(t *testing.T) {
+// TestRender_AgyBadgeYieldsRatherThanErasingTheName is the invariant that makes the
+// badge safe on a narrow pane, and the guard for the regression the first round of
+// this feature shipped: composeLine can only shrink line 1's single flex segment,
+// so an unbounded second account name took the name to ZERO and then overhung — at a
+// 55-column list pane (a ~185-column terminal at the default 0.30 split) the row
+// rendered no session name and no agent icon. Line 1 exists to say which session
+// this is.
+//
+// Two claims, swept across the whole width range rather than sampled: wherever the
+// badge is shown the name is non-empty, and wherever it is dropped the row is
+// BYTE-IDENTICAL to the same session with no agy account. The second is what makes
+// the yield exactly reversible — this feature cannot make a narrow pane worse than
+// it was before the feature existed. The name is a run of "Z" because no other cell
+// on the row can contain one, so "is any of the name left?" is a substring test.
+func TestRender_AgyBadgeYieldsRatherThanErasingTheName(t *testing.T) {
+	t.Cleanup(theme.Set("unicode"))
+	t.Cleanup(theme.SetGlyphSet(theme.GlyphSetPlain))
+	theme.SetGlyphSet(theme.GlyphSetPlain)
+
+	const name = "ZZZZZZZZZZZZZZZZZZZZ"
+	shown := 0
+	for w := 10; w <= 140; w++ {
+		row := fullyBadgedAgyRow(t, w, name, true)
+		line1 := strings.Split(row, "\n")[0]
+		if strings.Contains(line1, "agy:") {
+			shown++
+			require.Containsf(t, line1, "Z",
+				"at %d columns the badge is shown but the name is gone:\n%s", w, row)
+			continue
+		}
+		require.Equalf(t, fullyBadgedAgyRow(t, w, name, false), row,
+			"at %d columns the badge yielded, so the row must be byte-identical to a no-account row", w)
+	}
+	require.Greater(t, shown, 40, "…and the badge must actually be shown somewhere, or this proves nothing")
+}
+
+// TestRender_AgyBadgeYieldsWithNoOtherChipBeforeAuto covers the one arrangement
+// where yielding could leave litter: the AUTO chip prepends a pad when anything
+// precedes it, so on a row whose ONLY earlier chip is the agy badge (no mute, no
+// queue, no Claude account) dropping the badge would strand that pad. It is
+// invisible — it abuts composeLine's gap — which is exactly why only a byte
+// comparison catches it, and why it would otherwise silently cost the name a column.
+func TestRender_AgyBadgeYieldsWithNoOtherChipBeforeAuto(t *testing.T) {
+	t.Cleanup(theme.Set("unicode"))
+	t.Cleanup(theme.SetGlyphSet(theme.GlyphSetPlain))
+	theme.SetGlyphSet(theme.GlyphSetPlain)
+
+	build := func(agyAcct string) *session.Instance {
+		inst := agyInst(t, "ZZZZZZZZZZZZZZZZ", "/tmp/api", "agy", "" /* no Claude account */, agyAcct)
+		inst.AutoYes = true
+		return inst
+	}
+	for w := 10; w <= 60; w++ {
+		row := agyRow(t, w, build("grav-one"))
+		if strings.Contains(row, "agy:") {
+			continue
+		}
+		require.Equalf(t, agyRow(t, w, build("")), row,
+			"at %d columns a yielded badge must leave no pad behind", w)
+	}
+}
+
+// TestRender_AgyBadgeDoesNotMoveTheRowsFitFloor is the width claim, measured on both
+// sides rather than asserted at one convenient column count. A badge added to a row
+// with a flexible name column is invisible to a total-width test — the flex absorbs
+// it and the assertion still passes while the name silently loses cells (#478/#479 →
+// #501). The floor is the number that cannot be absorbed: the narrowest width at
+// which every line still measures exactly, below which the right cluster overhangs
+// and the panel clips it. Because the badge yields, that floor must not move at all.
+func TestRender_AgyBadgeDoesNotMoveTheRowsFitFloor(t *testing.T) {
 	t.Cleanup(theme.Set("unicode"))
 	t.Cleanup(theme.SetGlyphSet(theme.GlyphSetPlain))
 	theme.SetGlyphSet(theme.GlyphSetPlain)
 
 	without := minExactWidth(t, func(w int) string { return fullyBadgedAgyRow(t, w, "n", false) })
 	with := minExactWidth(t, func(w int) string { return fullyBadgedAgyRow(t, w, "n", true) })
-
-	const badge = " agy:grav-one " // exactly what the renderer appends
-	require.Equal(t, ansi.StringWidth(badge), with-without,
-		"the agy badge must cost its own cells and nothing more (floor %d → %d)", without, with)
-	t.Logf("fully badged agy row floor: %d columns without the badge, %d with it", without, with)
+	t.Logf("fully badged agy row fit floor: %d columns without the badge, %d with it", without, with)
+	require.Equal(t, without, with,
+		"a chip that yields cannot raise the width at which the row stops fitting")
 }
 
 // TestRender_AgyBadgeLadderStaysExact walks the row up a width ladder rather than
 // asserting one column count: an off-by-one in the right cluster shows up at one
-// width and hides at the next. Every rung must measure exactly and must still carry
-// the badge — a row that "fits" by silently dropping the chip fails here.
+// width and hides at the next. Every rung must measure exactly AND carry the badge,
+// so a row that "fits" by yielding below its threshold cannot pass here.
 //
-// The rungs are anchored to the measured floor rather than to literals, so the
-// ladder keeps testing the boundary if another chip moves it; the one rung BELOW
-// the floor is the negative control that makes "floor" mean something. There is no
-// drop-when-it-does-not-fit rule for this chip, deliberately: none of the seven
-// other line-1 badges has one, and the pane that cannot hold the cluster is the
-// pane the user widens (the argument portSeg's comment makes for line 2).
+// The rungs are anchored to the measured threshold — the narrowest width at which
+// the badge is shown — rather than to literals, so the ladder keeps testing the
+// boundary if another chip moves it. The rung below it is the negative control that
+// makes the threshold mean something: there the badge is gone and the name is not.
 func TestRender_AgyBadgeLadderStaysExact(t *testing.T) {
 	t.Cleanup(theme.Set("unicode"))
 	t.Cleanup(theme.SetGlyphSet(theme.GlyphSetPlain))
 	theme.SetGlyphSet(theme.GlyphSetPlain)
 
-	floor := minExactWidth(t, func(w int) string { return fullyBadgedAgyRow(t, w, "n", true) })
+	threshold := 0
+	for w := 10; w <= 140 && threshold == 0; w++ {
+		if strings.Contains(fullyBadgedAgyRow(t, w, "agy-account-badge", true), "agy:") {
+			threshold = w
+		}
+	}
+	require.NotZero(t, threshold, "the badge must appear at some width")
+	t.Logf("the agy badge appears from %d columns up", threshold)
 
-	under := fullyBadgedAgyRow(t, floor-1, "n", true)
-	require.Greater(t, ansi.StringWidth(strings.Split(under, "\n")[0]), floor-1,
-		"one column under the floor the right cluster must overhang — else the floor is not the boundary")
+	under := fullyBadgedAgyRow(t, threshold-1, "agy-account-badge", true)
+	require.NotContains(t, under, "agy:", "one column under the threshold the badge must be gone")
+	require.Contains(t, strings.Split(under, "\n")[0], "a",
+		"…and the name it yielded to must still be there")
 
-	for _, w := range []int{floor, floor + 1, floor + 2, floor + 7, 80, 100, 120} {
+	for _, w := range []int{threshold, threshold + 1, threshold + 2, threshold + 7, 100, 120} {
 		row := fullyBadgedAgyRow(t, w, "agy-account-badge", true)
 		for i, line := range strings.Split(row, "\n") {
 			require.Equalf(t, w, ansi.StringWidth(line),
