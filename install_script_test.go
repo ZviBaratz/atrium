@@ -26,16 +26,25 @@ import (
 //
 // Not every case here is a #656 reproduction, and pretending otherwise would be the
 // easiest way to write a guard that proves nothing. Measured against the pre-fix script
-// (see "Verifying" below), the split is:
+// rather than assumed (see "Verifying" below), the split is:
 //
 //	fail on the old script — api unreachable, no releases, unparseable response,
-//	                         asset missing after resolving latest
+//	                         asset missing after resolving latest,
+//	                         --name without a value
 //	pass on both           — asset missing for an explicit version, fresh install,
-//	                         upgrade, explicit version, tmux -V unreadable
+//	                         upgrade, explicit version, release note mentioning
+//	                         "Not Found", tmux -V unreadable
 //
-// The four that fail are the defects. The five that pass are stated as what they are:
+// The five that fail are the defects. The six that pass are stated as what they are:
 // regression guards over paths the old script handled correctly, kept because the fix
 // rewrote how main obtains a version, plus one negative control and one tripwire.
+//
+// One of them earns its place a level down. "a release note mentioning Not Found" passes
+// against the old script — which greps the whole payload, matches, and then carries on
+// and installs anyway, being #656 — but fails against this PR's own first commit, where
+// making that path abort turned a garbled install into a refused one. It guards a
+// regression introduced and fixed inside this branch, which is the only reason a case
+// that passes on main is worth keeping.
 //
 // # Hermeticity
 //
@@ -73,8 +82,11 @@ import (
 // Belt and braces, pass -count=1:
 //
 //	git checkout origin/main -- install.sh
-//	go test -count=1 -run TestInstallScript -v .   # the four failures listed above
-//	git checkout -- install.sh
+//	go test -count=1 -run TestInstallScript -v .   # the five failures listed above
+//	git checkout HEAD -- install.sh
+//
+// Note the restore is `git checkout HEAD --`, not `git checkout --`: the first form also
+// writes the index, so the plain undo would restore the pre-fix file from there.
 
 // releasesJSON is a GitHub /releases payload shaped the way install.sh parses it: the
 // first "tag_name" line wins for the version, and every "tag_name" line is listed by the
