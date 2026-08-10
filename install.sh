@@ -58,9 +58,21 @@ detect_platform_and_arch() {
 }
 
 get_latest_version() {
-    # Get latest version from GitHub API, including prereleases
-    API_RESPONSE=$(curl -sS "https://api.github.com/repos/ZviBaratz/atrium/releases")
-    if [ $? -ne 0 ]; then
+    # Get latest version from GitHub API, including prereleases.
+    #
+    # Testing the curl directly rather than via a following `$?` makes this branch
+    # reachable on its own terms. A bare `VAR=$(curl …)` is a simple command, so under
+    # `set -e` it aborts before any `$?` check runs; what saves it today is that `main`
+    # runs as `main "$@" || exit 1` and errexit is suppressed inside a `||` list — the
+    # branch survives by grace of the call site rather than by anything written here.
+    #
+    # Caveat this does not fix: the caller uses `VERSION=$(get_latest_version)`, so the
+    # message below lands in VERSION instead of the terminal and the run continues with
+    # it as the version string. Pre-existing, and out of scope for a shellcheck pass.
+    #
+    # stderr is deliberately not merged into the capture: -sS already prints curl's
+    # error to the terminal, and this value is parsed for "tag_name" below.
+    if ! API_RESPONSE=$(curl -sS "https://api.github.com/repos/ZviBaratz/atrium/releases"); then
         echo "Failed to connect to GitHub API"
         exit 1
     fi
@@ -85,13 +97,18 @@ download_release() {
     local binary_url=$2
     local archive_name=$3
     local tmp_dir=$4
+    local download_output
 
     echo "Downloading binary from $binary_url"
-    DOWNLOAD_OUTPUT=$(curl -sS -L -f -w '%{http_code}' "$binary_url" -o "${tmp_dir}/${archive_name}" 2>&1)
-    HTTP_CODE=$?
-
-    if [ $HTTP_CODE -ne 0 ]; then
+    # As in get_latest_version, the curl is tested directly rather than via a following
+    # `$?`. The capture is the point here: -w writes the HTTP status to stdout and -sS
+    # writes curl's message to stderr, so `2>&1` collects both — and until now nothing
+    # read them, so every download failure reported the guesses below without the one
+    # fact that settles it. The old `HTTP_CODE=$?` was curl's exit status, not the HTTP
+    # code, which is why it could not be printed as one.
+    if ! download_output=$(curl -sS -L -f -w '%{http_code}' "$binary_url" -o "${tmp_dir}/${archive_name}" 2>&1); then
         echo "Error: Failed to download release asset"
+        echo "curl reported: ${download_output}"
         echo "This could be because:"
         echo "1. The release ${version} doesn't have assets uploaded yet"
         echo "2. The asset for ${PLATFORM}_${ARCHITECTURE} wasn't built"
@@ -166,7 +183,11 @@ extract_and_install() {
     else
         echo "Installed as '$INSTALL_NAME':"
     fi
-    echo "$("$bin_dir/$INSTALL_NAME${extension}" version)"
+    # Run it rather than echoing its capture. The old `echo "$(… version)"` reported
+    # echo's exit status, so a freshly installed binary that could not run left the
+    # installer exiting 0 with a blank line where the version should be. As the last
+    # command of this function that status now reaches `main "$@" || exit 1`.
+    "$bin_dir/$INSTALL_NAME${extension}" version
 }
 
 check_command_exists() {
