@@ -5,7 +5,10 @@ import (
 	"time"
 
 	"github.com/ZviBaratz/atrium/session/transcript"
+	"github.com/ZviBaratz/atrium/ui/overlay"
 
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -281,4 +284,39 @@ func TestForkRefusesAFanOut(t *testing.T) {
 	assert.Contains(t, h.textInputOverlay.VariantError(), "one session")
 	assert.Equal(t, before, h.list.NumInstances(), "no session may have been spawned")
 	assert.NotNil(t, h.pendingFork, "the fork survives a refused submit")
+}
+
+// TestForkHeading_SurvivesAn80ColRender is the width guard for the one piece of
+// user-visible copy this feature adds to the create form.
+//
+// The heading is the only thing on that form that says the submit will fork, and
+// it is the widest string the form's title row has ever carried — every other
+// fixture in ui/overlay's width sweep uses the 11-cell default "New session", so
+// nothing measured a title until now. fitOverlay truncates silently, and a heading
+// cut to "Fork from checkp…" would still look deliberate.
+//
+// It drives `f` rather than pushing a string in, so what is measured is the copy
+// the app actually builds — timestamp and all — not a literal restated here.
+func TestForkHeading_SurvivesAn80ColRender(t *testing.T) {
+	h := openForkTimeline(t)
+	h.handleCheckpointsState(runeKey("f"))
+	require.NotNil(t, h.textInputOverlay)
+	heading := h.textInputOverlay.Title
+
+	// 80x24 is the terminal the copy has to survive; SetSize takes the overlay's
+	// 0.6 share of it, which is the trap in tests that pass 80 to the overlay.
+	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	frame := xansi.Strip(h.View().Content)
+	assert.Containsf(t, frame, heading,
+		"the fork heading is cut at 80 cols — fitOverlay trimmed it.\n  heading (%d cells): %q",
+		lipgloss.Width(heading), heading)
+
+	// The checkpoint's own time is the half that identifies WHICH checkpoint, so a
+	// truncation that kept "Fork from checkpoint" and dropped the stamp would leave
+	// the heading looking whole while losing the only thing a user could check the
+	// cursor against.
+	newest := forkCheckpoints().List[2]
+	assert.Contains(t, frame, newest.At.Format(overlay.CheckpointTimeFormat),
+		"the 80-column heading lost the checkpoint's timestamp")
 }
