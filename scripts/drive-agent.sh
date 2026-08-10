@@ -81,6 +81,11 @@ set -euo pipefail
 # short atr* name lands in a namespace this repo has already flagged as colliding.
 RUN_ROOT="${ATR_CAP_ROOT:-/tmp/atrium-capture}"
 
+# The TMUX_TMPDIR this script INHERITED, snapshotted at the top of the file — before
+# any code path can export the run's private one over it. live_socket needs it, and
+# by the time live_socket is called the value in the environment is this run's.
+HOST_TMUX_TMPDIR="${TMUX_TMPDIR:-}"
+
 # The tmux session name inside the capture server. Note that nothing targets tmux
 # objects BY THIS NAME: see resolve_ids.
 SESSION=cap
@@ -119,18 +124,33 @@ note() { printf 'drive-agent: %s\n' "$*" >&2; }
 # name derived the way config.RuntimeName() does it: prefer the new name, fall back
 # to the legacy one, never move.
 #
-# /tmp is hardcoded, NOT read from TMUX_TMPDIR: by the time anything calls this, the
-# run's private TMUX_TMPDIR is exported, and honouring it would point this at an
-# empty private root — so fleet-before and fleet-after would agree no matter what
-# happened to the real fleet. Caveat worth knowing: tmux names the directory from
-# getuid(), while `id -u` is the effective uid. They differ under sudo, and nothing
-# here should ever be run under sudo.
+# The DIRECTORY is the half that is easy to get wrong, in both directions.
+#
+# It cannot come from $TMUX_TMPDIR, because by the time anything calls this the run's
+# private TMUX_TMPDIR is exported over it, and a live socket looked up in an empty
+# private root is a fleet of zero — fleet-before and fleet-after would then agree no
+# matter what happened to the real fleet, which is the tautology this check exists to
+# refuse to be.
+#
+# But it cannot be a hardcoded /tmp either. Atrium addresses its server as
+# `-L atrium` (session/tmux/command.go), which tmux resolves against whatever
+# TMUX_TMPDIR the TUI was started with — and this repo's own guidance tells people to
+# export one when eyeballing the TUI. So take the value this SCRIPT inherited,
+# snapshotted before any export, and apply tmux's own rule for it: empty, or naming
+# something that is not a directory, means /tmp. That mirrors tmux.SocketDir
+# (session/tmux/orphan.go), which is where Atrium answers the same question.
+#
+# Caveat worth knowing: tmux names the directory from getuid(), while `id -u` is the
+# effective uid. They differ under sudo, and nothing here should ever be run under
+# sudo.
 live_socket() {
 	local name=atrium
 	if [[ ! -d "$HOME/.atrium" && -d "$HOME/.claude-squad" ]]; then
 		name=claudesquad
 	fi
-	printf '/tmp/tmux-%s/%s' "$(id -u)" "$name"
+	local root="$HOST_TMUX_TMPDIR"
+	[[ -n "$root" && -d "$root" ]] || root=/tmp
+	printf '%s/tmux-%s/%s' "$root" "$(id -u)" "$name"
 }
 
 # fleet_sessions prints the NAMES of the live Atrium server's sessions, sorted. This
@@ -178,14 +198,25 @@ WINDOW=""   # @N — every resize targets this
 # The fleet snapshot is deliberately NOT a meta.env field: it is a sorted list of
 # session names in $RUN/fleet-before.txt, which `down` diffs against the live set.
 
-# assert_under_run_root refuses any path that is not a direct child of $RUN_ROOT.
-# Every destructive operation in this file runs this first — including on $RUN
-# itself, which is settable from the environment (ATR_CAP_RUN=$HOME down would
-# otherwise be `rm -rf "$HOME"`).
+# assert_under_run_root refuses any path that is not UNDER $RUN_ROOT — at any depth,
+# not merely a direct child of it. The depth matters: cmd_reap_all passes
+# $RUN_ROOT/<run>/tmux/sock through here, so a direct-child test would refuse the one
+# caller that has to sweep. What it buys is that a path cannot resolve outside the
+# root, which is the property every destructive operation in this file needs.
+#
+# Every such operation runs this first — including on $RUN itself, which is settable
+# from the environment (ATR_CAP_RUN=$HOME down would otherwise be `rm -rf "$HOME"`).
 assert_under_run_root() {
 	local path="$1"
 	[[ -n "$path" ]] || die "refusing to operate on an empty path"
 	[[ "$path" != "$RUN_ROOT" ]] || die "refusing to operate on the run root itself"
+	# The run-root test above is a string comparison, so a trailing slash — which tab
+	# completion hands you for free — slips past it and then satisfies the prefix test
+	# below as well. "$RUN_ROOT/" naming the root itself is exactly what the previous
+	# line refuses; refuse the spelling too rather than rely on a later step failing.
+	case "$path" in
+	*/) die "refusing to operate on a path with a trailing slash: $path" ;;
+	esac
 	case "$path" in
 	"$RUN_ROOT"/*) ;;
 	*) die "refusing to operate on a path outside $RUN_ROOT: $path" ;;
@@ -199,6 +230,34 @@ assert_under_run_root() {
 # run_dir prints the run directory the verbs should act on, having proved it is one
 # this script may own. It does NOT require the directory to exist — `down` has to be
 # able to act on a pointer whose run is already gone.
+# clear_pointer_if_ours removes $RUN_ROOT/current only when it names the run being
+# torn down. `down` used to remove it unconditionally, which is indistinguishable in
+# the single-run case and wrong in the only case ATR_CAP_RUN exists for: tearing down
+# a pinned second run would clear the pointer the FIRST shell is steering by, and
+# every verb there would then report "no active run" for a run that is still live.
+clear_pointer_if_ours() {
+	local dir="$1" cur
+	[[ -f "$RUN_ROOT/current" ]] || return 0
+	cur="$(cat "$RUN_ROOT/current")"
+	if [[ "$cur" == "$dir" ]]; then
+		rm -f "$RUN_ROOT/current"
+	else
+		note "$RUN_ROOT/current names another run ($cur) — leaving it alone"
+	fi
+}
+
+# assert_sweepable refuses a run directory nested deeper than one level under the run
+# root. `reap-all` globs $RUN_ROOT/*/tmux/sock, so a run one level further down is a
+# server this script can create and can no longer sweep — the orphan class the whole
+# file is organised around. assert_under_run_root cannot express this: it must admit
+# any depth, because reap-all hands it the socket paths themselves.
+assert_sweepable() {
+	local dir="$1"
+	case "${dir#"$RUN_ROOT"/}" in
+	*/*) die "a run directory must sit directly under $RUN_ROOT, or \`reap-all\` cannot find its server: $dir" ;;
+	esac
+}
+
 run_dir() {
 	local dir="${ATR_CAP_RUN:-}"
 	if [[ -z "$dir" && -f "$RUN_ROOT/current" ]]; then
@@ -516,16 +575,43 @@ up_failed() {
 cmd_up() {
 	local program="${1:-}" width="${2:-$DEFAULT_WIDTH}" height="${3:-$DEFAULT_HEIGHT}"
 	[[ -n "$program" ]] || die "usage: up <program> [width] [height]"
+	# Validated here for the reason cmd_fresh validates its own width: these two values
+	# are interpolated into meta.env, which every later verb SOURCES. Today tmux
+	# rejecting a non-numeric -x/-y is the only thing standing in front of that, and it
+	# only holds while start_session keeps running before the meta.env write — a
+	# reordering away from `WIDTH=1; rm -rf …` being shell input on the next verb.
+	# Do not depend on a neighbour's argument checking for a file you generate.
+	local dim
+	for dim in "$width" "$height"; do
+		[[ "$dim" =~ ^[0-9]+$ ]] || die "width and height must be numbers, got: $width $height"
+		((dim > 0)) || die "width and height must be greater than zero, got: $width $height"
+	done
 	preflight
 	# The program may carry flags ("codex --foo"); only the first token is a binary.
 	local bin0="${program%% *}"
 	command -v "$bin0" >/dev/null 2>&1 || die "not on PATH: $bin0"
 
-	if [[ -f "$RUN_ROOT/current" ]]; then
+	# ATR_CAP_RUN names the run directory outright, and it is what makes a deliberate
+	# second run possible — it is the only spelling that leaves $RUN_ROOT/current out
+	# of the loop at BOTH ends: this verb neither refuses because of it nor publishes
+	# to it, so the shell steering the first run goes on steering the first run.
+	#
+	# The refusal below used to name it as the remedy while `up` read only ATR_CAP_NAME
+	# and consulted the pointer unconditionally, so the advice could not work and there
+	# was in fact no way to drive two at once. An error message that names an escape
+	# hatch has to have one.
+	local pinned=0
+	if [[ -n "${ATR_CAP_RUN:-}" ]]; then
+		[[ -z "${ATR_CAP_NAME:-}" ]] ||
+			die "set ATR_CAP_RUN or ATR_CAP_NAME, not both — they name the same directory two ways"
+		pinned=1
+	fi
+
+	if ((!pinned)) && [[ -f "$RUN_ROOT/current" ]]; then
 		local prev
 		prev="$(cat "$RUN_ROOT/current")"
 		if [[ -S "$prev/tmux/sock" ]] && tmux -N -S "$prev/tmux/sock" has-session >/dev/null 2>&1; then
-			die "a capture run is already live at $prev — \`down\` it first (or set ATR_CAP_RUN to drive two in parallel, and read \`help\` on why the default is one)"
+			die "a capture run is already live at $prev — \`down\` it first (or export ATR_CAP_RUN=$RUN_ROOT/<name> in this shell to drive a second one in parallel, and read \`help\` on why the default is one)"
 		fi
 	fi
 
@@ -559,12 +645,19 @@ cmd_up() {
 	# agyConfirmPane contains "rm -f /tmp/agy512cap/repo/hello.txt"). A random id per
 	# run would make every re-capture a large spurious diff and make fixtures from
 	# different widths disagree with each other about where they were taken.
-	RUN="$RUN_ROOT/${ATR_CAP_NAME:-$(basename "$bin0")}"
+	if ((pinned)); then
+		RUN="$ATR_CAP_RUN"
+	else
+		RUN="$RUN_ROOT/${ATR_CAP_NAME:-$(basename "$bin0")}"
+	fi
 	# `up` is the path that CREATES $RUN, so it is the one that must prove $RUN is a
 	# place this script may own before writing a socket and a scratch repo into it —
 	# every later verb reaches $RUN through load_run, which already asserts. Miss it
-	# here and the trap two lines below is an `rm -rf` on an unchecked path.
+	# here and the trap two lines below is an `rm -rf` on an unchecked path. The
+	# sweepability check is what ATR_CAP_RUN needs beyond that: it arrives as a whole
+	# path rather than a name, so it can name a depth `reap-all` cannot glob.
 	assert_under_run_root "$RUN"
+	assert_sweepable "$RUN"
 	[[ ! -e "$RUN" ]] || die "$RUN already exists — \`down\` the previous run, or set ATR_CAP_NAME"
 	SOCK="$RUN/tmux/sock"
 	REPO="$RUN/repo"
@@ -576,6 +669,12 @@ cmd_up() {
 	# newlines: an unguarded printf would write one blank line for an empty fleet, and
 	# `comm` would then report a phantom "" session as missing.
 	if [[ -n "$fleet_before" ]]; then printf '%s\n' "$fleet_before"; fi >"$RUN/fleet-before.txt"
+	# WHICH fleet that snapshot is of, recorded so `down` can tell whether it is
+	# comparing like with like. live_socket derives the path from the inherited
+	# TMUX_TMPDIR, and each verb is a separate process — so a shell that exports or
+	# unsets that variable between `up` and `down` watches one fleet and then reports
+	# on another, and the report reads exactly like a clean one.
+	live_socket >"$RUN/fleet-socket.txt"
 	export TMUX_TMPDIR="$RUN/tmux"
 
 	# Until the run is recorded, a failure must not leave a server behind. This trap
@@ -607,7 +706,12 @@ EOF
 	# Disarm before publishing the pointer, so no failure path can leave `current`
 	# naming a directory the trap has just deleted.
 	trap - EXIT
-	printf '%s\n' "$RUN" >"$RUN_ROOT/current"
+	if ((pinned)); then
+		note "ATR_CAP_RUN was set: $RUN_ROOT/current is left untouched. Keep ATR_CAP_RUN"
+		note "        exported in this shell — without it the later verbs aim at the other run."
+	else
+		printf '%s\n' "$RUN" >"$RUN_ROOT/current"
+	fi
 
 	note "run     $RUN"
 	note "socket  $SOCK"
@@ -665,12 +769,19 @@ cmd_fresh() {
 # byte for `C-m`, which is a spelling somebody reaching for a control key will
 # reasonably use, and it walked straight past a guard whose whole job is to stand
 # between a keystroke and the user's real config file. "Enter" as a substring already
-# covers KPEnter/S-Enter/M-Enter; C-m is the one that needs naming.
+# covers KPEnter/S-Enter/M-Enter; C-m and C-j are the ones that need naming.
+#
+# C-j (0x0A) is here even though it is NOT reliably a submit: in a readline-style
+# composer it is accept-line, while several Ink-based ones treat it as the insert-a-
+# newline key (#396 made exactly that binding in Atrium's own composers). Listing it
+# resolves that ambiguity in the direction the guard's cost argument demands — a
+# false positive costs one FORCE=1, a miss costs a permanent edit to the user's
+# config.
 sends_enter() {
 	local k
 	for k in "$@"; do
 		case "$k" in
-		*[Ee]nter* | C-m | C-M | c-m | c-M) return 0 ;;
+		*[Ee]nter* | C-m | C-M | c-m | c-M | C-j | C-J | c-j | c-J) return 0 ;;
 		esac
 	done
 	return 1
@@ -691,9 +802,19 @@ sends_enter() {
 # single token cannot be split by one. It will fire on panes that merely mention the
 # word; that costs a FORCE=1, while a miss costs a permanent edit to the user's
 # config — refuse in the cheap direction.
+#
+# Which is also why the capture is its own statement rather than the head of a
+# `pane | tr | grep -q … || return 0` pipeline. That spelling makes the guard's
+# verdict the status of a PIPELINE, so any way the capture can fail — a pane that
+# died in the window between require_live and here, a tmux error — reads as "no
+# persist option" and lets the Enter through. Failing to capture is not evidence of
+# safety, so it refuses.
 guard_enter() {
+	local flat
 	[[ "${FORCE:-0}" != "1" ]] || return 0
-	pane | tr -d '[:space:]' | grep -qi 'persist' || return 0
+	flat="$(pane | tr -d '[:space:]')" ||
+		die "could not capture the pane to check it for a persist-to-settings option"
+	grep -qi 'persist' <<<"$flat" || return 0
 	note "the pane offers a persist-to-settings option, and this CLI is running against your REAL config dir."
 	note "check which row is highlighted, then re-run with FORCE=1 if that is what you want."
 	die "refusing to submit at this pane"
@@ -703,7 +824,9 @@ cmd_keys() {
 	[[ $# -gt 0 ]] || die "usage: keys <tmux-key>... (e.g. \`keys Enter\`, \`keys Down Enter\`)"
 	load_run
 	require_live
-	# A confirmation dialog can offer "(Persist to settings.json)". This drives a
+	# Only when the keys actually submit: `keys Down` moves a selection and needs no
+	# ceremony, while `keys Enter` at a "(Persist to settings.json)" row edits the
+	# user's real agent config. See guard_enter for why the check is shaped as it is.
 	sends_enter "$@" && guard_enter
 	t send-keys -t "$PANE" "$@"
 	settle
@@ -754,9 +877,16 @@ cmd_wait() {
 	# Poll for the screen; never sleep-and-hope. A timeout prints the pane it gave up
 	# on, because "the marker never appeared" and "the marker is spelled differently"
 	# are indistinguishable from a bare failure.
-	local deadline=$((SECONDS + timeout))
+	# `screen="$(pane)" && grep …` rather than `pane | grep -qE`, for the reason
+	# guard_enter spells out: under `set -o pipefail` a match that lets grep exit while
+	# the capture is still writing makes the pipeline's status the writer's SIGPIPE,
+	# and a match then reads as no-match. A pane fits the pipe buffer, so the writer
+	# has always finished first and this has never been reachable here — but the
+	# failure it would produce is a timeout on a marker that WAS on screen, which is
+	# indistinguishable from a wrong regex and would be debugged as one.
+	local deadline=$((SECONDS + timeout)) screen
 	while ((SECONDS < deadline)); do
-		if pane | grep -qE "$pattern"; then
+		if screen="$(pane)" && grep -qE "$pattern" <<<"$screen"; then
 			note "matched /$pattern/ after ${SECONDS}s"
 			return 0
 		fi
@@ -896,13 +1026,19 @@ cmd_emit() {
 		# what raw strings are for.
 		if ((join)) || [[ "$body" == *'`'* || "$body" == *$'\r'* ]]; then
 			printf 'var %s = strings.Join([]string{\n' "$name"
-			# The CR expression carries a LITERAL carriage return via $'…' rather
-			# than the escape "\r": GNU sed understands \r on the left-hand side,
-			# BSD sed reads it as the letter r and would mangle every word with an
-			# r in it. Order matters — the backslash doubling runs first, so the
-			# backslash this one introduces is not doubled again.
+			# Both the CR expression and the indent carry a LITERAL control
+			# character via $'…' rather than the escape "\r"/"\t". POSIX leaves
+			# backslash-<char> undefined for anything but a few sequences, and BSD
+			# sed takes it literally at both ends: on the left \r matches the letter
+			# r, so every word containing one gets mangled, and on the right \t
+			# inserts the letter t — which would open each fixture line with `t"`
+			# instead of a tab, inside a Go composite literal, so the emitted file
+			# does not compile. The join form is not opt-in (a backtick in the pane
+			# selects it, and agent CLIs render markdown constantly), so that lands
+			# on macOS by default. Order matters — the backslash doubling runs first,
+			# so the backslash the CR rule introduces is not doubled again.
 			printf '%s\n' "$body" |
-				sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e $'s/\r/\\\\r/g' -e 's/^/\t"/' -e 's/$/",/'
+				sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e $'s/\r/\\\\r/g' -e $'s/^/\t"/' -e 's/$/",/'
 			printf '}, "\\n")\n\n'
 		else
 			# shellcheck disable=SC2016  # the backticks are Go raw-string delimiters, not a subshell
@@ -942,8 +1078,7 @@ cmd_down() {
 	dir="$(run_dir)"
 	if [[ ! -d "$dir" ]]; then
 		note "run directory is already gone: $dir"
-		rm -f "$RUN_ROOT/current"
-		note "cleared the pointer."
+		clear_pointer_if_ours "$dir"
 		# Say what clearing the pointer does NOT do. Whoever removed that directory
 		# removed the socket file inside it, and a tmux server outlives its socket:
 		# the process is still there and is now addressable by NEITHER -S (the path
@@ -971,6 +1106,18 @@ cmd_down() {
 	}
 	before_n="$(grep -c . "$RUN/fleet-before.txt" || true)"
 	after_n="$(fleet_count)"
+	# Same-fleet check. Written as a warning rather than a refusal: the comparison
+	# below is still worth running and still worth reading, it just is not the
+	# reassurance it looks like when the two snapshots came from different servers.
+	local snap_sock now_sock
+	snap_sock="$(cat "$RUN/fleet-socket.txt" 2>/dev/null || true)"
+	now_sock="$(live_socket)"
+	if [[ -n "$snap_sock" && "$snap_sock" != "$now_sock" ]]; then
+		note "*** the fleet snapshot is of a DIFFERENT server than the one being read now: ***"
+		note "        at \`up\`: $snap_sock"
+		note "        now:     $now_sock"
+		note "*** TMUX_TMPDIR changed between the two. Treat the comparison below as unverified. ***"
+	fi
 	# comm's status is captured rather than allowed to propagate. `|| true` would be
 	# the reflex and it is the wrong one here: it converts "the comparison did not
 	# run" into an empty missing-list, which reads as an all-clear. Letting it
@@ -1007,7 +1154,7 @@ cmd_down() {
 		rm -rf "$RUN"
 		note "removed $RUN"
 	fi
-	rm -f "$RUN_ROOT/current"
+	clear_pointer_if_ours "$RUN"
 
 	# Cleanup happens either way — a fleet that lost a session is a reason to look, not
 	# a reason to leave a capture server and a scratch repo behind. The status is the
@@ -1070,7 +1217,9 @@ ENV
   ATR_CAP_ROOT   run root (default /tmp/atrium-capture; keep it short — sun_path is 108)
   ATR_CAP_NAME   run directory name (default the binary's basename). The workspace path
                  ends up INSIDE the fixtures, so it is deterministic on purpose.
-  ATR_CAP_RUN    target a specific run instead of $ATR_CAP_ROOT/current
+  ATR_CAP_RUN    target a specific run directory instead of $ATR_CAP_ROOT/current. On
+                 `up` it also PINS the run: the pointer is neither consulted nor
+                 written, which is what makes a second parallel run possible.
   SETTLE         seconds to let the CLI repaint after a resize/keystroke (default 1.5)
   KEEP=1         keep the run directory on `down`
   FORCE=1        allow `keys Enter` at a persist-to-settings dialog
@@ -1078,8 +1227,16 @@ ENV
 ONE RUN AT A TIME
   $ATR_CAP_ROOT/current is a single pointer, so a second `up` would silently re-aim
   every later verb at the new run — capturing the wrong program at the wrong width,
-  which looks like output rather than an error. `up` refuses while a run is live. To
-  drive two on purpose, set ATR_CAP_RUN explicitly in each shell.
+  which looks like output rather than an error. `up` refuses while a run is live.
+
+  To drive two on purpose, export ATR_CAP_RUN in the SECOND shell before `up`:
+
+      export ATR_CAP_RUN=$ATR_CAP_ROOT/codex   # then: up codex, ladder …, down
+
+  That run is pinned to the path you gave and never touches `current`, so the first
+  shell keeps steering the first run — including when the pinned one is torn down.
+  Keep the variable exported for every verb of that run: unset it and the shell
+  silently goes back to following `current`, which is the other run.
 
 THE JUDGEMENT — what this script does NOT do for you
   Which literal a matcher keys on is a human call. #512 got it wrong twice from wide

@@ -60,9 +60,9 @@ func TestShellScriptsParse(t *testing.T) {
 		scripts = append(scripts, abs)
 	}
 
-	// A guard that silently matches nothing is worse than no guard: if the walk ever
-	// stops finding the scripts, this test would pass while checking zero files.
-	require.NotEmpty(t, scripts, "found no *.sh to check — the walk is broken, not the tree")
+	// A guard that silently matches nothing is worse than no guard: if the pathspec
+	// ever stops matching the scripts, this test would pass while checking zero files.
+	require.NotEmpty(t, scripts, "git ls-files matched no *.sh — the query is broken, not the tree")
 
 	for _, script := range scripts {
 		rel, err := filepath.Rel(root, script)
