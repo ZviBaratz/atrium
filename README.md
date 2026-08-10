@@ -1298,7 +1298,16 @@ list:
 
 - Matching rules (`remote_matches`, `path_matches`, list order, the optional rule-less
   catch-all) work exactly as for `claude_accounts` above. The resolved dir is pinned
-  at session creation; editing `agy_accounts` affects only newly created sessions.
+  at session creation, so re-routing a repo affects only newly created sessions;
+  renaming an account in place (same `config_dir`) is re-derived onto existing
+  sessions, as for `claude_accounts`.
+- The resolved account is shown on the session's row as an `agy:<name>` badge, on
+  sessions that actually run `agy` — an account is resolved for every session, but
+  only the Antigravity CLI's launch honours it, so a `claude` session carries no
+  badge even under a catch-all `agy` account. Unlike Claude accounts there is no pool
+  and no default/fallback state, so the badge has no dim form; and account clustering
+  (`[` / `]`, the `account` group mode) still keys on the Claude account alone, so an
+  `agy` badge is never folded into a cluster divider.
 - Isolation is implemented with [bwrap](https://github.com/containers/bubblewrap)
   (bubblewrap), which bind-mounts the account's `config_dir` over
   `~/.gemini/antigravity-cli` for that session only. **This is Linux-only** — bwrap

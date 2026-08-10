@@ -179,6 +179,17 @@ func (p rowPaint) agentColor(i *session.Instance) theme.Color {
 	return c
 }
 
+// runsAgy reports whether i's program resolves to the Antigravity adapter. It is
+// the same gate the launch path applies before isolating the pinned agy config dir
+// (session/tmux's `if t.adapter.Key == agent.KeyAgy`), and it resolves rather than
+// string-matches the program for the same reason that one does: Resolve takes the
+// first token's basename and matches it against the adapter's aliases, so a path, a
+// flag-carrying program string and the `antigravity` alias all land on one agent.
+//
+// It exists because a pinned agy account is not evidence a session uses one — the
+// account is stamped on every session at creation, whatever CLI it runs.
+func runsAgy(i *session.Instance) bool { return agent.Resolve(i.Program).Key == agent.KeyAgy }
+
 // nameSeg is the flex (elastic) display-name segment. NeedsInput recolors the
 // name (the one attention state); the selected row bolds it. The name is width-
 // sanitized so emoji/ZWJ clusters don't desync the renderer.

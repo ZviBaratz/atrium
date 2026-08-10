@@ -86,6 +86,16 @@ func distinctCount(items []*session.Instance, key func(*session.Instance) string
 // shares it, which is what lets clusterByAccount move whole repo blocks intact.
 // The rule itself lives on session.Instance (mirroring GroupKey/repoKey) so this
 // package and the persisted cluster order cannot disagree about a session's key.
+//
+// Claude-only, and deliberately still so after the agy account badge landed (#457).
+// A session carries two independent account axes, but this returns ONE key: adding
+// agy would mean either a composite key — clusters that split on a dimension the
+// user never asked to group by — or a mode selector, which is a new Config field and
+// the four-site drift set that comes with it (.claude/skills/tui-drift-sites). The
+// key is also persisted (see AccountOrder), so changing what it returns rewrites the
+// stored cluster order of every existing user. The badge needs none of that: it
+// reports the route on its own row, which is what the issue asked for. Clustering on
+// the agy axis is a separate decision, to be made with its migration.
 func accountKey(i *session.Instance) string {
 	return i.AccountClusterKey()
 }

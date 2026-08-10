@@ -51,10 +51,19 @@ type InstanceRenderer struct {
 	// the occupancy modes, Instance.CostInfo in "cost" — and is absent whenever
 	// there is none.
 	contextIndicator string
-	// hideAccountBadge suppresses the per-row Claude-account badge. Set by List.String
-	// when account grouping is visually active (mode == account and >1 account), so the
-	// cluster divider + tinted header carry the identity instead of every row repeating it.
-	hideAccountBadge bool
+	// hideClaudeAccountBadge suppresses the per-row Claude-account badge. Set by
+	// List.String when account grouping is visually active (mode == account and >1
+	// account), so the cluster divider + tinted header carry the identity instead of
+	// every row repeating it.
+	//
+	// Claude-specific by name because it is Claude-specific in fact, and the two
+	// account axes are independent: the suppression means "this badge repeats the
+	// divider above it", and the divider labels a Claude account (accountKey →
+	// session.Instance.AccountClusterKey, which reads claudeAccountPool then
+	// claudeAccount). The agy badge is redundant with no divider — nothing clusters
+	// on it — so it is never suppressed. Sharing one bool would make an agy badge
+	// vanish because a session's CLAUDE account happened to match the divider (#457).
+	hideClaudeAccountBadge bool
 }
 
 func (r *InstanceRenderer) setWidth(width int) {
@@ -212,12 +221,35 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 	// Per-session Claude account badge: accent for a routed account, dim for the
 	// default/fallback. Shown only when an account was resolved (empty = feature
 	// off / legacy session).
-	if acct := i.ClaudeAccountName(); acct != "" && !r.hideAccountBadge {
+	if acct := i.ClaudeAccountName(); acct != "" && !r.hideClaudeAccountBadge {
 		acctColor := th.Palette.Accent
 		if i.ClaudeAccountIsDefault() {
 			acctColor = th.Palette.FgDim
 		}
 		right1 = append(right1, p.seg(" "+acct+" ", acctColor))
+	}
+	// Per-session Antigravity (agy) account badge (#457), on the same axis-identity
+	// footing as the Claude badge above and rendered beside it.
+	//
+	// Shown only on a session that actually RUNS agy. The account is stamped on every
+	// session regardless of program — app's spawn calls SetAgyAccount unconditionally,
+	// and a catch-all agy account matches every repo — but the pinned dir is honoured
+	// only where the launch path resolves the agy adapter (session/tmux's
+	// `if t.adapter.Key == agent.KeyAgy` before wrapAgyBwrap). Badging a claude row
+	// would report a route that does nothing.
+	//
+	// Prefixed where the Claude badge is bare, because the two axes are independent
+	// and can both land on one row: two unlabelled names would not say which is which.
+	// The Claude one keeps its bare form — it predates the second axis, and every
+	// row-width guard in this package is calibrated against it.
+	//
+	// Accent, and never FgDim: the agy section has no default/fallback account flag to
+	// mirror (see RestampAgyAccount), so there is no dim state to render — and FgDim is
+	// an open contrast bug on this band (#555).
+	//
+	// Deliberately NOT gated on hideClaudeAccountBadge — see that field's comment.
+	if acct := i.AgyAccountName(); acct != "" && runsAgy(i) {
+		right1 = append(right1, p.seg(" agy:"+acct+" ", th.Palette.Accent))
 	}
 	// Per-session AUTO badge (not while paused) so "yolo" state is unmistakable.
 	// The badge carries its own background, so wrap it as a pre-rendered chip.
@@ -473,7 +505,7 @@ func (l *List) String() string {
 	accountGroupingVisible := l.AccountClusteringVisible()
 	// Default to showing row badges; the row loop suppresses each one only when it is
 	// redundant with the cluster it renders under (see below).
-	l.renderer.hideAccountBadge = false
+	l.renderer.hideClaudeAccountBadge = false
 	haveAcct := false
 	prevAcct := ""
 	first := true
@@ -535,8 +567,12 @@ func (l *List) String() string {
 				// concrete member, so it is redundant only against a same-named divider. A
 				// session whose account diverges from its repo anchor (a mixed-account
 				// repo) likewise keeps its badge, so the divider/tint never mislabel it.
+				//
+				// Only the Claude badge: the divider labels a Claude account, so it is the
+				// only badge a match can make redundant. The agy badge has no divider to
+				// repeat and is never suppressed here (#457).
 				if accountGroupingVisible {
-					l.renderer.hideAccountBadge = l.items[j].ClaudeAccountName() == accountKey(l.items[start])
+					l.renderer.hideClaudeAccountBadge = l.items[j].ClaudeAccountName() == accountKey(l.items[start])
 				}
 				at := appendBlock(zone.Mark(listRowZoneID(l.items[j]), l.renderer.Render(l.items[j], j+1, j == l.selectedIdx, l.IsMarked(l.items[j]))))
 				if j == l.selectedIdx {
