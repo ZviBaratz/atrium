@@ -43,7 +43,7 @@ func pressPlusToCap(h *home) {
 }
 
 // TestVariantRefusals_SurviveAn80ColRender is the width guard for the create form's
-// three batch refusals (#541), and it deliberately holds no copy of its own: it drives
+// four batch refusals (#541, #644), and it deliberately holds no copy of its own: it drives
 // each refusal through the real submit path, then asserts that the message the app
 // actually set survives into the rendered frame.
 //
@@ -148,6 +148,31 @@ func TestVariantRefusals_SurviveAn80ColRender(t *testing.T) {
 				assert.NotContainsf(t, msg, strconv.Itoa(total),
 					"this refusal must not interpolate the batch total (%d): it is bounded by "+
 						"len(profiles), which nothing caps. Interpolate maxVariantBatch alone.", total)
+			},
+		},
+		{
+			// A fork that also asks for a fan-out. No interpolation, so there is
+			// nothing to maximise — but it is the longest of the four at 31 cells,
+			// one under the 32 the row gives, which is what makes rendering it the
+			// real test rather than a formality.
+			//
+			// The fork is armed on the model rather than driven through the timeline:
+			// what this case needs is the armed *state*, and reaching it through `f`
+			// would drag a claude session and a loaded enumeration into a fixture whose
+			// subject is a width. The refusal itself is still driven, by a real submit.
+			name: "fork cannot fan out",
+			arm: func(t *testing.T) *home {
+				h := newFanOutHome(t, gitInitRepo(t))
+				h.pendingFork = &pendingFork{
+					sourceTitle:      "alpha",
+					sourceTranscript: "/cfg/projects/-src/s.jsonl",
+					cutEntryID:       "aaaa1111-1111-4111-8111-111111111111",
+					droppedMessageID: "bbbb2222-2222-4222-8222-222222222222",
+				}
+				typeString(h, "race")
+				h.textInputOverlay.FocusVariants()
+				plusKey(h) // claude 1 -> 2
+				return h
 			},
 		},
 		{

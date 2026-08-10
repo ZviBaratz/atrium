@@ -1,0 +1,284 @@
+package app
+
+import (
+	"testing"
+	"time"
+
+	"github.com/ZviBaratz/atrium/session/transcript"
+
+	xansi "github.com/charmbracelet/x/ansi"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// forkCheckpoints is a three-checkpoint enumeration in the reader's own order —
+// oldest first — with the oldest carrying no ForkAtID, as a real one does.
+func forkCheckpoints() transcript.Checkpoints {
+	base := time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC)
+	return transcript.Checkpoints{
+		SessionID: "5e551111-1111-4111-8111-111111111111",
+		Path:      "/cfg/projects/-home-zvi-src/5e551111-1111-4111-8111-111111111111.jsonl",
+		List: []transcript.Checkpoint{
+			{MessageID: "0001aaaa-1111-4111-8111-111111111111", Label: "oldest", At: base, ForkAtID: ""},
+			{MessageID: "0002aaaa-1111-4111-8111-111111111111", Label: "middle", At: base.Add(time.Minute), ForkAtID: "a001bbbb-1111-4111-8111-111111111111"},
+			{MessageID: "0003aaaa-1111-4111-8111-111111111111", Label: "newest", At: base.Add(2 * time.Minute), ForkAtID: "a002bbbb-1111-4111-8111-111111111111"},
+		},
+	}
+}
+
+// openForkTimeline opens the timeline on a claude session and loads the fixture,
+// leaving the cursor on row 0 (the newest checkpoint).
+func openForkTimeline(t *testing.T) *home {
+	t.Helper()
+	h, inst := checkpointHome(t)
+	_, _ = h.openCheckpoints()
+	require.NotNil(t, h.checkpointOverlay)
+	h.handleCheckpointsLoaded(checkpointsLoadedMsg{target: inst, result: forkCheckpoints()})
+	return h
+}
+
+// TestSelectedCheckpoint_ReadsTheCursorThroughTheReversal is the guard for the one
+// index inversion in the checkpoint path. The overlay is pushed rows newest-first
+// while the enumeration is held in file order, so cursor 0 is the LAST element.
+//
+// Getting it backwards is invisible on screen — every row looks alike, and a fork
+// seeded from the wrong end still starts, still answers, and still goes Ready. It
+// is the same class of failure as the ignored flag, arrived at from the other side.
+func TestSelectedCheckpoint_ReadsTheCursorThroughTheReversal(t *testing.T) {
+	h := openForkTimeline(t)
+	list := forkCheckpoints().List
+
+	for cursor, want := range []string{list[2].MessageID, list[1].MessageID, list[0].MessageID} {
+		for h.checkpointOverlay.SelectedIndex() < cursor {
+			h.checkpointOverlay.HandleKeyPress(runeKey("j"))
+		}
+		require.Equal(t, cursor, h.checkpointOverlay.SelectedIndex())
+
+		got, ok := h.selectedCheckpoint()
+		require.True(t, ok, "cursor %d selected nothing", cursor)
+		assert.Equalf(t, want, got.MessageID,
+			"cursor %d (rows are newest-first, the enumeration is oldest-first) selected %q",
+			cursor, got.Label)
+	}
+}
+
+// Out-of-range and no-overlay both answer false rather than an arbitrary row: the
+// caller spawns a session off this, so a zero Checkpoint would fork from "".
+func TestSelectedCheckpoint_RefusesWhenThereIsNothingSelected(t *testing.T) {
+	h, _ := checkpointHome(t)
+	if _, ok := h.selectedCheckpoint(); ok {
+		t.Error("selectedCheckpoint answered with no timeline open")
+	}
+
+	h = openForkTimeline(t)
+	h.checkpointSource = transcript.Checkpoints{} // a result dropped between press and read
+	if _, ok := h.selectedCheckpoint(); ok {
+		t.Error("selectedCheckpoint answered from an empty enumeration")
+	}
+}
+
+// TestForkKeyOpensTheSeededForm presses the key rather than calling the handler.
+// Nothing else in the suite proves `f` is wired: it is not a keys.Registry entry,
+// so no dispatch-coverage test reaches it, and the overlay's own tests stop at the
+// intent flag. A key can be handled, documented in the footer, and dead.
+func TestForkKeyOpensTheSeededForm(t *testing.T) {
+	h := openForkTimeline(t)
+	source := h.checkpointTarget.Title
+
+	h.handleCheckpointsState(runeKey("f"))
+
+	require.Equal(t, statePrompt, h.state, "f did not open the create form")
+	require.NotNil(t, h.textInputOverlay)
+	require.NotNil(t, h.pendingFork, "the form opened without the fork armed")
+	assert.Nil(t, h.checkpointOverlay, "the timeline should be gone once the form is up")
+
+	// The seed is the newest checkpoint's, since the cursor opens there.
+	newest := forkCheckpoints().List[2]
+	assert.Equal(t, newest.ForkAtID, h.pendingFork.cutEntryID)
+	assert.Equal(t, newest.MessageID, h.pendingFork.droppedMessageID,
+		"the dropped marker must be the checkpoint's own prompt — it is what proves the cut happened")
+	assert.Equal(t, forkCheckpoints().Path, h.pendingFork.sourceTranscript,
+		"a fork resumes the transcript by path; the new session's project dir is not the source's")
+
+	// The title is derived from the source and free; the heading says it will fork.
+	assert.Equal(t, source+forkTitleSuffix, h.textInputOverlay.GetTitle())
+	assert.Contains(t, h.textInputOverlay.Title, "Fork",
+		"the form is otherwise identical to a plain create — the heading is the only thing that says otherwise")
+	assert.Contains(t, h.textInputOverlay.Title, newest.At.Format("Jan _2 15:04"),
+		"the heading must name the checkpoint, so a mis-aimed cursor is visible before a worktree is built")
+}
+
+// The oldest checkpoint has nothing before it to keep, so claude would exit 1 on
+// an empty --resume-session-at. Refused with a reason, and — the part that matters
+// — the timeline stays up, exactly as a refused attach leaves it up rather than
+// costing the user the list and a second whole-transcript scan.
+func TestForkRefusesTheOldestCheckpoint(t *testing.T) {
+	h := openForkTimeline(t)
+	for h.checkpointOverlay.SelectedIndex() < 2 {
+		h.checkpointOverlay.HandleKeyPress(runeKey("j"))
+	}
+	cp, ok := h.selectedCheckpoint()
+	require.True(t, ok)
+	require.Empty(t, cp.ForkAtID, "the fixture's oldest row must have no fork point")
+
+	h.handleCheckpointsState(runeKey("f"))
+
+	assert.Equal(t, stateCheckpoints, h.state, "a refused fork must leave the timeline standing")
+	assert.NotNil(t, h.checkpointOverlay)
+	assert.Nil(t, h.pendingFork)
+	// Behind an overlay a notice falls back to the errBox row, which the centred box
+	// does not cover — so the refusal is both spoken and visible, the same split the
+	// refused-attach path makes.
+	require.True(t, h.errBox.HasContent(), "and it must say why")
+	assert.Contains(t, xansi.Strip(h.errBox.String()), "start of the conversation")
+}
+
+// f is inert while the read is in flight, all the way through the app: the overlay
+// declines to arm it, so no form opens and no fork is stored. Asserted here as
+// well as in the overlay because this is the layer that would build a worktree.
+func TestForkIsInertWhileTheTimelineIsLoading(t *testing.T) {
+	h, _ := checkpointHome(t)
+	_, _ = h.openCheckpoints() // loading; no result delivered
+
+	h.handleCheckpointsState(runeKey("f"))
+
+	assert.Equal(t, stateCheckpoints, h.state)
+	assert.Nil(t, h.pendingFork)
+	assert.NotNil(t, h.checkpointOverlay)
+}
+
+// TestForkDoesNotLeakIntoAnUnrelatedCreate is the invariant that keeps the fork
+// from being spawned by a form that says nothing about it.
+//
+// The create form is the ordinary one, so an armed fork left on the model would be
+// picked up by the next `n` — same fields, same heading, and a session seeded from
+// someone else's conversation. Every route into the form disarms; only openForkForm
+// re-arms, and only for its own open.
+func TestForkDoesNotLeakIntoAnUnrelatedCreate(t *testing.T) {
+	h := openForkTimeline(t)
+	h.handleCheckpointsState(runeKey("f"))
+	require.NotNil(t, h.pendingFork)
+
+	// Abandon it and open a fresh, unrelated form the way smart dispatch does.
+	h.textInputOverlay = nil
+	h.state = stateDefault
+	h.openCreateFormSeeded(t.TempDir(), false, &PrefillResult{Title: "something-else"})
+
+	assert.Nil(t, h.pendingFork, "an abandoned fork survived into an unrelated create form")
+	require.NotNil(t, h.textInputOverlay)
+	assert.NotContains(t, h.textInputOverlay.Title, "Fork")
+}
+
+// A stashed draft still shows the fork heading when it comes back, so the fork has
+// to come back with it — otherwise the restored form promises a fork and performs
+// a plain create, which is worse than either.
+func TestForkTravelsWithAStashedDraft(t *testing.T) {
+	h := openForkTimeline(t)
+	h.handleCheckpointsState(runeKey("f"))
+	require.NotNil(t, h.pendingFork)
+	armed := h.pendingFork
+
+	h.textInputOverlay.SetPrompt("try it another way")
+	h.stashDirtyCreateForm()
+	require.NotNil(t, h.stashedDraft, "the fixture must actually stash")
+	require.Nil(t, h.pendingFork, "a stashed fork must not stay armed")
+
+	h.textInputOverlay = nil
+	h.state = stateDefault
+	h.openCreateFormSeeded("", false, nil) // the bare `n` restore path
+
+	require.Same(t, armed, h.pendingFork, "the restored draft came back without its fork")
+	assert.Contains(t, h.textInputOverlay.Title, "Fork")
+}
+
+// firstFreeTitle suffixes from 2, because the bare stem is the 1. It goes through
+// the same conflict predicate a variant title does, so an existing session — or an
+// orphan branch from a killed one — disqualifies a name here too.
+func TestFirstFreeTitle(t *testing.T) {
+	h := openForkTimeline(t)
+	path := t.TempDir()
+
+	assert.Equal(t, "alpha-fork", h.firstFreeTitle("alpha-fork", path, true))
+
+	// titleConflict is scoped to the target's repo group, so the fixture has to sit
+	// in the one being submitted to — an instance in another group is not a conflict,
+	// which is the whole point of the scoping.
+	inst := h.list.GetSelectedInstance()
+	require.NotNil(t, inst)
+	inst.Title = "alpha-fork"
+	h.newSessionGroup = inst.GroupKey()
+	require.NotEmpty(t, h.variantTitleConflict("alpha-fork", path, true),
+		"the fixture must actually collide, or the suffix step proves nothing")
+	assert.Equal(t, "alpha-fork-2", h.firstFreeTitle("alpha-fork", path, true),
+		"a taken stem must step to -2, not collide and not jump to -1")
+}
+
+// A fork's print run is what materializes the truncated conversation, and it has
+// to ask something. An ordinary create's prompt is explicitly optional, so the
+// requirement is the fork's alone — and it is refused with the form still open,
+// rather than discovered as a failed start after a worktree was built.
+func TestForkSubmitRequiresAPrompt(t *testing.T) {
+	h := openForkTimeline(t)
+	h.handleCheckpointsState(runeKey("f"))
+	require.NotNil(t, h.pendingFork)
+	h.textInputOverlay.Submitted = true
+
+	h.createSessionFromForm("   ")
+
+	require.NotNil(t, h.textInputOverlay, "the form must stay open to correct")
+	assert.False(t, h.textInputOverlay.Submitted)
+	assert.NotNil(t, h.pendingFork, "the fork must survive a refused submit")
+	assert.Equal(t, 1, h.list.NumInstances(), "nothing may have been spawned")
+}
+
+// forkSeedForSpawn mints a fresh id per submit. claude refuses a --session-id
+// already in use, so an id minted when `f` was pressed and reused across an
+// abandoned submit would fail the second fork with an error about the first.
+func TestForkSeedForSpawn_MintsAFreshID(t *testing.T) {
+	h := openForkTimeline(t)
+	h.handleCheckpointsState(runeKey("f"))
+
+	first, err := h.forkSeedForSpawn()
+	require.NoError(t, err)
+	require.NotNil(t, first)
+	second, err := h.forkSeedForSpawn()
+	require.NoError(t, err)
+
+	assert.NotEqual(t, first.NewSessionID, second.NewSessionID)
+	assert.Equal(t, first.CutEntryID, second.CutEntryID, "only the id is fresh")
+
+	h.pendingFork = nil
+	none, err := h.forkSeedForSpawn()
+	require.NoError(t, err)
+	assert.Nil(t, none, "an ordinary create must carry no seed")
+}
+
+// A fan-out cannot be a fork: N sessions would each need their own --session-id
+// and their own print run, and claude refuses an id already in use. Refused on the
+// variant row, which is where the counts that caused it live, and nothing spawns.
+//
+// A git target, deliberately: on a direct one the fan-out is refused earlier for
+// wanting worktrees at all, so the fork refusal would never be reached and this
+// would pass while proving nothing. Its width is guarded separately, by
+// TestVariantRefusals_SurviveAn80ColRender.
+func TestForkRefusesAFanOut(t *testing.T) {
+	h := newFanOutHome(t, gitInitRepo(t))
+	h.pendingFork = &pendingFork{
+		sourceTitle:      "alpha",
+		sourceTranscript: "/cfg/projects/-src/s.jsonl",
+		cutEntryID:       "aaaa1111-1111-4111-8111-111111111111",
+		droppedMessageID: "bbbb2222-2222-4222-8222-222222222222",
+	}
+	typeString(h, "race")
+	h.textInputOverlay.FocusVariants()
+	plusKey(h) // claude 1 -> 2
+	require.Greater(t, len(h.textInputOverlay.GetVariants()), 1, "the fixture must request a fan-out")
+
+	before := h.list.NumInstances()
+	ctrlS(h)
+
+	require.Equal(t, statePrompt, h.state, "the form must stay open to correct")
+	assert.Contains(t, h.textInputOverlay.VariantError(), "one session")
+	assert.Equal(t, before, h.list.NumInstances(), "no session may have been spawned")
+	assert.NotNil(t, h.pendingFork, "the fork survives a refused submit")
+}

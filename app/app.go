@@ -22,6 +22,7 @@ import (
 	"github.com/ZviBaratz/atrium/repocfg"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/tmux"
+	"github.com/ZviBaratz/atrium/session/transcript"
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/overlay"
 	"github.com/ZviBaratz/atrium/ui/theme"
@@ -603,6 +604,21 @@ type home struct {
 	// to the process: closing the box, or reloading over it, must not leave a
 	// goroutine decoding JSON for a result nothing will use.
 	checkpointCancel context.CancelFunc
+	// pendingFork is a fork armed on the checkpoint timeline, waiting on the create
+	// form's submit. Nil for an ordinary create — the two use the same form, so this
+	// field is the only thing that tells them apart.
+	pendingFork *pendingFork
+	// stashedFork is pendingFork parked beside a stashed create-form draft, so
+	// escaping a half-typed fork and coming back to it re-arms the fork the restored
+	// form's heading still claims.
+	stashedFork *pendingFork
+	// checkpointSource is the enumeration behind the open timeline, kept whole
+	// because a per-checkpoint action needs what the overlay deliberately does not
+	// carry: the ids on each Checkpoint, and the transcript Path a fork resumes by
+	// (the forking session's project directory is not the new session's, so the
+	// session id alone would not resolve). Held in the reader's file order; the
+	// overlay was pushed the reverse, so selectedCheckpoint owns that inversion.
+	checkpointSource transcript.Checkpoints
 	// commandPaletteOverlay is the fuzzy-over-every-action picker (#374).
 	commandPaletteOverlay *overlay.CommandPaletteOverlay
 	// paletteRows is what the open palette's row indices mean: the overlay reports

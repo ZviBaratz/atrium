@@ -273,6 +273,10 @@ type spawnPlan struct {
 	branch   string
 	prompt   string
 	account  *overlay.AccountSelection
+	// fork, when non-nil, seeds the one session in this plan from a checkpoint of
+	// another conversation (#644). A plan carrying it always has exactly one
+	// program: createSessionFromForm refuses a fan-out that is also a fork.
+	fork *session.ForkSeed
 }
 
 // proceedOverCapMsg is emitted when the user confirms the host-capacity prompt; its
@@ -321,7 +325,7 @@ func (m *home) spawnVariants(plan spawnPlan) tea.Cmd {
 	for i := range plan.programs {
 		created, err := m.startNewSession(
 			plan.titles[i], plan.path, plan.direct, plan.programs[i],
-			plan.branch, plan.prompt, plan.account, total > 1)
+			plan.branch, plan.prompt, plan.account, total > 1, plan.fork)
 		if err != nil {
 			if i == 0 {
 				if m.textInputOverlay != nil {
@@ -346,6 +350,10 @@ func (m *home) spawnVariants(plan spawnPlan) tea.Cmd {
 func (m *home) closeCreateForm() {
 	m.textInputOverlay = nil
 	m.stashedDraft = nil
+	// The fork went into the spawn plan already, or the submit it belonged to is
+	// over. Either way it must not outlive this form.
+	m.pendingFork = nil
+	m.stashedFork = nil
 	m.clearPersistedDraft()
 	m.state = stateDefault
 	m.menu.SetState(ui.StateDefault)

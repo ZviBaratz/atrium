@@ -378,7 +378,7 @@ func (m *home) autoDispatch(res PrefillResult) (tea.Cmd, bool) {
 	if verdict == capConfirm {
 		return m.confirmOverCap(plan, sc.Limit, count), true
 	}
-	cmd, err := m.startNewSession(res.Title, res.Path, direct, m.program, "", res.Prompt, nil, false)
+	cmd, err := m.startNewSession(res.Title, res.Path, direct, m.program, "", res.Prompt, nil, false, nil)
 	if err != nil {
 		return nil, false
 	}
@@ -1187,9 +1187,18 @@ func (m *home) openCreateFormSeeded(seedPath string, focusTitle bool, prefill *P
 	// the smart-dispatch and seeded paths carry explicit intent that must win.
 	restore := prefill == nil && seedPath == "" && m.stashedDraft != nil
 
+	// Disarm any fork on the way in. openForkForm re-arms immediately after its own
+	// call, so a fork survives only the open that meant it — and a restored draft
+	// gets back the one that was parked with it, because the heading it still shows
+	// promises a fork. Every other route in (a bare n, smart dispatch, a rebuilt
+	// crash draft) starts disarmed, which is what stops an abandoned fork from being
+	// spawned by a form that says nothing about it.
+	m.pendingFork = nil
 	if restore {
 		m.newSessionPath = m.stashedDraft.GetSelectedPath()
+		m.restorePendingFork()
 	} else {
+		m.stashedFork = nil
 		m.newSessionPath = seedPath
 	}
 	if m.newSessionPath == "" {
@@ -1514,6 +1523,31 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 		ov.SetVariantError("fan-out needs a git repo")
 		return nil
 	}
+	// A fork cannot fan out. Each session would need its own --session-id and its
+	// own print run to materialize a separate copy of the truncated conversation,
+	// and N sessions sharing one id is not a thing claude will do — it refuses a
+	// --session-id already in use. Forking a checkpoint into a bake-off is a real
+	// want (it is #387's shape exactly) but it is a batch of forks, not this.
+	if m.pendingFork != nil && total > 1 {
+		ov.Submitted = false
+		// 31 cells, one under the 32 the variant row gives, and no interpolation —
+		// every word is a constant. What to do about it is the chip row the message
+		// sits on: put the counts back to one.
+		ov.SetVariantError("forking spawns one session only")
+		return nil
+	}
+	// The fork's print run is what materializes the truncated conversation, and a
+	// print run asks something — so a fork needs a first prompt in a way an ordinary
+	// create does not, where the field is explicitly optional. Refused here, with the
+	// form open, rather than discovered as a failed start after a worktree was built.
+	//
+	// After the fan-out check, not before: a form with both problems has to be told
+	// about the counts, because that refusal rides the row the counts are on while
+	// this one is a toast.
+	if m.pendingFork != nil && strings.TrimSpace(prompt) == "" {
+		ov.Submitted = false
+		return m.handleError(fmt.Errorf("a fork needs a first prompt — it is the turn the forked conversation starts from"))
+	}
 	if total > maxVariantBatch {
 		ov.Submitted = false
 		// 29 cells plus the digits of maxVariantBatch, a compile-time constant — 31 at
@@ -1564,6 +1598,16 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 
 	sel := ov.GetSelectedAccount() // *overlay.AccountSelection, nil when untouched
 
+	// Mint the fork's session id now, at the last gate before the plan is captured:
+	// an id is refused by claude once used, so it must not outlive an abandoned
+	// submit. Nil for an ordinary create, which is every path that did not come
+	// through the checkpoint timeline.
+	fork, err := m.forkSeedForSpawn()
+	if err != nil {
+		ov.Submitted = false
+		return m.handleError(err)
+	}
+
 	// Host-capacity gate, evaluated once for the whole batch now that every title and
 	// program has passed pre-flight. An explicit cap refuses an over-budget batch as a
 	// unit (unchanged); the host-derived soft cap instead asks once and, on confirm,
@@ -1572,7 +1616,7 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	branch := ov.GetSelectedBranch()
 	plan := spawnPlan{
 		titles: titles, path: path, direct: direct, programs: programs,
-		branch: branch, prompt: prompt, account: sel,
+		branch: branch, prompt: prompt, account: sel, fork: fork,
 	}
 
 	// Session-cap gate FIRST. A hard cap must hard-refuse an over-budget batch even
@@ -1621,8 +1665,11 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 // the form-submit and smart-auto-dispatch paths: caller-supplied validation (title
 // conflict, target validity) must already have passed. sel, when non-nil, is the
 // create-form's account choice: a member pin wins over auto-routing (and availability),
-// while a bare pool routes rotation to that pool.
-func (m *home) startNewSession(title, path string, direct bool, program, branch, prompt string, sel *overlay.AccountSelection, fromBatch bool) (tea.Cmd, error) {
+// while a bare pool routes rotation to that pool. fork, when non-nil, seeds the session's
+// conversation from a checkpoint of another one (#644) — an explicit parameter rather than
+// a read of m.pendingFork, because the post-confirm resume path spawns from a captured
+// plan with no form left to consult.
+func (m *home) startNewSession(title, path string, direct bool, program, branch, prompt string, sel *overlay.AccountSelection, fromBatch bool, fork *session.ForkSeed) (tea.Cmd, error) {
 	instance, err := session.NewInstance(session.InstanceOptions{
 		Title:   title,
 		Path:    path,
@@ -1633,6 +1680,14 @@ func (m *home) startNewSession(title, path string, direct bool, program, branch,
 		return nil, err
 	}
 	instance.SetBaseContext(m.ctx)
+
+	// Arm the fork before Start, which consumes it. The prompt goes to the fork's
+	// print run rather than the queue: that run is what writes the truncated
+	// conversation to disk, so it has to ask something, and the session opens on its
+	// answer instead of paying for a throwaway turn and then asking again.
+	if fork != nil {
+		instance.SetForkSeed(fork, prompt)
+	}
 
 	// Resolve the pool this worktree routes to, then pick the account: a picker
 	// member-pin wins outright; otherwise rotate to the next available member and
@@ -1872,6 +1927,9 @@ func (m *home) stashDirtyCreateForm() {
 	// Drop any pending "⌃R again" arm so it can't survive a Ctrl+C cancel (which
 	// bypasses the overlay's own disarm) and make the next single Ctrl+R a wipe.
 	m.textInputOverlay.DisarmClear()
+	// The draft carries the fork's heading, so the fork travels with it (see
+	// stashPendingFork). Restored together by openCreateFormSeeded.
+	m.stashPendingFork()
 	// The stash reuses this very overlay, whose Canceled flag may have been set by the
 	// Escape that triggered it (or Submitted by the Ctrl+S that hit the cap). Clear the
 	// transient submit/cancel flags so the restored draft is a clean, submittable form —

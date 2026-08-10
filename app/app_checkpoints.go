@@ -148,10 +148,11 @@ func (m *home) handleCheckpointsLoaded(msg checkpointsLoadedMsg) (tea.Model, tea
 	// Newest first — the checkpoint a user wants is nearly always a recent one, and
 	// the cursor opens on it. The reader returns file order, so reverse here, once.
 	//
-	// No parallel row table is kept, unlike the palette's: v1's only action is
-	// "attach to this session", which the cursor position does not affect. When a
-	// per-checkpoint action arrives it will need one, and the read-once intent flags
-	// are the seam for it.
+	// The enumeration itself is kept rather than a parallel row table: the overlay
+	// is primitives-only and carries no id, so fork (#644) reads the cursor back
+	// against this. One inversion, in selectedCheckpoint, rather than a second
+	// reversed copy to keep in step with this loop.
+	m.checkpointSource = msg.result
 	rows := make([]overlay.CheckpointRow, 0, len(msg.result.List))
 	for i := len(msg.result.List) - 1; i >= 0; i-- {
 		cp := msg.result.List[i]
@@ -188,6 +189,67 @@ func checkpointNote(result transcript.Checkpoints) string {
 	return "claude has already swept this session's file backups — these are a record, not a restore point"
 }
 
+// selectedCheckpoint is the checkpoint under the timeline's cursor, and false
+// when there is none.
+//
+// It owns the one index inversion in this file. The overlay was pushed the rows
+// newest-first while checkpointSource holds the reader's file order, so the
+// cursor counts from the far end — and getting that backwards is invisible in a
+// list whose rows all look alike, right up until a fork is seeded from the wrong
+// end of the conversation.
+func (m *home) selectedCheckpoint() (transcript.Checkpoint, bool) {
+	if m.checkpointOverlay == nil {
+		return transcript.Checkpoint{}, false
+	}
+	list := m.checkpointSource.List
+	i := len(list) - 1 - m.checkpointOverlay.SelectedIndex()
+	if i < 0 || i >= len(list) {
+		return transcript.Checkpoint{}, false
+	}
+	return list[i], true
+}
+
+// forkFromCheckpoint opens the create form seeded to branch the conversation at
+// the selected checkpoint into a new session, or explains why it cannot.
+//
+// The refusals come before anything is torn down, exactly as the attach path
+// orders them: a fork that is not going to happen must leave the timeline
+// standing rather than cost the user the list and a second whole-transcript scan.
+func (m *home) forkFromCheckpoint() (tea.Model, tea.Cmd) {
+	target := m.checkpointTarget
+	if target == nil {
+		return m, nil
+	}
+	cp, ok := m.selectedCheckpoint()
+	if !ok {
+		return m, nil
+	}
+	if cp.ForkAtID == "" {
+		// The oldest checkpoint, or one anchored off the main chain. Both mean there
+		// is no entry to cut at, and claude would exit 1 rather than fork — so this is
+		// a refusal with a reason, not a silent no-op. Forking before the first prompt
+		// is a new session, which the user already has a key for.
+		return m, m.handleInfoNotice("nothing before this checkpoint to fork from — it is the start of the conversation")
+	}
+	if m.checkpointSource.Path == "" {
+		return m, m.handleInfoNotice("this session's transcript could not be located — reload the timeline")
+	}
+
+	pf := &pendingFork{
+		sourceTitle:      target.Title,
+		sourceTranscript: m.checkpointSource.Path,
+		cutEntryID:       cp.ForkAtID,
+		droppedMessageID: cp.MessageID,
+		at:               cp.At,
+	}
+	path := target.GetRepoPath()
+	if path == "" {
+		path = target.Path
+	}
+	m.dismissCheckpointOverlay()
+	return m.openForkForm(path, pf)
+}
+
 // handleCheckpointsState routes a key to the timeline and acts on what it armed.
 func (m *home) handleCheckpointsState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	shouldClose := m.checkpointOverlay.HandleKeyPress(msg)
@@ -195,6 +257,10 @@ func (m *home) handleCheckpointsState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 	if m.checkpointOverlay.RefreshRequested() && m.checkpointTarget != nil {
 		m.checkpointOverlay.SetLoading()
 		return m, m.loadCheckpointsCmd(m.checkpointTarget)
+	}
+
+	if m.checkpointOverlay.ForkRequested() {
+		return m.forkFromCheckpoint()
 	}
 
 	if m.checkpointOverlay.AttachRequested() {
@@ -246,5 +312,6 @@ func (m *home) dismissCheckpointOverlay() {
 	m.cancelCheckpointRead()
 	m.checkpointOverlay = nil
 	m.checkpointTarget = nil
+	m.checkpointSource = transcript.Checkpoints{}
 	m.state = stateDefault
 }

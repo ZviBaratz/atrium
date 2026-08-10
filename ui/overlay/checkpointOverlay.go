@@ -52,12 +52,16 @@ type CheckpointOverlay struct {
 	refreshReq bool
 }
 
-// checkpointTimeFormat is deliberately absolute and now-independent: a
+// CheckpointTimeFormat is deliberately absolute and now-independent: a
 // "3h ago" column would re-render differently every run and could not be pinned
 // by a frame golden.
-const checkpointTimeFormat = "Jan _2 15:04"
+//
+// Exported because the fork form's heading stamps the chosen checkpoint with it
+// (#644). That heading exists to be read against the row the cursor was on, so
+// the two must be the same format, not two spellings that agree today.
+const CheckpointTimeFormat = "Jan _2 15:04"
 
-// checkpointTimeWidth is the rendered width of checkpointTimeFormat ("Aug  5
+// checkpointTimeWidth is the rendered width of CheckpointTimeFormat ("Aug  5
 // 10:00"), used to keep the label column aligned.
 const checkpointTimeWidth = 12
 
@@ -382,7 +386,7 @@ func hiddenRowSummary(above, below int) string {
 func (c *CheckpointOverlay) renderRow(row CheckpointRow, width int) string {
 	stamp := "unknown"
 	if !row.When.IsZero() {
-		stamp = row.When.Format(checkpointTimeFormat)
+		stamp = row.When.Format(CheckpointTimeFormat)
 	}
 	summary := checkpointFileSummary(row)
 	label := row.Label
