@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 
@@ -63,7 +64,11 @@ func (m agentMark) equals(o agentMark) bool {
 var glyphExemptFromIdentity = map[agent.Key]string{}
 
 // TestEveryAgentAdapterHasAnIdentityGlyph fails when an adapter in session/agent's
-// registry is indistinguishable from an agent Atrium does not recognise.
+// registry is indistinguishable from an agent Atrium does not recognise, or from
+// another adapter. Those are the two halves of being tellable apart in a list, and
+// each is silent about the other: a table where two agents share one glyph covers
+// every registry key, and a table where every glyph is unique can still be missing
+// a key entirely.
 //
 // The discriminator is the fallback itself. AgentGlyph normalises an unrecognised
 // key onto the generic entry BEFORE it consults any palette, so "absent from the
@@ -124,4 +129,29 @@ func TestEveryAgentAdapterHasAnIdentityGlyph(t *testing.T) {
 			"agent column, the in-session bar, the profile pickers — shows that session as one "+
 			"Atrium does not know",
 		uncovered, generic.glyph)
+
+	// Covered is half of tellable apart; the other half is that no two adapters
+	// resolve to the SAME glyph. Distinctness is required of the glyph alone rather
+	// than of the whole mark, because the pickers paint identity from the glyph and
+	// discard the colour (ui/overlay/profilePicker.go, ui/overlay/variantPicker.go
+	// both bind it to _), so two agents sharing a glyph are indistinguishable there
+	// whatever accent the row would have given them. Nothing forces an accent either:
+	// an adapter with no agentColors entry rides Palette.Fg, which is why more than
+	// one of them does today.
+	byGlyph := map[string][]agent.Key{}
+	for _, a := range adapters {
+		g, _ := th.AgentGlyph(string(a.Key))
+		byGlyph[g] = append(byGlyph[g], a.Key)
+	}
+	var shared []string
+	for g, keys := range byGlyph {
+		if len(keys) > 1 {
+			slices.Sort(keys)
+			shared = append(shared, fmt.Sprintf("%q: %v", g, keys))
+		}
+	}
+	slices.Sort(shared)
+	require.Emptyf(t, shared, "these adapters resolve to one glyph — %s — so they paint as "+
+		"the same agent wherever identity is drawn from the glyph alone; give each its own "+
+		"entry in agentGlyphs, ui/theme/agent.go", shared)
 }
