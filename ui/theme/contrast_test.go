@@ -100,8 +100,8 @@ var pairFloors = []struct {
 
 // KNOWN, DELIBERATELY UNASSERTED: FgDim on BarBg. ui/contextbar.go's barState
 // renders Paused and the default state in FgDim on the bar's band, which is
-// 1.44:1 on tokyo-night and 1.87:1 on catppuccin-mocha — while contextbar.go:59's
-// own comment says "dim greys wash out" there. It is a real legibility defect on
+// 1.44:1 on tokyo-night and 1.87:1 on catppuccin-mocha — while barState's own comment
+// says "dim greys wash out" there. It is a real legibility defect on
 // the DARK themes, found by this oracle while it was being written, and it is
 // filed rather than fixed here: fixing it means choosing a new colour for a
 // state, which is a design decision and not #394's subject. Do not add it to

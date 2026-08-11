@@ -107,8 +107,8 @@ func TestApplyBarStyle_NoOpsUnderAConfigOverride(t *testing.T) {
 // than quietly writing into the developer's fleet, and a site that leaves it to its
 // TestMain is a site where a failed sandbox install goes undetected. Conditioned on
 // tmux being present for the same reason RequireTmux is not used: with no tmux,
-// validateConfig returns before it starts anything (config.go:180) and there is no
-// socket to misplace.
+// validateConfig returns on its own exec.LookPath guard before it starts anything, and
+// there is no socket to misplace.
 func TestInitAndTmuxConfigPath_AreRaceFree(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err == nil {
 		testutil.RequireSandboxedTmux(t)

@@ -209,12 +209,12 @@ type terminalEnsurer func(*session.Instance) (string, error)
 // It CAN die, deliberately. A zero target used to be dispatched anyway, so a
 // paused selection, the diff tab, the screensaver and now a still pane each cost
 // ten messages a second that captured nothing and applied nothing — and Bubble
-// Tea rebuilds the whole frame after every message (tea.go:880), measured at
-// 6-9ms and 1.2-2.3MB a rebuild. Declining to arm is what turns that into zero.
-// The unconditional 100ms preview tick is the revive (handlePreviewTick), in the
-// shape armSplashTick and armSpinnerTick already use: a general self-heal rather
-// than an enumeration of the ways a target can become interesting again, so a
-// future zero-target case gets its revive for free.
+// Tea rebuilds the whole frame after every message (Program.eventLoop's render
+// call), measured at 6-9ms and 1.2-2.3MB a rebuild. Declining to arm is what
+// turns that into zero. The unconditional 100ms preview tick is the revive
+// (handlePreviewTick), in the shape armSplashTick and armSpinnerTick already use:
+// a general self-heal rather than an enumeration of the ways a target can become
+// interesting again, so a future zero-target case gets its revive for free.
 func (m *home) armFrameCapture(delay time.Duration) tea.Cmd {
 	if m.frameInFlight || m.ctx.Err() != nil {
 		return nil
