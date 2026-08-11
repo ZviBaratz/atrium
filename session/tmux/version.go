@@ -17,9 +17,10 @@ import (
 // MinVersion is the oldest tmux Atrium can start a session on.
 //
 // It is 3.2, and it is forced rather than chosen: `new-session -e` landed in 3.2, and
-// Atrium passes -e on every session start. tmux.go:495 appends `-e ATRIUM=1 -e
-// ATRIUM_SESSION=<name>` unconditionally — not only for routed accounts — so below 3.2
-// no session has ever started. Declaring the floor removes no working configuration.
+// Atrium passes -e on every session start: Session.start appends `-e ATRIUM=1 -e
+// ATRIUM_SESSION=<name>` (atriumMarkerEnv) unconditionally — not only for routed accounts
+// — so below 3.2 no session has ever started. Declaring the floor removes no working
+// configuration.
 //
 // Derivation (tmux's own sources, which are stronger evidence than its CHANGES prose):
 //
@@ -47,8 +48,9 @@ var ErrTooOld = errors.New("tmux is too old")
 // ErrTooOldFor builds the user-facing too-old error naming the version that was found.
 // Atrium starts every session with `new-session -e`, which an older tmux rejects — and it
 // rejects it inside the pty, so Atrium never sees tmux's stderr and the user would
-// otherwise get a bare "timed out waiting for tmux session" two seconds later
-// (tmux.go:547), naming neither tmux nor its version.
+// otherwise get a bare "timed out waiting for tmux session <name>" two seconds later
+// (Session.start's timeout path), which names the tmux session but neither the cause nor
+// the version — so nothing in it points at an upgrade.
 //
 // Deliberately long and multi-clause: handleError routes an error to the persistent info
 // modal only when it does not fit the one-line toast (ui/err.go Fits is a pure width
