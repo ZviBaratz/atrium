@@ -389,10 +389,12 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 	// than a truncated name — is answered by this package, not waved away. The badge is
 	// already suppressed on EVERY row under visible account grouping (see
 	// hideClaudeAccountBadge), so it is not an always-on guarantee; the pinned value
-	// stays reachable without widening, via the account: filter term and the account
-	// group mode, both of which read the same claudeAccount the badge does; and what
-	// the clip destroys today is the live permission-mode chip and the agent icon,
-	// which the yield hands back along with the name (#671).
+	// stays reachable without widening, via filter.go's account: term, which reads the
+	// same claudeAccount this badge renders (the account group mode is only a partial
+	// fallback — accountKey is AccountClusterKey, which returns the POOL where a
+	// session has one, so a pooled row's divider names the pool and not the member the
+	// badge shows); and what the clip destroys today is the live permission-mode chip
+	// and the agent icon, which the yield hands back along with the name (#671).
 	//
 	// ORDER IS FORCED, not chosen. agy goes first because #457's invariant — an
 	// agy-badged row below its threshold is byte-identical to the same session with no
