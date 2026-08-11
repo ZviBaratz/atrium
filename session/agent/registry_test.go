@@ -258,8 +258,12 @@ var claudeFetchPane = strings.Join([]string{
 // — the narrowest pane this dialog was captured at, NOT a floor. An earlier draft called 28
 // "the narrowest reachable pane" on the arithmetic that an 80-column terminal at
 // maxListRatio hands the preview pane 28 columns (#340); that is one terminal size, not a
-// bound. There is no floor (see registry.go's agy block and the ladder at :1394), and #512
-// falsified two literals at 24 and shipped a fixture at 20.
+// bound. There is no floor — see registry.go's agy block, and the agy fixture ladder below
+// (agyTrustGatePane down to agyConfirmFloorPane), cited by name because the line number
+// this used to carry was never right: in the very commit that wrote it, those lines were
+// already inside an aider test, several above where the agy block actually began. It did
+// not rot; it was born wrong, which no amount of re-checking a diff would have caught.
+// #512 falsified two literals at 24 and shipped a fixture at 20.
 //
 // It pins two properties the matcher depends on. The title reflows across THREE physical
 // lines, so the match must run on the flattened region, not per-line. And the title sits 9

@@ -888,9 +888,18 @@ var aider = &Adapter{
 }
 
 // Antigravity (agy). Every string below was driven against a live agy 1.1.11 in an
-// isolated tmux on 2026-08-09 (#512) and captured at widths 120/60/40/34/28/26/24/20. The width
-// ladder is load-bearing for this adapter in a way it is not for the others, because agy
-// renders its two dialogs with two DIFFERENT overflow behaviours:
+// isolated tmux on 2026-08-09 (#512), down to width 20. Which widths are EVIDENCE is a
+// different question from which were driven, and it is not answerable from here: only a
+// KEPT capture can falsify a matcher. The ones each matcher must FIRE on live in
+// paneCoverage (pane_width_test.go), where a test reads their widths; that table is
+// positive-only, so the panes agy must NOT match — the answered confirmation, the
+// accepted gate, the slash menu, the idle composer — are guarded in registry_test.go
+// instead. Ask those, not this sentence: a width ladder recited in prose is exactly what
+// #648 found rotting. The observations below name a width where the rendering is the
+// point; they are not a capture list.
+//
+// The ladder is load-bearing for this adapter in a way it is not for the others, because
+// agy renders its two dialogs with two DIFFERENT overflow behaviours:
 //
 //   - Headline questions are TRUNCATED, not wrapped. "Do you trust the contents of this
 //     project?" renders in full at 120/60, as "…of this projec" at 40, "…of this" at 34
