@@ -27,12 +27,12 @@ func pooledCatchAllCfg(pool string) *config.Config {
 
 // bodyLines is how many lines the overlay's body occupies, and boxLines how many the
 // bordered box does. With nothing wrapping the second is exactly the first plus six
-// (border 2 + vertical padding 2 + the title and its blank line 2), so comparing
-// them is the only reliable wrap detector available here: lipgloss pads every line
-// of a Border()+Padding()+Width() box out to the same width, so a wrapped row is
-// invisible to any width comparison taken after Render — the kind
-// TestAccountsOverlay_GutterNarrowsDirNotRowWidth makes — but it does cost the box a
-// line the body never had.
+// (border 2 + vertical padding 2 + the title and its blank line 2), so comparing them is
+// the only reliable wrap detector available here: lipgloss pads every line of a
+// Border()+Padding()+Width() box out to the same width, so a wrapped row is invisible to
+// any width comparison taken after Render — the limitation
+// TestAccountsOverlay_LegendFitsAndKeepsLimitedClaudeOnly's note sets out — but it does
+// cost the box a line the body never had.
 const boxChromeLines = 6
 
 func assertNothingWraps(t *testing.T, o *AccountsOverlay, ctx string) {
