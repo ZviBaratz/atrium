@@ -228,11 +228,18 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 	// glyph renders it far wider — which overflows the pane into the accumulating ghost
 	// rows theme.SanitizeWidth documents. No width guard in this package can see it,
 	// because a test measures with the same library that mis-measures.
+	//
+	// claudeIdx records where it landed so it can YIELD below, like the agy badge: an
+	// account name is unbounded user config in a cluster that can hold eight other
+	// chips, and composeLine pays for it out of the name (#671). See the yield ladder
+	// before composeLine.
+	claudeIdx := -1
 	if acct := theme.SanitizeWidth(i.ClaudeAccountName()); acct != "" && !r.hideClaudeAccountBadge {
 		acctColor := th.Palette.Accent
 		if i.ClaudeAccountIsDefault() {
 			acctColor = th.Palette.FgDim
 		}
+		claudeIdx = len(right1)
 		right1 = append(right1, p.seg(" "+acct+" ", acctColor))
 	}
 	// Per-session Antigravity (agy) account badge (#457), on the same axis-identity
@@ -262,8 +269,10 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 	//
 	// Prefixed where the Claude badge is bare, because the two axes are independent
 	// and can both land on one row: two unlabelled names would not say which is which.
-	// The Claude one keeps its bare form — it predates the second axis, and every
-	// row-width guard in this package is calibrated against it.
+	// The Claude one keeps its bare form — it predates the second axis, and the
+	// package's two literal name budgets are measured with it present: nameBudget = 28
+	// and loadedBudget = 21 in list_context_test.go, both at 80 columns, where neither
+	// badge yields.
 	//
 	// Accent, and never FgDim: the agy section has no default/fallback account flag to
 	// mirror (see RestampAgyAccount), so there is no dim state to render — and FgDim is
@@ -271,9 +280,9 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 	//
 	// Deliberately NOT gated on hideClaudeAccountBadge — see that field's comment.
 	//
-	// agyIdx records where it landed so it can YIELD below — this is the one chip in
-	// the cluster that is dropped rather than squeezed; see the fit check before
-	// composeLine.
+	// agyIdx records where it landed so it can YIELD below. Both account badges are
+	// dropped rather than squeezed, and this one goes FIRST; see the ladder before
+	// composeLine for why that order is forced rather than chosen.
 	// Width-sanitized, like the Claude badge above — same free-text-from-config risk.
 	agyIdx := -1
 	if acct := theme.SanitizeWidth(i.AgyAccountName()); acct != "" && i.AgyConfigDir() != "" && runsAgy(i) {
@@ -355,36 +364,61 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 	}
 	right1 = append(right1, p.agentSeg(i))
 
-	// The agy badge yields rather than erasing the name. composeLine can only shrink
-	// line 1's single flex segment — the name — so an unbounded second account name in
+	// Both account badges yield rather than erasing the name. composeLine can only
+	// shrink line 1's single flex segment — the name — so an unbounded account name in
 	// a cluster that already carries up to eight other chips takes the name to zero and
 	// then overhangs, and the panel clips the far right: measured at a 55-column list
 	// pane, a fully badged row went from "○ my-… work AUTO gemini-3-pro max
 	// accept-edits •" to "○  work agy:grav-one  AUTO gemini-3-pro max acce" — no name at
-	// all and no agent icon. Line 1's job is to say WHICH session this is, so the chip
-	// that costs it that goes.
+	// all and no agent icon (#457). The Claude badge alone does the same: across
+	// renderer widths 40–52 a fully badged claude row rendered 53 cells with no name at
+	// all, overhanging by up to 13 (#671). Line 1's job is to say WHICH session this
+	// is, so the chips that cost it that go.
 	//
-	// Dropping rather than squeezing, and dropping THIS chip, is the argument portSeg
-	// already makes on line 2: an account is an identifier to go look up (the Accounts
-	// overlay's routing preview has it, and it does not change under the user), where
-	// the model/effort/permission chips are live state. The rule is deliberately all-or-
-	// nothing on the name surviving at all rather than a taste threshold, because that
-	// makes it exactly reversible: below the width where the badge fits, the row is
-	// byte-identical to the same session with no agy account, so this feature cannot
-	// make a narrow pane worse than it was before it existed.
+	// Dropping rather than squeezing, and dropping THESE chips, is the argument portSeg
+	// already makes on line 2: an account is an identifier to go look up, and it does
+	// not change under the user, where the model/effort/permission chips are live
+	// state. The rule is deliberately all-or-nothing on the name surviving at all
+	// rather than a taste threshold, because that makes each drop exactly reversible:
+	// below the width where a badge fits, the row is byte-identical to the same session
+	// without that account, so neither badge can make a narrow pane worse than it was
+	// without it.
 	//
-	// The Claude badge is not given the same rule here. It is the older axis with rows
-	// calibrated against it, and changing when it disappears is a change to every
-	// existing user's list, not to this feature — worth its own issue, not a drive-by.
-	if agyIdx >= 0 && !line1KeepsSomeName(left1, right1, W) {
-		right1 = append(right1[:agyIdx], right1[agyIdx+1:]...)
-		// The AUTO chip prepends a pad when anything precedes it. If the badge was that
-		// anything, the pad is now leading the cluster: invisible (it abuts composeLine's
-		// gap) but it would still cost the name a column, and it is what would otherwise
-		// stop the dropped row from being byte-identical to a no-account row.
-		if agyIdx == 0 && len(right1) > 0 && right1[0].plain == " " {
-			right1 = right1[1:]
+	// The counter-argument for the Claude badge — an account is a safety signal (which
+	// login this session bills and pushes as) and one that silently vanishes is worse
+	// than a truncated name — is answered by this package, not waved away. The badge is
+	// already suppressed on EVERY row under visible account grouping (see
+	// hideClaudeAccountBadge), so it is not an always-on guarantee; the pinned value
+	// stays reachable without widening, via the account: filter term and the account
+	// group mode, both of which read the same claudeAccount the badge does; and what
+	// the clip destroys today is the live permission-mode chip and the agent icon,
+	// which the yield hands back along with the name (#671).
+	//
+	// ORDER IS FORCED, not chosen. agy goes first because #457's invariant — an
+	// agy-badged row below its threshold is byte-identical to the same session with no
+	// agy account — is false if Claude goes first: there would be a band where an agy
+	// row shows no Claude badge while the same session without an agy account still
+	// shows one, i.e. the agy badge making the pane worse. Newest axis first also keeps
+	// claudeIdx valid without re-derivation, since Claude is appended before agy.
+	//
+	// Re-testing line1KeepsSomeName each rung is the stop condition: if dropping agy is
+	// enough, the Claude rung is skipped and its badge survives.
+	dropped := false
+	for _, idx := range []int{agyIdx, claudeIdx} {
+		if idx < 0 || line1KeepsSomeName(left1, right1, W) {
+			continue
 		}
+		right1 = append(right1[:idx], right1[idx+1:]...)
+		dropped = true
+	}
+	// The AUTO chip and the agent icon each prepend a pad when anything precedes them.
+	// If the badges were that anything, the pad is now leading the cluster: invisible
+	// (it abuts composeLine's gap) but it would still cost the name a column, and it is
+	// what would otherwise stop the dropped row from being byte-identical to a
+	// no-account row. A leading bare-space segment can only be such an orphan, because
+	// both pads are appended only when the cluster is already non-empty.
+	if dropped && len(right1) > 0 && right1[0].plain == " " {
+		right1 = right1[1:]
 	}
 
 	line1 := p.composeLine(W, left1, right1)

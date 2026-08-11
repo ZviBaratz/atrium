@@ -1095,6 +1095,13 @@ list to your config file:
   leaving them grouped under a name the config no longer has. Deleting an account
   from the config leaves its sessions' badges as they were — the last known truth
   about the login they run under.
+- On a list pane too narrow to hold the badge and the session name, the badge is
+  the one that goes — the name is how you tell one row from another at all, and
+  without it a narrow row also loses the permission-mode chip and the agent icon
+  off the right edge. Nothing is hidden by this that you cannot get back without
+  resizing: `account:<name>` filtering and the `account` group mode both read the
+  same pinned value the badge shows. Where both account badges are on one row, the
+  `agy:` one yields first.
 - When more than one account is configured, the new-session form shows an
   **Account** picker, preset to the auto-routed account, to override the choice.
 - `expect_account` (optional) is the email address that `config_dir` is supposed to
@@ -1311,10 +1318,11 @@ list:
   below — the route is still shown, because whether `bwrap` is on `PATH` is decided
   at launch and not recorded on the session. On a list pane too narrow to hold the
   badge and the session name, the badge is the one that goes — the name is how you
-  find the session at all — so widen the pane to read it back. The `@` panel's
-  routing preview is *not* a substitute: it resolves the current config for a repo,
-  which is what a **new** session there would get, not what an existing session
-  pinned.
+  find the session at all — and it goes *before* the Claude account badge, which has
+  the `account:` filter and the `account` group mode to fall back on where this one
+  has neither. So widen the pane to read it back: the `@` panel's routing preview is
+  *not* a substitute, because it resolves the current config for a repo, which is
+  what a **new** session there would get, not what an existing session pinned.
 - Unlike Claude accounts there is no pool and no default/fallback state, so the badge
   has no dim form; and account clustering (`[` / `]`, the `account` group mode) keys
   on the Claude account alone, so an `agy` badge is never folded into a cluster
