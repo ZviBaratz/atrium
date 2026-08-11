@@ -9,12 +9,18 @@ import "charm.land/lipgloss/v2"
 // and a glyph whose measured width differs from its rendered width desyncs
 // bubbletea's incremental renderer (the list-ghosting defect). Every entry must
 // measure width 1; TestAgentGlyphWidths guards the invariant.
-
+//
+// That test iterates this table, so it can only speak for the entries that exist.
+// Whether the table COVERS session/agent's registry is a question this package
+// cannot ask — a leaf cannot see the registry — so it is guarded from package ui,
+// by TestEveryAgentAdapterHasAnIdentityGlyph. Editing this table and running only
+// `go test ./ui/theme` will therefore not tell you whether an agent is missing.
 var agentGlyphs = map[string]string{
 	"claude":  "✻", // claude code's own spinner glyph
 	"codex":   "❖", // ◆ would collide with Glyphs.Waiting
 	"gemini":  "✦",
 	"aider":   "≡",
+	"agy":     "✜", // a cross: no Glyphs rung draws one, and a star would read as a second gemini
 	"generic": "•",
 }
 
