@@ -43,7 +43,15 @@ import (
 //     literal misses at ≤40 while the real GateUp holds to 24.
 //
 // So every assertion here runs the PRODUCTION predicate (GateUp / DetectPrompt /
-// HasBusyMarker) against a VERBATIM captured pane. Nothing here reasons about lengths.
+// HasBusyMarker) against a captured pane. Nothing here reasons about lengths.
+//
+// "Captured" means byte-verbatim for every entry that records a WIDTH, which is the direction
+// that matters: two entries are TRANSCRIPTIONS of a live pane instead — claudeMCPSinglePane and
+// claudeMCPMultiPane, whose box rule was spliced (#666) — and both carry width 0, because an
+// edited pane cannot testify about its own width. Not every width-0 entry is a transcription;
+// most are verbatim captures whose provenance simply never wrote the width down, which is what
+// keysWithNoRecordedCaptureWidth is for. Both kinds still testify about SHAPE, which is what
+// they are listed for.
 //
 // What this file does NOT reach, stated so the tables are not read as fuller than they are.
 // A Match matcher IS exercised at every width it has captures for, because fires() runs the
@@ -56,7 +64,8 @@ import (
 // Prompts/Gates/BusyMarkers — PermissionMode's footer markers, LiveSpinner, SuggestionVisible,
 // PasteCollapsed — have no coverage here at all.
 
-// paneCapture is one verbatim capture plus the width it was driven at.
+// paneCapture is one captured pane plus the width it was driven at (see the header on the two
+// entries that are transcriptions rather than verbatim captures).
 type paneCapture struct {
 	// name is the fixture's Go identifier, so a failure names the capture to open.
 	name string
@@ -221,40 +230,55 @@ var paneCoverageExempt = map[string]string{
 	"aider/prompt/confirm": "no width ladder driven; its shapes are inline single-line cases in TestAiderConfirmShapes, not named captures",
 }
 
-// wantFloors is the payoff: "the floor is 20" stops being a sentence in a comment and becomes
-// a value this suite computes from real captures and real predicates.
+// wantRungs is the payoff: "the floor is 20" stops being a sentence in a comment and becomes a
+// list this suite computes from real captures and real predicates.
 //
-// Each entry is the NARROWEST recorded capture width at which that matcher's production
-// predicate still fires. Read it as evidence, not as a guarantee — a matcher proven at 28 is
-// not known to survive the 24 a 70-column terminal produces; it is merely untested there.
-// claude/prompt/permission sitting at 28 while its permission-local sibling sits at 20 is
+// Each entry holds every recorded capture width at which that matcher's production predicate
+// still fires — ascending, duplicates kept, one number per width-bearing capture. The FIRST is
+// the floor. Read it as evidence, not as a guarantee: a matcher proven at 28 is not known to
+// survive the 24 a 70-column terminal produces; it is merely untested there.
+// claude/prompt/permission floored at 28 while its permission-local sibling reaches 20 is
 // exactly the kind of thing #648 wanted visible instead of buried, and it is a gap in the
 // EVIDENCE rather than a known cliff: claude's fetch dialog has simply never been driven below
 // 28 (#666 does not close it — reaching that dialog needs a live fetch, not a resize).
+//
+// WHY THE WHOLE LIST rather than the minimum this used to hold. A floor alone stops being loud
+// the moment a key owns two captures below its most interesting one, and #666 walked straight
+// into that: with claude/gate pinned at 28, deleting claudeMCPNarrowPane raised the computed
+// floor and reddened the suite, but once two rungs were driven to 20 the same deletion left
+// the minimum at 20 and the suite green — silently discarding the only evidence at the 28 an
+// 80-column terminal with the list dragged wide actually produces, and the exact width #340
+// measured as a live gate miss. Pinning every rung restores that for every key at once: a
+// deleted capture changes the list no matter what else the key holds.
+//
+// Its limit, so the list is not read as fuller than it is: a capture whose provenance records
+// NO width contributes nothing here, so deleting one of those is still silent — only
+// TestEveryDeclaredMatcherIsCoveredOrExempt notices, and only once the last one goes.
 //
 // Nor is a floor a promise about everything above it. Codex WRAPS, so a wider rung can fail
 // where a narrower one passes: line-budget effects are not monotonic in width, which is why
 // every rung is asserted rather than just the narrowest.
 //
-// Lowering an entry means new evidence was driven and captured. Raising one means either a
-// literal got wider or a capture was deleted — and both should be loud.
-var wantFloors = map[string]int{
-	"claude/gate":                    20,
-	"claude/busy":                    100,
-	"claude/prompt/permission":       28,
-	"claude/prompt/permission-local": 20,
+// A narrower first entry means new evidence was driven and captured. A wider one, or a rung
+// vanishing from the middle, means either a literal got wider or a capture was deleted — and
+// both should be loud.
+var wantRungs = map[string][]int{
+	"claude/gate":                    {20, 20, 28, 40, 110, 110},
+	"claude/busy":                    {100, 100},
+	"claude/prompt/permission":       {28, 100},
+	"claude/prompt/permission-local": {20, 20, 29, 29, 30},
 
-	"codex/gate":            20,
-	"codex/prompt/approval": 20,
+	"codex/gate":            {20, 24, 28, 40, 60, 120},
+	"codex/prompt/approval": {20, 24, 28, 40, 60, 120},
 
-	"agy/gate":                24,
-	"agy/busy":                20,
-	"agy/prompt/confirmation": 20,
+	"agy/gate":                {24, 28, 120},
+	"agy/busy":                {20, 24, 28, 40, 120, 120},
+	"agy/prompt/confirmation": {20, 24, 28, 40, 120},
 }
 
 // keysWithNoRecordedCaptureWidth are covered by real captures whose provenance never wrote
 // down the width they were driven at. They prove their matcher fires; they prove nothing
-// about width, so they are absent from wantFloors. Listing them is the point: an undocumented
+// about width, so they are absent from wantRungs. Listing them is the point: an undocumented
 // capture width is the same defect as an undocumented anything else, and this is where it
 // stops being invisible.
 //
@@ -266,10 +290,17 @@ var wantFloors = map[string]int{
 // on overflow ("at width 30 a busy 2.1.210 pane reads '⏸ manual mode on · esc to …'"), so the
 // pair looked certain to die just under 30 — above the 28 claude's fetch dialog is already
 // captured at. Driving it (2.1.228, widths 120..20, both dialog shapes) FALSIFIED that: the
-// footer wraps rather than truncating, footerVisibleInSegments flattens the segment before
-// applying the predicate, and the matcher holds to 20. The reasoning that failed was reading a
-// note about the status line BELOW the input box as a fact about the dialog's own footer; one
-// CLI renders more than one way, and only the region you drove is the region you know.
+// footer wraps rather than truncating, a flatten reassembles the pair either side of the wrap,
+// and the matcher holds to 20. The reasoning that failed was reading a note about the status
+// line BELOW the input box as a fact about the dialog's own footer; one CLI renders more than
+// one way, and only the region you drove is the region you know.
+//
+// Which flatten reassembles it is not uniform across the ladder, and the 20 rungs — the ones
+// this floor rests on — are NOT the segment one. footerVisibleInSegments segments only where a
+// box border survives its window, and by 20 none does, so those rungs land on the flat
+// workChromeLines fallback, which the shell shape's three-piece footer fills exactly.
+// registry_test.go TestPermissionLocalFooterFlattenBudget measures that; read the mechanism
+// there rather than inferring it from the 20 in the table above.
 //
 // What remains is what nobody has driven, and neither is a resize away — which is the whole
 // reason they outlived the one that was. plan needs a plan-mode turn to run to its approval
@@ -435,7 +466,7 @@ func TestPaneWidthMeasuresTheTerminalTheCapturesCameFrom(t *testing.T) {
 // trailing spaces, and a dialog need not reach the edge (codexTrustGatePane120's widest line
 // is 111, codexApprovalPane120's is 94). So the check is an inequality, and it is pointed at
 // the one direction that can lie: a capture LABELLED narrower than it renders would credit a
-// matcher with surviving a width it was never shown, and wantFloors would report that
+// matcher with surviving a width it was never shown, and wantRungs would report that
 // invention as evidence.
 // It stays an inequality, deliberately. An earlier draft also held each key's NARROWEST
 // capture to equality, to close the relabel hole below — but that assertion is unsound rather
@@ -446,8 +477,8 @@ func TestPaneWidthMeasuresTheTerminalTheCapturesCameFrom(t *testing.T) {
 // five keys, not a property of narrow captures.
 //
 // The relabel hole is real — mislabel a capture narrower than it was driven and this test
-// passes while the floor drops on no new evidence — but it is closed by wantFloors instead,
-// which is the right place: a relabel changes a computed floor, so it cannot land without a
+// passes while the floor drops on no new evidence — but it is closed by wantRungs instead,
+// which is the right place: a relabel changes a computed rung, so it cannot land without a
 // second, deliberate edit to a pinned number in the same review.
 func TestCaptureWidthsAreNotOverstated(t *testing.T) {
 	for key, captures := range paneCoverage {
@@ -574,38 +605,40 @@ func TestEveryCoveredMatcherFiresAtEveryCapturedWidth(t *testing.T) {
 	}
 }
 
-// "The floor is 20" was a sentence in a comment. Here it is a number this suite computes from
-// the captures and the predicates, and compares against what we claim to have proven.
+// "The floor is 20" was a sentence in a comment. Here the whole rung list is a value this
+// suite computes from the captures and the predicates, and compares against what we claim to
+// have proven.
 //
 // This is not redundant with the test above even though that one requires every capture to
-// fire. That test cannot see a capture that is no longer there: delete the width-20 rung and
-// it passes with fewer subtests while the proven floor silently rises to 24. Evidence
-// deletion is the direction this test exists for.
+// fire. That test cannot see a capture that is no longer there: delete a rung and it passes
+// with fewer subtests, saying nothing. Evidence deletion is the direction this test exists
+// for, which is why it pins every width and not just the smallest — a minimum only notices a
+// deletion at the bottom, and only when nothing else sits there. See wantRungs.
 func TestProvenWidthFloorsAreComputedNotClaimed(t *testing.T) {
-	proven := map[string]int{}
+	proven := map[string][]int{}
 	unrecorded := make([]string, 0) // see the nil-vs-empty note in the coverage test above
 	for key, captures := range paneCoverage {
-		floor := 0
+		rungs := make([]int, 0, len(captures))
 		for _, c := range captures {
 			if c.width == 0 || !fires(t, key, c) {
 				continue
 			}
-			if floor == 0 || c.width < floor {
-				floor = c.width
-			}
+			rungs = append(rungs, c.width)
 		}
-		if floor == 0 {
+		if len(rungs) == 0 {
 			unrecorded = append(unrecorded, key)
 			continue
 		}
-		proven[key] = floor
+		sort.Ints(rungs)
+		proven[key] = rungs
 	}
 	sort.Strings(unrecorded)
 
-	require.Equal(t, wantFloors, proven,
-		"the width each matcher is PROVEN at changed. A raised number means a literal grew "+
-			"past a narrow rung or a capture was deleted; a lowered one means new evidence was "+
-			"driven, and is the only direction to celebrate")
+	require.Equal(t, wantRungs, proven,
+		"the widths each matcher is PROVEN at changed. A rung that vanished means a capture "+
+			"was deleted or a literal grew past it — including a rung in the MIDDLE, which no "+
+			"floor would have reported; a narrower first entry means new evidence was driven, "+
+			"and is the only direction to celebrate")
 
 	require.Equal(t, keysWithNoRecordedCaptureWidth, unrecorded,
 		"these matchers have captures but no recorded capture width, so they are evidence "+

@@ -349,8 +349,11 @@ var claude = &Adapter{
 		//
 		// Plus the MCP-approval prompt, whose two literals are not a
 		// capital/lowercase spelling hedge but the titles of two DIFFERENT
-		// dialogs (both captured live at 2.1.210, #340 — registry_test.go
-		// claudeMCPSinglePane / claudeMCPMultiPane):
+		// dialogs (both observed on live 2.1.210 dialogs, #340). The fixtures
+		// beside them, registry_test.go claudeMCPSinglePane / claudeMCPMultiPane,
+		// are transcriptions of those panes rather than verbatim captures — #666
+		// settled that and re-drove both shapes, so the verbatim ones are
+		// claudeMCPSingleWidePane / claudeMCPMultiWidePane:
 		//   "New MCP server found in this project: <name>"   → one server
 		//   "3 new MCP servers found in this project"        → many, matched
 		//                                                      as a substring
@@ -412,9 +415,10 @@ var claudeGateTitles = []string{
 // box border proves is live chrome (footerBelowBox), never the transcript above it.
 //
 // Claude's gates are shaped "one rule across the top, dialog below it, no bottom rule" —
-// pinned by every captured shape (registry_test.go claudeTrustPane, claudeMCPSinglePane,
-// claudeMCPMultiPane, claudeMCPWrappedPane, claudeMCPNarrowPane). So the last border on a
-// gated pane is the dialog's own top rule and everything below it IS the dialog, while on a
+// pinned by every captured shape, which is a set to look up rather than a list to keep here:
+// they are the claude/gate entries of pane_width_test.go's paneCoverage, and both ladders
+// driven so far added to them (#340, #666). So the last border on a gated pane is the dialog's
+// own top rule and everything below it IS the dialog, while on a
 // running session the last border is the composer's bottom edge and everything below it is
 // just the footer. That asymmetry is the whole signal, and it is the one footerBelowBox was
 // written for: "a caller that must not false-match a phrase quoted in the conversation".
@@ -469,10 +473,15 @@ func claudeGateVisible(content string) bool {
 // gate where the bottom-15 window did not — a false positive, which is the reported bug's own
 // direction (a row stuck on "waiting on setup screen", its queued prompt never sent).
 //
-// The cap restores the ceiling without restoring the floor. It sits well clear of the tallest
-// dialog ever captured (claudeMCPNarrowPane: 17 non-empty lines at width 28 — the width that
-// used to miss), so it never truncates a real gate, and bites only when the anchor turns out
-// not to be live chrome. Same role aboveBoxBlockCap plays for the upward scan (chrome.go).
+// The cap restores the ceiling without restoring the floor, so it bites only when the anchor
+// turns out not to be live chrome. That it still clears every real gate is MEASURED, not
+// asserted here: TestClaudeGateAnchorEdges walks every claude/gate capture, counts what each
+// puts below its anchoring rule, and fails if the cap does not exceed the tallest. Read the
+// margin off that test rather than from a number in this comment — the tallest region went
+// from 16 lines to 26 when #666 drove these shapes down to 20, and a figure written down here
+// is exactly what would not have noticed. When it does bite, the title is at
+// the TOP of the region and so the first thing flattenChrome drops, which is a MISSED gate.
+// Same role aboveBoxBlockCap plays for the upward scan (chrome.go).
 const gateRegionCap = 40
 
 // claudeFetchTitles are the fetch/network dialog's own question text, captured live at
@@ -653,6 +662,18 @@ func claudeSelectionFooterVisible(content string) bool {
 // captures are claudeWritePermission{Narrow,WrappedFooter,Floor}Pane and
 // claudeBashPermission{WrappedFooter,Floor}Pane, filed with their widths in
 // pane_width_test.go, which is what proves the pair holds to 20 rather than asserting it.
+//
+// WHICH flatten is not one answer, and the ladder straddles both. footerVisibleInSegments
+// segments on box borders inside the bottom-WindowPrompt window; the 30 and 29 rungs still
+// show one there, so they take the segment scan, whose segment is as tall as the dialog. By 20
+// the splash has scrolled clear and NO border survives that window, so the 20 rungs take the
+// no-rules fallback instead — a flat window workChromeLines tall, which
+// claudeBashPermissionFloorPane's three-piece footer fills EXACTLY. Zero headroom is the
+// narrowest thing about this matcher, and it is a measured value rather than a remark:
+// TestPermissionLocalFooterFlattenBudget computes the depth each rung needs and reddens when
+// the shell shape stops fitting. A fourth hint in claude's footer, or a rung below 20, lands
+// there first — and lands as a MISSED dialog, which session/tmux AwaitingInput then types the
+// queued prompt into.
 //
 // So do not "simplify" this to a match over lines, and do not shorten either half to buy
 // width: neither half is length-bound here. What the pair costs is the two decoys it exists
