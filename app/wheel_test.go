@@ -80,7 +80,7 @@ func waitAppZone(t *testing.T, h *home, id string) *zone.ZoneInfo {
 		}
 		z = zone.Get(id)
 		return !z.IsZero()
-	}, time.Second, 5*time.Millisecond, "zone %s never consistently registered", id)
+	}, testutil.ZoneClickTimeout, testutil.ZoneClickPoll, "zone %s never consistently registered", id)
 	return z
 }
 

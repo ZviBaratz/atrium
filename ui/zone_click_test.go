@@ -4,7 +4,6 @@ import (
 	"context"
 	"github.com/ZviBaratz/atrium/internal/testutil"
 	"testing"
-	"time"
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
@@ -38,7 +37,7 @@ func clickZone(t *testing.T, render func() string, id string, act func(*zone.Zon
 		zone.Scan(render())
 		z := zone.Get(id)
 		return !z.IsZero() && act(z)
-	}, time.Second, 5*time.Millisecond, "a click on zone %q never resolved to its own target", id)
+	}, testutil.ZoneClickTimeout, testutil.ZoneClickPoll, "a click on zone %q never resolved to its own target", id)
 }
 
 // TestListInstanceAtZone verifies that a click landing inside a row's registered

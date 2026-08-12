@@ -72,14 +72,33 @@ var sandboxTmuxRoot string
 // ui's terminal panes run $SHELL (ui/terminal.go), which never exits, and every -L
 // lookup (`tmux ls`, and `atrium reset` via CleanupSessions) resolves against the
 // *current* TMUX_TMPDIR rather than that dead run's, so the survivor is invisible to
-// both. Reap it by path instead:
+// both.
 //
-//	for s in /tmp/atrium-tmux-*/tmux-*/*; do tmux -S "$s" kill-server; done
+// `atrium doctor` is what can name it (#547). Its "Orphaned tmux servers:" section
+// identifies a server from /proc rather than from a socket directory (ScanServers),
+// so a sandbox socket is in range wherever its root sits, and the name it binds is
+// the bare brand, which ownsSocketName claims. A root the teardown never reached is
+// still there, so the socket under it still resolves and the server answers — it is
+// listed `reachable`, with the exact path-named command that stops it (see
+// renderOrphanServer in internal/doctor/orphans.go):
 //
-// Doing that automatically is what this package tried and reverted: the glob that
-// finds those roots is one wrong prefix away from /tmp/tmux-<uid>/atrium, and that
+//	pid 4242  socket atrium  up 2h11m  reachable  holds 1 process (bash)
+//	    → tmux -S /tmp/atrium-tmux-<rand>/tmux-<uid>/atrium kill-server
+//
+// Run what it prints. `atrium reap` reports the same list and can also do the kill,
+// but reachable is precisely the class `--kill` spares by default (reapTargets in
+// cli_reap.go) — deliberately, since a reachable server may be a second live Atrium
+// under its own TMUX_TMPDIR. So reap is the verb for the other shape: a server whose
+// root *was* removed while it lived, which nothing can address by path any more and
+// only `atrium reap --kill` can stop. Neither command accounts for the leftover
+// directory itself, nor a socket file with no server behind it inside one:
+// ScanStaleSockets reads only Atrium's own socket dir. That part is litter — remove
+// the root by the exact path doctor named, never by a glob.
+//
+// Sweeping this package's roots automatically is what it tried and reverted: the glob
+// that finds them is one wrong prefix away from /tmp/tmux-<uid>/atrium, and that
 // prefix going missing during a mutation test is what killed the developer's live
-// fleet. Reaping by hand is rare; a sweep is a standing hazard.
+// fleet (#584). Reaping by hand is rare; a sweep is a standing hazard.
 func installSandboxTmuxTmpdir() func() {
 	root, err := os.MkdirTemp(tmuxRootParent, tmuxRootPrefix)
 	if err != nil {

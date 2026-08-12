@@ -4,7 +4,6 @@ import (
 	"context"
 	"github.com/ZviBaratz/atrium/internal/testutil"
 	"testing"
-	"time"
 
 	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/ui"
@@ -189,7 +188,7 @@ func TestFoldClick_HeaderRefusesWhileFiltering(t *testing.T) {
 		}
 		h.Update(testutil.MouseClick(zi.StartX, zi.StartY, tea.MouseLeft))
 		return h.menu.HasNotice()
-	}, time.Second, 5*time.Millisecond, "the header click never reached the fold guard")
+	}, testutil.ZoneClickTimeout, testutil.ZoneClickPoll, "the header click never reached the fold guard")
 
 	assert.Contains(t, h.menu.String(), "filter")
 	assert.Empty(t, h.list.CollapsedRepos(), "a click may not fold what the filter overrides")
