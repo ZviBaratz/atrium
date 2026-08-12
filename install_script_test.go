@@ -611,15 +611,21 @@ func TestInstallScriptFailurePaths(t *testing.T) {
 		require.Contains(t, res.stdout, "9.9.7")
 	})
 
-	t.Run("an unwritable profile fails the install", func(t *testing.T) {
-		// The #662 reproduction. setup_shell_and_path appends the PATH line to $PROFILE
+	t.Run("an unwritable profile installs but exits non-zero", func(t *testing.T) {
+		// The #662 reproduction. setup_shell_and_path appended the PATH line to $PROFILE
 		// with no guard, so an unwritable one printed bash's raw redirection error and the
 		// install carried on to a success banner and exit 0 — with BIN_DIR never on PATH,
 		// which is the one thing that append exists to do.
 		//
-		// The exit code is what discriminates: the old script already printed a message
-		// naming this same path (bash's own), so asserting on the path alone would pass
-		// against it. Our text plus the code is the pair that cannot.
+		// The fix is not "abort": the append runs before the download, and on an
+		// immutable-dotfiles setup (Nix home-manager's read-only ~/.zshrc, chezmoi, stow)
+		// BIN_DIR is writable and the binary works, so refusing to install throws away a
+		// working install over a file the installer does not need. It installs, says what
+		// did not happen, and exits non-zero.
+		//
+		// The exit code is what discriminates against the old script, which printed a
+		// message naming this same path (bash's own) and exited 0 — so an assertion on the
+		// path alone would pass against it. Code plus our text is the pair that cannot.
 		if os.Geteuid() == 0 {
 			t.Skip("root ignores the mode bits this case turns on")
 		}
@@ -629,17 +635,28 @@ func TestInstallScriptFailurePaths(t *testing.T) {
 
 		res := f.run(t)
 
-		require.Equal(t, 1, res.exitCode, "an install that cannot put BIN_DIR on PATH must fail")
-		require.Contains(t, res.stderr, "could not append to "+profile,
-			"the diagnosis has to name the profile and be ours, not bash's redirection error")
-		require.Contains(t, res.stderr, `export PATH="$PATH:`+f.binDir+`"`,
+		require.Equal(t, 1, res.exitCode, "PATH setup did not happen, so this is not a clean install")
+		require.Contains(t, res.stderr, "Could not append to "+profile,
+			"the immediate note has to name the profile and be ours, not bash's redirection error")
+
+		// Installed, and said so: the binary is the half that worked.
+		require.FileExists(t, filepath.Join(f.binDir, "atrium"))
+		require.Contains(t, res.stdout, "Installed as 'atrium':")
+		require.Len(t, res.curlCalls, 2, "the install itself must run to completion")
+
+		// …and the warning is the last thing on screen, after the banner it qualifies.
+		require.Contains(t, res.stdout, "WARNING: 'atrium' is installed, but "+f.binDir+" is not on your PATH.")
+		require.Contains(t, res.stdout, profile+" could not be appended to")
+		require.Contains(t, res.stdout, `export PATH="$PATH:`+f.binDir+`"`,
 			"a user who has to do this by hand needs the line quoted for them")
-		require.NotContains(t, res.stdout, "Installed as", "nothing was installed")
-		// setup_shell_and_path runs before the version is resolved, so a run that stops
-		// here has not touched the network at all. That also fixes the ordering claim: if
-		// the append ever moves after the download, this goes red rather than silent.
-		require.Empty(t, res.curlCalls, "the run must stop at the profile, before any fetch")
-		require.NoFileExists(t, filepath.Join(f.binDir, "atrium"))
+		require.Contains(t, res.stdout, "run it by full path: "+filepath.Join(f.binDir, "atrium"))
+		require.Greater(t, strings.Index(res.stdout, "WARNING:"), strings.Index(res.stdout, "Installed as"),
+			"a warning above the success banner is one the banner scrolls off")
+
+		// The profile is left exactly as it was: a failed append must not half-write.
+		body, err := os.ReadFile(profile)
+		require.NoError(t, err)
+		require.Equal(t, "# pre-existing\n", string(body))
 	})
 
 	t.Run("the available versions tip is capped at ten", func(t *testing.T) {
@@ -709,10 +726,18 @@ func TestInstallScriptFailurePaths(t *testing.T) {
 func TestInstallScriptInstallsAndUpgrades(t *testing.T) {
 	t.Run("fresh install of latest", func(t *testing.T) {
 		f := newInstallFixture(t)
+		// Injected from the environment for the same reason API_RESPONSE is in the
+		// explicit-version case below: main initializes PATH_SETUP_FAILED itself, and this
+		// is what proves it, rather than trusting that an unset global reads as false. A
+		// stray one in the caller's environment must not fail an install whose profile was
+		// written fine.
+		f.extraEnv = append(f.extraEnv, "PATH_SETUP_FAILED=true")
 
 		res := f.run(t)
 
 		require.Equal(t, 0, res.exitCode, "stderr was: %s", res.stderr)
+		require.NotContains(t, res.stdout, "WARNING",
+			"nothing here warrants a warning: the profile was written and tmux is new")
 		require.Contains(t, res.stdout, "Installed as 'atrium':")
 		require.Contains(t, res.stdout, "atrium version 9.9.9 (test fixture)",
 			"the banner quotes the installed binary, so one that cannot run is reported as a failure")

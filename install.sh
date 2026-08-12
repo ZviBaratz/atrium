@@ -2,13 +2,20 @@
 
 set -e
 
+# setup_shell_and_path resolves BIN_DIR, picks the profile for the user's shell, and
+# appends the PATH line to it. It answers through globals: PROFILE, PATH_LINE, and
+# PATH_SETUP_FAILED, which report_path_setup turns into the run's verdict at the very end.
+#
+# The append is attempted here, before the download, rather than at the end beside its
+# report: a user who interrupts a slow download still gets a profile that works, and the
+# profile is the only part of this script that touches files they own.
 setup_shell_and_path() {
-    local path_line profile_dir
+    local profile_dir
     BIN_DIR=${BIN_DIR:-$HOME/.local/bin}
 
     # The line to append is per-shell because the profile's language is. Default to the
     # POSIX-ish form and let a branch below override it.
-    path_line="export PATH=\"\$PATH:$BIN_DIR\""
+    PATH_LINE="export PATH=\"\$PATH:$BIN_DIR\""
 
     case $SHELL in
         */zsh)
@@ -25,7 +32,7 @@ setup_shell_and_path() {
             # not reachable" outcome as an append that never landed (#662). `set -gx` is
             # the fish spelling and is valid on every fish; fish_add_path would be
             # idempotent, but it needs fish 3.2 or newer.
-            path_line="set -gx PATH \$PATH \"$BIN_DIR\""
+            PATH_LINE="set -gx PATH \$PATH \"$BIN_DIR\""
             ;;
         */ash)
             PROFILE=$HOME/.profile
@@ -43,7 +50,10 @@ setup_shell_and_path() {
         # report a failure about the wrong thing.
         profile_dir=${PROFILE%/*}
         if [ -n "$profile_dir" ] && [ ! -d "$profile_dir" ]; then
-            ensure mkdir -p "$profile_dir"
+            # `|| true` because errexit would abort here, and because this failing is not
+            # the report: the append below fails too, and that is the one path both cases
+            # leave through.
+            mkdir -p "$profile_dir" || true
         fi
 
         # One printf rather than the two echos this replaces, and deliberately NOT a
@@ -52,15 +62,42 @@ setup_shell_and_path() {
         # 5.3.9 — so `if ! { …; } >> file` takes the *success* branch and swallows exactly
         # the failure this guards. A simple command's status negates correctly.
         #
-        # Guarded because errexit alone would abort at the call site in main: this `if`
-        # is the last command in the function, so its status is the function's, and the
-        # message a user sees has to name the profile and the line rather than
-        # "setup_shell_and_path".
-        if ! printf '\n%s\n' "$path_line" >> "$PROFILE"; then
-            echo "Failed to add ${BIN_DIR} to your PATH: could not append to $PROFILE" >&2
-            err "Add this line to your shell profile by hand, or set BIN_DIR to a directory already on your PATH, and re-run: $path_line"
+        # Guarded rather than left to errexit for two reasons: this `if` is the last
+        # command in the function, so an unguarded failure would abort at the call site in
+        # main and read as the caller's fault — and an install that cannot write a profile
+        # is still an install, which is what report_path_setup is for.
+        if ! printf '\n%s\n' "$PATH_LINE" >> "$PROFILE"; then
+            # Reported twice on purpose: here, next to bash's own errno line, so the
+            # failure is never silent even on a run that exits before the end — and again
+            # at the end by report_path_setup, where it is the last thing on screen.
+            echo "Could not append to $PROFILE — see the warning at the end of this run." >&2
+            PATH_SETUP_FAILED=true
         fi
     fi
+}
+
+# report_path_setup is the last thing main does, and it is where a profile that could not
+# be written becomes the run's verdict.
+#
+# It is deliberately not an err() at the point of failure. The append runs before the
+# download, so failing there refuses to install at all — and on an immutable-dotfiles setup
+# (Nix home-manager's read-only ~/.zshrc, chezmoi, stow) BIN_DIR is perfectly writable and
+# the binary would have worked. So: install, then say plainly that the one thing PATH setup
+# exists for did not happen, and exit non-zero so no caller reads this as a clean install.
+# That is the whole of #662 — not "abort", but "never report success you did not achieve".
+report_path_setup() {
+    [ "$PATH_SETUP_FAILED" = true ] || return 0
+
+    echo ""
+    echo "WARNING: '$INSTALL_NAME' is installed, but ${BIN_DIR} is not on your PATH."
+    echo "         ${PROFILE} could not be appended to (see the error above), so a new"
+    echo "         shell will not find it. Add this line to your shell profile by hand:"
+    echo ""
+    echo "             ${PATH_LINE}"
+    echo ""
+    echo "         Until then, run it by full path: ${BIN_DIR}/${INSTALL_NAME}"
+    echo ""
+    exit 1
 }
 
 detect_platform_and_arch() {
@@ -475,6 +512,9 @@ main() {
     # Parse command line arguments
     INSTALL_NAME="atrium"
     UPGRADE_MODE=false
+    # Initialized here rather than at the top level so an ambient PATH_SETUP_FAILED=true in
+    # the caller's environment cannot fail an install that wrote its profile fine.
+    PATH_SETUP_FAILED=false
 
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -524,6 +564,10 @@ main() {
 
     download_release "$VERSION" "$BINARY_URL" "$ARCHIVE_NAME" "$TMP_DIR" "$REQUESTED_VERSION"
     extract_and_install "$TMP_DIR" "$ARCHIVE_NAME" "$BIN_DIR" "$EXTENSION"
+
+    # Last, so the warning it may print is the last thing on screen and cannot be scrolled
+    # off by the success banner it qualifies.
+    report_path_setup
 }
 
 # Run a command that should never fail. If the command fails execution
