@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,20 +25,36 @@ import (
 // text. None of them can see that a failed install used to print its diagnosis into a
 // variable and carry on — which is the class of bug this file exists to catch.
 //
-// Not every case here is a #656 reproduction, and pretending otherwise would be the
-// easiest way to write a guard that proves nothing. Measured against the pre-fix script
-// rather than assumed (see "Verifying" below), the split is:
+// Not every case here reproduces a defect, and pretending otherwise would be the easiest
+// way to write a guard that proves nothing. Each group below was measured against the
+// script it is about rather than assumed (see "Verifying" below).
 //
-//	fail on the old script — api unreachable, no releases, unparseable response,
-//	                         asset missing after resolving latest,
-//	                         --name without a value
-//	pass on both           — asset missing for an explicit version, fresh install,
-//	                         upgrade, explicit version, release note mentioning
-//	                         "Not Found", tmux -V unreadable
+// Against the pre-#656 script:
 //
-// The five that fail are the defects. The six that pass are stated as what they are:
-// regression guards over paths the old script handled correctly, kept because the fix
-// rewrote how main obtains a version, plus one negative control and one tripwire.
+//	fail — api unreachable, no releases, unparseable response,
+//	       asset missing after resolving latest, --name without a value
+//	pass — asset missing for an explicit version, fresh install, upgrade,
+//	       explicit version, release note mentioning "Not Found", tmux -V unreadable
+//
+// Those five failures are #656. The six that pass are stated as what they are: regression
+// guards over paths the old script handled correctly, kept because the fix rewrote how
+// main obtains a version, plus one negative control and one tripwire.
+//
+// Against the script as of #660 — which is to say the four cases added for #662/#663/#664,
+// all of which fail there:
+//
+//	unwritable profile             — installed and exited 0 with BIN_DIR off PATH (#662)
+//	fish syntax in a missing dir   — appended nothing, or a line fish cannot use (#662)
+//	compact release body           — resolved an upload_url as the version (#663)
+//	available-versions tip capped  — printed every release the page carried (#664)
+//
+// TestInstallScriptRestoresErrexit belongs to the same change and guards the one-line
+// decision none of the above can see.
+//
+// Two cases that predate #662 also go red against #660, and both are guards doing their
+// job rather than surprises: "upgrade over an existing install" fails because `which` is
+// now a recorder stub and the old check_command_exists called it, and "asset missing after
+// resolving latest" fails on the tip's new "(newest 10)" label.
 //
 // One of them earns its place a level down. "a release note mentioning Not Found" passes
 // against the old script — which greps the whole payload, matches, and then carries on
@@ -74,26 +91,30 @@ import (
 // those two grade) and it costs the stubs their syntax check, so newInstallFixture runs
 // `bash -n` over each one itself.
 //
-// # Verifying that these actually catch #656
+// # Verifying that these actually catch what they claim
 //
-// Run them against the pre-fix script. `go test` keys its cache on files the test process
-// opens, and install.sh reaches bash as a path, so installFixture.run reads it purely to
-// register it as an input — without that, editing only install.sh replays a cached PASS.
-// Belt and braces, pass -count=1:
+// Run them against the script the case is measured against — for the #656 cases the
+// version before that fix landed, for the four newer ones the version before #662. Fetch
+// it by PR rather than by branch commit (a squash-merged branch's SHAs never reach main):
 //
-//	git checkout origin/main -- install.sh
-//	go test -count=1 -run TestInstallScript -v .   # the five failures listed above
+//	git fetch origin refs/pull/660/head && git checkout FETCH_HEAD -- install.sh
+//	go test -count=1 -run TestInstallScript -v .   # the four #662/#663/#664 failures
 //	git checkout HEAD -- install.sh
+//
+// `go test` keys its cache on files the test process opens, and install.sh reaches bash as
+// a path, so installFixture.run reads it purely to register it as an input — without that,
+// editing only install.sh replays a cached PASS. Belt and braces, pass -count=1.
 //
 // Note the restore is `git checkout HEAD --`, not `git checkout --`: the first form also
 // writes the index, so the plain undo would restore the pre-fix file from there.
 
-// releasesJSON is a GitHub /releases payload shaped the way install.sh parses it: the
-// first "tag_name" line wins for the version, and every "tag_name" line is listed by the
-// available-versions tip. It has to be pretty-printed one field per line, because the sed
-// in get_latest_version that extracts the tag is greedy (`.*"([^"]+)".*`) and so captures
-// the last quoted run on the line. That is a real fragility, dormant only because the
-// GitHub REST API pretty-prints; it is out of scope here, but the fixture must respect it.
+// releasesJSON is a GitHub /releases payload: the first tag is the version install.sh
+// resolves, and all of them feed the available-versions tip. Pretty-printed one field per
+// line because that is what the REST API sends — not because the parse needs it. It used
+// to need it: the tag came out of a greedy `sed -E 's/.*"([^"]+)".*/\1/'`, which captures
+// the last quoted run on the line, so a compact body resolved an upload_url as the version
+// (#663). releasesJSONCompact is the guard that the shape is no longer load-bearing, and
+// it is why this constant is free to stay pretty.
 const releasesJSON = `[
   {
     "upload_url": "https://uploads.github.com/repos/ZviBaratz/atrium/releases/1/assets{?name,label}",
@@ -109,6 +130,37 @@ const releasesJSON = `[
   }
 ]
 `
+
+// releasesJSONCompact is releasesJSON with the whitespace taken out — the body a proxy, a
+// cache or a `jq -c` wrapper would hand the installer. Every tag is on one line, and each
+// release puts upload_url BEFORE tag_name, which is what makes this discriminating:
+//
+//	greedy `.*"([^"]+)".*`          -> https://uploads.github.com/…/3/assets{?name,label}
+//	anchored `.*"tag_name": *"…".*` -> 9.9.7, the OLDEST release, because .* is still greedy
+//	first match of `"tag_name": *"[^"]*"` -> 9.9.9
+//
+// Only the third is the newest release, so a case using this body pins the parse rather
+// than merely rejecting a URL.
+const releasesJSONCompact = `[{"upload_url":"https://uploads.github.com/repos/ZviBaratz/atrium/releases/1/assets{?name,label}","tag_name":"v9.9.9"},` +
+	`{"upload_url":"https://uploads.github.com/repos/ZviBaratz/atrium/releases/2/assets{?name,label}","tag_name":"v9.9.8"},` +
+	`{"upload_url":"https://uploads.github.com/repos/ZviBaratz/atrium/releases/3/assets{?name,label}","tag_name":"v9.9.7"}]
+`
+
+// releasesJSONPage builds a pretty-printed body of n releases, newest first, tagged
+// v8.0.<n-1> down to v8.0.0. The available-versions tip caps its output, and a fixture with
+// more releases than the cap is the only way to see the cap (#664).
+func releasesJSONPage(n int) string {
+	var b strings.Builder
+	b.WriteString("[\n")
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			b.WriteString(",\n")
+		}
+		fmt.Fprintf(&b, "  {\n    \"tag_name\": \"v8.0.%d\"\n  }", n-1-i)
+	}
+	b.WriteString("\n]\n")
+	return b.String()
+}
 
 // stubCurlScript replays the outcome the test staged in $CTL_DIR and records every call,
 // so a test can assert on calls that did *not* happen. Two call shapes reach it, both
@@ -192,14 +244,19 @@ echo "atrium version 9.9.9 (test fixture)"
 `
 
 // systemPathDirs is the PATH install.sh gets below the stubs: enough for the coreutils it
-// shells out to (uname, mktemp, tar, grep, sed, mv, ln, chmod, rm, which) and nothing
-// else. Deliberately not the caller's PATH — see this file's header.
+// shells out to (uname, mktemp, tar, grep, sed, head, mv, ln, chmod, rm) and nothing else.
+// Deliberately not the caller's PATH — see this file's header.
 var systemPathDirs = []string{"/usr/bin", "/bin", "/usr/sbin", "/sbin"}
 
-// forbiddenCommands are stubbed as recorders. `sudo` covers the Linux branches and `brew`
-// the macOS ones; the managers themselves are listed so a `command -v` probe cannot pick
-// a real one off the system path.
-var forbiddenCommands = []string{"sudo", "brew", "apt-get", "dnf", "yum", "pacman"}
+// forbiddenCommands are stubbed as recorders, and every case asserts nothing reached one.
+// `sudo` covers the Linux dependency branches and `brew` the macOS ones; the managers
+// themselves are listed so a `command -v` probe cannot pick a real one off the system path.
+//
+// `which` is here for a different reason: check_command_exists used it to report where an
+// existing install lives, and it is absent from minimal images, so #662 replaced it with
+// `command -v` (a builtin, which no stub can intercept). Listing it turns every case in
+// this file into a guard against it coming back.
+var forbiddenCommands = []string{"sudo", "brew", "apt-get", "dnf", "yum", "pacman", "which"}
 
 type installResult struct {
 	stdout    string
@@ -217,6 +274,7 @@ type installFixture struct {
 	ctlDir     string
 	tmpDir     string
 	version    string   // VERSION env var; empty leaves it unset, i.e. "latest"
+	shell      string   // SHELL env var, which picks $PROFILE and its syntax
 	args       []string // command-line arguments for install.sh
 	extraEnv   []string // appended verbatim to the child environment
 	pathPrefix []string // prepended to systemPathDirs
@@ -245,6 +303,7 @@ func newInstallFixture(t *testing.T) *installFixture {
 		stubDir: t.TempDir(),
 		ctlDir:  t.TempDir(),
 		tmpDir:  t.TempDir(),
+		shell:   "/bin/bash",
 	}
 	f.pathPrefix = []string{f.stubDir}
 
@@ -297,7 +356,7 @@ func (f *installFixture) run(t *testing.T) installResult {
 
 	env := []string{
 		"HOME=" + f.home,
-		"SHELL=/bin/bash",
+		"SHELL=" + f.shell,
 		"BIN_DIR=" + f.binDir,
 		"TMPDIR=" + f.tmpDir,
 		"PATH=" + strings.Join(append(append([]string{}, f.pathPrefix...), systemPathDirs...), string(os.PathListSeparator)),
@@ -353,8 +412,9 @@ func (f *installFixture) run(t *testing.T) installResult {
 	})
 
 	// Asserted here rather than per-case: no run has any business reaching a package
-	// manager, and a case that forgot to check would be the one that needed it.
-	require.Empty(t, res.forbidden, "install.sh escaped the stubs and reached for a package manager")
+	// manager (or `which`), and a case that forgot to check would be the one that needed
+	// it. See forbiddenCommands for what is on the list and why.
+	require.Empty(t, res.forbidden, "install.sh escaped the stubs and reached for a forbidden command")
 	return res
 }
 
@@ -429,7 +489,42 @@ func tarballWithAtrium(t *testing.T, dir string) string {
 	return path
 }
 
-// TestInstallScriptFailurePaths is the guard for #656.
+// TestInstallScriptRestoresErrexit reads the one line #662 was about.
+//
+// A text assertion because nothing behavioural can see this: `main "$@" || exit 1` exempts
+// both sides of the list from errexit and the exemption reaches into every function called
+// there, so putting it back would silently re-inert the `set -e` at the top of the file
+// while every case in this file still passed — each of them reaches its verdict through
+// `err` or an explicit `exit`, never through errexit. The guards for the three sites that
+// needed the exemption live in the two tests below; this one guards the switch itself.
+func TestInstallScriptRestoresErrexit(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join(moduleRoot(t), "install.sh"))
+	require.NoError(t, err)
+
+	// Comments are skipped rather than searched: the note above the call quotes the form it
+	// forbids, so a whole-file substring check reports the documentation as the defect.
+	var setE bool
+	var calls []string
+	for _, line := range strings.Split(string(src), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		if line == "set -e" {
+			setE = true
+		}
+		if strings.Contains(line, `main "$@"`) {
+			calls = append(calls, line)
+		}
+	}
+
+	require.True(t, setE, "errexit has to be set for calling main bare to mean anything")
+	require.Equal(t, []string{`main "$@"`}, calls,
+		"main must be called bare: anything after it — `|| exit 1`, a pipe — exempts the "+
+			"whole install from errexit, which is what let a failed step report success (#662)")
+}
+
+// TestInstallScriptFailurePaths is the guard for #656, and for the failure paths #662 added.
 //
 // Each assertion here is chosen to fail against the pre-fix script rather than merely to
 // describe the new one, which is easy to get wrong: asserting that the combined output
@@ -500,12 +595,62 @@ func TestInstallScriptFailurePaths(t *testing.T) {
 		// subshell, and the tip was gated on a $version main had already resolved away
 		// from "latest", so the block could not run even with a response to print.
 		require.Contains(t, res.stdout, "Tip: Try installing a specific version instead of 'latest'")
-		require.Contains(t, res.stdout, "Available versions:")
+		require.Contains(t, res.stdout, "Available versions (newest 10):")
 		// The older tags are what discriminate: they can only come from API_RESPONSE
 		// crossing the subshell boundary. 9.9.9 alone would not — it also appears in the
 		// "Expected asset name" line above the tip.
 		require.Contains(t, res.stdout, "9.9.8")
 		require.Contains(t, res.stdout, "9.9.7")
+	})
+
+	t.Run("an unwritable profile fails the install", func(t *testing.T) {
+		// The #662 reproduction. setup_shell_and_path appends the PATH line to $PROFILE
+		// with no guard, so an unwritable one printed bash's raw redirection error and the
+		// install carried on to a success banner and exit 0 — with BIN_DIR never on PATH,
+		// which is the one thing that append exists to do.
+		//
+		// The exit code is what discriminates: the old script already printed a message
+		// naming this same path (bash's own), so asserting on the path alone would pass
+		// against it. Our text plus the code is the pair that cannot.
+		if os.Geteuid() == 0 {
+			t.Skip("root ignores the mode bits this case turns on")
+		}
+		f := newInstallFixture(t)
+		profile := filepath.Join(f.home, ".bashrc")
+		require.NoError(t, os.WriteFile(profile, []byte("# pre-existing\n"), 0o444))
+
+		res := f.run(t)
+
+		require.Equal(t, 1, res.exitCode, "an install that cannot put BIN_DIR on PATH must fail")
+		require.Contains(t, res.stderr, "could not append to "+profile,
+			"the diagnosis has to name the profile and be ours, not bash's redirection error")
+		require.Contains(t, res.stderr, `export PATH="$PATH:`+f.binDir+`"`,
+			"a user who has to do this by hand needs the line quoted for them")
+		require.NotContains(t, res.stdout, "Installed as", "nothing was installed")
+		// setup_shell_and_path runs before the version is resolved, so a run that stops
+		// here has not touched the network at all. That also fixes the ordering claim: if
+		// the append ever moves after the download, this goes red rather than silent.
+		require.Empty(t, res.curlCalls, "the run must stop at the profile, before any fetch")
+		require.NoFileExists(t, filepath.Join(f.binDir, "atrium"))
+	})
+
+	t.Run("the available versions tip is capped at ten", func(t *testing.T) {
+		// #664: the tip prints under the whole download diagnosis, and the API returns up
+		// to 30 releases per page. Twelve here so the cap is visible in both directions.
+		f := newInstallFixture(t)
+		f.control(t, "api_body", releasesJSONPage(12))
+		f.control(t, "dl_exit", "22")
+		f.control(t, "dl_http", "404")
+
+		res := f.run(t)
+
+		require.Equal(t, 1, res.exitCode)
+		require.Contains(t, res.stdout, "Available versions (newest 10):",
+			"the label has to state the cap, or the list reads as everything that exists")
+		require.Contains(t, res.stdout, "8.0.11", "the newest release is 8.0.11")
+		require.Contains(t, res.stdout, "8.0.2", "the tenth-newest is still inside the cap")
+		require.NotContains(t, res.stdout, "8.0.1\n", "the eleventh release is past the cap")
+		require.NotContains(t, res.stdout, "8.0.0", "the twelfth release is past the cap")
 	})
 
 	t.Run("--name without a value fails instead of hanging", func(t *testing.T) {
@@ -540,7 +685,9 @@ func TestInstallScriptFailurePaths(t *testing.T) {
 		res := f.run(t)
 
 		require.Equal(t, 1, res.exitCode)
-		require.NotContains(t, res.stdout, "Available versions:",
+		// No colon: the label carries the cap now ("Available versions (newest 10):"), and
+		// an assertion on the old exact string would pass even if the whole tip printed.
+		require.NotContains(t, res.stdout, "Available versions",
 			"the tip is for someone who asked for 'latest'; this user named a version")
 		require.NotContains(t, res.stdout, "Tip: Try installing a specific version")
 		require.Contains(t, res.stdout, "/v1.2.3/", "the attempted URL should name the requested version")
@@ -585,6 +732,42 @@ func TestInstallScriptInstallsAndUpgrades(t *testing.T) {
 		profile, err := os.ReadFile(filepath.Join(f.home, ".bashrc"))
 		require.NoError(t, err)
 		require.Contains(t, string(profile), `export PATH="$PATH:`+f.binDir+`"`)
+	})
+
+	t.Run("a compact release body resolves the newest tag", func(t *testing.T) {
+		// #663. Against the greedy sed this run does not merely pick the wrong release —
+		// it asks GitHub for atrium_https://uploads.github.com/…_linux_amd64.tar.gz, which
+		// is a -o path with slashes in it, so the download fails and the install exits 1.
+		// Anchoring alone would land on 9.9.7 here; see releasesJSONCompact.
+		f := newInstallFixture(t)
+		f.control(t, "api_body", releasesJSONCompact)
+
+		res := f.run(t)
+
+		require.Equal(t, 0, res.exitCode, "stderr was: %s", res.stderr)
+		require.Len(t, res.curlCalls, 2)
+		require.Contains(t, res.curlCalls[1], "/v9.9.9/atrium_9.9.9_",
+			"the newest tag is the first one in the body, whatever the whitespace")
+		require.Contains(t, res.stdout, "Installed as 'atrium':")
+		require.FileExists(t, filepath.Join(f.binDir, "atrium"))
+	})
+
+	t.Run("a fish profile gets fish syntax in a directory that did not exist", func(t *testing.T) {
+		// Two defects in one line, both #662: ~/.config/fish does not exist until fish
+		// first writes there, so the append failed outright on a fresh install — and what
+		// it appended was `export PATH=…`, which fish has no `export` for, so even where
+		// the directory existed the line could not put BIN_DIR on PATH.
+		f := newInstallFixture(t)
+		f.shell = "/usr/bin/fish"
+
+		res := f.run(t)
+
+		require.Equal(t, 0, res.exitCode, "stderr was: %s", res.stderr)
+		profile, err := os.ReadFile(filepath.Join(f.home, ".config", "fish", "config.fish"))
+		require.NoError(t, err, "the fish config dir has to be created, not assumed")
+		require.Contains(t, string(profile), `set -gx PATH $PATH "`+f.binDir+`"`)
+		require.NotContains(t, string(profile), "export PATH",
+			"fish has no export builtin, so that line cannot put BIN_DIR on a fish PATH")
 	})
 
 	t.Run("upgrade over an existing install", func(t *testing.T) {
@@ -640,11 +823,11 @@ func TestInstallScriptInstallsAndUpgrades(t *testing.T) {
 	})
 
 	t.Run("unreadable tmux version does not fail the install", func(t *testing.T) {
-		// A tripwire for the decision recorded at the bottom of install.sh: this PR left
-		// `main "$@" || exit 1` in place, so errexit stays suppressed. check_tmux_version
-		// is warning-only and reads `raw="$(tmux -V)"` unguarded, which is one of the
-		// sites that would become fatal if errexit were restored. Whoever restores it
-		// finds this case red rather than a paragraph in an old PR description.
+		// errexit is live under main (#662), and `raw="$(tmux -V 2>/dev/null)"` is a simple
+		// command: without the `|| raw=""` beside it, a tmux that cannot report its version
+		// aborts the whole install. check_tmux_version is warning-only by design — Atrium
+		// installs fine against an old or unreadable tmux — so this case is what holds the
+		// guard in place. Verified red by deleting that `|| raw=""`.
 		f := newInstallFixture(t)
 		f.control(t, "tmux_exit", "1")
 
