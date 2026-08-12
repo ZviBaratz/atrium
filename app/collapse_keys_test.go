@@ -177,9 +177,12 @@ func TestFoldClick_HeaderRefusesWhileFiltering(t *testing.T) {
 	// ui.listHeaderZoneID's format, spelled out because it is unexported.
 	headerZone := "list-header-" + h.list.InstancesForPersist()[0].GroupKey()
 
-	// Render and click inside one retry loop: bounds read from an earlier frame can
-	// be stale, and repo headers abut, so a stale read lands on a neighbor (#434). A
-	// miss leaves the notice unset and fails the wait — it can never pass vacuously.
+	// Render and click inside one retry loop: bounds read from an earlier frame can be
+	// stale, and repo headers abut, so a stale read lands on a neighbor (#434). Landing
+	// there is not a false pass — while filtering, *any* header click hits the same
+	// guard (app_msgs.go), which is the whole of what this asserts — and a read that
+	// lands on no header at all leaves the notice unset and retries. The wait can only
+	// end on the guard firing, never on the clock.
 	require.Eventually(t, func() bool {
 		_ = h.View().Content
 		zi := zone.Get(headerZone)

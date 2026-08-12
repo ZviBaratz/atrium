@@ -74,26 +74,38 @@ var sandboxTmuxRoot string
 // *current* TMUX_TMPDIR rather than that dead run's, so the survivor is invisible to
 // both.
 //
-// `atrium doctor` is what can name it (#547). Its "Orphaned tmux servers:" section
-// identifies a server from /proc rather than from a socket directory (ScanServers),
-// so a sandbox socket is in range wherever its root sits, and the name it binds is
-// the bare brand, which ownsSocketName claims. A root the teardown never reached is
-// still there, so the socket under it still resolves and the server answers — it is
-// listed `reachable`, with the exact path-named command that stops it (see
-// renderOrphanServer in internal/doctor/orphans.go):
+// On Linux, `atrium doctor` is what can name it (#547). Its "Orphaned tmux servers:"
+// section identifies a server from /proc rather than from a socket directory
+// (ScanServers), so a sandbox socket is in range wherever its root sits, and the name
+// it binds is the bare brand, which ownsSocketName claims. A root the teardown never
+// reached is still there, so the socket under it still resolves and the server answers
+// — the row reads `reachable` and carries the exact path-named command that stops it:
 //
 //	pid 4242  socket atrium  up 2h11m  reachable  holds 1 process (bash)
 //	    → tmux -S /tmp/atrium-tmux-<rand>/tmux-<uid>/atrium kill-server
 //
-// Run what it prints. `atrium reap` reports the same list and can also do the kill,
-// but reachable is precisely the class `--kill` spares by default (reapTargets in
-// cli_reap.go) — deliberately, since a reachable server may be a second live Atrium
-// under its own TMUX_TMPDIR. So reap is the verb for the other shape: a server whose
-// root *was* removed while it lived, which nothing can address by path any more and
-// only `atrium reap --kill` can stop. Neither command accounts for the leftover
-// directory itself, nor a socket file with no server behind it inside one:
-// ScanStaleSockets reads only Atrium's own socket dir. That part is litter — remove
-// the root by the exact path doctor named, never by a glob.
+// Run what it prints. Read the row rather than this example, though: with no live
+// fleet answering the ambient socket, that same command arrives under a caution that
+// the server may itself be a live fleet under another TMUX_TMPDIR, and if tmux could
+// not be probed at all the row offers no command — three branches, one per class of
+// what the scan established (renderOrphanServer, internal/doctor/orphans.go).
+//
+// `atrium reap` reports the identical list, but it is not the verb for *this* leak.
+// Reachable is the class `--kill` spares by default (reapTargets, cli_reap.go) —
+// deliberately, since a reachable server may be a second live Atrium — and the `--all`
+// that would select it refuses whenever no live fleet was identified, which is exactly
+// the state a bare-brand reachable orphan puts the scan in (EmptyFleetUnproven). Reap
+// is for the shape whose root *was* removed while it lived: unreachable, nothing can
+// address it by path any more, and `atrium reap --kill` is the only thing that stops it.
+//
+// Off Linux there is no process inventory, so neither command can see any of this:
+// doctor renders the section unavailable and reap errors out (orphanScanSupported in
+// session/tmux/orphan_other.go). Kill it by the path you can see under the leaked root
+// — `tmux -S <that path> kill-server`, the path spelled out, not matched.
+//
+// Neither command accounts for the leftover directory itself, nor a socket file with
+// no server behind it inside one: ScanStaleSockets reads only Atrium's own socket dir.
+// That part is litter — remove the root by its exact path, never by a glob.
 //
 // Sweeping this package's roots automatically is what it tried and reverted: the glob
 // that finds them is one wrong prefix away from /tmp/tmux-<uid>/atrium, and that
