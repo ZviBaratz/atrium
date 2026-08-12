@@ -378,6 +378,9 @@ func (m *home) autoDispatch(res PrefillResult) (tea.Cmd, bool) {
 	if verdict == capConfirm {
 		return m.confirmOverCap(plan, sc.Limit, count), true
 	}
+	// Never dependency-isolating: this is the smart-dispatch path, which has no form
+	// to ask, and shared is both the default and the answer for the read-only session
+	// an auto-dispatched one almost always is.
 	cmd, err := m.startNewSession(res.Title, res.Path, direct, false, m.program, "", res.Prompt, nil, false, nil)
 	if err != nil {
 		return nil, false
