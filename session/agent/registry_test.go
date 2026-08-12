@@ -605,6 +605,307 @@ var claudeBashPermissionPane = strings.Join([]string{
 	" Esc to cancel · Tab to amend · ctrl+e to explain",
 }, "\n")
 
+// The permission-local width ladder (#666 item 1), driven 2026-08-11 against a live claude
+// 2.1.228 by scripts/drive-agent.sh (#647). One API turn per shape covers the whole ladder,
+// because a dialog waits for input and the pane is resized under it. The write shape was
+// driven at 120 60 40 34 32 31 30 29 28 26 24 20 and the bash shape at 120 60 40 34 30 29 28
+// 26 24 20; DetectPrompt returned "permission-local" at every rung of both. The five fixtures
+// below are the rungs that carry something the others do not.
+//
+// WHAT THIS SETTLES. #648 filed this matcher as the likeliest live defect in its exemption
+// list, on the reasoning that "Tab to amend" ends at column 29 in claudeWritePermissionPane
+// and that registry.go already records claude truncating a footer on overflow ("at width 30 a
+// busy 2.1.210 pane reads '⏸ manual mode on · esc to …'"), so the pair would die just under
+// 30 — above the 28 claude's fetch dialog is already captured at. That is FALSIFIED. This
+// footer WRAPS: at 30 it is one line, at 29 it breaks inside the discriminating literal
+// itself (" Esc to cancel · Tab to" / " amend"), and footerVisibleInSegments flattens each
+// segment before testing it, so the pair is reconstructed and the matcher holds to 20 — the
+// narrowest rung driven, and below the ~24 a 70-column terminal gives the preview pane.
+//
+// The inference that failed is worth naming, because it is the one this package keeps making:
+// the busy-marker note describes the status line BELOW the input box, and a different region
+// of the same CLI is a different renderer. Truncation somewhere is not truncation here.
+//
+// WHAT IT DOES NOT SETTLE. A wrap is repaired only where the segment scan reaches. These panes
+// carry the startup splash and its box borders verbatim for that reason — eliding a region
+// would change the segmentation the matcher runs over, which is the one edit that turns a
+// capture back into a composition.
+//
+// WHAT THESE FIXTURES ACTUALLY GUARD, measured by mutating the source rather than asserted:
+//
+//   - Replace footerVisibleInSegments' segment join with a per-LINE token test and only the
+//     two width-29 rungs fail. Nothing else in the tree notices.
+//   - De-flatten the other half — the no-rules fallback, tokens(flattenChrome(…)) — and only
+//     the two width-20 rungs fail, plus TestClaudePrompts, whose composed wrapped-footer case
+//     covers that path for the SELECTION matcher. There was no captured evidence for
+//     permission-local on either path before this.
+//   - Drop the "Tab to amend" half of the pair and neither of those groups fails: the kill
+//     comes from TestClaudePrompts and from this file's own trust-gate / model-picker
+//     negatives. The pair's exclusion job was already guarded; what was not guarded is that
+//     the pair survives being cut in half by a line break.
+//
+// So the flattening is the mechanism these captures exist to hold, and widening or shortening
+// either literal is NOT what they catch — see localPermissionFooterTokens in registry.go.
+
+// claudeWritePermissionNarrowPane is the write dialog at width 30: the last rung where the
+// footer is a single line, and therefore the exact width #648 predicted the matcher would die
+// just below. It fires.
+//
+// Said plainly, because the rest of this file is strict about it: this rung adds no matcher
+// coverage. Every mutation that kills it kills the 2.1.210 wide captures above too — it is a
+// RENDERING datum, the wide side of a boundary the next two fixtures cross, and it is here so
+// that the prediction's own width has a firing capture at it rather than an argument. If
+// claude ever does switch this footer to truncate-on-overflow, 30-versus-29 is the pair that
+// localises it in one diff.
+var claudeWritePermissionNarrowPane = strings.Join([]string{
+	"",
+	"╭─ Claude Code ──────────────╮",
+	"│                            │",
+	"│     Welcome back Zvi!      │",
+	"│                            │",
+	"│           ▐▛███▜▌          │",
+	"│          ▝▜█████▛▘         │",
+	"│            ▘▘ ▝▝           │",
+	"│                            │",
+	"│ Opus 5 (1M context) with   │",
+	"│ medi…                      │",
+	"│         Claude Max         │",
+	"│       /…/claude/repo       │",
+	"│                            │",
+	"╰────────────────────────────╯",
+	"",
+	" ⚠ 1 MCP server needs",
+	"   authentication · run /mcp",
+	"",
+	"❯ Use the Write tool to",
+	"  create hello.txt containing",
+	"  exactly one line: hi",
+	"",
+	"● Write(hello.txt)",
+	"",
+	"──────────────────────────────",
+	" Create file",
+	" hello.txt",
+	"╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌",
+	"  1 hi",
+	"╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌",
+	" Do you want to create",
+	" hello.txt?",
+	" ❯ 1. Yes",
+	"   2. Yes, allow all edits",
+	"      during this session",
+	"      (shift+tab)",
+	"   3. No",
+	"",
+	" Esc to cancel · Tab to amend",
+}, "\n")
+
+// claudeWritePermissionWrappedFooterPane is the write dialog at width 29 — one column
+// narrower, and the rung that answers the question. The footer breaks into the two physical
+// lines " Esc to cancel · Tab to" and " amend" (quoted rather than shown as an indented block,
+// because gofmt normalises a block's leading space away and the leading space is pane content),
+// so "Tab to amend" is not on any single physical line, and a flat strings.Contains over the
+// pane cannot see it. The matcher survives only because footerVisibleInSegments joins a
+// segment before applying the token predicate. That is the property this fixture pins, and
+// nothing in the tree pinned it against a real pane before.
+var claudeWritePermissionWrappedFooterPane = strings.Join([]string{
+	"│                           │",
+	"│     Welcome back Zvi!     │",
+	"│                           │",
+	"│          ▐▛███▜▌          │",
+	"│         ▝▜█████▛▘         │",
+	"│           ▘▘ ▝▝           │",
+	"│                           │",
+	"│ Opus 5 (1M context) with  │",
+	"│ medi…                     │",
+	"│        Claude Max         │",
+	"│      /…/claude/repo       │",
+	"│                           │",
+	"╰───────────────────────────╯",
+	"",
+	" ⚠ 1 MCP server needs",
+	"   authentication · run /mcp",
+	"",
+	"❯ Use the Write tool to",
+	"  create hello.txt",
+	"  containing exactly one",
+	"  line: hi",
+	"",
+	"● Write(hello.txt)",
+	"",
+	"─────────────────────────────",
+	" Create file",
+	" hello.txt",
+	"╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌",
+	"  1 hi",
+	"╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌",
+	" Do you want to create",
+	" hello.txt?",
+	" ❯ 1. Yes",
+	"   2. Yes, allow all edits",
+	"      during this session",
+	"      (shift+tab)",
+	"   3. No",
+	"",
+	" Esc to cancel · Tab to",
+	" amend",
+}, "\n")
+
+// claudeWritePermissionFloorPane is the write dialog at width 20, the narrowest rung driven
+// and the floor this matcher is now proven at. The footer has wrapped again, this time after
+// the separator (" Esc to cancel ·" / " Tab to amend"), and the splash has scrolled far enough
+// that its top border is gone — so the pane opens mid-box, which is the segmentation the scan
+// actually meets on a narrow preview pane.
+var claudeWritePermissionFloorPane = strings.Join([]string{
+	"│                  │",
+	"│  Opus 5 (1M      │",
+	"│  context) with   │",
+	"│  medi…           │",
+	"│    Claude Max    │",
+	"│  /…/claude/repo  │",
+	"│                  │",
+	"╰──────────────────╯",
+	"",
+	" ⚠ 1 MCP server",
+	"   needs",
+	"   authentication ·",
+	"   run /mcp",
+	"",
+	"❯ Use the Write",
+	"  tool to create",
+	"  hello.txt",
+	"  containing",
+	"  exactly one line:",
+	"  hi",
+	"",
+	"● Write(hello.txt)",
+	"",
+	"────────────────────",
+	" Create file",
+	" hello.txt",
+	"╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌",
+	"  1 hi",
+	"╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌",
+	" Do you want to",
+	" create hello.txt?",
+	" ❯ 1. Yes",
+	"   2. Yes, allow all",
+	"      edits during",
+	"      this session",
+	"      (shift+tab)",
+	"   3. No",
+	"",
+	" Esc to cancel ·",
+	" Tab to amend",
+}, "\n")
+
+// claudeBashPermissionWrappedFooterPane is the shell-command dialog at width 29. Its footer
+// carries a third hint, so it wraps into ONE MORE piece than the write shape's does —
+// " Esc to cancel · Tab to" then " amend · ctrl+e to explain" — and "Tab to amend" is again
+// split across the break, with a hint trailing it this time. Same property, a different amount of
+// footer either side of it, which is what makes this a second measurement rather than a copy.
+var claudeBashPermissionWrappedFooterPane = strings.Join([]string{
+	"╰───────────────────────────╯",
+	"",
+	" ⚠ 1 MCP server needs",
+	"   authentication · run /mcp",
+	"",
+	"❯ Use the Write tool to",
+	"  create hello.txt",
+	"  containing exactly one",
+	"  line: hi",
+	"",
+	"● Write(hello.txt)",
+	"  ⎿  User rejected    hello.t",
+	"     write to         xt",
+	"      1 hi",
+	"",
+	"✻ Crunched for 2m 39s",
+	"",
+	"❯ Run the shell command:",
+	"  mkdir probedir",
+	"",
+	"  Creating probedir directory",
+	"",
+	"  ⎿  $ mkdir probedir",
+	"",
+	"─────────────────────────────",
+	" Bash command",
+	"",
+	"   mkdir probedir",
+	"   Create probedir",
+	"   directory",
+	"",
+	" Do you want to proceed?",
+	" ❯ 1. Yes",
+	"   2. Yes, and always allow",
+	"      access to repo/ from",
+	"      this project",
+	"   3. No",
+	"",
+	" Esc to cancel · Tab to",
+	" amend · ctrl+e to explain",
+}, "\n")
+
+// claudeBashPermissionFloorPane is the shell-command dialog at width 20, and it carries
+// something no hand-written pane would have thought to include: claude's own repaint residue.
+// Read the decline option — it is "   3. Nois project".
+//
+// When narrowing costs option 2 a wrapped line, claude draws the next row without erasing to
+// end of line, so the tail of "this project" survives under "   3. No". It is deterministic,
+// not a torn capture. Three things say so: it survives SETTLE raised to 4s; the write shape
+// does the same thing at 32 and 24, there as "   3. Nohift+tab)"; and the width-24 case
+// reproduces identically whether the pane was 120, 26 or 20 immediately before, so it is not a
+// residue of any particular previous width.
+//
+// Atrium reaches this by dragging the split, since the preview pane resizes under a live
+// dialog (session/instance.go SetPreviewSize). Pinned verbatim because it is what the poller
+// actually sees, and because it makes the matcher's indifference to the option rows a measured
+// fact rather than a design intention — the footer is untouched here, and the footer is all
+// this matcher reads.
+var claudeBashPermissionFloorPane = strings.Join([]string{
+	"",
+	"",
+	"● Write(hello.txt)",
+	"  ⎿  User     hello.",
+	"     rejected txt",
+	"     write to",
+	"      1 hi",
+	"",
+	"✻ Crunched for 2m",
+	"  39s",
+	"",
+	"❯ Run the shell",
+	"  command: mkdir",
+	"  probedir",
+	"",
+	"  Creating probedir",
+	"  directory",
+	"  ⎿  $ mkdir",
+	"     probedir",
+	"",
+	"────────────────────",
+	" Bash command",
+	"",
+	"   mkdir probedir",
+	"   Create",
+	"   probedir",
+	"   directory",
+	"",
+	" Do you want to",
+	" proceed?",
+	" ❯ 1. Yes",
+	"   2. Yes, and",
+	"      always allow",
+	"      access to",
+	"      repo/ from",
+	"   3. Nois project",
+	"",
+	" Esc to cancel ·",
+	" Tab to amend ·",
+	" ctrl+e to explain",
+}, "\n")
+
 // TestClaudeLocalPermissionPrompt pins the tool-permission matcher against both
 // live shapes (#332). NoAutoTap: unlike the WebFetch dialog the "permission"
 // matcher auto-answers, these gate local file writes and shell commands, so
@@ -943,6 +1244,133 @@ var claudeMCPNarrowPane = strings.Join([]string{
 	"",
 	"  Enter to confirm · Esc",
 	"  to cancel",
+}, "\n")
+
+// The MCP-approval width ladder, driven 2026-08-11 against a live claude 2.1.228 by
+// scripts/drive-agent.sh (#647) at 110 40 28 24 20, both shapes, with NO api turn: the gate is
+// a startup dialog, so a fresh workspace holding a project-scoped .mcp.json is the whole
+// setup. The three servers are named nanoclaw/picoclaw/femtoclaw so the pane reproduces the
+// 2.1.210 captures above rather than merely resembling them. claudeGateVisible fired at every
+// rung of both shapes.
+//
+// This settles the width claim #648 flagged as disputed. claudeMCPMultiPane's comment carries
+// a per-width result table headed 110, while the pane's widest line is 105 and the box rule
+// spliced into it is strings.Repeat("─", 56). A real 110-column capture draws a 110-cell rule,
+// as the two Wide panes below show — so the older fixtures are edited transcriptions, not
+// verbatim 110-column captures, and their width stays unrecorded rather than inferred. #340's
+// table is still provenance for what was measured; it is not provenance for a fixture's width.
+//
+// The rules here are written out rather than spliced with strings.Repeat for exactly that
+// reason: splicing is what made the width unverifiable the first time.
+
+// claudeMCPMultiWidePane is the multi-server approval at width 110 — the first capture of this
+// shape whose width is a datum. Its rule is 110 cells.
+var claudeMCPMultiWidePane = strings.Join([]string{
+	"",
+	"──────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+	"  3 new MCP servers found in this project",
+	"  Select any you wish to enable.",
+	"",
+	"  MCP servers may execute code or access system resources. All tool calls require approval. Learn more in",
+	"  the MCP documentation.",
+	"",
+	"  ❯ [✔] nanoclaw",
+	"    [✔] picoclaw",
+	"    [✔] femtoclaw",
+	" Space to select · Enter to confirm · Esc to reject all",
+}, "\n")
+
+// claudeMCPMultiFloorPane is the multi-server approval at width 20, and with its single-server
+// sibling it takes claude/gate from proven-at-28 to proven-at-20 — under the ~24 a 70-column
+// terminal leaves the preview pane. The title wraps across three lines here and the footer
+// across three more; the gate reads the whole dialog region, so neither costs it anything.
+var claudeMCPMultiFloorPane = strings.Join([]string{
+	"",
+	"────────────────────",
+	"  3 new MCP",
+	"  servers found in",
+	"  this project",
+	"  Select any you",
+	"  wish to enable.",
+	"",
+	"  MCP servers may",
+	"  execute code or",
+	"  access system",
+	"  resources. All",
+	"  tool calls",
+	"  require",
+	"  approval. Learn",
+	"  more in the MCP",
+	"  documentation.",
+	"",
+	"  ❯ [✔] nanoclaw",
+	"    [✔] picoclaw",
+	"    [✔] femtoclaw",
+	" Space to select ·",
+	" Enter to confirm ·",
+	" Esc to reject all",
+}, "\n")
+
+// claudeMCPSingleWidePane is the one-server approval at width 110. claudeMCPSinglePane, the
+// fixture it stands beside, records no width at all; this one does, and its rule is 110 cells.
+var claudeMCPSingleWidePane = strings.Join([]string{
+	"",
+	"──────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+	"  New MCP server found in this project: nanoclaw",
+	"",
+	"  MCP servers may execute code or access system resources. All tool calls require approval. Learn more in",
+	"  the MCP documentation.",
+	"",
+	"  ❯ 1. Use this MCP server",
+	"    2. Use this and all future MCP servers in this project",
+	"    3. Continue without using this MCP server",
+	"",
+	"  Enter to confirm · Esc to cancel",
+}, "\n")
+
+// claudeMCPSingleFloorPane is the one-server approval at width 20.
+//
+// The ladder also caught a real reword between 2.1.210 and 2.1.228, and it is a reword rather
+// than a reflow because the comparison is at ONE width: claudeMCPNarrowPane is this shape at
+// 28, where 2.1.210 renders "    2.Use this and all" with the space after the number eaten and
+// the continuation at column 6; the 28 rung driven here renders "    2. Use this and all" and
+// hang-indents the continuation to column 7, under the label. A matcher keying on an option
+// row would now have to carry both spellings. This gate keys on the title, which is the whole
+// reason the change costs it nothing — and the reason the 28 rung is not pinned as a fixture,
+// since claudeMCPNarrowPane already holds that width and the difference is in rows the gate
+// does not read.
+var claudeMCPSingleFloorPane = strings.Join([]string{
+	"",
+	"────────────────────",
+	"  New MCP server",
+	"  found in this",
+	"  project:",
+	"  nanoclaw",
+	"",
+	"  MCP servers may",
+	"  execute code or",
+	"  access system",
+	"  resources. All",
+	"  tool calls",
+	"  require",
+	"  approval. Learn",
+	"  more in the MCP",
+	"  documentation.",
+	"",
+	"  ❯ 1. Use this MCP",
+	"       server",
+	"    2. Use this and",
+	"       all future",
+	"       MCP servers",
+	"       in this",
+	"       project",
+	"    3. Continue",
+	"       without using",
+	"       this MCP",
+	"       server",
+	"",
+	"  Enter to confirm",
+	"  · Esc to cancel",
 }, "\n")
 
 // claudeQuotedGatePane is the bug this gate's Match exists for, captured from a live 2.1.210

@@ -47,7 +47,8 @@ import (
 //
 // What this file does NOT reach, stated so the tables are not read as fuller than they are.
 // A Match matcher IS exercised at every width it has captures for, because fires() runs the
-// production predicate — claudeGateVisible holds at 40 and 28 here. What cannot be enumerated
+// production predicate; read the rungs off paneCoverage rather than from a list here, which is
+// what #666 had to correct when it drove claudeGateVisible below 28. What cannot be enumerated
 // is its individual literals: they live inside the func (claudeGateVisible,
 // claudeFetchPermissionVisible, claudeNetworkPermissionVisible, claudeSelectionFooterVisible,
 // claudeLocalPermissionVisible, aiderConfirmVisible and the token helpers they call), so the
@@ -103,21 +104,32 @@ func describeWidth(w int) string {
 // ladders (codex_pane_test.go TestCodexComposersReadAsNeitherPromptNorGate).
 var paneCoverage = map[string][]paneCapture{
 	// claude's gate is one Match (claudeGateVisible) covering the folder-trust dialog and
-	// both MCP-approval shapes, so all five captures belong to the same key.
+	// both MCP-approval shapes, so every capture below belongs to the same key however many
+	// of them there are. (There were five when this was written; #666 added four. Say "every"
+	// rather than a number in a comment sitting directly above the thing that can be counted.)
 	"claude/gate": {
 		{name: "claudeTrustPane", width: 0, note: "folder-trust, 2.1.185", pane: claudeTrustPane},
-		// Neither MCP capture has a usable width. claudeMCPMultiPane's comment carries the
-		// only "110" in the file, in a per-width result table, and that number is not
-		// trustworthy: the pane's widest line is 105 and the box rule spliced inside it is
-		// strings.Repeat("─", 56), where a genuine 110-column capture would draw a
-		// ~110-cell rule. claudeMCPSinglePane records no width at all. Recorded as unknown
-		// rather than propagated — restating a width the artifact contradicts is the defect
-		// class #648 exists to end. (Never infer a capture width from a box rule either;
-		// that is the same guess in reverse.)
-		{name: "claudeMCPSinglePane", width: 0, note: "one server, width claim disputed", pane: claudeMCPSinglePane},
-		{name: "claudeMCPMultiPane", width: 0, note: "many servers, width claim disputed", pane: claudeMCPMultiPane},
+		// Neither 2.1.210 MCP capture has a usable width, and #666 settled why rather than
+		// leaving it a suspicion. claudeMCPMultiPane's comment claims 110 in a per-width
+		// result table, while the pane's widest line is 105 and the box rule spliced
+		// inside it is strings.Repeat("─", 56). Driving the same two
+		// shapes at a real 110 (claudeMCPMultiWidePane, claudeMCPSingleWidePane) shows a
+		// 110-column capture drawing a 110-cell rule — so those two are edited
+		// transcriptions, and their width stays unrecorded rather than inferred. #340's
+		// table remains provenance for what it measured; it was never provenance for a
+		// fixture's width. (Never infer a capture width from a box rule either; that is the
+		// same guess in reverse. The Wide panes carry theirs because they were driven at
+		// it, and their rule agreeing is a consequence, not the evidence.)
+		{name: "claudeMCPSinglePane", width: 0, note: "one server, 2.1.210, width claim disputed", pane: claudeMCPSinglePane},
+		{name: "claudeMCPMultiPane", width: 0, note: "many servers, 2.1.210, width claim disputed", pane: claudeMCPMultiPane},
 		{name: "claudeMCPWrappedPane", width: 40, note: "title wrapped", pane: claudeMCPWrappedPane},
 		{name: "claudeMCPNarrowPane", width: 28, note: "", pane: claudeMCPNarrowPane},
+		// The 2.1.228 ladder (#666). Both shapes at both ends, so the floor below is
+		// carried by two independent dialogs rather than by one pane's luck.
+		{name: "claudeMCPSingleWidePane", width: 110, note: "one server, width driven", pane: claudeMCPSingleWidePane},
+		{name: "claudeMCPMultiWidePane", width: 110, note: "many servers, width driven", pane: claudeMCPMultiWidePane},
+		{name: "claudeMCPSingleFloorPane", width: 20, note: "one server, title wrapped, options hang-indented", pane: claudeMCPSingleFloorPane},
+		{name: "claudeMCPMultiFloorPane", width: 20, note: "many servers, title wrapped, footer in three pieces", pane: claudeMCPMultiFloorPane},
 	},
 	"claude/busy": {
 		{name: "claudeBusyDefaultPane", width: 100, note: "default chat:cancel binding", pane: claudeBusyDefaultPane},
@@ -127,9 +139,17 @@ var paneCoverage = map[string][]paneCapture{
 		{name: "claudeFetchPane", width: 100, note: "", pane: claudeFetchPane},
 		{name: "claudeFetchNarrowPane", width: 28, note: "", pane: claudeFetchNarrowPane},
 	},
+	// The 2.1.228 ladder (#666 item 1) is the last five. The first two keep width 0: their
+	// provenance genuinely never recorded one, and TestCaptureWidthsAreNotOverstated would
+	// take a guess as a claim. They still prove shape, which is what they were pinned for.
 	"claude/prompt/permission-local": {
-		{name: "claudeWritePermissionPane", width: 0, note: "file write", pane: claudeWritePermissionPane},
-		{name: "claudeBashPermissionPane", width: 0, note: "shell command", pane: claudeBashPermissionPane},
+		{name: "claudeWritePermissionPane", width: 0, note: "file write, 2.1.210", pane: claudeWritePermissionPane},
+		{name: "claudeBashPermissionPane", width: 0, note: "shell command, 2.1.210", pane: claudeBashPermissionPane},
+		{name: "claudeWritePermissionNarrowPane", width: 30, note: "footer still one line", pane: claudeWritePermissionNarrowPane},
+		{name: "claudeWritePermissionWrappedFooterPane", width: 29, note: "\"Tab to amend\" split across the wrap", pane: claudeWritePermissionWrappedFooterPane},
+		{name: "claudeWritePermissionFloorPane", width: 20, note: "footer wrapped after the separator", pane: claudeWritePermissionFloorPane},
+		{name: "claudeBashPermissionWrappedFooterPane", width: 29, note: "three-hint footer, same split", pane: claudeBashPermissionWrappedFooterPane},
+		{name: "claudeBashPermissionFloorPane", width: 20, note: "claude's own repaint residue on the decline row", pane: claudeBashPermissionFloorPane},
 	},
 	"claude/prompt/plan": {
 		{name: "claudePlanPane", width: 0, note: "", pane: claudePlanPane},
@@ -207,8 +227,10 @@ var paneCoverageExempt = map[string]string{
 // Each entry is the NARROWEST recorded capture width at which that matcher's production
 // predicate still fires. Read it as evidence, not as a guarantee — a matcher proven at 28 is
 // not known to survive the 24 a 70-column terminal produces; it is merely untested there.
-// That claude/gate sits at 28 while agy/prompt/confirmation sits at 20 is exactly the kind of
-// thing #648 wanted visible instead of buried.
+// claude/prompt/permission sitting at 28 while its permission-local sibling sits at 20 is
+// exactly the kind of thing #648 wanted visible instead of buried, and it is a gap in the
+// EVIDENCE rather than a known cliff: claude's fetch dialog has simply never been driven below
+// 28 (#666 does not close it — reaching that dialog needs a live fetch, not a resize).
 //
 // Nor is a floor a promise about everything above it. Codex WRAPS, so a wider rung can fail
 // where a narrower one passes: line-budget effects are not monotonic in width, which is why
@@ -217,9 +239,10 @@ var paneCoverageExempt = map[string]string{
 // Lowering an entry means new evidence was driven and captured. Raising one means either a
 // literal got wider or a capture was deleted — and both should be loud.
 var wantFloors = map[string]int{
-	"claude/gate":              28,
-	"claude/busy":              100,
-	"claude/prompt/permission": 28,
+	"claude/gate":                    20,
+	"claude/busy":                    100,
+	"claude/prompt/permission":       28,
+	"claude/prompt/permission-local": 20,
 
 	"codex/gate":            20,
 	"codex/prompt/approval": 20,
@@ -235,18 +258,28 @@ var wantFloors = map[string]int{
 // capture width is the same defect as an undocumented anything else, and this is where it
 // stops being invisible.
 //
-// claude/prompt/permission-local is the one to drive first. It keys on the footer PAIR
-// "Esc to cancel" + "Tab to amend", and claudeWritePermissionPane's footer line is
-// " Esc to cancel · Tab to amend" — "Tab to amend" ends at column 29. The registry's own
-// busy-marker note records that claude renders a footer with truncate-on-overflow ("at width
-// 30 a busy 2.1.210 pane reads '⏸ manual mode on · esc to …'"). If the dialog footer
-// truncates the same way, this matcher dies just under 30 — above the 28 at which claude's
-// fetch dialog is already captured, and well above the 24 a 70-column terminal produces. That
-// is #512's mechanism in claude, and it is a hypothesis, not a finding: whether this footer
-// truncates or wraps has never been driven. Which is exactly why the width is missing.
+// claude/prompt/permission-local left this list in #666 — the first entry to, the list having
+// been born in #665 with exactly the three it started with — and the shape of its departure is
+// what the list is for. It was named here as the likeliest live defect in the set, because it
+// keys on the footer PAIR "Esc to cancel" + "Tab to amend", "Tab to amend" ends at
+// column 29 in claudeWritePermissionPane, and registry.go records claude truncating a footer
+// on overflow ("at width 30 a busy 2.1.210 pane reads '⏸ manual mode on · esc to …'"), so the
+// pair looked certain to die just under 30 — above the 28 claude's fetch dialog is already
+// captured at. Driving it (2.1.228, widths 120..20, both dialog shapes) FALSIFIED that: the
+// footer wraps rather than truncating, footerVisibleInSegments flattens the segment before
+// applying the predicate, and the matcher holds to 20. The reasoning that failed was reading a
+// note about the status line BELOW the input box as a fact about the dialog's own footer; one
+// CLI renders more than one way, and only the region you drove is the region you know.
+//
+// What remains is what nobody has driven, and neither is a resize away — which is the whole
+// reason they outlived the one that was. plan needs a plan-mode turn to run to its approval
+// dialog. model-error is the cheaper of the two and should be said so rather than filed as
+// hard: registry.go records it being reached with `claude --model __atrium_probe__` followed
+// by a prompt, so a ladder is one bogus-model session away. It is transcript content rather
+// than a dialog, which makes its width behaviour a different question from this one's, not an
+// expensive one.
 var keysWithNoRecordedCaptureWidth = []string{
 	"claude/prompt/model-error",
-	"claude/prompt/permission-local",
 	"claude/prompt/plan",
 }
 

@@ -643,6 +643,20 @@ func claudeSelectionFooterVisible(content string) bool {
 // tool-permission dialog's footer pair: "Esc to cancel" plus "Tab to amend". The
 // pair is what separates it from the trust gate and the /model picker, which show
 // "Esc to cancel" beside a different second hint.
+//
+// FLATTENED is load-bearing, and #666 is where that stopped being an assumption. Both
+// dialog shapes were driven against a live 2.1.228 at 120 60 40 34 32 31 30 29 28 26 24 20
+// (the write shape) and 120 60 40 34 30 29 28 26 24 20 (the shell one). This footer WRAPS on
+// overflow — it does not truncate the way the below-box status line does — and at 29 the
+// break falls INSIDE "Tab to amend": the pane carries " Esc to cancel · Tab to" and " amend"
+// on separate physical lines. A flat per-line match would miss every rung below 30. The
+// captures are claudeWritePermission{Narrow,WrappedFooter,Floor}Pane and
+// claudeBashPermission{WrappedFooter,Floor}Pane, filed with their widths in
+// pane_width_test.go, which is what proves the pair holds to 20 rather than asserting it.
+//
+// So do not "simplify" this to a match over lines, and do not shorten either half to buy
+// width: neither half is length-bound here. What the pair costs is the two decoys it exists
+// to exclude, which is a different budget entirely.
 func localPermissionFooterTokens(s string) bool {
 	return strings.Contains(s, "Esc to cancel") && strings.Contains(s, "Tab to amend")
 }
