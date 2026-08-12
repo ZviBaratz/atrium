@@ -263,19 +263,30 @@ func minExactWidth(t *testing.T, render func(int) string) int {
 	return 0
 }
 
-// maxWholeName is the longest name that still survives un-truncated on line 1 at
-// `width` columns — the name column's real budget, measured rather than derived.
-func maxWholeName(t *testing.T, width int, withAgy bool) int {
+// maxWholeNameOf is the longest name that still survives un-truncated on line 1 of
+// the row `render` builds from it — the name column's real budget, measured rather
+// than derived. Measuring it on both sides of a chip is what makes a width claim
+// non-vacuous: a flexible name column absorbs an added chip, so a total-row-width
+// assertion passes unchanged while the name silently loses cells (#478/#479 → #501).
+func maxWholeNameOf(t *testing.T, width int, render func(name string) string) int {
 	t.Helper()
 	last := 0
 	for n := 1; n <= width; n++ {
 		name := strings.Repeat("n", n)
-		if !strings.Contains(strings.Split(fullyBadgedAgyRow(t, width, name, withAgy), "\n")[0], name) {
+		if !strings.Contains(strings.Split(render(name), "\n")[0], name) {
 			break
 		}
 		last = n
 	}
 	return last
+}
+
+// maxWholeName is maxWholeNameOf for the fully badged agy row.
+func maxWholeName(t *testing.T, width int, withAgy bool) int {
+	t.Helper()
+	return maxWholeNameOf(t, width, func(name string) string {
+		return fullyBadgedAgyRow(t, width, name, withAgy)
+	})
 }
 
 // TestRender_AgyBadgeYieldsRatherThanErasingTheName is the invariant that makes the
