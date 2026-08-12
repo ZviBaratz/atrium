@@ -181,7 +181,7 @@ func (m *home) actHint(match hints.Match, open bool) tea.Cmd {
 //
 // GetRepoPath is deliberately NOT the fallback, though it reads like the obvious
 // one: it resolves through the same `worktree() == nil` guard as GetWorktreePath
-// (session/instance.go:1973), so for a direct session both return "" and the
+// (both in session/instance.go), so for a direct session both return "" and the
 // fallback would be dead — relative image paths would silently degrade to copy in
 // exactly the sessions a folder of plots is most likely to be.
 //

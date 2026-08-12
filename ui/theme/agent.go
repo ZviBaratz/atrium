@@ -9,12 +9,26 @@ import "charm.land/lipgloss/v2"
 // and a glyph whose measured width differs from its rendered width desyncs
 // bubbletea's incremental renderer (the list-ghosting defect). Every entry must
 // measure width 1; TestAgentGlyphWidths guards the invariant.
-
+//
+// That test iterates this table, so it can only speak for the entries that exist.
+// Whether the table COVERS session/agent's registry is a question this package
+// cannot ask — a leaf cannot see the registry — so it is guarded from package ui,
+// by TestEveryAgentAdapterHasAnIdentityGlyph. Editing this table and running only
+// `go test ./ui/theme` will therefore not tell you whether an agent is missing, nor
+// whether two of them now share a glyph — that test covers both.
+//
+// A new glyph is checked against two surfaces, and the second is the one that is easy
+// to skip: every rung of the Glyphs table (nerd/plain/ascii — Waiting is why codex is
+// not "◆"), AND the rune literals the row paints inline, which are not Glyphs fields
+// at all. agy's "✜" is a plus-shaped cross; the nearest thing the row draws is
+// prCheckGlyph's failing-CI "✗" (ui/row.go), a saltire rather than a plus. A star was
+// the other candidate for agy and would have read as a second gemini.
 var agentGlyphs = map[string]string{
 	"claude":  "✻", // claude code's own spinner glyph
 	"codex":   "❖", // ◆ would collide with Glyphs.Waiting
 	"gemini":  "✦",
 	"aider":   "≡",
+	"agy":     "✜", // a plus-cross; see the note above on what that was checked against
 	"generic": "•",
 }
 

@@ -534,8 +534,8 @@ func TestAccountClusteringVisible(t *testing.T) {
 			})
 			require.NoError(t, err)
 			// SetClaudeAccount's second argument is the CLAUDE_CONFIG_DIR, not the pool
-			// (session/account.go:14). The pool has its own setter, and it is the field
-			// AccountClusterKey actually prefers (session/account.go:60) — so setting it through
+			// (session/account.go). The pool has its own setter, and it is the field
+			// AccountClusterKey actually prefers — so setting it through
 			// the wrong argument would leave two distinct keys and make this subtest assert the
 			// opposite of what it claims.
 			inst.SetClaudeAccount(acct, "", false)

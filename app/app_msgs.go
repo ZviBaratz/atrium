@@ -151,9 +151,9 @@ func (m *home) spinnerAnimating() bool {
 //
 // Same shape as armSplashTick, for the same reason: with nothing to animate, the
 // loop was still delivering 10 messages a second, and Bubble Tea rebuilds the
-// entire frame after every message (tea.go:880) — measured at 6-9ms and 1.2-2.3MB
-// per rebuild, so this was ~31% of an idle Atrium's render cost animating nothing
-// (#546).
+// entire frame after every message (Program.eventLoop's render call) — measured
+// at 6-9ms and 1.2-2.3MB per rebuild, so this was ~31% of an idle Atrium's render
+// cost animating nothing (#546).
 //
 // Called from the 100ms preview tick and from the tail of applyMetadataResults.
 // The tick is the one that makes this correct: it fires unconditionally, so it

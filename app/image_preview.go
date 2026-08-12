@@ -71,11 +71,11 @@ func (m *home) currentImageRenderMode() imageview.Mode {
 // closes it), or — worse — stateHints overwritten without exitHintMode, which
 // leaves PreviewPane.hintContent set with nothing to clear it. The tick's
 // self-heal cannot recover that one: it is gated on `m.state == stateHints`
-// (app/app_msgs.go:192), which is no longer true, so the pane stays frozen on a
-// dimmed, hint-labelled snapshot until the selection changes.
+// (handlePreviewTick, app/app_msgs.go), which is no longer true, so the pane stays
+// frozen on a dimmed, hint-labelled snapshot until the selection changes.
 //
 // Dropping silently rather than notifying is the sibling loader's behaviour
-// (handleCheckpointsLoaded, app/app_checkpoints.go:122) and the right one here:
+// (handleCheckpointsLoaded, app/app_checkpoints.go) and the right one here:
 // the user has already moved to something else, and a toast would interrupt that
 // too.
 func (m *home) handleImageLoaded(msg imageLoadedMsg) (tea.Model, tea.Cmd) {

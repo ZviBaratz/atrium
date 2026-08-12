@@ -78,12 +78,12 @@ func joinFrame(k frameKey) string {
 
 // frameCached stacks the frame and scans it, memoized on the components, because
 // an idle Atrium hands it the same ones over and over: Bubble Tea calls View()
-// after every message (tea.go:880), and at idle the preview tick and the metadata
-// tick produce ~12 of those a second — ~22 once the pane-capture chain has
-// something to capture (armFrameCapture), ~32 once the spinner loop joins them too
-// (armSpinnerTick). Measured on a cold 14-session build, the stack and the scan
-// together are ~21% of its time — 13 points the join, 8 the scan — and the scan
-// alone is over half its allocated bytes.
+// after every message (Program.eventLoop's render call), and at idle the preview
+// tick and the metadata tick produce ~12 of those a second — ~22 once the
+// pane-capture chain has something to capture (armFrameCapture), ~32 once the
+// spinner loop joins them too (armSpinnerTick). Measured on a cold 14-session
+// build, the stack and the scan together are ~21% of its time — 13 points the
+// join, 8 the scan — and the scan alone is over half its allocated bytes.
 //
 // Reusing the previous output is safe, and the reason is worth stating because it
 // is not obvious: a zone's ID lives INSIDE the pre-scan string, as the ANSI marker

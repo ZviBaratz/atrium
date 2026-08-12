@@ -14,19 +14,20 @@ import (
 // Atrium ASKS rather than being told, and both ways of being told were measured
 // against the pinned stack before that was settled.
 //
-// Mode 2031 — the terminal pushing a scheme change — is decodable here today:
-// x/ansi carries SetModeLightDark, ultraviolet decodes CSI ? 997 ; N n into
-// Dark/LightColorSchemeEvent (decoder.go:432), and translateInputEvent ends in
-// `return e`, so an unrecognised ultraviolet event reaches Update untouched and a
-// case for one would compile. It is rejected because it is a PERSISTENT MODE that
-// nothing here unwinds. Bubble Tea's teardown is declarative: cursedRenderer.close()
-// resets exactly the modes tea.View models, read back off the last View — and
-// tea.View has no light/dark field, so 2031 is not tracked. (restoreTerminalState is
-// not the mechanism; it restores termios and flushes.) An unmatched ESC[?2031h
-// therefore outlives Atrium on every exit path — quit, ctx.Done()/SIGTERM, and panic
-// alike — and past every tea.Exec attach, where the terminal keeps emitting
-// CSI?997;Nn into an input stream tmux now owns, injecting stray bytes into the
-// agent's pane. Owning that lifecycle would be real work.
+// Mode 2031 — the terminal pushing a scheme change — is decodable here today: x/ansi
+// carries SetModeLightDark, ultraviolet decodes CSI ? 997 ; N n into
+// Dark/LightColorSchemeEvent (its decoder's `case 997`, ansi.LightDarkReport), and
+// Program.translateInputEvent ends in `return e`, so an unrecognised ultraviolet
+// event reaches Update untouched and a case for one would compile. It is rejected
+// because it is a PERSISTENT MODE that nothing here unwinds. Bubble Tea's teardown
+// is declarative: cursedRenderer.close() resets exactly the modes tea.View models,
+// read back off the last View — and tea.View has no light/dark field, so 2031 is not
+// tracked. (restoreTerminalState is not the mechanism; it restores termios and
+// flushes.) An unmatched ESC[?2031h therefore outlives Atrium on every exit path —
+// quit, ctx.Done()/SIGTERM, and panic alike — and past every tea.Exec attach, where
+// the terminal keeps emitting CSI?997;Nn into an input stream tmux now owns,
+// injecting stray bytes into the agent's pane. Owning that lifecycle would be real
+// work.
 //
 // The kitty keyboard protocol is the contrast that makes the rule sharp rather than
 // a counterexample to it. It is just as persistent a mode, and it costs Atrium

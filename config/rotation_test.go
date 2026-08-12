@@ -48,7 +48,7 @@ func TestSelectPoolMember(t *testing.T) {
 	}
 }
 
-// Moved from app/rotation_test.go:95 with the function it tests.
+// Moved from app/rotation_test.go with the function it tests.
 func TestSoonestResetMember(t *testing.T) {
 	members := []ClaudeAccount{{Name: "a"}, {Name: "b"}, {Name: "c"}}
 	avail := map[string]AccountAvailability{

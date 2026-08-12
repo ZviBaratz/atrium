@@ -1363,10 +1363,10 @@ func TestAccountsOverlay_GutterNarrowsDirNotRowWidth(t *testing.T) {
 }
 
 // TestAccountsOverlay_ReorderPersists is the persistence half of Task 5: dirty is
-// the app's ONLY cue to call config.SaveConfig (app/app_accounts.go:14) — the
-// overlay itself never writes to disk. This proves the permuted order actually
-// round-trips through a real save/load cycle, not merely that SaveConfig didn't
-// error.
+// the app's ONLY cue to call config.SaveConfig (handleAccountsState,
+// app/app_accounts.go) — the overlay itself never writes to disk. This proves the
+// permuted order actually round-trips through a real save/load cycle, not merely
+// that SaveConfig didn't error.
 func TestAccountsOverlay_ReorderPersists(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // hermetic: LoadConfig/SaveConfig must never touch the real data dir
 
