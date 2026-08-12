@@ -7,8 +7,16 @@ import (
 )
 
 // Status/unread tracking: the mu-guarded live-status accessors and the
-// into-Ready edge detection that maintains the unread bit. The Status enum and
+// turn-end edge detection that maintains the unread bit. The Status enum and
 // StatusUrgency sort policy live with the struct in instance.go.
+//
+// "Turn-end" is the edge, not the status. Entering Ready is the usual one and the only
+// one the status alone identifies; setStatusTurnEnded exists because chip-held Pending
+// (tmux.PaneBackground) is a real turn-end that Ready never sees — the agent stopped and
+// wrote to the user, but work it launched is still running, so the row stays Pending.
+// Everything downstream keys off the unread bit rather than off Ready, so routing that
+// edge here is what keeps the finish/asked notification (#289/#571), the unread glyph,
+// NextUnread and the queued-prompt question hold working for those sessions.
 
 // GetStatus returns the instance status under the read lock.
 func (i *Instance) GetStatus() Status {
@@ -34,7 +42,28 @@ func (i *Instance) GetStatus() Status {
 func (i *Instance) SetStatus(status Status) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	i.setStatusLocked(status, true)
+	i.setStatusLocked(status, true, false)
+}
+
+// setStatusTurnEnded writes an observed status that IS a turn-end even though it is not
+// Ready, raising the unread bit exactly as an into-Ready write does.
+//
+// Only ApplyPaneState's PaneBackground arm calls it, and only on the edge into a
+// chip-held Pending. The caller owns that edge because neither the status nor its
+// predecessor can carry it: both Pending producers write the same value (so
+// "i.status != status" misses a set-driven Pending handing over to a chip-driven one as
+// the sub-agents drain), and a session whose Monitor runs all session long sits Pending
+// across the very turn boundaries it needs to announce. Instance.pendingSource is what
+// resolves the edge; see ApplyPaneState.
+//
+// Without this the row would go quiet for as long as the background work runs — no ding,
+// no unread glyph, skipped by NextUnread, and the #571 question hold silently inert
+// because it releases on Unread(). That is strictly worse than the pre-Pending behaviour
+// it replaced, which at least rang once per turn.
+func (i *Instance) setStatusTurnEnded(status Status) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.setStatusLocked(status, true, true)
 }
 
 // setStatusReattached writes the synthetic status reattach uses to mark a
@@ -53,22 +82,38 @@ func (i *Instance) setStatusReattached(status Status) {
 	defer i.mu.Unlock()
 	i.reattachSavedStatus = i.status
 	i.awaitingReattachSettle = true
-	i.setStatusLocked(status, false)
+	i.setStatusLocked(status, false, false)
 }
 
-// setStatusLocked is the shared body of SetStatus and setStatusReattached. observed
-// says whether this write is an observation of the agent, and so whether it counts as
-// a status change; only a caller that is writing a synthetic status passes false.
-func (i *Instance) setStatusLocked(status Status, observed bool) {
-	if status == Ready && i.status != Ready {
+// setStatusLocked is the shared body of SetStatus, setStatusTurnEnded and
+// setStatusReattached. observed says whether this write is an observation of the agent,
+// and so whether it counts as a status change; only a caller that is writing a synthetic
+// status passes false. turnEnded says the caller has already resolved that this write is
+// a turn-end edge for a status that is not Ready — only setStatusTurnEnded passes true,
+// and passing it on a repeat write would re-ring the same turn every poll.
+func (i *Instance) setStatusLocked(status Status, observed, turnEnded bool) {
+	switch {
+	case turnEnded, status == Ready && i.status != Ready:
 		if i.suppressNextUnread {
 			i.suppressNextUnread = false
 		} else {
 			i.unread = true
 			i.unreadAt = time.Now()
 		}
-	} else if status != Ready {
+	case status != Ready:
 		i.suppressNextUnread = false
+	}
+	// Keep the Pending producer clock true for EVERY writer, not just the poller's two
+	// producers: leaving Pending releases it, and entering Pending by any other route
+	// (a restore, a hand-built row) still gets a stamp, so PendingSince is never zero on a
+	// row the list is about to render an elapsed cue for. The producers themselves claim
+	// their slot before writing, so this only ever fills a gap — it never overwrites a live
+	// hold, which is what makes the cap and the cue measure one continuous hold.
+	switch {
+	case status != Pending:
+		i.pendingSource, i.pendingSince = pendingNone, time.Time{}
+	case i.pendingSince.IsZero():
+		i.pendingSince = time.Now()
 	}
 	if status == Paused {
 		i.clearPaneFrameLocked()

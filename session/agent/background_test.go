@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The footers below are verbatim captures from a live claude 2.1.210 pane driven with a
+// The footers below are verbatim captures from a live claude 2.1.228 pane driven with a
 // real Bash(run_in_background) and a real Monitor (tmux capture-pane, 2026-08-12), plus the
 // two-of-each rung. They are the whole reason this detector is not a substring match: the
 // shell and monitor counts share ONE "·"-delimited segment and are joined by a COMMA, so an
@@ -96,8 +96,10 @@ func TestClaudeBackgroundWorkVisible_WrappedFooterStillReads(t *testing.T) {
 }
 
 // A chip quoted in the SCROLLBACK, above a live input box, is the #342/#343 forgery shape:
-// an agent discussing its own footer once read as a live prompt. The segment scan stops at
-// the input-box line, so the quote never reaches the predicate.
+// an agent discussing its own footer once read as a live prompt. footerBelowBox keeps only
+// what follows the LAST horizontal rule on screen, so a quote above the box is not in the
+// region the predicate ever sees. (Not the segment scan: background.go rejects
+// footerVisibleInSegments, whose no-border fallback is the hole this must not inherit.)
 func TestClaudeBackgroundWorkVisible_QuotedChipAboveTheBoxIsNotLive(t *testing.T) {
 	require.False(t, claude.BackgroundWorkVisible(strings.Join([]string{
 		"● The footer read: ⏵⏵ auto mode on · 2 shells, 2 monitors · ← for agents",

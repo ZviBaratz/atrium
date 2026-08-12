@@ -45,8 +45,14 @@ func TestPollBackgroundChipHoldsPending(t *testing.T) {
 }
 
 // And it clears itself: no watchdog, no latch — the chip is re-scraped every poll, so the
-// tick after the work exits commits idle. The grace holds one tick first (see
-// TestPollBackgroundExitHoldsThroughTheGrace), so drive past the cap.
+// work exiting is the whole reconciliation.
+//
+// With the hook latched "ready" that lands on the FIRST tick, not after the grace: the
+// ready+empty arm is the sole "done" authority and returns above the grace, resetting
+// idleStreak on its way. Asserting tick 1 is what pins that — a loop to the cap would pass
+// on tick 1 too and quietly stop proving anything if the fast path ever moved.
+// TestPollBackgroundExitHoldsThroughTheGrace covers the other shape, where no ready latch
+// exists and the grace does run.
 func TestPollBackgroundChipClearsToIdle(t *testing.T) {
 	c := backgroundPane(chipFooter)
 	s := hookPollSession(t, "claude", &c)
@@ -54,11 +60,24 @@ func TestPollBackgroundChipClearsToIdle(t *testing.T) {
 	require.Equal(t, PaneBackground, s.Poll())
 
 	c = backgroundPane(cleanIdleFooter)
-	var last PaneState
+	require.Equal(t, PaneIdle, s.Poll(), "chip gone + an authoritative ready latch → done at once")
+}
+
+// The chip outranks the marker-absent grace, which is a statement about a pane that has
+// gone quiet rather than a read of the current frame. Ordered the other way, a chip that is
+// STILL up matches the grace's own hold set (PaneBackground is in it, for the cleared-chip
+// case) and reports working — flipping the row Pending → Running → Pending while nothing on
+// the pane changes.
+func TestPollVisibleChipOutranksTheGrace(t *testing.T) {
+	c := backgroundPane(chipFooter)
+	s := hookPollSession(t, "claude", &c)
+	seedHookRecord(t, s, hookRecord{State: hookStateWorking}) // no ready latch → grace territory
+	require.Equal(t, PaneBackground, s.Poll())
+
 	for range idleConfirmTicks + 1 {
-		last = s.Poll()
+		require.Equal(t, PaneBackground, s.Poll(),
+			"a chip that never clears stays background; it must not churn through working")
 	}
-	require.Equal(t, PaneIdle, last, "chip gone → the turn is genuinely done")
 }
 
 // A chip beside a LIVE busy marker is a running turn that also has a background job, not a

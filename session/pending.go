@@ -13,11 +13,13 @@ import (
 // non-empty in-flight sub-agent set: the main turn ended, but background work is still
 // outstanding.
 //
-// Pending now has a SECOND producer, and everything in this file is about the first one.
-// tmux.PaneBackground raises the same status from claude's footer chips, for work that is
-// not a sub-agent at all (a background Bash, a Monitor) and therefore never reaches the
-// set. That producer is deliberately NOT reconciled here — see the watchdog note in item 2
-// and Instance.inflightPendingSince. Everything below concerns the set.
+// Pending now has a SECOND producer. tmux.PaneBackground raises the same status from
+// claude's footer chips, for work that is not a sub-agent at all (a background Bash, a
+// Monitor) and therefore never reaches the set. It is deliberately NOT reconciled here —
+// see the watchdog note in item 2 — and it is raised from ApplyPaneState, not from this
+// file. What lives here for BOTH of them is pendingProducer: which one currently holds the
+// row, which is the question the status itself cannot answer. The reconciliation order
+// below concerns the set alone.
 //
 // Pending is advisory — it must never become a permanently-stuck row — so it
 // is reconciled in a strict, load-bearing priority order:
@@ -35,9 +37,9 @@ import (
 //     chip-driven Pending is exempt, because a scraped chip cannot go stuck the way a
 //     latched id can — it is re-read every poll and gone when the work exits — and capping
 //     it would re-commit the false "done" at the cap. The clock is per-producer for the
-//     same reason (Instance.inflightPendingSince): both write the status Pending, and
-//     recordStatusChange does not re-stamp on from == to, so a shared stamp would let a
-//     long chip hold expire the next genuine sub-agent run on its first tick.
+//     same reason (Instance.pendingSource / pendingSince): both write the status Pending,
+//     and recordStatusChange does not re-stamp on from == to, so a shared stamp would let
+//     a long chip hold expire the next genuine sub-agent run on its first tick.
 //  3. Liveness. A dead tmux pane is caught by Poll's has-session check (→ PaneDead →
 //     recoverLostInstances → Paused) before the record is ever read, so a crash mid-sub-agent
 //     can't strand a Pending row. This needs no code here — it is the existing machinery.
@@ -71,14 +73,16 @@ func (i *Instance) pendingWatchdogCap() time.Duration {
 }
 
 // applyPending maps a PanePending poll onto the instance's status, running the wall-clock
-// watchdog. On entry (status not yet Pending) it just latches Pending, resetting
-// statusChangedAt so the cap measures pending-duration and not the prior state's age. On a
-// subsequent poll where the session has been Pending longer than its cap, it reconciles:
-// clear the stuck in-flight set (the deterministic latch-clear that prevents re-entry), then
-// commit Ready. The commit flags unread like any real completion, so a session that was
-// stuck pending surfaces as finished-and-unseen rather than silently vanishing.
+// watchdog. On entry it claims the set producer, which starts the watchdog's own clock
+// (pendingSince) so the cap measures how long the SET has held the row and not the prior
+// state's age — statusChangedAt cannot serve here, because it does not re-stamp when a
+// chip-driven Pending hands over to a set-driven one. On a subsequent poll where the set
+// has held longer than the cap, it reconciles: clear the stuck in-flight set (the
+// deterministic latch-clear that prevents re-entry), then commit Ready. The commit flags
+// unread like any real completion, so a session that was stuck pending surfaces as
+// finished-and-unseen rather than silently vanishing.
 func (i *Instance) applyPending() {
-	i.startInflightPendingClock()
+	i.setPendingSource(pendingInflight)
 	if i.pendingExpired() {
 		if ts := i.tmux(); ts != nil {
 			// Clear the set before committing done so the next poll reads ready+empty → idle
@@ -89,46 +93,77 @@ func (i *Instance) applyPending() {
 				log.WarningLog.Printf("pending watchdog: failed to clear in-flight set for %q: %v", i.Title, err)
 			}
 		}
-		i.clearInflightPendingClock()
-		i.SetStatus(Ready)
+		i.SetStatus(Ready) // a non-Pending write releases the producer and its clock
 		log.InfoLog.Printf("pending watchdog: %q held pending past %s, reconciled to ready", i.Title, i.pendingWatchdogCap())
 		return
 	}
 	i.SetStatus(Pending)
 }
 
-// startInflightPendingClock stamps the watchdog's clock on entry to a set-driven Pending,
-// leaving an already-running clock alone so the cap measures the whole continuous hold
-// rather than restarting every poll.
-func (i *Instance) startInflightPendingClock() {
+// pendingProducer names which of Pending's two producers is currently holding a row, so
+// the things that differ between them can key off it. Both write the same Status, so the
+// status cannot answer this and neither can statusChangedAt.
+//
+// Three consumers need the distinction: the watchdog caps only the set (a latched id can
+// leak; a scraped chip cannot), the row's elapsed cue must show the age of the hold the
+// user is looking at rather than its predecessor's, and the turn-end edge that raises the
+// unread bit fires on the handover INTO the chip producer — including the set → chip
+// handover, where the status never changes at all.
+type pendingProducer uint8
+
+const (
+	pendingNone       pendingProducer = iota // not held Pending
+	pendingInflight                          // a non-empty hook in-flight sub-agent set (#290)
+	pendingBackground                        // claude's footer shell/monitor chips (tmux.PaneBackground)
+)
+
+// setPendingSource claims src as the current Pending producer and reports whether that
+// was a CHANGE — the handover edge. On a change it restamps pendingSince, so each
+// producer's hold is measured from its own start; on a repeat it leaves the stamp alone,
+// so the clock spans the whole continuous hold rather than restarting every poll.
+func (i *Instance) setPendingSource(src pendingProducer) (changed bool) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	if i.inflightPendingSince.IsZero() {
-		i.inflightPendingSince = time.Now()
+	if i.pendingSource == src {
+		return false
 	}
+	i.pendingSource = src
+	i.pendingSince = time.Now()
+	return true
 }
 
-// clearInflightPendingClock stops the watchdog's clock. Called from every pane state that
-// is not a set-driven Pending — including PaneBackground, whose hold must never accrue
-// against a cap it is exempt from (see the Instance field's doc) — and after a
-// reconciliation, so the next genuine set starts from zero.
-func (i *Instance) clearInflightPendingClock() {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	i.inflightPendingSince = time.Time{}
+// pendingSinceOnRestore derives a restored row's Pending clock from the persisted
+// statusChangedAt, and only when the restored status is actually Pending. Anything else
+// gets the zero time, which is what "not held" means everywhere else in this file.
+func pendingSinceOnRestore(status Status, statusChangedAt time.Time) time.Time {
+	if status != Pending {
+		return time.Time{}
+	}
+	return statusChangedAt
+}
+
+// PendingSince reports when the CURRENT Pending hold began, or the zero time when the row
+// is not held. It is what the list's elapsed cue must render: statusChangedAt does not
+// move when one producer hands over to the other (recordStatusChange returns early on
+// from == to), so a row that sat 40 minutes on a Monitor chip and then started a genuine
+// sub-agent would otherwise claim the sub-agent had been running for 40 minutes.
+func (i *Instance) PendingSince() time.Time {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.pendingSince
 }
 
 // pendingExpired reports whether the instance has been continuously held Pending BY THE
 // IN-FLIGHT SET for longer than its watchdog cap. Gated on the current status already being
-// Pending, so the tick that first enters Pending can never trip it, and measured on the
-// watchdog's own clock rather than statusChangedAt — the two diverge whenever a
-// background-chip Pending precedes a set-driven one.
+// Pending, so the tick that first enters Pending can never trip it, and on the set being the
+// current producer — a chip-driven hold is exempt by design and must not accrue against a cap
+// it can never legitimately trip.
 func (i *Instance) pendingExpired() bool {
 	if i.GetStatus() != Pending {
 		return false
 	}
 	i.mu.RLock()
-	since := i.inflightPendingSince
+	src, since := i.pendingSource, i.pendingSince
 	i.mu.RUnlock()
-	return !since.IsZero() && time.Since(since) > i.pendingWatchdogCap()
+	return src == pendingInflight && !since.IsZero() && time.Since(since) > i.pendingWatchdogCap()
 }

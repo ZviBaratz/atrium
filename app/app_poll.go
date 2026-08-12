@@ -351,6 +351,11 @@ func endedAskingNow(inst *session.Instance, state tmux.PaneState) (bool, transcr
 	// by asking a question while a background shell is live would never run ComputeAsked —
 	// silently dropping #571's question hold and the EventAsked notification for precisely
 	// the sessions this feature exists to keep visible.
+	//
+	// Necessary but NOT sufficient, and the other half is in another package: the hold is
+	// `asked && Unread()`, so it also needs the turn-end into a chip-held Pending to raise
+	// the unread bit (session.setStatusTurnEnded). With only this half, `asked` is computed
+	// for a conjunction that is always false — the hold reads as present and does nothing.
 	if state != tmux.PaneIdle && state != tmux.PaneBackground {
 		return inst.EndedAsking(), transcript.Stamp{}, false
 	}
@@ -433,13 +438,18 @@ const promptDeliveryTimeout = 60 * time.Second
 //
 // PaneBackground is deliberately NOT held, and the asymmetry is the point: a sub-agent's
 // turn interleaves with a new one, whereas a detached background shell or monitor does not.
-// Holding it would stall every queued follow-up behind work the agent is not even waiting
-// on — and a persistent Monitor runs session-length, so the hold would never lift until the
-// timeout below fired. But a chatty agent that
-// writes continuously on boot can stay PaneWorking indefinitely and stall the first message
-// forever; once the prompt has been queued longer than promptDeliveryTimeout we drop only
-// that busy check. A zero queuedAt disables the timeout (the prompt was queued without a
-// timestamp), falling back to the strict idle-pane requirement.
+// Holding it would strand the follow-up outright rather than merely delay it — a quick-send
+// carries a ZERO queuedAt, which disables the timeout valve below, so a session-length
+// Monitor would keep every later message queued for the rest of the session with no
+// release. The case that DOES need holding — the turn ended by asking something — is held
+// by unansweredQuestion instead, which reaches a chip-held row because the turn-end raises
+// unread there too (session.setStatusTurnEnded).
+//
+// But a chatty agent that writes continuously on boot can stay PaneWorking indefinitely and
+// stall the first message forever; once the prompt has been queued longer than
+// promptDeliveryTimeout we drop only that busy check. A zero queuedAt disables the timeout
+// (the prompt was queued without a timestamp), falling back to the strict idle-pane
+// requirement.
 func promptDeliveryReady(state tmux.PaneState, awaitingInput, unansweredQuestion bool, queuedAt, now time.Time) bool {
 	if !awaitingInput {
 		return false

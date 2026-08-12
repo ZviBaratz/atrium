@@ -621,12 +621,15 @@ func TestMaybeNotifyQuestionHasItsOwnThrottleBudget(t *testing.T) {
 		"a question must not be swallowed by a finish that spent its budget moments earlier")
 }
 
-// The user-facing payoff of routing background work to Pending: no premature "finished"
-// ding. The ding is driven by the non-Ready→Ready unread edge, so a turn that ends with a
-// background shell or monitor still running stays silent — and then rings once, on the
-// later Pending→Ready edge, when the work actually finishes. The notification is moved to
-// the right moment rather than lost.
-func TestMaybeNotifyBackgroundWorkDefersTheFinishDing(t *testing.T) {
+// Routing background work to Pending changes the ROW, not the ding. The turn really did
+// end — the agent stopped and wrote to the user — so it rings at the turn boundary exactly
+// as it did before Pending existed; only the glyph now says "still has work running".
+//
+// Deferring the ding to the eventual Pending→Ready edge was tried and is wrong: that edge
+// never arrives while a persistent Monitor runs, so every turn for the rest of the session
+// would land in silence. Instance.setStatusTurnEnded is what keeps the edge, and with it
+// the unread glyph, NextUnread and #571's question hold, on a row that never reaches Ready.
+func TestMaybeNotifyBackgroundWorkRingsTheTurnEnd(t *testing.T) {
 	var buf bytes.Buffer
 	h, list := newNotifyHome(t, &buf)
 	a := newNotifyInstance(t)
@@ -643,13 +646,13 @@ func TestMaybeNotifyBackgroundWorkDefersTheFinishDing(t *testing.T) {
 
 	// The turn ends, but a background shell is still running: PaneBackground → Pending.
 	target.ApplyPaneState(tmux.PaneBackground)
-	require.Equal(t, session.Pending, target.GetStatus())
+	require.Equal(t, session.Pending, target.GetStatus(), "the row says work is still running")
 	h.maybeNotify(target, session.Running, time.Time{}, false, config.NotificationsBell)
-	require.Empty(t, buf.String(), "background work must not ring a 'finished' ding")
+	require.Equal(t, "\a", buf.String(), "the turn still ended, so it still rings")
+	buf.Reset()
 
-	// The shell exits; now the session is genuinely done.
-	target.ApplyPaneState(tmux.PaneIdle)
-	require.Equal(t, session.Ready, target.GetStatus())
-	h.maybeNotify(target, session.Pending, time.Time{}, false, config.NotificationsBell)
-	require.Equal(t, "\a", buf.String(), "the ding lands when the background work actually ends")
+	// Every later poll is the same hold, not a new turn — no re-ring for as long as it runs.
+	target.ApplyPaneState(tmux.PaneBackground)
+	h.maybeNotify(target, session.Pending, target.UnreadAt(), false, config.NotificationsBell)
+	require.Empty(t, buf.String(), "a continuing background hold is not a new turn-end")
 }

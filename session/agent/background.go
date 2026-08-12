@@ -2,7 +2,9 @@ package agent
 
 import "regexp"
 
-// Background-work detection for claude (2.1.210).
+// Background-work detection for claude (chips driven against 2.1.228; the adapter's
+// VerifiedVersion pin stays at 2.1.210, which is a claim about the WHOLE surface — see
+// registry.go).
 //
 // A turn can END while work it started is still running. Claude's Stop hook fires at the
 // turn boundary regardless, and a background Bash(run_in_background) or Monitor is NOT a

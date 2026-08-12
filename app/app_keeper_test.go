@@ -38,6 +38,7 @@ type fakeKeeperPane struct {
 	created      bool   // has-session fails until new-session ran, so Start can create the session
 	dialog       string // when non-empty, capture-pane renders this instead of the composer
 	box          string // current composer text ("" = empty/submitted)
+	footer       string // mode line below the box ("" = the inert "? for shortcuts")
 	pending      string // text staged by set-buffer, applied on paste-buffer
 	failSendKeys bool   // hard-fail typing/tapping (exec error), for the hard-failure budget
 	noLand       bool   // drop typed text on the floor (a soft not-landed outcome)
@@ -70,7 +71,11 @@ func (f *fakeKeeperPane) render() string {
 		}
 	}
 	b.WriteString("╰──────────────────────────────────────────────╯\n")
-	b.WriteString("  ? for shortcuts\n")
+	if f.footer != "" {
+		b.WriteString("  " + f.footer + "\n")
+	} else {
+		b.WriteString("  ? for shortcuts\n")
+	}
 	return b.String()
 }
 
@@ -718,6 +723,47 @@ func TestKeeperServiceHoldsPromptOnUnansweredQuestion(t *testing.T) {
 	require.Equal(t, 1, enters)
 	require.Empty(t, inst.Prompt())
 	require.True(t, k.delivered)
+}
+
+// The same hold, on a turn that ended by asking WHILE a background shell kept running.
+//
+// This is the shape #682's review caught. The hold is `asked && Unread()`, and the unread
+// bit used to be raised only on entry to Ready — which a chip-held row never reaches, since
+// it settles on Pending instead. So extending endedAskingNow to PaneBackground (which this
+// still needs) computed `asked` for a conjunction that could never be true, and the queued
+// follow-up went out as the answer to a question the user had not seen. Nothing else fails
+// when the hold silently stops holding, which is why it needs a test of its own on both
+// dispatchers.
+func TestKeeperServiceHoldsPromptWhenTheQuestionEndedWithBackgroundWork(t *testing.T) {
+	fake := &fakeKeeperPane{footer: "⏵⏵ auto mode on · 2 shells · ← for agents · ↓ to manage"}
+	inst := newKeeperInstance(t, "asked-bg", fake)
+	startKeeperInstance(t, inst)
+	writeKeeperTranscript(t, inst, inst.WorkingDir(), "Want me to open the PR, or will you?")
+	inst.QueueFollowupPrompt("go ahead")
+
+	// The keeper's own poll must classify this pane as background work, or the test would
+	// be driving the plain PaneIdle path the sibling test above already covers.
+	require.Equal(t, tmux.PaneBackground, inst.Poll(), "chip up + turn over = background work")
+
+	k := newAttachKeeper(context.Background(), []*session.Instance{inst}, nil)
+	k.service(inst)
+
+	require.Equal(t, session.Pending, inst.GetStatus(), "the shell is still running")
+	require.True(t, inst.Unread(), "and the turn-end that asked still flags unread")
+	typed, enters, _ := fake.snapshot()
+	require.Empty(t, typed, "a follow-up must not answer a question the user has not seen")
+	require.Zero(t, enters)
+	require.Equal(t, "go ahead", inst.Prompt(), "the prompt stays queued")
+
+	// The release valve is the same one: seeing the row lets the prompt through, even
+	// though the background work is still running and the row is still Pending.
+	inst.MarkSeen()
+	k.service(inst)
+
+	typed, enters, _ = fake.snapshot()
+	require.Equal(t, []string{"go ahead"}, typed, "a seen question releases the queued follow-up")
+	require.Equal(t, 1, enters)
+	require.Equal(t, session.Pending, inst.GetStatus(), "delivery does not fake a finished turn")
 }
 
 // TestEndedAskingNow_MemoFallback pins the two paths that must answer from the memo

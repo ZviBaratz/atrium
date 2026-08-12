@@ -103,10 +103,12 @@ func TestApplyPending_WatchdogReconciles(t *testing.T) {
 	require.Equal(t, Pending, inst.GetStatus())
 
 	// Pretend we entered Pending longer ago than the cap (SubagentStop never fired). The
-	// watchdog measures inflightPendingSince, not statusChangedAt: Pending has two
-	// producers now and only this one is capped (see the field's doc).
+	// watchdog measures pendingSince under the pendingInflight producer, not
+	// statusChangedAt: Pending has two producers now and only this one is capped (see the
+	// field's doc).
 	inst.mu.Lock()
-	inst.inflightPendingSince = time.Now().Add(-2 * defaultPendingWatchdog)
+	require.Equal(t, pendingInflight, inst.pendingSource, "the set is what is holding this row")
+	inst.pendingSince = time.Now().Add(-2 * defaultPendingWatchdog)
 	inst.mu.Unlock()
 
 	st := inst.Poll()
@@ -166,9 +168,13 @@ func TestApplyPending_LongBackgroundHoldDoesNotExpireTheNextSubagentRun(t *testi
 	inst.ApplyPaneState(inst.Poll())
 	require.Equal(t, Pending, inst.GetStatus())
 
-	// Held by the chip for far longer than the watchdog cap.
+	// Held by the chip for far longer than the watchdog cap. Age BOTH stamps: the shared one
+	// the watchdog used to read, and the producer clock — a hold this long is exactly what
+	// the handover below has to reset, and leaving pendingSince fresh here would let the
+	// test pass on a shared clock too.
 	inst.mu.Lock()
-	inst.statusChangedAt = time.Now().Add(-4 * defaultPendingWatchdog)
+	aged := time.Now().Add(-4 * defaultPendingWatchdog)
+	inst.statusChangedAt, inst.pendingSince = aged, aged
 	inst.mu.Unlock()
 	inst.ApplyPaneState(inst.Poll())
 
@@ -180,5 +186,82 @@ func TestApplyPending_LongBackgroundHoldDoesNotExpireTheNextSubagentRun(t *testi
 	require.Equal(t, tmux.PanePending, st, "a non-empty in-flight set is set-driven pending")
 	inst.ApplyPaneState(st)
 	require.Equal(t, Pending, inst.GetStatus(),
-		"the watchdog measures its own clock, so a prior background hold cannot expire this run")
+		"the handover restamps the producer clock, so a prior background hold cannot expire this run")
+	// The two stamps have now demonstrably diverged, which is the whole reason the list's
+	// elapsed cue reads PendingSince: rendering StatusChangedAt here would tell the user
+	// this sub-agent had been running for four watchdog caps.
+	require.WithinDuration(t, time.Now(), inst.PendingSince(), time.Minute,
+		"the cue dates the sub-agent run, not the chip hold it replaced")
+	require.True(t, inst.StatusChangedAt().Before(time.Now().Add(-defaultPendingWatchdog)),
+		"while the shared stamp still carries the background hold's age")
+}
+
+// A row restored from state.json as Pending keeps its elapsed cue: the clock is seeded from
+// the persisted statusChangedAt rather than starting blank until the first poll. The
+// producer stays unattributed, because state.json does not record which one was holding and
+// crediting the set would hand a restored row to a watchdog clock it never earned.
+func TestFromInstanceData_SeedsThePendingClock(t *testing.T) {
+	held := time.Now().Add(-12 * time.Minute)
+
+	inst := &Instance{}
+	inst.pendingSince = pendingSinceOnRestore(Pending, held)
+	require.Equal(t, held, inst.PendingSince(), "a restored Pending row keeps its age")
+	require.Equal(t, pendingNone, inst.pendingSource, "but not a producer it cannot know")
+	require.False(t, inst.pendingExpired(), "and an unattributed clock is not watchdog fuel")
+
+	require.Zero(t, pendingSinceOnRestore(Ready, held), "any other status is simply not held")
+}
+
+// Findings 1-3 of the #682 review, which share one root cause: every "the agent produced
+// something" consumer keys off the unread bit, and the bit was only ever raised on entry to
+// Ready. A chip-held row never reaches Ready, so a turn that ended while a background shell
+// ran went silent — no finish/asked ding, no unread glyph, skipped by NextUnread, and #571's
+// question hold inert because it RELEASES on Unread(), meaning a queued follow-up could be
+// delivered as the answer to a question the user never saw. With a session-length Monitor
+// that silence covered every later turn too, not just the one that launched the work.
+func TestApplyBackground_TurnEndRingsOnceAndStaysPending(t *testing.T) {
+	c := backgroundFooter
+	inst := claudePendingInstance(t, &c)
+	seedInflight(t, inst, tmux.HookEventReady)
+	inst.SetStatus(Running) // a turn is under way
+	inst.MarkSeen()
+
+	inst.ApplyPaneState(inst.Poll())
+	require.Equal(t, Pending, inst.GetStatus(), "the work is still running, so the row is not done")
+	require.True(t, inst.Unread(), "but the turn ENDED — that is a turn-end the user must see")
+	first := inst.UnreadAt()
+
+	// Every later poll is the same hold, not a new turn: re-ringing it would ding on every
+	// tick for as long as the work runs.
+	inst.MarkSeen()
+	inst.ApplyPaneState(inst.Poll())
+	require.False(t, inst.Unread(), "a continuing hold is not a new turn-end")
+	require.Equal(t, first, inst.UnreadAt(), "and does not re-stamp the unread clock")
+}
+
+// The handover case the status alone cannot express: the turn ends with sub-agents in
+// flight (Pending, correctly silent — the turn is not over), they drain, and only a
+// background shell is left. That is the moment the agent became done-and-waiting, and the
+// status never changes across it, so an edge keyed on the status would miss it entirely.
+func TestApplyBackground_SetHandingOverToChipIsATurnEnd(t *testing.T) {
+	c := "❯ \n⏵⏵ auto mode on (shift+tab to cycle) · ← for agents"
+	inst := claudePendingInstance(t, &c)
+	seedInflight(t, inst, tmux.HookEventReady, "aa")
+
+	inst.ApplyPaneState(inst.Poll())
+	require.Equal(t, Pending, inst.GetStatus())
+	require.False(t, inst.Unread(), "sub-agents still in flight: the turn is not over yet")
+
+	// The set drains (seedInflight only ever adds, so stop the id explicitly); the footer
+	// still chips a background shell.
+	c = backgroundFooter
+	path, err := inst.tmux().HookStateFile()
+	require.NoError(t, err)
+	require.NoError(t, tmux.UpdateHookState(path, tmux.HookEventSubagentStop, tmux.HookPayload{AgentID: "aa"}, ""))
+
+	st := inst.Poll()
+	require.Equal(t, tmux.PaneBackground, st)
+	inst.ApplyPaneState(st)
+	require.Equal(t, Pending, inst.GetStatus(), "still not done — the shell is running")
+	require.True(t, inst.Unread(), "but the turn is over now, and the status never moved to say so")
 }

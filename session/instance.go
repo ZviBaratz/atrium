@@ -117,8 +117,11 @@ func StatusUrgency(s Status, unread bool) int {
 	case Running:
 		return 3
 	case Pending:
-		// Still working (a background sub-agent is finishing), so it wants the user's
-		// attention no more than Running does — rank it alongside, not above, Running.
+		// Still working — a sub-agent is finishing (#290), or a background shell/Monitor the
+		// ended turn left running — so it wants the user's attention no more than Running
+		// does: rank it alongside, not above, Running. The chip-driven producer rings a
+		// turn-end of its own (ApplyPaneState), so a row the user must actually look at is
+		// surfaced by the unread bit rather than by this rank.
 		return 3
 	case Loading:
 		return 4
@@ -505,20 +508,31 @@ type Instance struct {
 	// session that has been waiting on the user for six hours must still say so
 	// after a restart. Guarded by mu.
 	statusChangedAt time.Time
-	// inflightPendingSince is the pending watchdog's own clock: when this session most
-	// recently STARTED being held Pending by a non-empty hook in-flight set. Zero when it
-	// is not.
+	// pendingSource is which of Pending's two producers currently holds this row (see
+	// pendingProducer), and pendingSince is when THAT hold began. Zero/pendingNone when
+	// the row is not Pending.
 	//
-	// It cannot borrow statusChangedAt, because Pending now has two producers and that
-	// stamp cannot tell them apart. recordStatusChange deliberately does not re-stamp when
-	// from == to, so a session held Pending for 40 minutes by a background chip (which is
-	// never watchdogged, by design) carries a 40-minute-old stamp; the moment a real
-	// sub-agent then starts, a shared clock would read "pending for 40 minutes" and fire
-	// the watchdog on the first tick of a legitimate run — clearing a live in-flight set
-	// and force-committing a false Ready. A dedicated clock measures what the watchdog
-	// actually caps: continuous time held by the set that can leak. In-memory only, and a
-	// restart re-derives it on the first poll. Guarded by mu.
-	inflightPendingSince time.Time
+	// Neither can be derived from status or statusChangedAt, because both producers write
+	// the same Status and recordStatusChange deliberately does not re-stamp when
+	// from == to. A session held Pending for 40 minutes by a background chip (never
+	// watchdogged, by design) therefore carries a 40-minute-old statusChangedAt; the moment
+	// a real sub-agent starts, a shared stamp would fire the watchdog on the first tick of a
+	// legitimate run — clearing a live in-flight set and force-committing a false Ready —
+	// and the row's elapsed cue would credit the sub-agent with the chip's 40 minutes.
+	// Tracking the producer measures each hold from its own start and lets the watchdog cap
+	// only the set, which is the thing that can leak.
+	//
+	// The pair also carries the turn-end edge: a handover INTO pendingBackground is the
+	// moment the agent stopped and left work running, which is what setStatusTurnEnded
+	// needs and what the status alone cannot express — including the set → chip handover,
+	// where the status does not change at all.
+	//
+	// Neither is persisted. pendingSince is seeded on restore from the persisted
+	// statusChangedAt when the restored status is Pending, so the row's elapsed cue survives
+	// a restart (see pendingSinceOnRestore); pendingSource is not guessed, and the first poll
+	// attributes both. Guarded by mu.
+	pendingSource pendingProducer
+	pendingSince  time.Time
 	// statusDirty marks a statusChangedAt write that has not reached state.json yet.
 	// Set by recordStatusChange — i.e. by whichever goroutine observed the change —
 	// and cleared once a save carrying it succeeds (see StatusDirty). In-memory only.
@@ -672,14 +686,20 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 		// file predating the field) is exactly the case recordStatusChange
 		// already covers, by stamping on first observation.
 		statusChangedAt: data.StatusChangedAt,
-		unread:          data.Unread,
-		muted:           data.Muted,
-		Height:          data.Height,
-		Width:           data.Width,
-		CreatedAt:       data.CreatedAt,
-		UpdatedAt:       data.UpdatedAt,
-		Program:         data.Program,
-		direct:          data.Direct,
+		// Seeded from the same stamp, and only for a restored Pending row, so the elapsed
+		// cue survives a restart instead of blanking until the first poll. The producer is
+		// left unattributed: state.json does not record which one was holding, and guessing
+		// "the set" would hand a restored row to the watchdog on a clock it did not earn.
+		// The first poll attributes it, restamping as it does for any handover.
+		pendingSince: pendingSinceOnRestore(data.Status, data.StatusChangedAt),
+		unread:       data.Unread,
+		muted:        data.Muted,
+		Height:       data.Height,
+		Width:        data.Width,
+		CreatedAt:    data.CreatedAt,
+		UpdatedAt:    data.UpdatedAt,
+		Program:      data.Program,
+		direct:       data.Direct,
 
 		claudeAccount:        data.ClaudeAccount,
 		claudeConfigDir:      data.ClaudeConfigDir,
@@ -1604,6 +1624,9 @@ func (i *Instance) PollNow() tmux.PaneState {
 // surfaces NeedsInput and is never auto-tapped, with the awaitingSetup flag set so the row
 // shows a setup hint. PanePending (main turn ended, background sub-agents still in flight)
 // maps to the Pending status via applyPending, which also runs the wall-clock watchdog.
+// PaneBackground (main turn ended, a background shell or Monitor it launched still running)
+// maps to the same Pending status but bypasses that watchdog, and rings the turn-end once on
+// the edge into it — see the arm below for both.
 // PaneUnknown (an unreadable or not-yet-started pane) and PaneDead (the session is gone)
 // both leave the status untouched: a dead session is recovered to Paused separately,
 // debounced by the metadata loop's recoverLostInstances, not from here.
@@ -1613,16 +1636,10 @@ func (i *Instance) ApplyPaneState(state tmux.PaneState) (tapped bool) {
 	// settled state clears the setup flag so a cleared gate drops the row hint; the
 	// keep-prior states (Unknown/Dead) leave both status and flag untouched.
 	//
-	// Every settled state that is not a set-driven Pending also stops the pending
-	// watchdog's clock, so its cap only ever accrues while the leakable in-flight set is
-	// actually holding the row (see Instance.inflightPendingSince). The keep-prior states
-	// are excluded for the same reason they leave status alone: an unreadable pane is not
-	// evidence that the set drained.
-	switch state {
-	case tmux.PaneUnknown, tmux.PaneDead, tmux.PanePending:
-	default:
-		i.clearInflightPendingClock()
-	}
+	// Releasing the Pending producer needs no arm here: setStatusLocked drops it on any
+	// write of a non-Pending status, and the keep-prior states (Unknown/Dead) write no
+	// status at all — which is the behaviour they want anyway, since an unreadable pane is
+	// not evidence that the set drained or the chip cleared.
 	switch state {
 	case tmux.PaneWorking:
 		i.setAwaitingSetup(false)
@@ -1654,8 +1671,20 @@ func (i *Instance) ApplyPaneState(state tmux.PaneState) (tapped bool) {
 		// still working" bug this state exists to fix, at the 30-minute mark, and a persistent
 		// Monitor legitimately runs for the whole session. A dead pane is still caught by
 		// tmux liveness (PaneDead) before the pane is ever classified.
+		//
+		// But the row must not go SILENT for that whole run, which is what dropping the
+		// into-Ready edge would do: no finish/asked ding, no unread glyph, skipped by
+		// NextUnread, and #571's question hold inert because it releases on Unread(). The
+		// handover into this producer is the turn-end — the agent stopped and wrote to the
+		// user — so it rings once, here, and the status stays Pending because the work has
+		// not finished. A session-length Monitor then rings on every subsequent turn-end too,
+		// since each turn's working phase releases the producer and re-enters it.
 		i.setAwaitingSetup(false)
-		i.SetStatus(Pending)
+		if i.setPendingSource(pendingBackground) {
+			i.setStatusTurnEnded(Pending)
+		} else {
+			i.SetStatus(Pending)
+		}
 	case tmux.PaneUnknown, tmux.PaneDead:
 	}
 	return false

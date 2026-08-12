@@ -194,8 +194,12 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 	// line-2 indent (gutter+space) is unaffected. The separator is the shared collapsible
 	// sepSeg, so at a width too narrow to keep any of the name it drops out (composeLine's
 	// collapseSeps) and the row degrades to "⧗ 12s" rather than a dangling "⧗  · 12s".
+	// PendingSince, not StatusChangedAt: Pending has two producers writing the same status,
+	// and recordStatusChange does not re-stamp on from == to — so a row that sat on a
+	// Monitor chip for 40 minutes and then started a genuine sub-agent would credit the
+	// sub-agent with the chip's 40 minutes.
 	if i.GetStatus() == session.Pending {
-		if elapsed := fmtPendingElapsed(i.StatusChangedAt()); elapsed != "" {
+		if elapsed := fmtPendingElapsed(i.PendingSince()); elapsed != "" {
 			left1 = append(left1, p.sepSeg(), p.seg(elapsed, th.Palette.FgFaint))
 		}
 	}

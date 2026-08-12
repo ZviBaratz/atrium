@@ -516,29 +516,39 @@ func (t *Session) Poll() PaneState {
 				return PaneWorking
 			}
 		}
+		// The other would-be idle: no record at all, or a non-ready latch whose heartbeat has
+		// gone stale. A chip is still live proof the session is not done.
+		//
+		// Consulted BEFORE the grace below, and resetting idleStreak like every other
+		// not-idle arm, because the two answer different questions: the grace is hysteresis
+		// bridging a gap where the pane says nothing, while this is a positive read of the
+		// CURRENT frame. Ordered the other way, a still-visible chip whose lastReported is
+		// already PaneBackground matches the grace's own hold set and reports PaneWorking for
+		// up to the cap — Pending → Running → Pending on a pane that never changed, churning
+		// statusChangedAt, the status history and the state.json dirty bit every tick.
+		if bg {
+			t.monitor.idleStreak = 0
+			t.monitor.lastReported = PaneBackground
+			t.monitor.logSignal(name, "marker-absent + footer background chip → background")
+			return PaneBackground
+		}
 		t.monitor.idleStreak++
 		if (t.monitor.lastReported == PaneWorking || t.monitor.lastReported == PanePending ||
 			t.monitor.lastReported == PaneBackground) &&
 			t.monitor.idleStreak < t.idleConfirmCap() {
 			// A brief marker-absent gap after real work (auto-accept turn boundary, model
 			// spin-up) — or right after PanePending, when a session that was waiting on a
-			// background sub-agent resumes, or right after PaneBackground, when a chip clears a
-			// beat before the marker repaints: a working hook (UserPromptSubmit/PreToolUse) latches
-			// "working" and the in-flight set drains a beat before the busy marker repaints, so
-			// without holding here that sub-tick gap would commit PaneIdle → a false "done" (and
-			// a false #289 "finished" ding) at every sub-agent resume. We only get here once the
-			// hook is no longer "ready" (a working edge fired = the agent is doing something), so
-			// holding working is honest. Still bounded by idleConfirmCap, so it can never relatch
-			// working (#46) — once the cap is hit the absent marker keeps us idle.
+			// background sub-agent resumes, or right after PaneBackground, whose chip has just
+			// CLEARED (a still-visible one returned above): a working hook
+			// (UserPromptSubmit/PreToolUse) latches "working" and the in-flight set drains a beat
+			// before the busy marker repaints, so without holding here that sub-tick gap would
+			// commit PaneIdle → a false "done" (and a false #289 "finished" ding) at every
+			// sub-agent resume. We only get here once the hook is no longer "ready" (a working
+			// edge fired = the agent is doing something), so holding working is honest. Still
+			// bounded by idleConfirmCap, so it can never relatch working (#46) — once the cap is
+			// hit the absent marker keeps us idle.
 			t.monitor.logSignal(name, "marker-absent grace → working")
 			return PaneWorking
-		}
-		// The other would-be idle: no record at all, or a non-ready latch whose heartbeat
-		// has gone stale. A chip is still live proof the session is not done.
-		if bg {
-			t.monitor.lastReported = PaneBackground
-			t.monitor.logSignal(name, "marker-absent + footer background chip → background")
-			return PaneBackground
 		}
 		t.monitor.lastReported = PaneIdle
 		t.monitor.logSignal(name, "marker-absent → idle")
