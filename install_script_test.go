@@ -40,11 +40,12 @@ import (
 // guards over paths the old script handled correctly, kept because the fix rewrote how
 // main obtains a version, plus one negative control and one tripwire.
 //
-// Against the script as of #660 — which is to say the four cases added for #662/#663/#664,
+// Against the script as of #660 — which is to say the five cases added for #662/#663/#664,
 // all of which fail there:
 //
 //	unwritable profile             — installed and exited 0 with BIN_DIR off PATH (#662)
 //	fish syntax in a missing dir   — appended nothing, or a line fish cannot use (#662)
+//	no symlinks on the filesystem  — claimed a link ln had failed to make (#662)
 //	compact release body           — resolved an upload_url as the version (#663)
 //	available-versions tip capped  — printed every release the page carried (#664)
 //
@@ -244,9 +245,16 @@ echo "atrium version 9.9.9 (test fixture)"
 `
 
 // systemPathDirs is the PATH install.sh gets below the stubs: enough for the coreutils it
-// shells out to (uname, mktemp, tar, grep, sed, head, mv, ln, chmod, rm) and nothing else.
-// Deliberately not the caller's PATH — see this file's header.
+// shells out to (uname, tr, mktemp, tar, grep, sed, head, mkdir, mv, ln, chmod, rm) and
+// nothing else. Deliberately not the caller's PATH — see this file's header.
 var systemPathDirs = []string{"/usr/bin", "/bin", "/usr/sbin", "/sbin"}
+
+// requiredTools are the ones a missing copy of which has to surface as a skip rather than
+// as a failure inside the script — see the probe in newInstallFixture. They are the tools
+// on the path every run takes: `tr` lowercases uname's output, and grep/sed/head are what
+// resolve a version out of the API response, so a host that keeps its coreutils elsewhere
+// (Nix, Guix) would otherwise fail these cases with an unparseable-response verdict.
+var requiredTools = []string{"uname", "tr", "mktemp", "tar", "grep", "sed", "head"}
 
 // forbiddenCommands are stubbed as recorders, and every case asserts nothing reached one.
 // `sudo` covers the Linux dependency branches and `brew` the macOS ones; the managers
@@ -291,7 +299,7 @@ func newInstallFixture(t *testing.T) *installFixture {
 	}
 	// Say so plainly on a host that keeps its coreutils elsewhere (Nix, Guix) rather than
 	// failing later inside the script, where it would read as a script bug.
-	for _, tool := range []string{"uname", "mktemp", "tar"} {
+	for _, tool := range requiredTools {
 		if !inSystemPath(tool) {
 			t.Skipf("%s is not under %v, which is the PATH these runs get", tool, systemPathDirs)
 		}
@@ -768,6 +776,29 @@ func TestInstallScriptInstallsAndUpgrades(t *testing.T) {
 		require.Contains(t, string(profile), `set -gx PATH $PATH "`+f.binDir+`"`)
 		require.NotContains(t, string(profile), "export PATH",
 			"fish has no export builtin, so that line cannot put BIN_DIR on a fish PATH")
+	})
+
+	t.Run("a filesystem without symlinks still installs", func(t *testing.T) {
+		// The `atr` alias is a convenience — extract_and_install already skips it for a
+		// custom --name and on Windows — so a filesystem that cannot make symlinks (an
+		// exFAT stick, WSL's DrvFs) must not fail the install. Under restored errexit an
+		// unguarded `ln` aborts here, *after* the binary is in place: the run exits 1 with
+		// ln's message and no version banner, reporting a working install as a total
+		// failure. Which is #662 with the sign flipped, so it belongs to the same fix.
+		f := newInstallFixture(t)
+		f.writeStub(t, "ln", "#!/usr/bin/env bash\necho \"ln: failed to create symbolic link: Operation not supported\" >&2\nexit 1\n")
+
+		res := f.run(t)
+
+		require.Equal(t, 0, res.exitCode, "the alias is optional; stderr was: %s", res.stderr)
+		require.Contains(t, res.stdout, "Installed as 'atrium':", "the install itself succeeded")
+		require.Contains(t, res.stdout, "atrium version 9.9.9 (test fixture)")
+		require.Contains(t, res.stdout, "Could not link 'atr' -> 'atrium'",
+			"a link that was not made has to be reported as not made")
+		require.NotContains(t, res.stdout, "Linked 'atr'",
+			"the old code claimed the link unconditionally, ln having just failed")
+		require.FileExists(t, filepath.Join(f.binDir, "atrium"))
+		require.NoFileExists(t, filepath.Join(f.binDir, "atr"))
 	})
 
 	t.Run("upgrade over an existing install", func(t *testing.T) {

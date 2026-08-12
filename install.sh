@@ -237,7 +237,7 @@ extract_and_install() {
     fi
 
     if [ ! -d "$bin_dir" ]; then
-        mkdir -p "$bin_dir"
+        ensure mkdir -p "$bin_dir"
     fi
 
     # Remove existing binary if upgrading
@@ -246,22 +246,31 @@ extract_and_install() {
         rm -f "$bin_dir/$INSTALL_NAME${extension}"
     fi
 
-    # Install binary with desired name
-    mv "${tmp_dir}/atrium${extension}" "$bin_dir/$INSTALL_NAME${extension}"
+    # Install binary with desired name. Through ensure, which names both paths: errexit
+    # would abort here too, but with nothing on the terminal except mv's own message. The
+    # `[ ! -f … ]` check that used to follow is gone with it — it could only ever fire
+    # because a failed mv was ignored, so under a guarded mv it is unreachable, and a
+    # check that cannot run reads as one that does.
+    ensure mv "${tmp_dir}/atrium${extension}" "$bin_dir/$INSTALL_NAME${extension}"
     rm -rf "$tmp_dir"
 
-    if [ ! -f "$bin_dir/$INSTALL_NAME${extension}" ]; then
-        echo "Installation failed, could not find $bin_dir/$INSTALL_NAME${extension}"
-        exit 1
-    fi
-
-    chmod +x "$bin_dir/$INSTALL_NAME${extension}"
+    ensure chmod +x "$bin_dir/$INSTALL_NAME${extension}"
 
     # Provide the short `atr` alias for the default install (skipped on Windows and
     # when a custom --name is used, to avoid clobbering an unrelated `atr`).
+    #
+    # Reported, never fatal, and that is the whole point of the branch: BIN_DIR can sit on
+    # a filesystem with no symlinks (an exFAT stick, WSL's DrvFs), where an unguarded `ln`
+    # under errexit aborts *after* a working binary is in place — so a complete install
+    # exits 1 with ln's message and no version banner, which is #662 with the sign
+    # flipped. The old code was worse than either: it printed "Linked" unconditionally,
+    # claiming a link it had just failed to make.
     if [ "$INSTALL_NAME" = "atrium" ] && [ "$PLATFORM" != "windows" ]; then
-        ln -sf "$bin_dir/atrium" "$bin_dir/atr"
-        echo "Linked 'atr' -> 'atrium'."
+        if ln -sf "$bin_dir/atrium" "$bin_dir/atr"; then
+            echo "Linked 'atr' -> 'atrium'."
+        else
+            echo "Could not link 'atr' -> 'atrium' — a filesystem without symlinks? Use '$INSTALL_NAME' directly."
+        fi
     fi
 
     # Ask the binary for its version before announcing success, so the two agree. The
