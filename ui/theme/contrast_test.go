@@ -98,14 +98,14 @@ var pairFloors = []struct {
 	{"Fg on BarBg (diff anchor)", 4.5, func(p Palette) Color { return p.Fg }, func(p Palette) Color { return p.BarBg }},
 }
 
-// KNOWN, DELIBERATELY UNASSERTED: FgDim on BarBg. ui/contextbar.go's barState
-// renders Paused and the default state in FgDim on the bar's band, which is
-// 1.44:1 on tokyo-night and 1.87:1 on catppuccin-mocha — while contextbar.go:59's
-// own comment says "dim greys wash out" there. It is a real legibility defect on
-// the DARK themes, found by this oracle while it was being written, and it is
-// filed rather than fixed here: fixing it means choosing a new colour for a
-// state, which is a design decision and not #394's subject. Do not add it to
-// pairFloors without fixing barState in the same change.
+// KNOWN, DELIBERATELY UNASSERTED: FgDim on BarBg. ui/contextbar.go's barState renders
+// Paused and the default state in FgDim on the bar's band, which is 1.44:1 on tokyo-night
+// and 1.87:1 on catppuccin-mocha — while ComposeSessionContext's comment, describing the
+// band barState draws onto, says "dim greys wash out" there. It is a real legibility
+// defect on the DARK themes, found by this oracle while it was being written, and it is
+// filed rather than fixed here: fixing it means choosing a new colour for a state, which
+// is a design decision and not #394's subject. Do not add it to pairFloors without fixing
+// barState in the same change.
 
 // TestPaletteContrastFloors holds every registered palette to the floors above.
 // Iterating Names() rather than a hand-listed table is deliberate: a theme

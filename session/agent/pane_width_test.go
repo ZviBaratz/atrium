@@ -320,11 +320,12 @@ func promptMatcherFor(t *testing.T, a *Adapter, name string) PromptMatcher {
 //
 // Which pane an ordering hides is not decidable from the table alone. claude's "permission"
 // and "permission-network" both key on the fetch/network family and "permission" is declared
-// first (registry.go:215, :254), but it is the STRICTER of the two — it requires the dialog's
+// first in claude's Prompts, but it is the STRICTER of the two — it requires the dialog's
 // own fetch title — so on the sandbox's "Do you want to allow this connection?" it misses and
-// permission-network wins. That is exactly the arrangement registry.go:604 documents and the
-// reason permission-network exists. It is shadowed on the fetch pane and live on the sandbox
-// one, which is why this asks each matcher by name instead of reasoning about the order.
+// permission-network wins. That is exactly the arrangement claudeNetworkPermissionVisible's
+// own comment documents, and the reason permission-network exists. It is shadowed on the
+// fetch pane and live on the sandbox one, which is why this asks each matcher by name
+// instead of reasoning about the order.
 func fires(t *testing.T, key string, c paneCapture) bool {
 	t.Helper()
 	a, kind := adapterFor(t, key)

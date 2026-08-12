@@ -367,7 +367,7 @@ func (s *SettingsOverlay) innerWidth() int { return s.boxWidth() - 4 }
 //
 // The filter rides this row rather than claiming one of its own because the box's height
 // depends only on the terminal size — a taller box on `/` would re-centre the whole panel
-// under the user mid-keystroke (the jump ui/overlay/textInput_size.go:3-8 warns about). The
+// under the user mid-keystroke (the jump defaultPickerRows' comment warns about). The
 // query is truncated to the inner width for the same reason: an over-wide line soft-wraps,
 // grows the box a row, and clips the pinned hint off the bottom.
 func (s *SettingsOverlay) titleLine() string {

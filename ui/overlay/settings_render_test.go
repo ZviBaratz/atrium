@@ -389,8 +389,8 @@ func TestCurrentRailEntryIsAlwaysVisible(t *testing.T) {
 
 // TestBoxHeightDependsOnlyOnTheTerminal pins that the box neither jumps as the rail moves
 // nor changes when the row cursor does. A centered overlay whose height changes gets
-// re-centered under the user's cursor mid-navigation — the jump
-// ui/overlay/textInput_size.go:3-8 warns about.
+// re-centered under the user's cursor mid-navigation — the jump defaultPickerRows'
+// comment warns about.
 func TestBoxHeightDependsOnlyOnTheTerminal(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
 	o.SetSize(100, 32)
