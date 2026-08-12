@@ -2,8 +2,20 @@
 
 set -e
 
+# setup_shell_and_path resolves BIN_DIR, picks the profile for the user's shell, and
+# appends the PATH line to it. It answers through globals: PROFILE, PATH_LINE, and
+# PATH_SETUP_FAILED, which report_path_setup turns into the run's verdict at the very end.
+#
+# The append is attempted here, before the download, rather than at the end beside its
+# report: a user who interrupts a slow download still gets a profile that works, and the
+# profile is the only part of this script that touches files they own.
 setup_shell_and_path() {
+    local profile_dir
     BIN_DIR=${BIN_DIR:-$HOME/.local/bin}
+
+    # The line to append is per-shell because the profile's language is. Default to the
+    # POSIX-ish form and let a branch below override it.
+    PATH_LINE="export PATH=\"\$PATH:$BIN_DIR\""
 
     case $SHELL in
         */zsh)
@@ -14,6 +26,13 @@ setup_shell_and_path() {
             ;;
         */fish)
             PROFILE=$HOME/.config/fish/config.fish
+            # fish has no `export` builtin, and its $PATH is a list rather than a
+            # colon-joined string, so the default line above cannot put BIN_DIR on a fish
+            # PATH — it fails at every startup instead, which is the same "installed but
+            # not reachable" outcome as an append that never landed (#662). `set -gx` is
+            # the fish spelling and is valid on every fish; fish_add_path would be
+            # idempotent, but it needs fish 3.2 or newer.
+            PATH_LINE="set -gx PATH \$PATH \"$BIN_DIR\""
             ;;
         */ash)
             PROFILE=$HOME/.profile
@@ -24,8 +43,61 @@ setup_shell_and_path() {
     esac
 
     if [[ ":$PATH:" != *":${BIN_DIR}:"* ]]; then
-        echo >> "$PROFILE" && echo "export PATH=\"\$PATH:$BIN_DIR\"" >> "$PROFILE"
+        # The profile's directory can be missing: fish creates ~/.config/fish on its
+        # first run, and a `curl … | bash` install can come first (#662). Created only
+        # when there is something to write, and skipped when the name has no directory
+        # part at all — $HOME unset leaves PROFILE=/.bashrc, where `mkdir -p ''` would
+        # report a failure about the wrong thing.
+        profile_dir=${PROFILE%/*}
+        if [ -n "$profile_dir" ] && [ ! -d "$profile_dir" ]; then
+            # `|| true` because errexit would abort here, and because this failing is not
+            # the report: the append below fails too, and that is the one path both cases
+            # leave through.
+            mkdir -p "$profile_dir" || true
+        fi
+
+        # One printf rather than the two echos this replaces, and deliberately NOT a
+        # `{ …; } >> "$PROFILE"` group: bash reports a failed redirection on a compound
+        # command and sets $? to 1, but negating that still yields 1 — measured on bash
+        # 5.3.9 — so `if ! { …; } >> file` takes the *success* branch and swallows exactly
+        # the failure this guards. A simple command's status negates correctly.
+        #
+        # Guarded rather than left to errexit for two reasons: this `if` is the last
+        # command in the function, so an unguarded failure would abort at the call site in
+        # main and read as the caller's fault — and an install that cannot write a profile
+        # is still an install, which is what report_path_setup is for.
+        if ! printf '\n%s\n' "$PATH_LINE" >> "$PROFILE"; then
+            # Reported twice on purpose: here, next to bash's own errno line, so the
+            # failure is never silent even on a run that exits before the end — and again
+            # at the end by report_path_setup, where it is the last thing on screen.
+            echo "Could not append to $PROFILE — see the warning at the end of this run." >&2
+            PATH_SETUP_FAILED=true
+        fi
     fi
+}
+
+# report_path_setup is the last thing main does, and it is where a profile that could not
+# be written becomes the run's verdict.
+#
+# It is deliberately not an err() at the point of failure. The append runs before the
+# download, so failing there refuses to install at all — and on an immutable-dotfiles setup
+# (Nix home-manager's read-only ~/.zshrc, chezmoi, stow) BIN_DIR is perfectly writable and
+# the binary would have worked. So: install, then say plainly that the one thing PATH setup
+# exists for did not happen, and exit non-zero so no caller reads this as a clean install.
+# That is the whole of #662 — not "abort", but "never report success you did not achieve".
+report_path_setup() {
+    [ "$PATH_SETUP_FAILED" = true ] || return 0
+
+    echo ""
+    echo "WARNING: '$INSTALL_NAME' is installed, but ${BIN_DIR} is not on your PATH."
+    echo "         ${PROFILE} could not be appended to (see the error above), so a new"
+    echo "         shell will not find it. Add this line to your shell profile by hand:"
+    echo ""
+    echo "             ${PATH_LINE}"
+    echo ""
+    echo "         Until then, run it by full path: ${BIN_DIR}/${INSTALL_NAME}"
+    echo ""
+    exit 1
 }
 
 detect_platform_and_arch() {
@@ -57,6 +129,28 @@ detect_platform_and_arch() {
     fi
 }
 
+# release_tags prints every tag in API_RESPONSE, one per line, newest release first, with
+# the leading "v" stripped. Both places that need a tag go through here so the parse has
+# one home: the version lookup takes the first line, the "Available versions" tip below
+# lists them.
+#
+# Unlike get_latest_version below, this one IS safe in a command substitution — it only
+# reads the global and prints, and never calls err — which is why the callers can pipe it.
+#
+# `grep -o` rather than a `sed` over the whole line, because a leading `.*` is greedy and
+# so captures the LAST match on the line, not the first (#663). The old pattern
+# (`.*"([^"]+)".*`) took the last quoted run of any kind, which on a compact body is an
+# upload_url; merely anchoring the key still takes the last *tag* when a body puts several
+# on one line, i.e. the oldest release. Extracting matches makes the order explicit, and
+# GitHub's pretty-printing stops being load-bearing.
+#
+# grep exits 1 when it selects nothing, but the pipeline's status is sed's, so a body with
+# no tags prints nothing and still returns 0. Reporting that is the caller's job: the
+# empty-LATEST_VERSION check below is what has the response body to show.
+release_tags() {
+    echo "$API_RESPONSE" | grep -o '"tag_name": *"[^"]*"' | sed -E 's/^"tag_name": *"(.*)"$/\1/' | sed 's/^v//'
+}
+
 # get_latest_version resolves the newest release, prereleases included, and answers
 # through two globals rather than through stdout: LATEST_VERSION (the tag, leading "v"
 # stripped) and API_RESPONSE (the raw body, which download_release quotes when an asset
@@ -74,7 +168,7 @@ detect_platform_and_arch() {
 # Failures leave through err(), so they land on stderr and stop the script. Both halves
 # matter: stderr is what survives a caller that captures stdout, and the stopping is the
 # direct call's doing, since `exit` in a normally-called function leaves the whole script
-# even though `main "$@" || exit 1` suppresses errexit throughout (see the note there).
+# — which is why it reports the same way whether or not errexit is in force.
 # On success it prints nothing and returns 0 — a trailing `if` with a false condition and
 # no else branch returns 0, so appending to this function needs care.
 #
@@ -101,13 +195,13 @@ get_latest_version() {
     fi
 
     # Get the first release (latest) from the array
-    LATEST_VERSION=$(echo "$API_RESPONSE" | grep -m1 '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' | sed 's/^v//')
+    LATEST_VERSION=$(release_tags | head -n 1)
     if [ -z "$LATEST_VERSION" ]; then
         # The body is the evidence a bug report needs, so it goes out before the verdict
         # — err prints one line and exits, so nothing after it would run. Both halves go
         # to stderr so they stay together. `|| true` because grep exits 1 when it selects
-        # nothing (an empty body, or one whose every line matches), which must not
-        # pre-empt the verdict if errexit is ever restored at the bottom of this file.
+        # nothing (an empty body, or one whose every line matches), which errexit — live
+        # again since #662 — would otherwise turn into an exit before the verdict.
         echo "GitHub API response was:" >&2
         echo "$API_RESPONSE" | grep -v "upload_url" >&2 || true # Drop the long upload_url line
         err "Failed to parse a version from the GitHub API response above"
@@ -146,8 +240,11 @@ download_release() {
         if [ "$requested_version" == "latest" ]; then
             echo ""
             echo "Tip: Try installing a specific version instead of 'latest'"
-            echo "Available versions:"
-            echo "$API_RESPONSE" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' | sed 's/^v//'
+            # Capped, and labelled with the cap: the API returns up to 30 releases per
+            # page, and this prints under the whole diagnosis above (#664). Labelled
+            # because an unlabelled truncated list reads as everything that exists.
+            echo "Available versions (newest 10):"
+            release_tags | head -n 10
         fi
         rm -rf "$tmp_dir"
         exit 1
@@ -177,7 +274,7 @@ extract_and_install() {
     fi
 
     if [ ! -d "$bin_dir" ]; then
-        mkdir -p "$bin_dir"
+        ensure mkdir -p "$bin_dir"
     fi
 
     # Remove existing binary if upgrading
@@ -186,22 +283,31 @@ extract_and_install() {
         rm -f "$bin_dir/$INSTALL_NAME${extension}"
     fi
 
-    # Install binary with desired name
-    mv "${tmp_dir}/atrium${extension}" "$bin_dir/$INSTALL_NAME${extension}"
+    # Install binary with desired name. Through ensure, which names both paths: errexit
+    # would abort here too, but with nothing on the terminal except mv's own message. The
+    # `[ ! -f … ]` check that used to follow is gone with it — it could only ever fire
+    # because a failed mv was ignored, so under a guarded mv it is unreachable, and a
+    # check that cannot run reads as one that does.
+    ensure mv "${tmp_dir}/atrium${extension}" "$bin_dir/$INSTALL_NAME${extension}"
     rm -rf "$tmp_dir"
 
-    if [ ! -f "$bin_dir/$INSTALL_NAME${extension}" ]; then
-        echo "Installation failed, could not find $bin_dir/$INSTALL_NAME${extension}"
-        exit 1
-    fi
-
-    chmod +x "$bin_dir/$INSTALL_NAME${extension}"
+    ensure chmod +x "$bin_dir/$INSTALL_NAME${extension}"
 
     # Provide the short `atr` alias for the default install (skipped on Windows and
     # when a custom --name is used, to avoid clobbering an unrelated `atr`).
+    #
+    # Reported, never fatal, and that is the whole point of the branch: BIN_DIR can sit on
+    # a filesystem with no symlinks (an exFAT stick, WSL's DrvFs), where an unguarded `ln`
+    # under errexit aborts *after* a working binary is in place — so a complete install
+    # exits 1 with ln's message and no version banner, which is #662 with the sign
+    # flipped. The old code was worse than either: it printed "Linked" unconditionally,
+    # claiming a link it had just failed to make.
     if [ "$INSTALL_NAME" = "atrium" ] && [ "$PLATFORM" != "windows" ]; then
-        ln -sf "$bin_dir/atrium" "$bin_dir/atr"
-        echo "Linked 'atr' -> 'atrium'."
+        if ln -sf "$bin_dir/atrium" "$bin_dir/atr"; then
+            echo "Linked 'atr' -> 'atrium'."
+        else
+            echo "Could not link 'atr' -> 'atrium' — a filesystem without symlinks? Use '$INSTALL_NAME' directly."
+        fi
     fi
 
     # Ask the binary for its version before announcing success, so the two agree. The
@@ -231,9 +337,15 @@ extract_and_install() {
     echo "$installed_version"
 }
 
+# check_command_exists decides between a fresh install and an upgrade.
+#
+# `command -v`, not `which`: which is not POSIX and is absent from minimal images, where it
+# returned nothing and left the banner below reading "at " with a blank after it — and
+# under errexit its non-zero status would abort the install outright (#662). Taking the
+# path from the `if` condition also makes it one lookup instead of two, and an assignment
+# in a condition is exempt from errexit whether or not it finds anything.
 check_command_exists() {
-    if command -v "$INSTALL_NAME" &> /dev/null; then
-        EXISTING_PATH=$(which "$INSTALL_NAME")
+    if EXISTING_PATH=$(command -v "$INSTALL_NAME"); then
         echo "Found existing installation of '$INSTALL_NAME' at $EXISTING_PATH"
         echo "Will upgrade to the latest version"
         UPGRADE_MODE=true
@@ -260,7 +372,12 @@ check_tmux_version() {
     want_major="${MIN_TMUX_VERSION%%.*}"
     want_minor="${MIN_TMUX_VERSION#*.}"
 
-    raw="$(tmux -V 2>/dev/null)"
+    # `|| raw=""` keeps this warning-only under errexit: a bare assignment from a command
+    # substitution is a simple command, so a tmux that cannot report its version would
+    # abort the whole install (#662). An empty raw falls out of the case below with a
+    # silent return 0, which is the right answer — an unreadable version is not evidence
+    # of an old one. TestInstallScriptInstallsAndUpgrades pins that.
+    raw="$(tmux -V 2>/dev/null)" || raw=""
     # Strip the "tmux " prefix and an optional "next-", then keep MAJOR.MINOR only. Keep
     # the un-stripped token for the warning so it is not a second `tmux -V` — a second
     # exec could report a different binary than the one this verdict was computed from.
@@ -395,6 +512,9 @@ main() {
     # Parse command line arguments
     INSTALL_NAME="atrium"
     UPGRADE_MODE=false
+    # Initialized here rather than at the top level so an ambient PATH_SETUP_FAILED=true in
+    # the caller's environment cannot fail an install that wrote its profile fine.
+    PATH_SETUP_FAILED=false
 
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -444,6 +564,10 @@ main() {
 
     download_release "$VERSION" "$BINARY_URL" "$ARCHIVE_NAME" "$TMP_DIR" "$REQUESTED_VERSION"
     extract_and_install "$TMP_DIR" "$ARCHIVE_NAME" "$BIN_DIR" "$EXTENSION"
+
+    # Last, so the warning it may print is the last thing on screen and cannot be scrolled
+    # off by the success banner it qualifies.
+    report_path_setup
 }
 
 # Run a command that should never fail. If the command fails execution
@@ -458,20 +582,13 @@ err() {
     exit 1
 }
 
-# The `|| exit 1` suppresses errexit for every command reachable from main — bash exempts
-# both sides of a `&&`/`||` list, and the exemption propagates into the functions called
-# there — so the `set -e` at the top of this file is inert below this line. Anything added
-# under main must therefore report its own failures, through `ensure` or `err`, rather
-# than trusting errexit to catch them.
+# Called bare, so the `set -e` at the top of this file is in force for everything under
+# main. Never `main "$@" || exit 1`: bash exempts both sides of a `&&`/`||` list from
+# errexit and the exemption propagates into the functions called there, which is what let
+# the profile append fail, print bash's error, and install anyway — reporting success with
+# BIN_DIR off the user's PATH (#662).
 #
-# Three sites do not, and would become fatal if this were changed to a bare `main "$@"`,
-# which is why restoring errexit is a separate piece of work rather than a one-word edit:
-#
-#   - the profile append in setup_shell_and_path, which today prints bash's raw
-#     redirection error and installs anyway, reporting success while leaving BIN_DIR off
-#     the user's PATH — the same "failed step, cheerful exit 0" shape as #656;
-#   - `which` in check_command_exists, absent from some minimal images;
-#   - `tmux -V` in check_tmux_version, which is warning-only by design and must never
-#     fail an install. TestInstallScriptInstallsAndUpgrades pins that one, so whoever
-#     makes the change finds a red test rather than a paragraph in an old PR.
-main "$@" || exit 1
+# What that costs: a command under main that is ALLOWED to fail has to say so — `|| true`,
+# `|| var=""`, or an `if`/`&&`/`||` context — and a command that must not fail silently
+# still wants `ensure` or `err`, because errexit exits without explaining itself.
+main "$@"
