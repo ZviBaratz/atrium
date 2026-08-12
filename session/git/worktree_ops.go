@@ -40,8 +40,9 @@ func (g *Worktree) Setup() error {
 	}
 
 	// The worktree is materialized; seed the configured gitignored paths from the
-	// origin checkout into it — carry_files copied, link_paths symlinked
-	// (best-effort, never an error — see carry.go).
+	// origin checkout into it — carry_files copied, link_paths symlinked unless this
+	// session is dependency-isolated, which skips them (best-effort, never an error —
+	// see carry.go).
 	g.seedLocalPaths()
 	return nil
 }

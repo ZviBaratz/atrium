@@ -266,13 +266,17 @@ const startupParkNoticeMaxWidth = 78
 // host-capacity confirmation so the post-confirm path spawns exactly what the
 // user submitted, with no overlay to re-read.
 type spawnPlan struct {
-	titles   []string
-	path     string
-	direct   bool
-	programs []string
-	branch   string
-	prompt   string
-	account  *overlay.AccountSelection
+	titles []string
+	path   string
+	direct bool
+	// isolateDeps is the create form's per-session link_paths opt-out (#481). It
+	// applies to every variant in a fan-out batch: the choice is about the repo's
+	// dependency tree, which they all share.
+	isolateDeps bool
+	programs    []string
+	branch      string
+	prompt      string
+	account     *overlay.AccountSelection
 	// fork, when non-nil, seeds the one session in this plan from a checkpoint of
 	// another conversation (#644). A plan carrying it always has exactly one
 	// program: createSessionFromForm refuses a fan-out that is also a fork.
@@ -324,7 +328,7 @@ func (m *home) spawnVariants(plan spawnPlan) tea.Cmd {
 	cmds := make([]tea.Cmd, 0, total)
 	for i := range plan.programs {
 		created, err := m.startNewSession(
-			plan.titles[i], plan.path, plan.direct, plan.programs[i],
+			plan.titles[i], plan.path, plan.direct, plan.isolateDeps, plan.programs[i],
 			plan.branch, plan.prompt, plan.account, total > 1, plan.fork)
 		if err != nil {
 			if i == 0 {

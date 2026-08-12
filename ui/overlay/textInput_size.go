@@ -39,6 +39,21 @@ const (
 	// effortSectionLines is the height the effort section adds when present,
 	// mirroring modeSectionLines (label + blank + chips row + a divider).
 	effortSectionLines = 4
+	// depsSectionLines is the height the Dependencies section adds when present: one
+	// content row + a divider, HALF what every section above costs. Two reasons, and
+	// the second is a hard constraint rather than a preference.
+	//
+	// The claude override fields spend their second and third lines on a
+	// constant-height hint row explaining their no-op chip (see ModeField.Render);
+	// this field has neither a no-op chip nor a pin, so it has nothing to put there.
+	//
+	// And the budget has no room. fitOverlay degrades a too-tall form by dropping
+	// blank lines, then dividers, then hard-clipping the tail — and the Create button
+	// is the tail. At 80×24 with profiles, the three claude fields and an account
+	// picker, the droppable lines are already almost exhausted; a fourth line here
+	// would clip the button off the form. TestSessionCreateOverlay_ClaudeFormFitsShortTerminal
+	// is the assertion that holds this, and it fails if this constant grows.
+	depsSectionLines = 2
 )
 
 // SetSize is given the full terminal dimensions. The create form keeps every section at a
@@ -100,6 +115,9 @@ func (t *TextInputOverlay) fitRows(height int) (pickerRows, promptRows int) {
 	}
 	if t.hasAccountSection() {
 		chrome += accountSectionLines
+	}
+	if t.depsField != nil {
+		chrome += depsSectionLines
 	}
 	const margin = 2 // keep a row above and below so the overlay isn't flush to the edges
 	total := func() int { return 2*pickerRows + promptRows + chrome }

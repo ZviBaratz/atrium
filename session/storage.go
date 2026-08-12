@@ -69,6 +69,16 @@ type InstanceData struct {
 	// load the instance is rehydrated with a nil worktree.
 	Direct bool `json:"direct,omitempty"`
 
+	// IsolateDeps marks a dependency-isolating session: link_paths are not symlinked
+	// into its worktree, so an `npm install` it runs cannot reach the origin checkout
+	// (#481). It must persist because seeding re-runs on every worktree materialization
+	// — a resume of a session stored without it would start linking again.
+	//
+	// A plain bool with omitempty, not a *bool: the default is OFF, so absent, false and
+	// "written by a build predating the field" all mean the same thing, which is exactly
+	// the pre-upgrade behavior. (Compare DiffStatsData.Unpushed, where they differ.)
+	IsolateDeps bool `json:"isolate_deps,omitempty"`
+
 	Program string `json:"program"`
 
 	// ClaudeAccount / ClaudeConfigDir / ClaudeAccountDefault pin the Claude Code

@@ -18,8 +18,8 @@ import (
 //
 // The textarea and title input get the real tea.PasteMsg: both bubbles models
 // handle it natively via insertRunesFromUserInput, which keeps newlines intact.
-// The selection fields (variant, model, mode, effort, account) take no text, so a
-// paste there is inert — as is a paste on the Create button.
+// The selection fields (variant, model, mode, effort, account, dependencies) take no
+// text, so a paste there is inert — as is a paste on the Create button.
 func (t *TextInputOverlay) HandlePaste(msg tea.PasteMsg) (branchFilterChanged bool) {
 	// A paste is not the second half of a double-tap: it disarms the clear gesture
 	// exactly as any other non-Ctrl+R input does.
@@ -185,6 +185,10 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyPressMsg) (bool, bool) {
 		}
 		if t.isEffortField() {
 			t.effortField.HandleKeyPress(msg)
+			return false, false
+		}
+		if t.isDepsField() {
+			t.depsField.HandleKeyPress(msg)
 			return false, false
 		}
 		if t.isAccountPicker() {

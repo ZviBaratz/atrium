@@ -24,7 +24,7 @@ import (
 // which is the only create-form stop where a newline means anything.
 func promptFocusedForm(t *testing.T) *TextInputOverlay {
 	t.Helper()
-	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "", nil)
 	o.FocusTitle()
 	tab(o) // title → prompt
 	require.True(t, o.isTextarea())
@@ -71,7 +71,7 @@ func TestShiftEnterInsertsNewlineInEveryComposer(t *testing.T) {
 // above still passes, because none of them is on a non-textarea stop. These are.
 func TestShiftEnterNeverSubmitsOrNavigates(t *testing.T) {
 	t.Run("filled title", func(t *testing.T) {
-		o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
+		o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "", nil)
 		o.FocusTitle()
 		o.HandleKeyPress(textMsg("my-task"))
 
@@ -84,7 +84,7 @@ func TestShiftEnterNeverSubmitsOrNavigates(t *testing.T) {
 	})
 
 	t.Run("create button", func(t *testing.T) {
-		o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
+		o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "", nil)
 		o.FocusTitle()
 		o.HandleKeyPress(textMsg("my-task"))
 		o.focusStop(stopEnter)
@@ -97,7 +97,7 @@ func TestShiftEnterNeverSubmitsOrNavigates(t *testing.T) {
 	})
 
 	t.Run("branch filter", func(t *testing.T) {
-		o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
+		o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "", nil)
 		o.focusStop(stopBranch)
 		require.True(t, o.isBranchPicker())
 
@@ -117,7 +117,7 @@ func TestShiftEnterNeverSubmitsOrNavigates(t *testing.T) {
 // here so that a later consistency pass which wants to align the two newline keys
 // has to argue with a named test rather than discover the change in review.
 func TestAltEnterOnTheCreateButtonStillSubmits(t *testing.T) {
-	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "", nil)
 	o.FocusTitle()
 	o.HandleKeyPress(textMsg("my-task"))
 	o.focusStop(stopEnter)

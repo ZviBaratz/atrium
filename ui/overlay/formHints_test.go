@@ -24,7 +24,7 @@ func createFormWithEveryField(t *testing.T) *TextInputOverlay {
 	t.Helper()
 	profiles := []config.Profile{{Name: "one", Program: "claude"}, {Name: "two", Program: "claude"}}
 	accounts := []config.ClaudeAccount{{Name: "personal", Pool: "work"}, {Name: "team", Pool: "work"}}
-	ov := NewSessionCreateOverlay(profiles, accounts, []string{t.TempDir()}, "claude")
+	ov := NewSessionCreateOverlay(profiles, accounts, []string{t.TempDir()}, "claude", []string{"node_modules"})
 	ov.SetSize(200, 60)
 	return ov
 }
@@ -62,6 +62,7 @@ func TestCreateFormHints_FooterOwnsTheNavKeys(t *testing.T) {
 		{"effort", stopEffort, 1, "the effort hint names the pin behind the inherit chip"},
 		{"mode", stopMode, 1, "the permissions hint names the pin behind the inherit chip"},
 		{"account", stopAccount, 1, "the account hint glosses pool vs member, not the arrows"},
+		{"deps", stopDeps, 1, "the dependency chips add no hint of their own"},
 		{"enter", stopEnter, 1, "the Create button adds no hint of its own"},
 		{"prompt", stopTextarea, 0, "the prompt swaps in promptFocusHelp, which names no arrows"},
 	} {

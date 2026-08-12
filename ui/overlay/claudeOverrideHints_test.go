@@ -61,7 +61,7 @@ func TestClaudeFields_NoOpChipLabeledInherit(t *testing.T) {
 // and never a valid --model) means "no override".
 func TestModelField_InheritOrDefaultTypedMeansNoOverride(t *testing.T) {
 	for _, word := range []string{"inherit", "default"} {
-		o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+		o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude", nil)
 		o.focusStop(stopModel)
 		o.HandleKeyPress(textMsg(word))
 		assert.Equal(t, "", o.GetModel(), "typed %q must contribute no override", word)
@@ -73,7 +73,7 @@ func TestModelField_InheritOrDefaultTypedMeansNoOverride(t *testing.T) {
 // claude's own resolved default.
 func TestClaudeFields_HintNoPin_ClaudesDefault(t *testing.T) {
 	for _, stop := range []focusStop{stopModel, stopEffort, stopMode} {
-		ov := NewSessionCreateOverlay(claudeProfile("claude"), nil, []string{t.TempDir()}, "claude")
+		ov := NewSessionCreateOverlay(claudeProfile("claude"), nil, []string{t.TempDir()}, "claude", nil)
 		ov.focusStop(stop)
 		out := xansi.Strip(fieldForStop(ov, stop).Render())
 		assert.Contains(t, out, "claude's default", "stop %v with no pin", stop)
@@ -83,7 +83,7 @@ func TestClaudeFields_HintNoPin_ClaudesDefault(t *testing.T) {
 // TestModeField_HintSharedPin_EchoesLabel: an in-enum mode can be named, so the
 // shared-pin hint echoes it — as its display label, never the raw enum value.
 func TestModeField_HintSharedPin_EchoesLabel(t *testing.T) {
-	ov := NewSessionCreateOverlay(claudeProfile("claude --permission-mode acceptEdits"), nil, []string{t.TempDir()}, "claude")
+	ov := NewSessionCreateOverlay(claudeProfile("claude --permission-mode acceptEdits"), nil, []string{t.TempDir()}, "claude", nil)
 	ov.focusStop(stopMode)
 	out := xansi.Strip(ov.modeField.Render())
 	assert.Contains(t, out, "program pins accept-edits")
@@ -92,7 +92,7 @@ func TestModeField_HintSharedPin_EchoesLabel(t *testing.T) {
 // TestEffortField_HintSharedPin_EchoesValue: an offered level can be named, so the
 // shared-pin hint echoes it.
 func TestEffortField_HintSharedPin_EchoesValue(t *testing.T) {
-	ov := NewSessionCreateOverlay(claudeProfile("claude --effort high"), nil, []string{t.TempDir()}, "claude")
+	ov := NewSessionCreateOverlay(claudeProfile("claude --effort high"), nil, []string{t.TempDir()}, "claude", nil)
 	ov.focusStop(stopEffort)
 	out := xansi.Strip(ov.effortField.Render())
 	assert.Contains(t, out, "program pins high")
@@ -102,7 +102,7 @@ func TestEffortField_HintSharedPin_EchoesValue(t *testing.T) {
 // (64-char vendor IDs), so the shared-pin hint stays generic and never echoes the
 // pinned value.
 func TestModelField_HintSharedPin_DoesNotEchoValue(t *testing.T) {
-	ov := NewSessionCreateOverlay(claudeProfile("claude --model claude-opus-4-6"), nil, []string{t.TempDir()}, "claude")
+	ov := NewSessionCreateOverlay(claudeProfile("claude --model claude-opus-4-6"), nil, []string{t.TempDir()}, "claude", nil)
 	ov.focusStop(stopModel)
 	out := xansi.Strip(ov.modelField.Render())
 	assert.Contains(t, out, "program pins it", "model names the source without the value")
@@ -114,7 +114,7 @@ func TestModelField_HintSharedPin_DoesNotEchoValue(t *testing.T) {
 // the hint must not credit a profile that does not exist. This is the whole reason
 // the wording is "program pins", not "profile pins".
 func TestClaudeFields_HintNoProfiles_SaysProgramNotProfile(t *testing.T) {
-	ov := NewSessionCreateOverlay(nil, nil, []string{t.TempDir()}, "claude --effort high")
+	ov := NewSessionCreateOverlay(nil, nil, []string{t.TempDir()}, "claude --effort high", nil)
 	ov.focusStop(stopEffort)
 	out := xansi.Strip(ov.effortField.Render())
 	assert.Contains(t, out, "program pins high")
@@ -128,7 +128,7 @@ func TestClaudeFields_HintNoProfiles_SaysProgramNotProfile(t *testing.T) {
 // which is the opposite of the truth.
 func TestEffortField_HintUnvalidatedPin_DoesNotEchoValue(t *testing.T) {
 	const bogus = "experimental-max-reasoning"
-	ov := NewSessionCreateOverlay(claudeProfile("claude --effort "+bogus), nil, []string{t.TempDir()}, "claude")
+	ov := NewSessionCreateOverlay(claudeProfile("claude --effort "+bogus), nil, []string{t.TempDir()}, "claude", nil)
 	ov.focusStop(stopEffort)
 	out := xansi.Strip(ov.effortField.Render())
 	assert.Contains(t, out, "program pins it")
@@ -143,7 +143,7 @@ func TestEffortField_HintUnvalidatedPin_DoesNotEchoValue(t *testing.T) {
 // default". The hint reads the raw pin (agent.PermissionModePin) so it reports a pin
 // it cannot name instead of asserting the opposite.
 func TestModeField_HintOutOfEnumPin_StillReadsAsPinned(t *testing.T) {
-	ov := NewSessionCreateOverlay(claudeProfile("claude --permission-mode reviewEdits"), nil, []string{t.TempDir()}, "claude")
+	ov := NewSessionCreateOverlay(claudeProfile("claude --permission-mode reviewEdits"), nil, []string{t.TempDir()}, "claude", nil)
 	ov.focusStop(stopMode)
 	out := xansi.Strip(ov.modeField.Render())
 	assert.Contains(t, out, "program pins it")
@@ -158,7 +158,7 @@ func TestEffortField_HintMixedPins_Varies(t *testing.T) {
 		{Name: "a", Program: "claude --effort high"},
 		{Name: "b", Program: "claude --effort low"},
 	}
-	ov := NewSessionCreateOverlay(profiles, nil, []string{t.TempDir()}, "claude")
+	ov := NewSessionCreateOverlay(profiles, nil, []string{t.TempDir()}, "claude", nil)
 	// Default counts select only profile "a" (×1); raise "b" to ×1 so both claude
 	// variants are in the batch and their pins disagree.
 	ov.focusStop(stopVariants)
@@ -173,7 +173,7 @@ func TestEffortField_HintMixedPins_Varies(t *testing.T) {
 // shows there and vanishes once the cursor moves onto a real value.
 func TestClaudeFields_HintOnlyOnNoOpChip(t *testing.T) {
 	for _, stop := range []focusStop{stopModel, stopEffort, stopMode} {
-		ov := NewSessionCreateOverlay(claudeProfile("claude"), nil, []string{t.TempDir()}, "claude")
+		ov := NewSessionCreateOverlay(claudeProfile("claude"), nil, []string{t.TempDir()}, "claude", nil)
 		ov.focusStop(stop)
 		onNoOp := xansi.Strip(fieldForStop(ov, stop).Render())
 		ov.HandleKeyPress(keyMsg("right")) // move off the no-op chip
@@ -187,7 +187,7 @@ func TestClaudeFields_HintOnlyOnNoOpChip(t *testing.T) {
 // blurred field shows none of it.
 func TestClaudeFields_HintHiddenWhenUnfocused(t *testing.T) {
 	for _, stop := range []focusStop{stopModel, stopEffort, stopMode} {
-		ov := NewSessionCreateOverlay(claudeProfile("claude"), nil, []string{t.TempDir()}, "claude")
+		ov := NewSessionCreateOverlay(claudeProfile("claude"), nil, []string{t.TempDir()}, "claude", nil)
 		// Do not focus the field: focus starts on the directory picker.
 		out := xansi.Strip(fieldForStop(ov, stop).Render())
 		assert.NotContains(t, out, "claude's default", "stop %v: no hint while unfocused", stop)

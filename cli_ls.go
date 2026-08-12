@@ -63,10 +63,14 @@ type sessionJSON struct {
 	// config: a TUI launch re-derives them from the session's CLAUDE_CONFIG_DIR, so
 	// after an account is renamed these report the new name from the first launch
 	// onward — not the name in force when the session was created (#470).
-	Account       string     `json:"account,omitempty"`
-	Pool          string     `json:"pool,omitempty"`
-	AutoYes       bool       `json:"auto_yes"`
-	Direct        bool       `json:"direct"`
+	Account string `json:"account,omitempty"`
+	Pool    string `json:"pool,omitempty"`
+	AutoYes bool   `json:"auto_yes"`
+	Direct  bool   `json:"direct"`
+	// Isolated is the per-session link_paths opt-out (#481): this session's worktree
+	// got none of the configured symlinks, so what it installs is private to it.
+	// Always false when link_paths is empty, where the choice has nothing to act on.
+	Isolated      bool       `json:"isolated"`
 	Unread        bool       `json:"unread"`
 	Muted         bool       `json:"muted"`
 	QueuedPrompts int        `json:"queued_prompts"`
@@ -146,6 +150,7 @@ func toSessionJSON(d session.InstanceData) sessionJSON {
 		Pool:            d.ClaudeAccountPool,
 		AutoYes:         d.AutoYes,
 		Direct:          d.Direct,
+		Isolated:        d.IsolateDeps,
 		Unread:          d.Unread,
 		Muted:           d.Muted,
 		QueuedPrompts:   len(d.PromptQueue),

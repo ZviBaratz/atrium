@@ -231,10 +231,13 @@ func (t *TextInputOverlay) compose() (content string, innerWidth int, divider st
 //   - Height: the create form's constant-height sections can total several rows more
 //     than a short terminal (an 80×24 screen with profiles, the claude fields, and an
 //     account picker needs over 30). Spacing is shed in stages — blank filler lines
-//     first, then divider lines (pure visual separation) — so the form compacts
-//     instead of scrolling. If even that is not enough (a terminal below the 24-row
-//     floor), the tail is clipped outright: a partially visible form is degraded but
-//     stable, while an oversize View() is not.
+//     first, then divider lines (pure visual separation), then the create form's own
+//     heading — so the form compacts instead of scrolling. If even that is not enough
+//     (a terminal below the 24-row floor), the tail is clipped outright: a partially
+//     visible form is degraded but stable, while an oversize View() is not. The
+//     heading stage was added when a link_paths install gained the Dependencies
+//     section (#481) and pushed the tallest form one row past the budget, where the
+//     clip's victim is the Create button.
 func (t *TextInputOverlay) fitOverlay(content string, innerWidth int, divider string) string {
 	lines := strings.Split(content, "\n")
 	for i, l := range lines {
@@ -247,6 +250,19 @@ func (t *TextInputOverlay) fitOverlay(content string, innerWidth int, divider st
 	if budget := t.height - 4; budget > 0 {
 		lines = dropLinesToFit(lines, budget, func(l string) bool { return lipgloss.Width(l) == 0 })
 		lines = dropLinesToFit(lines, budget, func(l string) bool { return l == divider })
+		// Third stage, and the reason it exists: the tail of the create form is the
+		// Create button, so the clip below removes the one control the form is for.
+		// Its own heading is the cheapest line on the screen — a bordered box holding
+		// a Title field and a Create button is not something a user needs told is the
+		// new-session form — so it goes first. dropLinesToFit cannot do this: it
+		// preserves index 0 by contract, which is exactly the line being dropped.
+		//
+		// One line, not a loop. It buys back the last row rather than promising a
+		// budget it cannot deliver, and anything still over falls through to the clip
+		// as before.
+		if len(lines) > budget && t.isCreateForm && len(lines) > 1 {
+			lines = lines[1:]
+		}
 		if len(lines) > budget {
 			lines = lines[:budget]
 		}
@@ -350,6 +366,9 @@ func (t *TextInputOverlay) renderCreateForm(divider string) string {
 	}
 	if t.hasAccountSection() {
 		section(t.accountPicker.Render())
+	}
+	if t.depsField != nil {
+		section(t.depsField.Render())
 	}
 
 	help := createFormHelp

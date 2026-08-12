@@ -31,9 +31,21 @@ import (
 // A linked path is the origin's own tree under another name: writes through it
 // land in the user's checkout and are visible to every other session at once, so
 // an agent running `npm install` or `rm -rf node_modules` inside one session
-// mutates the real dependency tree and every sibling's. That is the point (it is
-// why a copy would be wrong) but it is the one place a session is deliberately
-// not isolated.
+// mutates the real dependency tree and every sibling's. That is the point for the
+// read-only session that is the overwhelmingly common case — it is why a copy would
+// be the wrong default.
+//
+// It is the wrong ANSWER, though, for the one task type that must mutate
+// dependencies: a session whose whole job is upgrading them. So the sharing is now
+// per-session rather than unconditional (#481). A worktree marked isolateDeps gets
+// none of the links — not a symlink and not a directory — so the worktree looks
+// exactly like a fresh checkout in which nobody ever ran `npm install`, which is the
+// state a repo's setup_script (#389, session/setupscript.go) is already written
+// against and which it runs immediately afterwards, into a tree that is now private.
+// Deliberately not a copy: a copy is the cost link_paths exists to avoid, cannot be
+// made atomic under the never-error contract above (a half-copy looks installed), and
+// would re-copy on every resume, replacing the session's upgraded tree with the
+// origin's stale one just after pause committed the new manifests.
 //
 // The config is loaded once for both lists: config.LoadConfig also sweeps and
 // quarantines files in the data dir, so it is not a free read. It is deliberately
@@ -45,10 +57,21 @@ import (
 // early when both lists are empty — knowing they are empty is what the read is
 // for, and carry_files has a non-empty default, so the common case must read it
 // anyway.
+//
+// isolateDeps is the deliberate exception to that rule, not a violation of it: it is
+// a property of the SESSION, chosen once when the session was created, so freezing it
+// is the correct behaviour and a later settings edit must not reach it. That is why it
+// rides the Worktree (pushed in by the Instance) while the lists are read here.
 func (g *Worktree) seedLocalPaths() {
 	cfg := config.LoadConfig()
 	for _, rel := range cfg.GetCarryFiles() {
 		g.carryLocalFile(rel)
+	}
+	if g.isolateDeps {
+		if paths := cfg.GetLinkPaths(); len(paths) > 0 {
+			log.InfoLog.Printf("link_paths: session is dependency-isolated, so %v are not linked — this worktree starts without them and whatever installs into it stays private to it", paths)
+		}
+		return
 	}
 	for _, rel := range cfg.GetLinkPaths() {
 		g.linkLocalPath(rel)
@@ -170,8 +193,10 @@ func (g *Worktree) carryLocalFile(rel string) {
 // dependency trees a copy would be wrong for — node_modules is huge and slow to
 // duplicate, and the tooling resolves through a symlink fine.
 //
-// Writes through the link reach the origin checkout and every other session —
-// see seedLocalPaths on the two lists' write directions.
+// Writes through the link reach the origin checkout and every other session — see
+// seedLocalPaths on the two lists' write directions. A session that will rewrite the
+// tree should be created dependency-isolated instead, which skips this entirely; this
+// function is never reached for one.
 //
 // It shares carryLocalFile's guards, including the worktree-side ignore check and
 // every reason given there for it. The deliberate divergences: the source is

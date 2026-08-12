@@ -9,6 +9,13 @@ package session
 // step that can, and it is deliberately the LAST thing to happen to a worktree
 // before an agent sees it.
 //
+// The two mechanisms interact, and the direction matters. Installing under a LINKED
+// path writes into the user's own checkout, shared by every session at once, so for
+// an ordinary session linking and installing are alternatives. They compose for a
+// dependency-isolated session (#481), which is given none of the links: there this
+// script is what fills the empty tree, and it is why skipping the link rather than
+// copying it is enough on its own.
+//
 // Two contracts govern everything here, and both are about not destroying a session.
 //
 // A failure is recorded, never returned. Instance.Start's deferred unwind calls

@@ -489,7 +489,7 @@ func emptyTargetForm(t *testing.T, title string) *home {
 	t.Helper()
 	h := newCreateFormHome(t)
 	h.state = statePrompt
-	ov := overlay.NewSessionCreateOverlay(h.appConfig.GetProfiles(), h.appConfig.ClaudeAccounts, nil, h.program)
+	ov := overlay.NewSessionCreateOverlay(h.appConfig.GetProfiles(), h.appConfig.ClaudeAccounts, nil, h.program, nil)
 	ov.SetTitleValue(title)
 	ov.Submitted = true
 	h.textInputOverlay = ov
@@ -621,4 +621,50 @@ func TestComposeProgramFlags(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "claude", got)
 	})
+}
+
+// The per-session link_paths opt-out (#481) must survive the whole submit path: the
+// form's chip → createSessionFromForm → spawnPlan → startNewSession →
+// session.InstanceOptions → the Instance the list holds. Every hop is a place the
+// value could be dropped, and none of them would fail a compile.
+//
+// The default arm is the regression guard that matters most: an ordinary session must
+// still be shared, or every user starts paying for a feature they did not ask for.
+func TestCreateSessionFromForm_IsolateDepsReachesTheInstance(t *testing.T) {
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	require.True(t, git.IsGitRepo(context.Background(), cwd), "test must run inside a git repository")
+
+	for _, tc := range []struct {
+		name   string
+		choose bool
+		want   bool
+	}{
+		{"untouched form stays shared", false, false},
+		{"isolated selected", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newCreateFormHome(t)
+			h.appConfig.LinkPaths = []string{"node_modules"} // the section's precondition
+			h.newSessionPath = cwd
+			h.state = statePrompt
+			ov, _ := h.newSessionFormOverlay()
+			h.textInputOverlay = ov
+			ov.HandleKeyPress(keyMsg("tab"))
+			ov.HandleKeyPress(keyMsg("tab"))
+			ov.HandleKeyPress(textMsg("deps"))
+			if tc.choose {
+				ov.FocusDeps()
+				ov.HandleKeyPress(keyMsg("right"))
+			}
+			require.Equal(t, tc.want, ov.GetIsolateDeps(), "form state precondition")
+
+			require.NotNil(t, h.createSessionFromForm(""))
+			inst := h.list.GetSelectedInstance()
+			require.NotNil(t, inst)
+			assert.Equal(t, tc.want, inst.IsolateDeps())
+			assert.Equal(t, tc.want, inst.ToInstanceData().IsolateDeps,
+				"and it must be persisted, or a resume would start linking again")
+		})
+	}
 }

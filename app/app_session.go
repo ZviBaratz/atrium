@@ -378,7 +378,7 @@ func (m *home) autoDispatch(res PrefillResult) (tea.Cmd, bool) {
 	if verdict == capConfirm {
 		return m.confirmOverCap(plan, sc.Limit, count), true
 	}
-	cmd, err := m.startNewSession(res.Title, res.Path, direct, m.program, "", res.Prompt, nil, false, nil)
+	cmd, err := m.startNewSession(res.Title, res.Path, direct, false, m.program, "", res.Prompt, nil, false, nil)
 	if err != nil {
 		return nil, false
 	}
@@ -1080,7 +1080,7 @@ func (m *home) killMarked(openedBy string) tea.Cmd {
 // seeded target is a git repo, so openCreateForm can gate the open-time branch plumbing
 // without re-running the git checks.
 func (m *home) newSessionFormOverlay() (_ *overlay.TextInputOverlay, isGit bool) {
-	ov := overlay.NewSessionCreateOverlay(m.appConfig.GetProfiles(), m.appConfig.ClaudeAccounts, m.candidateRepoPaths(), m.program)
+	ov := overlay.NewSessionCreateOverlay(m.appConfig.GetProfiles(), m.appConfig.ClaudeAccounts, m.candidateRepoPaths(), m.program, m.appConfig.GetLinkPaths())
 	// Seed the initial validity so the picker can flag the default target before the user
 	// navigates: a non-git default directory shows the direct-session hint (and an inert
 	// branch section), not a block.
@@ -1618,7 +1618,7 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	// (max_sessions ≤ 0) yields Limit 0 and never fires.
 	branch := ov.GetSelectedBranch()
 	plan := spawnPlan{
-		titles: titles, path: path, direct: direct, programs: programs,
+		titles: titles, path: path, direct: direct, isolateDeps: ov.GetIsolateDeps(), programs: programs,
 		branch: branch, prompt: prompt, account: sel, fork: fork,
 	}
 
@@ -1672,12 +1672,13 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 // conversation from a checkpoint of another one (#644) — an explicit parameter rather than
 // a read of m.pendingFork, because the post-confirm resume path spawns from a captured
 // plan with no form left to consult.
-func (m *home) startNewSession(title, path string, direct bool, program, branch, prompt string, sel *overlay.AccountSelection, fromBatch bool, fork *session.ForkSeed) (tea.Cmd, error) {
+func (m *home) startNewSession(title, path string, direct, isolateDeps bool, program, branch, prompt string, sel *overlay.AccountSelection, fromBatch bool, fork *session.ForkSeed) (tea.Cmd, error) {
 	instance, err := session.NewInstance(session.InstanceOptions{
-		Title:   title,
-		Path:    path,
-		Program: program,
-		Direct:  direct,
+		Title:       title,
+		Path:        path,
+		Program:     program,
+		Direct:      direct,
+		IsolateDeps: isolateDeps,
 	})
 	if err != nil {
 		return nil, err

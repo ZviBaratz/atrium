@@ -860,9 +860,37 @@ copy** — it is the original checkout's tree under another name. Writes through
 land in your own working copy and are visible to every other session at once, so
 an agent that runs `npm install` (or `rm -rf node_modules`) inside one session
 changes the dependency tree for all of them. That is exactly why linking beats
-copying for a large tree, but it is the one place a session is deliberately not
-isolated: link paths whose contents you are content to share, and prefer
-`carry_files` when a session needs its own copy.
+copying for a large tree: link paths whose contents you are content to share, and
+prefer `carry_files` when a session needs its own copy of a *file*.
+
+##### Dependency-isolated sessions
+
+Sharing is right for the sessions that only read the tree, and wrong for the one
+whose job is to change it — an upgrade session's `npm install` rewrites the tree
+your other sessions (and anything else running from that checkout) resolve
+through. So the choice is **per session**, made when the session is created.
+
+Wherever `link_paths` is configured, the new-session form grows a **Dependencies**
+row with two settings:
+
+- **shared** (the default, and today's behaviour) — the paths are symlinked, as above.
+- **isolated** — this worktree gets **none** of them. No symlink, and no empty
+  directory either: the worktree looks exactly like a fresh clone where nobody has
+  run `npm install` yet, which is the state every tool already handles. Whatever the
+  session installs there is a real, private directory that no other session and no
+  part of your checkout can see, and it is deleted with the worktree on pause or
+  kill.
+
+The choice is fixed for the session's life and survives a restart and a
+pause/resume — the links are re-seeded on every worktree materialization, so a
+resumed isolated session stays isolated. It has no effect on `carry_files`, which
+are already per-session copies, and none on a **direct** (non-git) session, which
+has no worktree at all — the row renders inert there, like the base-branch row.
+
+An isolated session starts with nothing installed. If the repo has a
+[setup script](#setup-scripts), that script runs immediately afterwards and
+installs into the now-private tree; without one, the agent's first `npm install`
+does the same thing, just later.
 
 #### Setup scripts
 
@@ -938,7 +966,12 @@ rather than failing.
 
 One interaction to know about: a script that runs `npm install` under a path listed in
 [`link_paths`](#linked-paths) is writing into your own checkout's tree, shared by every
-other session at once. Linking and installing are alternatives, not a pair.
+other session at once — so for an ordinary session, linking and installing are
+alternatives rather than a pair. They *are* a pair for a session created with
+Dependencies set to **isolated**
+([dependency-isolated sessions](#dependency-isolated-sessions)): that worktree gets no
+links, so the script installs into a tree of its own. That is the combination to reach
+for when a session's job is to change dependencies.
 
 #### Managed ports
 

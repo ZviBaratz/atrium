@@ -16,7 +16,16 @@ import (
 // with the default/contextual target first. defaultProgram is the fallback program when no
 // profiles are configured; with profiles present the variant control's selected programs
 // win (see createSessionFromForm), so the model field keys its visibility off the profiles.
-func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.ClaudeAccount, dirCandidates []string, defaultProgram string) *TextInputOverlay {
+//
+// linkPaths is the configured link_paths list, and only its emptiness is read: a non-empty
+// one adds the Dependencies field (#481). It is a parameter rather than a config.LoadConfig()
+// here for two reasons. That call seeds and writes the file and sweeps the data dir, on a
+// path that runs for every `n`/`N`, every ⌃R rebuild and every crash-draft restore; and it
+// would make this form — and therefore app/testdata/frames/prompt.txt and both colour
+// fingerprints — a function of the developer's own config.json. The app layer holds the
+// live config the settings panel edits and pushes it in, which is this overlay's standing
+// contract (see SetTargetValidity).
+func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.ClaudeAccount, dirCandidates []string, defaultProgram string, linkPaths []string) *TextInputOverlay {
 	ti := newTextarea("")
 	// The prompt is optional and auto-sent to the agent once the session boots, so say so.
 	ti.Placeholder = PromptPlaceholderOptional
@@ -60,12 +69,24 @@ func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.Claude
 		}
 	}
 
+	// The dependency-isolation field exists only when link_paths names something to
+	// isolate. The other half of its gate — that the target is a git repo at all — is
+	// dynamic and arrives via SetTargetValidity, which makes the field inert rather
+	// than removing it, so the form does not reflow while the user edits the path.
+	var df *DepsField
+	if len(linkPaths) > 0 {
+		df = NewDepsField()
+	}
+
 	// Project first (where focus starts), immediately followed by the base branch — the two
 	// form one repo-context unit, since branches are scoped to the chosen project. Then the
 	// title and the prompt — the input that distinguishes this flow from the inline `n` flow
 	// (which jumps straight to the title via FocusTitle) — then the optional profile with its
-	// dependent claude overrides (model, effort, permission mode, in that order), and finally
-	// the optional Claude-account override.
+	// dependent claude overrides (model, effort, permission mode, in that order), then the
+	// optional Claude-account override, and last the optional dependency-isolation choice.
+	// Appending that one keeps every existing relative order untouched, and it belongs in
+	// the same category as the overrides above it: a per-session departure from a global
+	// default.
 	stops := []focusStop{stopDirectory, stopBranch, stopTitle, stopTextarea}
 	if vp != nil {
 		// Always focusable (unlike the old single-select profile picker, which was
@@ -85,6 +106,9 @@ func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.Claude
 	if ap != nil && ap.HasMultiple() {
 		stops = append(stops, stopAccount)
 	}
+	if df != nil {
+		stops = append(stops, stopDeps)
+	}
 	stops = append(stops, stopEnter)
 
 	overlay := &TextInputOverlay{
@@ -96,6 +120,7 @@ func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.Claude
 		modelField:      mf,
 		modeField:       pmf,
 		effortField:     ef,
+		depsField:       df,
 		accountPicker:   ap,
 		branchPicker:    bp,
 		focus:           focusRing{stops: stops},
@@ -374,6 +399,14 @@ func (t *TextInputOverlay) SetTargetValidity(valid, direct bool, headBranch stri
 	if t.isBranchPicker() && !t.stopEnabled(stopBranch) {
 		t.setFocusIndex(t.nextEnabledIndex(1))
 	}
+	// The dependency field rides the same verdict: only a git target has a worktree
+	// to seed, so there is nothing to isolate for the other two kinds.
+	if t.depsField != nil {
+		t.depsField.SetDisabled(kind != targetGit)
+		if t.isDepsField() && !t.stopEnabled(stopDeps) {
+			t.setFocusIndex(t.nextEnabledIndex(1))
+		}
+	}
 }
 
 // ClearTargetValidity resets the target-directory state indicator to "unknown", so no
@@ -451,6 +484,15 @@ func (t *TextInputOverlay) VariantError() string {
 // FocusTitle/FocusMode.
 func (t *TextInputOverlay) FocusVariants() { t.focusStop(stopVariants) }
 
+// FocusDeps moves focus to the Dependencies chips when the form has them and they can
+// take focus (link_paths names something to isolate, and the target is a git repo).
+// No-op otherwise, like FocusTitle/FocusVariants.
+func (t *TextInputOverlay) FocusDeps() {
+	if i := t.indexOfStop(stopDeps); i >= 0 && t.stopEnabled(stopDeps) {
+		t.setFocusIndex(i)
+	}
+}
+
 // GetModel returns the Claude model override typed into the model field, or ""
 // when no flag should be composed: the form has no model field, the field is
 // inert (non-claude profile selected), or it was left empty or typed as the no-op
@@ -480,6 +522,15 @@ func (t *TextInputOverlay) GetEffort() string {
 		return ""
 	}
 	return t.effortField.Value()
+}
+
+// GetIsolateDeps reports whether the session should be created dependency-isolating:
+// its worktree gets none of the configured link_paths symlinks, so what it installs
+// stays private to it (#481). False when there is no deps field (link_paths names
+// nothing to isolate), when it is inert (the target is not a git repo, so there is no
+// worktree), or when it sits on "shared".
+func (t *TextInputOverlay) GetIsolateDeps() bool {
+	return t.depsField != nil && t.depsField.Isolate()
 }
 
 // GetSelectedAccount returns the deliberate account choice, or nil when the user

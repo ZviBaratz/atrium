@@ -506,3 +506,56 @@ func stubBringOnline(t *testing.T, fn func([]*Instance, config.SessionCap) Defer
 	bringInstancesOnline = fn
 	return func() { bringInstancesOnline = prev }
 }
+
+// The per-session link_paths opt-out (#481) is state-bearing: seeding re-runs on
+// every worktree materialization, so a session that survives an app restart or a
+// pause/resume must carry the choice with it.
+//
+// The last assertion is the one that matters, and it is not about JSON. Resume calls
+// Setup — and therefore seedLocalPaths — on the Worktree that FromInstanceData
+// rebuilt, NOT on the one Start built, so a flag restored onto the Instance but never
+// pushed onto that Worktree would work exactly once and then silently start linking
+// again.
+func TestInstanceDataIsolateDepsRoundTrip(t *testing.T) {
+	inst, err := NewInstance(InstanceOptions{Title: "deps", Path: ".", Program: "claude", IsolateDeps: true})
+	require.NoError(t, err)
+	require.True(t, inst.IsolateDeps())
+
+	data := inst.ToInstanceData()
+	require.True(t, data.IsolateDeps)
+	// Give the round-trip a worktree to restore onto; FromInstanceData only builds one
+	// for a non-direct session.
+	data.Worktree = GitWorktreeData{
+		RepoPath:     "/tmp/repo",
+		WorktreePath: "/tmp/wt",
+		SessionName:  "deps",
+		BranchName:   "zvi/deps",
+	}
+
+	raw, err := json.Marshal(data)
+	require.NoError(t, err)
+	var back InstanceData
+	require.NoError(t, json.Unmarshal(raw, &back))
+	require.True(t, back.IsolateDeps)
+
+	restored, err := FromInstanceData(context.Background(), back, "zvi/")
+	require.NoError(t, err)
+	require.True(t, restored.IsolateDeps())
+	wt := restored.worktree()
+	require.NotNil(t, wt)
+	require.True(t, wt.IsolateDeps(),
+		"the restored worktree must be told: Resume seeds through THIS worktree, not the one Start built")
+}
+
+// The default is off, so a state.json written before the field existed must decode to
+// a shared session — the pre-upgrade behavior — rather than silently isolating one.
+func TestInstanceDataIsolateDepsDefaultsOffForLegacyState(t *testing.T) {
+	var legacy InstanceData
+	require.NoError(t, json.Unmarshal([]byte(`{"title":"t","program":"claude"}`), &legacy))
+	require.False(t, legacy.IsolateDeps)
+
+	// And an off session omits the key entirely, keeping old state files compact.
+	raw, err := json.Marshal(InstanceData{Title: "t", Program: "claude"})
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "isolate_deps")
+}
