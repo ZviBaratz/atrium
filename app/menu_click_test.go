@@ -2,7 +2,6 @@ package app
 
 import (
 	"testing"
-	"time"
 
 	"github.com/ZviBaratz/atrium/internal/testutil"
 	"github.com/ZviBaratz/atrium/keys"
@@ -74,7 +73,7 @@ func TestHintBarClick_MirrorsKeyPress(t *testing.T) {
 		}
 		h.Update(testutil.MouseClick(zi.StartX, zi.StartY, tea.MouseLeft))
 		return h.state == stateHelp
-	}, time.Second, 5*time.Millisecond, "clicking the ? hint must open help, like pressing ?")
+	}, testutil.ZoneClickTimeout, testutil.ZoneClickPoll, "clicking the ? hint must open help, like pressing ?")
 }
 
 // A click that lands on no hint-bar entry falls through to the normal row/tab
