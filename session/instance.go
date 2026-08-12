@@ -50,8 +50,9 @@ const (
 	// (a tool-permission y/n prompt with AutoYes off). Appended last so previously
 	// serialized Status values keep their meaning.
 	NeedsInput
-	// Pending is when the main turn has ended but the agent still has background
-	// sub-agents in flight — it is not done, it will resume on its own (#290). It must
+	// Pending is when the main turn has ended but the agent still has background work
+	// outstanding — sub-agents in flight (#290), or a background shell/monitor the turn
+	// left running (tmux.PaneBackground). Either way it is not done. It must
 	// render distinctly from Ready ("done, needs you"). Appended after NeedsInput so
 	// previously serialized Status values keep their meaning; a restored Pending is
 	// overwritten by reattach's synthetic Running and re-derived on the first poll.
@@ -504,6 +505,20 @@ type Instance struct {
 	// session that has been waiting on the user for six hours must still say so
 	// after a restart. Guarded by mu.
 	statusChangedAt time.Time
+	// inflightPendingSince is the pending watchdog's own clock: when this session most
+	// recently STARTED being held Pending by a non-empty hook in-flight set. Zero when it
+	// is not.
+	//
+	// It cannot borrow statusChangedAt, because Pending now has two producers and that
+	// stamp cannot tell them apart. recordStatusChange deliberately does not re-stamp when
+	// from == to, so a session held Pending for 40 minutes by a background chip (which is
+	// never watchdogged, by design) carries a 40-minute-old stamp; the moment a real
+	// sub-agent then starts, a shared clock would read "pending for 40 minutes" and fire
+	// the watchdog on the first tick of a legitimate run — clearing a live in-flight set
+	// and force-committing a false Ready. A dedicated clock measures what the watchdog
+	// actually caps: continuous time held by the set that can leak. In-memory only, and a
+	// restart re-derives it on the first poll. Guarded by mu.
+	inflightPendingSince time.Time
 	// statusDirty marks a statusChangedAt write that has not reached state.json yet.
 	// Set by recordStatusChange — i.e. by whichever goroutine observed the change —
 	// and cleared once a save carrying it succeeds (see StatusDirty). In-memory only.
@@ -1597,6 +1612,17 @@ func (i *Instance) ApplyPaneState(state tmux.PaneState) (tapped bool) {
 	// folder-trust or new-MCP screen is exactly the unsafe action we refuse. Every
 	// settled state clears the setup flag so a cleared gate drops the row hint; the
 	// keep-prior states (Unknown/Dead) leave both status and flag untouched.
+	//
+	// Every settled state that is not a set-driven Pending also stops the pending
+	// watchdog's clock, so its cap only ever accrues while the leakable in-flight set is
+	// actually holding the row (see Instance.inflightPendingSince). The keep-prior states
+	// are excluded for the same reason they leave status alone: an unreadable pane is not
+	// evidence that the set drained.
+	switch state {
+	case tmux.PaneUnknown, tmux.PaneDead, tmux.PanePending:
+	default:
+		i.clearInflightPendingClock()
+	}
 	switch state {
 	case tmux.PaneWorking:
 		i.setAwaitingSetup(false)
@@ -1620,6 +1646,16 @@ func (i *Instance) ApplyPaneState(state tmux.PaneState) (tapped bool) {
 	case tmux.PanePending:
 		i.setAwaitingSetup(false)
 		i.applyPending()
+	case tmux.PaneBackground:
+		// Same status as PanePending, deliberately WITHOUT applyPending's watchdog. That cap
+		// backstops one failure — a SubagentStop that never fired, leaving a latched id stuck
+		// forever — and a footer chip cannot fail that way: it is re-scraped every poll and
+		// gone the moment the work exits. Expiring it would re-commit the exact "done while
+		// still working" bug this state exists to fix, at the 30-minute mark, and a persistent
+		// Monitor legitimately runs for the whole session. A dead pane is still caught by
+		// tmux liveness (PaneDead) before the pane is ever classified.
+		i.setAwaitingSetup(false)
+		i.SetStatus(Pending)
 	case tmux.PaneUnknown, tmux.PaneDead:
 	}
 	return false

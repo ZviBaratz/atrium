@@ -207,6 +207,16 @@ type Adapter struct {
 	// its own windowing). See session/agent/spinner.go.
 	LiveSpinner func(content string) bool
 
+	// BackgroundWork reports whether the pane shows work the ENDED turn left running —
+	// claude's "N shells"/"N monitors" footer chips. It answers a different question from
+	// BusyMarkers and LiveSpinner, which both ask whether the turn itself is still going:
+	// a background Bash or Monitor is not a sub-agent, so it never reaches the hook
+	// record's in-flight set, and without this the poller reads the turn's end as done.
+	// Consulted only once the busy signals have come up empty, so a running turn is still
+	// Working rather than Pending. nil for agents with no such concept. Receives the full
+	// cleaned content (it does its own windowing). See session/agent/background.go.
+	BackgroundWork func(content string) bool
+
 	// IdleConfirmTicks overrides the poller's working→idle safety cap for this
 	// agent: the number of consecutive marker-absent (or, for markerless agents,
 	// unchanged-while-churning) poll ticks after which the pane is committed to
@@ -360,6 +370,17 @@ func (a *Adapter) HasBusyMarker(content string) bool {
 		}
 	}
 	return false
+}
+
+// BackgroundWorkVisible reports whether content (the cleaned full pane) shows work left
+// running by a turn that has already ended. Adapters that declare no BackgroundWork report
+// false, so an agent with no such concept degrades to the prior behaviour rather than
+// needing an entry.
+func (a *Adapter) BackgroundWorkVisible(content string) bool {
+	if a.BackgroundWork == nil {
+		return false
+	}
+	return a.BackgroundWork(content)
 }
 
 // DetectPrompt reports whether the bottom chrome of content (the cleaned full

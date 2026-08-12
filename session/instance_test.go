@@ -659,3 +659,47 @@ func TestAcceptSuggestion_CaptureErrorSurfaces(t *testing.T) {
 	require.Error(t, err)
 	assert.Empty(t, sent)
 }
+
+// TestApplyPaneState_EveryStateIsMapped buys back the compiler check the switch cannot give.
+// ApplyPaneState's switch has no default arm, and the keep-prior states are a legitimate
+// empty case, so a NEW tmux.PaneState silently becomes "keep prior status" — a status that
+// simply never updates, which no other test in this file would notice. Listing every
+// constant with its expected status makes adding one a decision.
+func TestApplyPaneState_EveryStateIsMapped(t *testing.T) {
+	newInst := func() *Instance {
+		inst, err := NewInstance(InstanceOptions{Title: "s", Path: t.TempDir(), Program: "claude"})
+		require.NoError(t, err)
+		inst.SetStatus(Loading) // a recognizable prior state
+		return inst
+	}
+
+	// keepPrior means "this state is not evidence about status" — the status must stay Loading.
+	const keepPrior = Loading
+	cases := []struct {
+		state tmux.PaneState
+		want  Status
+	}{
+		{tmux.PaneUnknown, keepPrior},
+		{tmux.PaneWorking, Running},
+		{tmux.PanePrompt, NeedsInput},
+		{tmux.PanePromptManual, NeedsInput},
+		{tmux.PaneIdle, Ready},
+		{tmux.PanePending, Pending},
+		{tmux.PaneDead, keepPrior},
+		{tmux.PaneGate, NeedsInput},
+		{tmux.PaneBackground, Pending},
+	}
+
+	// The iota run is contiguous, so the count is the guard: a new constant fails here
+	// until it is given a row, rather than defaulting to an invisible keep-prior.
+	require.Len(t, cases, int(tmux.PaneBackground)+1,
+		"every tmux.PaneState needs a row here — a missing one maps to 'keep prior status' silently")
+
+	for _, tc := range cases {
+		t.Run(fmt.Sprintf("state %d", int(tc.state)), func(t *testing.T) {
+			inst := newInst()
+			require.False(t, inst.ApplyPaneState(tc.state), "only an auto-tapped prompt reports tapped")
+			require.Equal(t, tc.want, inst.GetStatus())
+		})
+	}
+}

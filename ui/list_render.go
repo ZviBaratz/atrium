@@ -138,7 +138,8 @@ func (r *InstanceRenderer) stateGlyph(i *session.Instance, th *theme.Theme) (gly
 	case session.Running, session.Loading:
 		return r.spinner.View(), th.Palette.Working
 	case session.Pending:
-		// Pending (main turn ended, but a background sub-agent is still in flight — #290)
+		// Pending (main turn ended, but a sub-agent (#290) or a background shell/monitor
+		// the turn left running is still outstanding)
 		// is busy autonomous work: it must never read as the green "done" glyph, but it is
 		// also not foreground work. A *still* glyph in a calm cyan tint separates it from
 		// Running by motion (still vs the moving spinner), shape, and color — colorblind-safe

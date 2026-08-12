@@ -98,6 +98,11 @@ var claude = &Adapter{
 	// were not re-driven. Bumping on a partial drive is how a pin starts lying, which is
 	// the failure the three misses above all share.
 	//
+	// The background-work chips (background.go) were driven against a live 2.1.228 pane on
+	// 2026-08-12 — a real Bash(run_in_background) and a real Monitor, singly, doubled and
+	// together — and the pin is deliberately NOT bumped for that either, for the same
+	// reason: one surface is not the whole surface.
+	//
 	// Minor granularity (matching gemini): claude ships patch releases every few days, so
 	// patch-level drift would fire the warning almost constantly — alert fatigue, not
 	// signal. A patch reword is already handled additively (both old and new variants kept
@@ -189,6 +194,11 @@ var claude = &Adapter{
 	// tracks a broader notion of busy than the interrupt hint, and its signature sits at
 	// the head of its own line, where truncation reaches last.
 	LiveSpinner: claudeSpinnerWorking,
+
+	// The footer's shell/monitor count chips, which outlive the turn that started them
+	// (background.go). Distinct from both signals above: those say the turn is running,
+	// this says the turn ended and left something behind.
+	BackgroundWork: claudeBackgroundWorkVisible,
 
 	Prompts: []PromptMatcher{
 		// The fetch/network permission dialog — the ONE prompt in this list autoyes

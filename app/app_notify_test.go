@@ -620,3 +620,36 @@ func TestMaybeNotifyQuestionHasItsOwnThrottleBudget(t *testing.T) {
 	require.NotEmpty(t, buf.String(),
 		"a question must not be swallowed by a finish that spent its budget moments earlier")
 }
+
+// The user-facing payoff of routing background work to Pending: no premature "finished"
+// ding. The ding is driven by the non-Ready→Ready unread edge, so a turn that ends with a
+// background shell or monitor still running stays silent — and then rings once, on the
+// later Pending→Ready edge, when the work actually finishes. The notification is moved to
+// the right moment rather than lost.
+func TestMaybeNotifyBackgroundWorkDefersTheFinishDing(t *testing.T) {
+	var buf bytes.Buffer
+	h, list := newNotifyHome(t, &buf)
+	a := newNotifyInstance(t)
+	b := newNotifyInstance(t)
+	list.AddInstance(a)()
+	list.AddInstance(b)()
+	sel := list.GetSelectedInstance()
+	target := a
+	if sel == a {
+		target = b
+	}
+	h.maybeNotify(target, session.Running, time.Time{}, false, config.NotificationsBell)
+	require.Empty(t, buf.String())
+
+	// The turn ends, but a background shell is still running: PaneBackground → Pending.
+	target.ApplyPaneState(tmux.PaneBackground)
+	require.Equal(t, session.Pending, target.GetStatus())
+	h.maybeNotify(target, session.Running, time.Time{}, false, config.NotificationsBell)
+	require.Empty(t, buf.String(), "background work must not ring a 'finished' ding")
+
+	// The shell exits; now the session is genuinely done.
+	target.ApplyPaneState(tmux.PaneIdle)
+	require.Equal(t, session.Ready, target.GetStatus())
+	h.maybeNotify(target, session.Pending, time.Time{}, false, config.NotificationsBell)
+	require.Equal(t, "\a", buf.String(), "the ding lands when the background work actually ends")
+}

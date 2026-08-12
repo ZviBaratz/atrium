@@ -11,7 +11,15 @@ import (
 //
 // A session enters Pending when the poller sees the hook record latched "ready" with a
 // non-empty in-flight sub-agent set: the main turn ended, but background work is still
-// outstanding. Pending is advisory — it must never become a permanently-stuck row — so it
+// outstanding.
+//
+// Pending now has a SECOND producer, and everything in this file is about the first one.
+// tmux.PaneBackground raises the same status from claude's footer chips, for work that is
+// not a sub-agent at all (a background Bash, a Monitor) and therefore never reaches the
+// set. That producer is deliberately NOT reconciled here — see the watchdog note in item 2
+// and Instance.inflightPendingSince. Everything below concerns the set.
+//
+// Pending is advisory — it must never become a permanently-stuck row — so it
 // is reconciled in a strict, load-bearing priority order:
 //
 //  1. Explicit terminal status, gated on the set being empty. A Stop with the set empty is
@@ -23,7 +31,13 @@ import (
 //     case, where a SubagentStop never fired so the set never drained. Checked before
 //     liveness precisely because liveness would answer "alive → keep waiting" and never time
 //     it out. The cap is generous because a background sub-agent legitimately runs long;
-//     liveness (below) carries the common, fast failure.
+//     liveness (below) carries the common, fast failure. It caps ONLY the set: a
+//     chip-driven Pending is exempt, because a scraped chip cannot go stuck the way a
+//     latched id can — it is re-read every poll and gone when the work exits — and capping
+//     it would re-commit the false "done" at the cap. The clock is per-producer for the
+//     same reason (Instance.inflightPendingSince): both write the status Pending, and
+//     recordStatusChange does not re-stamp on from == to, so a shared stamp would let a
+//     long chip hold expire the next genuine sub-agent run on its first tick.
 //  3. Liveness. A dead tmux pane is caught by Poll's has-session check (→ PaneDead →
 //     recoverLostInstances → Paused) before the record is ever read, so a crash mid-sub-agent
 //     can't strand a Pending row. This needs no code here — it is the existing machinery.
@@ -64,6 +78,7 @@ func (i *Instance) pendingWatchdogCap() time.Duration {
 // commit Ready. The commit flags unread like any real completion, so a session that was
 // stuck pending surfaces as finished-and-unseen rather than silently vanishing.
 func (i *Instance) applyPending() {
+	i.startInflightPendingClock()
 	if i.pendingExpired() {
 		if ts := i.tmux(); ts != nil {
 			// Clear the set before committing done so the next poll reads ready+empty → idle
@@ -74,6 +89,7 @@ func (i *Instance) applyPending() {
 				log.WarningLog.Printf("pending watchdog: failed to clear in-flight set for %q: %v", i.Title, err)
 			}
 		}
+		i.clearInflightPendingClock()
 		i.SetStatus(Ready)
 		log.InfoLog.Printf("pending watchdog: %q held pending past %s, reconciled to ready", i.Title, i.pendingWatchdogCap())
 		return
@@ -81,11 +97,38 @@ func (i *Instance) applyPending() {
 	i.SetStatus(Pending)
 }
 
-// pendingExpired reports whether the instance has been continuously Pending longer than
-// its watchdog cap. Gated on the CURRENT status already being Pending: on the tick that
-// first enters Pending the status is still the prior state (with an older statusChangedAt
-// that must not be mistaken for a long pending hold), so the watchdog can only fire once
-// the session has actually been Pending across at least one poll.
+// startInflightPendingClock stamps the watchdog's clock on entry to a set-driven Pending,
+// leaving an already-running clock alone so the cap measures the whole continuous hold
+// rather than restarting every poll.
+func (i *Instance) startInflightPendingClock() {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.inflightPendingSince.IsZero() {
+		i.inflightPendingSince = time.Now()
+	}
+}
+
+// clearInflightPendingClock stops the watchdog's clock. Called from every pane state that
+// is not a set-driven Pending — including PaneBackground, whose hold must never accrue
+// against a cap it is exempt from (see the Instance field's doc) — and after a
+// reconciliation, so the next genuine set starts from zero.
+func (i *Instance) clearInflightPendingClock() {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.inflightPendingSince = time.Time{}
+}
+
+// pendingExpired reports whether the instance has been continuously held Pending BY THE
+// IN-FLIGHT SET for longer than its watchdog cap. Gated on the current status already being
+// Pending, so the tick that first enters Pending can never trip it, and measured on the
+// watchdog's own clock rather than statusChangedAt — the two diverge whenever a
+// background-chip Pending precedes a set-driven one.
 func (i *Instance) pendingExpired() bool {
-	return i.GetStatus() == Pending && time.Since(i.StatusChangedAt()) > i.pendingWatchdogCap()
+	if i.GetStatus() != Pending {
+		return false
+	}
+	i.mu.RLock()
+	since := i.inflightPendingSince
+	i.mu.RUnlock()
+	return !since.IsZero() && time.Since(since) > i.pendingWatchdogCap()
 }

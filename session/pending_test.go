@@ -102,9 +102,11 @@ func TestApplyPending_WatchdogReconciles(t *testing.T) {
 	inst.ApplyPaneState(inst.Poll())
 	require.Equal(t, Pending, inst.GetStatus())
 
-	// Pretend we entered Pending longer ago than the cap (SubagentStop never fired).
+	// Pretend we entered Pending longer ago than the cap (SubagentStop never fired). The
+	// watchdog measures inflightPendingSince, not statusChangedAt: Pending has two
+	// producers now and only this one is capped (see the field's doc).
 	inst.mu.Lock()
-	inst.statusChangedAt = time.Now().Add(-2 * defaultPendingWatchdog)
+	inst.inflightPendingSince = time.Now().Add(-2 * defaultPendingWatchdog)
 	inst.mu.Unlock()
 
 	st := inst.Poll()
@@ -117,4 +119,66 @@ func TestApplyPending_WatchdogReconciles(t *testing.T) {
 	require.Equal(t, tmux.PaneIdle, inst.Poll(), "the stuck in-flight set was cleared")
 	inst.ApplyPaneState(inst.Poll())
 	require.Equal(t, Ready, inst.GetStatus(), "stays done — no oscillation")
+}
+
+// backgroundFooter is a live claude idle pane whose footer still chips a background shell:
+// the turn has ended (hook ready, empty set) but the work it started is running.
+const backgroundFooter = "───────────────\n❯ \n───────────────\n  ⏵⏵ auto mode on · 2 shells · ← for agents"
+
+// A pane held Pending by the FOOTER CHIP is exempt from the watchdog. The cap backstops a
+// SubagentStop that never fired — a latch that can leak — and a chip cannot leak: it is
+// re-scraped every poll and gone when the work exits. Expiring it would re-commit the exact
+// "done while still working" bug at the 30-minute mark, and a persistent Monitor legitimately
+// outlives any cap.
+func TestApplyBackground_IsNeverReconciledByTheWatchdog(t *testing.T) {
+	c := backgroundFooter
+	inst := claudePendingInstance(t, &c)
+	seedInflight(t, inst, tmux.HookEventReady) // ready latch, EMPTY set
+
+	st := inst.Poll()
+	require.Equal(t, tmux.PaneBackground, st, "ready+empty with a chip is background work, not idle")
+	inst.ApplyPaneState(st)
+	require.Equal(t, Pending, inst.GetStatus(), "background work reads as Pending")
+
+	// Age it far past the cap. A set-driven Pending would reconcile here; this must not.
+	inst.mu.Lock()
+	inst.statusChangedAt = time.Now().Add(-4 * defaultPendingWatchdog)
+	inst.mu.Unlock()
+
+	inst.ApplyPaneState(inst.Poll())
+	require.Equal(t, Pending, inst.GetStatus(), "a visible chip is live proof — it never times out")
+
+	// And it still clears the moment the work does.
+	c = "❯ \n⏵⏵ auto mode on (shift+tab to cycle) · ← for agents"
+	inst.ApplyPaneState(inst.Poll())
+	require.Equal(t, Ready, inst.GetStatus(), "chip gone → the turn is genuinely done")
+}
+
+// The cross-talk regression. Both producers write Pending, and recordStatusChange does not
+// re-stamp statusChangedAt when from == to — so a watchdog reading that shared stamp would
+// see a long background hold as a long IN-FLIGHT hold and fire on the first tick of a
+// legitimate sub-agent run, clearing a live set and force-committing a false Ready.
+func TestApplyPending_LongBackgroundHoldDoesNotExpireTheNextSubagentRun(t *testing.T) {
+	c := backgroundFooter
+	inst := claudePendingInstance(t, &c)
+	seedInflight(t, inst, tmux.HookEventReady)
+
+	inst.ApplyPaneState(inst.Poll())
+	require.Equal(t, Pending, inst.GetStatus())
+
+	// Held by the chip for far longer than the watchdog cap.
+	inst.mu.Lock()
+	inst.statusChangedAt = time.Now().Add(-4 * defaultPendingWatchdog)
+	inst.mu.Unlock()
+	inst.ApplyPaneState(inst.Poll())
+
+	// Now a REAL sub-agent starts, on a pane with no chip left.
+	c = "❯ \n⏵⏵ auto mode on (shift+tab to cycle) · ← for agents"
+	seedInflight(t, inst, tmux.HookEventReady, "aa")
+
+	st := inst.Poll()
+	require.Equal(t, tmux.PanePending, st, "a non-empty in-flight set is set-driven pending")
+	inst.ApplyPaneState(st)
+	require.Equal(t, Pending, inst.GetStatus(),
+		"the watchdog measures its own clock, so a prior background hold cannot expire this run")
 }
