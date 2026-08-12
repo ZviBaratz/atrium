@@ -46,6 +46,17 @@ const (
 	// held; callers surface it as needs-input rather than tapping. Runtime-only, never
 	// persisted.
 	PaneGate
+	// PaneBackground means the main turn ended but the pane still shows work it left
+	// running — claude's "N shells"/"N monitors" footer chips. The sibling of PanePending
+	// for work that is NOT a sub-agent: a background Bash or Monitor fires no
+	// SubagentStart/Stop, so it never reaches the in-flight set, and Stop fires at the
+	// turn boundary regardless — which is what used to land these panes on PaneIdle. Both
+	// map to session.Pending; they are distinct here because only PanePending's latched
+	// set can leak and therefore needs the wall-clock watchdog. This one is re-read from
+	// the live footer every poll and clears itself when the work exits, so it is never
+	// expired — a persistent Monitor legitimately outlives any cap. A live busy marker
+	// still outranks it as PaneWorking. Runtime-only, never persisted.
+	PaneBackground
 )
 
 // markerWorking reports whether this session's agent shows its busy marker in the live
@@ -443,6 +454,22 @@ func (t *Session) Poll() PaneState {
 			return PaneWorking
 		}
 
+		// Work the ENDED turn left running, read from the footer's shell/monitor chips
+		// (agent/background.go). This is the one signal here that is not about the turn:
+		// a background Bash or Monitor is not a sub-agent, so it never reaches the
+		// in-flight set below, while Stop fires at the turn boundary regardless — which
+		// is what dropped these panes through to "hook ready → idle" and turned the row
+		// green mid-work.
+		//
+		// Read once here, but consulted ONLY at the two points below that would otherwise
+		// commit PaneIdle. That placement is the safety property: this can only ever
+		// convert a would-be idle into PaneBackground, so it cannot shadow the busy
+		// marker, the spinner, an in-flight sub-agent set, or a fresh heartbeat — all of
+		// which are statements about the MAIN turn, and all of which outrank a statement
+		// about what the turn left behind. A chip beside a live marker is a running turn
+		// with a background job, not a finished one (#332: the two render side by side).
+		bg := t.adapter.BackgroundWorkVisible(content)
+
 		if haveRec {
 			if len(rec.Inflight) > 0 {
 				t.monitor.idleStreak = 0
@@ -456,6 +483,15 @@ func (t *Session) Poll() PaneState {
 			// from the PostToolUse just before Stop.
 			if rec.State == hookStateReady {
 				t.monitor.idleStreak = 0
+				// …unless the footer still shows work the turn left running. The turn HAS
+				// ended — that is what makes the chip meaningful rather than redundant —
+				// but the session is not done, and reporting done here is the bug this
+				// state exists to fix.
+				if bg {
+					t.monitor.lastReported = PaneBackground
+					t.monitor.logSignal(name, "hook ready + footer background chip → background")
+					return PaneBackground
+				}
 				t.monitor.lastReported = PaneIdle
 				t.monitor.logSignal(name, "hook ready → idle")
 				return PaneIdle
@@ -480,18 +516,37 @@ func (t *Session) Poll() PaneState {
 				return PaneWorking
 			}
 		}
+		// The other would-be idle: no record at all, or a non-ready latch whose heartbeat has
+		// gone stale. A chip is still live proof the session is not done.
+		//
+		// Consulted BEFORE the grace below, and resetting idleStreak like every other
+		// not-idle arm, because the two answer different questions: the grace is hysteresis
+		// bridging a gap where the pane says nothing, while this is a positive read of the
+		// CURRENT frame. Ordered the other way, a still-visible chip whose lastReported is
+		// already PaneBackground matches the grace's own hold set and reports PaneWorking for
+		// up to the cap — Pending → Running → Pending on a pane that never changed, churning
+		// statusChangedAt, the status history and the state.json dirty bit every tick.
+		if bg {
+			t.monitor.idleStreak = 0
+			t.monitor.lastReported = PaneBackground
+			t.monitor.logSignal(name, "marker-absent + footer background chip → background")
+			return PaneBackground
+		}
 		t.monitor.idleStreak++
-		if (t.monitor.lastReported == PaneWorking || t.monitor.lastReported == PanePending) &&
+		if (t.monitor.lastReported == PaneWorking || t.monitor.lastReported == PanePending ||
+			t.monitor.lastReported == PaneBackground) &&
 			t.monitor.idleStreak < t.idleConfirmCap() {
 			// A brief marker-absent gap after real work (auto-accept turn boundary, model
 			// spin-up) — or right after PanePending, when a session that was waiting on a
-			// background sub-agent resumes: a working hook (UserPromptSubmit/PreToolUse) latches
-			// "working" and the in-flight set drains a beat before the busy marker repaints, so
-			// without holding here that sub-tick gap would commit PaneIdle → a false "done" (and
-			// a false #289 "finished" ding) at every sub-agent resume. We only get here once the
-			// hook is no longer "ready" (a working edge fired = the agent is doing something), so
-			// holding working is honest. Still bounded by idleConfirmCap, so it can never relatch
-			// working (#46) — once the cap is hit the absent marker keeps us idle.
+			// background sub-agent resumes, or right after PaneBackground, whose chip has just
+			// CLEARED (a still-visible one returned above): a working hook
+			// (UserPromptSubmit/PreToolUse) latches "working" and the in-flight set drains a beat
+			// before the busy marker repaints, so without holding here that sub-tick gap would
+			// commit PaneIdle → a false "done" (and a false #289 "finished" ding) at every
+			// sub-agent resume. We only get here once the hook is no longer "ready" (a working
+			// edge fired = the agent is doing something), so holding working is honest. Still
+			// bounded by idleConfirmCap, so it can never relatch working (#46) — once the cap is
+			// hit the absent marker keeps us idle.
 			t.monitor.logSignal(name, "marker-absent grace → working")
 			return PaneWorking
 		}
@@ -586,6 +641,11 @@ func (t *Session) PollNow() PaneState {
 		t.monitor.logSignal(name, "marker → working")
 		return PaneWorking
 	}
+	// Work the ended turn left running (see Poll for the full rationale, including why this
+	// is only ever consulted where the answer would otherwise be idle). This chain is a
+	// separate implementation of the same precedence, so the demotions have to be repeated
+	// here or a detach re-baselines a background-working session to Ready for one sweep.
+	bg := t.adapter.BackgroundWorkVisible(content)
 	if rec, ok := t.readHookRecord(); ok {
 		t.stashEffort(rec)
 		switch {
@@ -598,6 +658,10 @@ func (t *Session) PollNow() PaneState {
 			t.monitor.lastReported = PaneWorking
 			t.monitor.logSignal(name, "refresh hook working → working")
 			return PaneWorking
+		case bg:
+			t.monitor.lastReported = PaneBackground
+			t.monitor.logSignal(name, "refresh hook ready + footer background chip → background")
+			return PaneBackground
 		default:
 			t.monitor.lastReported = PaneIdle
 			t.monitor.logSignal(name, "hook ready → idle")
@@ -618,7 +682,13 @@ func (t *Session) PollNow() PaneState {
 		return PaneUnknown
 	}
 	// A marker-bearing agent with no hook file yet (e.g. before the first event): the
-	// marker is absent here, so face value is idle.
+	// marker is absent here, so face value is idle — unless the footer still shows work
+	// the turn left running.
+	if bg {
+		t.monitor.lastReported = PaneBackground
+		t.monitor.logSignal(name, "refresh marker-absent + footer background chip → background")
+		return PaneBackground
+	}
 	t.monitor.lastReported = PaneIdle
 	return PaneIdle
 }

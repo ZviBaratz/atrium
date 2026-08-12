@@ -24,7 +24,7 @@ type Palette struct {
 	Success     Color // ready, additions
 	SuccessDim  Color // seen-ready: a Ready session the user already visited
 	Working     Color // working/starting spinner tint; recedes (dim) so Attention stands alone
-	Pending     Color // pending autonomous work — a background sub-agent is still in flight (#290); a calm cyan-family tint, distinct from Working/Success/Attention
+	Pending     Color // pending autonomous work — a sub-agent (#290) or a background shell/monitor is still outstanding; a calm cyan-family tint, distinct from Working/Success/Attention
 	Attention   Color // waiting / behind (the one attention color — nothing else may use it)
 	Danger      Color // deletions, errors, destructive actions
 	Cyan        Color // hunks, info
@@ -41,7 +41,7 @@ type Glyphs struct {
 	Ready         string // idle, ready for input, not yet visited (unread)
 	ReadySeen     string // idle, ready for input, already visited (seen)
 	Waiting       string // blocked on user input (attention)
-	Pending       string // still glyph for pending autonomous work (#290): a background sub-agent is in flight; width-1
+	Pending       string // still glyph for pending autonomous work: a sub-agent (#290) or a background shell/monitor is outstanding; width-1
 	Paused        string // session halted
 	Branch        string // precedes a branch name
 	Ahead         string // commits ahead of base
