@@ -40,19 +40,20 @@ const (
 	// mirroring modeSectionLines (label + blank + chips row + a divider).
 	effortSectionLines = 4
 	// depsSectionLines is the height the Dependencies section adds when present: one
-	// content row + a divider, HALF what every section above costs. Two reasons, and
-	// the second is a hard constraint rather than a preference.
+	// content row + a divider, HALF what every section above costs, because
+	// DepsField.Render emits one line rather than three. The claude override fields
+	// spend their extra lines on a constant-height hint row explaining their no-op
+	// chip (see ModeField.Render); this field has neither a no-op chip nor a pin, so
+	// it has nothing to put there.
 	//
-	// The claude override fields spend their second and third lines on a
-	// constant-height hint row explaining their no-op chip (see ModeField.Render);
-	// this field has neither a no-op chip nor a pin, so it has nothing to put there.
-	//
-	// And the budget has no room. fitOverlay degrades a too-tall form by dropping
-	// blank lines, then dividers, then hard-clipping the tail — and the Create button
-	// is the tail. At 80×24 with profiles, the three claude fields and an account
-	// picker, the droppable lines are already almost exhausted; a fourth line here
-	// would clip the button off the form. TestSessionCreateOverlay_ClaudeFormFitsShortTerminal
-	// is the assertion that holds this, and it fails if this constant grows.
+	// Like every constant here this only feeds fitRows, which picks the picker and
+	// prompt row counts — it must agree with what the section actually renders, and
+	// nothing checks that agreement. It is NOT what keeps the form inside the screen:
+	// by the tightest configuration fitRows is already pinned at its floors, so the
+	// real bound is the rendered line itself, shed by fitOverlay. That is where the
+	// budget bites — see TestSessionCreateOverlay_ClaudeFormFitsShortTerminal and
+	// TestFitOverlay_DropsTheHeadingBeforeTheCreateButton, which fail if this section
+	// grows a second RENDERED row, and are indifferent to this number.
 	depsSectionLines = 2
 )
 
