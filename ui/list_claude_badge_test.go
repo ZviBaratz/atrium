@@ -285,6 +285,26 @@ func TestListString_ClaudeBadgeCannotBreakThePanelFrame(t *testing.T) {
 	}
 }
 
+// bothBadgedName is a run of "Z" for the reason the yield tests use one: no other
+// cell on these rows can contain one, so "is any of the name left?" is a substring
+// test that can actually fail.
+const bothBadgedName = "ZZZZZZZZZZZZZZZZZZZZ"
+
+// bothBadgedRow renders an agy session carrying BOTH account badges at `width`
+// columns, under the worst-case line-1 cluster the issues measured — accounts, AUTO,
+// model, effort, permission — ANSI-stripped. Either account may be "" to leave that
+// axis unstamped, which is what makes the byte comparisons against "the same session
+// without that account" possible.
+func bothBadgedRow(t *testing.T, width int, claudeAcct, agyAcct string) string {
+	t.Helper()
+	inst := agyInst(t, bothBadgedName, "/tmp/api", "agy", claudeAcct, agyAcct)
+	inst.AutoYes = true
+	inst.SetModeMeta("acceptEdits")
+	inst.SetModelMeta("gemini-3-pro", transcript.Stamp{Path: "m", Size: 1})
+	inst.SetEffortMeta("max")
+	return agyRow(t, width, inst)
+}
+
 // TestRender_BadgeYieldOrderIsAgyThenClaude pins the drop order on a row carrying
 // BOTH account badges, and it is the guard for a decision the issue left open.
 //
@@ -300,6 +320,12 @@ func TestListString_ClaudeBadgeCannotBreakThePanelFrame(t *testing.T) {
 // agy has yielded and Claude survives, must be non-empty, or a row that simply never
 // dropped either badge would pass.
 //
+// The Claude account is the WIDER of the two badges here, deliberately: with a
+// narrower one the ladder can never reach a width where dropping Claude alone would
+// have saved the name, so the order claim holds trivially and a row that put agy back
+// after Claude went would pass unnoticed (it is TestRender_BothBadgesYieldBandIsTheWidthGap
+// that measures what that costs).
+//
 // Both account names are chosen so no other cell on the row can contain them
 // ("gemini-3-pro", "max", "accept-edits", the AUTO badge and the agent icon share no
 // substring with either).
@@ -308,20 +334,13 @@ func TestRender_BadgeYieldOrderIsAgyThenClaude(t *testing.T) {
 	t.Cleanup(theme.SetGlyphSet(theme.GlyphSetPlain))
 	theme.SetGlyphSet(theme.GlyphSetPlain)
 
-	row := func(w int) string {
-		inst := agyInst(t, "ZZZZZZZZZZZZZZZZZZZZ", "/tmp/api", "agy", "quantivly", "grav-one")
-		inst.AutoYes = true
-		inst.SetModeMeta("acceptEdits")
-		inst.SetModelMeta("gemini-3-pro", transcript.Stamp{Path: "m", Size: 1})
-		inst.SetEffortMeta("max")
-		return agyRow(t, w, inst)
-	}
+	row := func(w int) string { return bothBadgedRow(t, w, claudeAcctName, "grav-one") }
 
 	both, agyGoneOnly, neither := 0, 0, 0
 	for w := 10; w <= 140; w++ {
 		out := row(w)
 		hasAgy := strings.Contains(out, "agy:grav-one")
-		hasClaude := strings.Contains(out, "quantivly")
+		hasClaude := strings.Contains(out, claudeAcctName)
 		switch {
 		case hasAgy:
 			require.Truef(t, hasClaude,
@@ -337,4 +356,89 @@ func TestRender_BadgeYieldOrderIsAgyThenClaude(t *testing.T) {
 	require.NotZero(t, both, "the ladder must have a band where both badges fit")
 	require.NotZero(t, agyGoneOnly, "…a band where only agy has yielded, or the order claim is vacuous")
 	require.NotZero(t, neither, "…and a band where both have yielded, or the Claude rung never ran")
+}
+
+// TestRender_BothBadgesYieldBandIsTheWidthGap measures what the drop order costs,
+// and bounds it. Each badge's yield is reversible on its own axis — below the width
+// where it fits, the row is byte-identical to the same session without that account
+// — but on a row carrying BOTH badges only agy's is exact. agy is dropped first, so
+// nothing above it in the ladder can have moved; the Claude badge's own width is
+// what pushed the row past the rung that dropped agy, so in a band at the bottom of
+// the Claude badge's range the row shows NEITHER badge while the same session with
+// no Claude account still shows agy. Adding a Claude account costs that row its agy
+// badge there — and per README's agy section the agy badge is the one with no
+// account: filter to fall back on, so the band drops the less recoverable signal.
+//
+// The band is not a fixed number of columns, which is why "measured 2" would be a
+// trap: it is exactly how much wider the Claude badge is than the agy badge (both
+// vanish at once only while the extra cells are what the name still cannot afford),
+// so a 20-character account beside a 2-character agy name widens it to 14. Asserting
+// it as claudeW - agyW is what makes this fail if a pad moves, if the ladder learns
+// a third rung, or if either badge changes shape — and the agy-wider case, where the
+// gap closes to zero and the band must be EMPTY, is the negative control that stops
+// the arithmetic from being fitted to one sample.
+//
+// Segment widths mirror the two p.seg() calls in Render (" "+acct+" " and
+// " agy:"+acct+" "); if either changes, this stops matching and says so.
+func TestRender_BothBadgesYieldBandIsTheWidthGap(t *testing.T) {
+	t.Cleanup(theme.Set("unicode"))
+	t.Cleanup(theme.SetGlyphSet(theme.GlyphSetPlain))
+	theme.SetGlyphSet(theme.GlyphSetPlain)
+
+	for _, tc := range []struct {
+		name       string
+		claudeAcct string
+		agyAcct    string
+	}{
+		{"the shapes the issues measured", claudeAcctName, "grav-one"},
+		{"a long Claude account beside a short agy one", "quantivly-work-eu-1", "g1"},
+		{"an agy account wider than the Claude one", "qw", "grav-one-eu-frankfurt"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			agyBadge := "agy:" + tc.agyAcct
+			gap := ansi.StringWidth(" "+tc.claudeAcct+" ") - ansi.StringWidth(" "+agyBadge+" ")
+			if gap < 0 {
+				gap = 0
+			}
+
+			band := []int{}
+			carriedBoth := 0
+			for w := 8; w <= 160; w++ {
+				both := bothBadgedRow(t, w, tc.claudeAcct, tc.agyAcct)
+				noClaude := bothBadgedRow(t, w, "", tc.agyAcct)
+				noAgy := bothBadgedRow(t, w, tc.claudeAcct, "")
+
+				hasAgy := strings.Contains(both, agyBadge)
+				hasClaude := strings.Contains(both, tc.claudeAcct)
+				if hasAgy && hasClaude {
+					carriedBoth++
+				}
+				// agy's half is exact even here: wherever it has yielded, the row is the
+				// no-agy session's row byte for byte.
+				if !hasAgy {
+					require.Equalf(t, noAgy, both,
+						"at %d columns the agy badge yielded, so the row must be byte-identical to a no-agy row", w)
+				}
+				if hasClaude || both == noClaude {
+					continue
+				}
+				band = append(band, w)
+				// What the exception costs, stated rather than counted: the Claude badge
+				// is gone AND it took agy with it, on a row where dropping the Claude
+				// account alone would have left agy standing.
+				require.Falsef(t, hasAgy, "at %d columns the row differs from a no-Claude row while still showing agy", w)
+				require.Containsf(t, noClaude, agyBadge,
+					"at %d columns the no-Claude row must still show agy, or this is not the band", w)
+			}
+
+			t.Logf("claude badge %d cells, agy badge %d cells, gap %d; both-badge band: %v",
+				ansi.StringWidth(" "+tc.claudeAcct+" "), ansi.StringWidth(" "+agyBadge+" "), gap, band)
+			require.NotZero(t, carriedBoth, "some width must carry both badges, or nothing here was exercised")
+			require.Lenf(t, band, gap,
+				"the band where the Claude badge's yield is not byte-reversible must be exactly the two badges' width gap")
+			for i, w := range band {
+				require.Equalf(t, band[0]+i, w, "…and contiguous: %v", band)
+			}
+		})
+	}
 }

@@ -379,10 +379,30 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 	// already makes on line 2: an account is an identifier to go look up, and it does
 	// not change under the user, where the model/effort/permission chips are live
 	// state. The rule is deliberately all-or-nothing on the name surviving at all
-	// rather than a taste threshold, because that makes each drop exactly reversible:
-	// below the width where a badge fits, the row is byte-identical to the same session
-	// without that account, so neither badge can make a narrow pane worse than it was
-	// without it.
+	// rather than a taste threshold, because that makes a drop reversible: below the
+	// width where a badge fits, the row is byte-identical to the same session without
+	// that account, so the badge cannot make a narrow pane worse than it was without
+	// it.
+	//
+	// That reversibility is exact on ONE axis and bounded on the other, and the
+	// difference is the price of the drop order below. agy is exact everywhere,
+	// including on a row that also carries a Claude account — it is dropped first, so
+	// nothing above it in the ladder can have moved. The Claude badge is exact on a row
+	// with no agy account, but where both are present its own width is what pushed the
+	// row past the rung that dropped agy: in a band at the bottom of the Claude badge's
+	// range the row shows NEITHER badge, while the same session with no Claude account
+	// still shows agy. The band is exactly as wide as the Claude badge exceeds the agy
+	// badge in cells (claudeW - agyW, zero when agy is the wider of the two) — 2 columns
+	// for a 14-char Claude account beside "agy:grav-one", 14 for a 20-char one beside a
+	// 2-char agy name. TestRender_BothBadgesYieldBandIsTheWidthGap measures both halves.
+	//
+	// It is a real cost, not a rounding error: per README's agy section the agy badge is
+	// the one with no account: filter to fall back on, so the band drops the less
+	// recoverable signal. It is accepted rather than fixed because every way to close it
+	// re-opens what the order exists to prevent — dropping the minimal set that lets the
+	// name survive would keep agy and drop Claude, which is precisely the inversion
+	// #457's byte-identity guard denies, and restoring agy afterwards makes a session's
+	// agy account the reason its Claude account went unnamed.
 	//
 	// The counter-argument for the Claude badge — an account is a safety signal (which
 	// login this session bills and pushes as) and one that silently vanishes is worse
