@@ -1102,7 +1102,9 @@ list to your config file:
   resizing: `account:<name>` filtering reads the same pinned name the badge shows.
   (Account grouping helps too, but only partly — a pooled session's divider names
   its **pool**, where the badge names the member.) Where both account badges are on
-  one row, the `agy:` one yields first.
+  one row, the `agy:` one yields first — and across a band as many columns wide as
+  this badge is wider than that one (none, where it is the narrower), the row gives
+  up both.
 - When more than one account is configured, the new-session form shows an
   **Account** picker, preset to the auto-routed account, to override the choice.
 - `expect_account` (optional) is the email address that `config_dir` is supposed to
