@@ -70,11 +70,44 @@ func (g *Worktree) seedLocalPaths() {
 	if g.isolateDeps {
 		if paths := cfg.GetLinkPaths(); len(paths) > 0 {
 			log.InfoLog.Printf("link_paths: session is dependency-isolated, so %v are not linked — this worktree starts without them and whatever installs into it stays private to it", paths)
+			for _, rel := range paths {
+				g.warnIsolatedPathNotIgnored(rel)
+			}
 		}
 		return
 	}
 	for _, rel := range cfg.GetLinkPaths() {
 		g.linkLocalPath(rel)
+	}
+}
+
+// warnIsolatedPathNotIgnored is the isolated session's half of the worktree-side ignore
+// check linkLocalPath runs, and it is needed for the same reason with the direction of
+// the risk reversed. The shared path warns because a symlink git would not ignore leaks
+// into pause's `git add .`; an isolated session creates no symlink, but it is the one
+// session GUARANTEED to fill the path — the setup script runs moments later, or the
+// agent's first install does — so an unignored path there is committed as a whole
+// dependency tree, onto the branch and into any PR cut from it. Skipping the link must
+// not also skip the diagnosis.
+//
+// The probe differs from linkLocalPath's in exactly one character, and that character is
+// the point. Asking about a slash-terminated pathspec asks git about a DIRECTORY, which
+// is what will exist here, so a dir-only rule (`node_modules/`) correctly passes — where
+// the slash-less form linkLocalPath must use, because git stores a symlink as a file,
+// correctly fails. Isolation is legitimately satisfied by the stricter-looking rule that
+// linking cannot accept, and warning about it would be a false alarm on the commonest
+// .gitignore in the ecosystem.
+//
+// Warn-only, like everything else here: the session is materially fine — its tree really
+// is private, which is what was asked for — and the never-error contract above forbids
+// turning this into a Setup failure regardless.
+func (g *Worktree) warnIsolatedPathNotIgnored(rel string) {
+	canon, _, _, ok := g.resolveSeedPaths("link_paths", rel)
+	if !ok {
+		return // resolveSeedPaths already warned
+	}
+	if _, err := g.runGitCommand(g.worktreePath, "check-ignore", "-q", "--", canon+"/"); err != nil {
+		log.WarningLog.Printf("link_paths: %q is not ignored in this dependency-isolated session's worktree, and it is about to be filled by a real install: whatever lands there would be committed on pause. The rule must reach the worktree — committed on this session's base, or in .git/info/exclude", rel)
 	}
 }
 

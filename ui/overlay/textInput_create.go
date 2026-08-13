@@ -7,6 +7,13 @@ import (
 	"github.com/ZviBaratz/atrium/session/agent"
 )
 
+// createFormTitle is the create form's default heading, and the value fitOverlay
+// compares Title against to decide the heading is generic enough to shed on a short
+// terminal. A caller that overrides Title (openForkForm, whose heading names the
+// checkpoint being forked) keeps it, so this is the seam between "decoration" and
+// "the only thing on screen saying what this submit does" — not a bare string.
+const createFormTitle = "New session"
+
 // NewSessionCreateOverlay creates the unified new-session form: a title field, a prompt
 // textarea, a project (directory) picker, a variant (fan-out) control, an optional Claude
 // model override (only when a selectable program resolves to claude), and a branch picker.
@@ -114,7 +121,7 @@ func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.Claude
 	overlay := &TextInputOverlay{
 		textarea:        ti,
 		titleInput:      newTitleInput(),
-		Title:           "New session",
+		Title:           createFormTitle,
 		directoryPicker: dp,
 		variantPicker:   vp,
 		modelField:      mf,
@@ -381,13 +388,15 @@ func (t *TextInputOverlay) SetTargetValidity(valid, direct bool, headBranch stri
 		return
 	}
 	t.directoryPicker.SetSelectionState(valid, direct)
-	if t.branchPicker == nil {
-		return
-	}
-	t.branchPicker.SetHeadLabel(headBranch)
+
 	// Order matters: an invalid path is reported as invalid even though the caller
-	// also passes direct=false for it. The branch section is inert either way, but
-	// its placeholder names which one, so the two must not collapse (#545).
+	// also passes direct=false for it. The dependent sections are inert either way,
+	// but their placeholders name which one, so the two must not collapse (#545).
+	//
+	// Derived before either section is touched, and each section guarded on its own
+	// nil. An early return on a missing branch picker would make the deps field's
+	// inertness — and so whether a stale "isolated" survives a retarget — contingent
+	// on an unrelated widget being present.
 	kind := targetGit
 	switch {
 	case !valid:
@@ -395,14 +404,17 @@ func (t *TextInputOverlay) SetTargetValidity(valid, direct bool, headBranch stri
 	case direct:
 		kind = targetDirect
 	}
-	t.branchPicker.SetTarget(kind)
-	if t.isBranchPicker() && !t.stopEnabled(stopBranch) {
-		t.setFocusIndex(t.nextEnabledIndex(1))
+	if t.branchPicker != nil {
+		t.branchPicker.SetHeadLabel(headBranch)
+		t.branchPicker.SetTarget(kind)
+		if t.isBranchPicker() && !t.stopEnabled(stopBranch) {
+			t.setFocusIndex(t.nextEnabledIndex(1))
+		}
 	}
 	// The dependency field rides the same verdict: only a git target has a worktree
 	// to seed, so there is nothing to isolate for the other two kinds.
 	if t.depsField != nil {
-		t.depsField.SetDisabled(kind != targetGit)
+		t.depsField.SetTarget(kind)
 		if t.isDepsField() && !t.stopEnabled(stopDeps) {
 			t.setFocusIndex(t.nextEnabledIndex(1))
 		}

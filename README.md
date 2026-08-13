@@ -157,6 +157,7 @@ To ask how long a session has held its status, subtract `status_changed_at` — 
 | `tmux_name` | The tmux session name, for scripts that want tmux directly |
 | `queued_prompts` | Prompts waiting to be delivered |
 | `auto_yes`, `direct`, `unread`, `muted`, `note` | Session flags and annotation |
+| `isolated` | Created dependency-isolated, so it got none of the [`link_paths`](#linked-paths) symlinks. Records the choice made at creation, not what `link_paths` says now |
 | `created_at`, `updated_at` | RFC 3339, or `null` when unrecorded |
 | `status_changed_at` | When `status` last changed, RFC 3339; `null` for a session not yet observed by a build that records it |
 | `diff` | `added`, `removed`, `files_changed`, `commits`, `behind`, `dirty`, and `unpushed` (`null` when not yet computed) |
@@ -549,7 +550,9 @@ git -C <your repo> for-each-ref refs/atrium/undo/
 destroyed and rebuilt. So are gitignored files that lived in the worktree: a
 local `.env`, a build cache, downloaded dependencies. They were never in a commit
 to restore from, and only the paths named by
-[`carry_files`](#carried-files) and [`link_paths`](#linked-paths) are re-seeded.
+[`carry_files`](#carried-files) and [`link_paths`](#linked-paths) are re-seeded — the
+latter unless the session was created dependency-isolated, which gets none of them by
+design and refills them with its setup script or its agent's own install.
 The agent's conversation usually returns — Atrium resumes it the same way it does
 after a pause, for the agents that support it. When Atrium can see there is no
 transcript to resume, the session comes back with a fresh agent and the notice
@@ -890,7 +893,19 @@ has no worktree at all — the row renders inert there, like the base-branch row
 An isolated session starts with nothing installed. If the repo has a
 [setup script](#setup-scripts), that script runs immediately afterwards and
 installs into the now-private tree; without one, the agent's first `npm install`
-does the same thing, just later.
+does the same thing, just later. That applies to **every** materialization, not
+just the first: the private tree is ordinary worktree content, so pausing deletes
+it and resuming starts empty again. A setup script is what makes that automatic,
+and it is why an isolated session is worth pausing less casually than a shared one.
+
+The path still has to be gitignored *in the session's worktree*, exactly as a
+linked one does — otherwise the tree the session installs is untracked rather than
+ignored, and pause commits it onto the branch. Atrium logs a warning at session
+start when it is not. A directory-only rule (`node_modules/`) is fine here, unlike
+for a symlink.
+
+Nothing in the session list marks a session isolated; the choice is visible in
+`atrium ls --json` as `isolated`.
 
 #### Setup scripts
 

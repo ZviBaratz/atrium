@@ -6,20 +6,25 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// depsFieldNA is the dim placeholder the field renders while it is inert. The reason
-// is always the same one — the target has no worktree to seed, so there is nothing to
-// isolate — and it borrows the branch picker's vocabulary for the same verdict
-// ("direct session — no git branching").
+// The dim placeholders the field renders while it is inert. The field is equally inert
+// for both, but they are not the same fact and must not collapse into one sentence:
+// reporting a path that is not a directory at all as a "direct session" tells the user
+// they have a creatable session when they do not, which is the defect #545 was filed
+// for and removed from the branch picker's placeholder. This borrows that picker's
+// vocabulary — including the half it had to grow.
 //
-// Its budget is tighter than the claude fields' claudeFieldNA, and the difference is
+// Their budget is tighter than the claude fields' claudeFieldNA, and the difference is
 // structural rather than stylistic: those render their label on a line of its own, so
 // the placeholder gets all 42 cells an 80-col terminal yields, while this field is one
 // line and must share them with the 12-cell "Dependencies" label.
 //
 // The widths are asserted rather than stated here — TestDepsFieldRowWidths measures
-// both rows against claudeFieldInnerWidth, and TestCreateForm_ComposesWithinInnerWidth
+// every row against claudeFieldInnerWidth, and TestCreateForm_ComposesWithinInnerWidth
 // sweeps the whole composed form via its "link paths, direct target" fixture.
-const depsFieldNA = "  n/a — direct session"
+const (
+	depsFieldNADirect  = "  n/a — direct session"
+	depsFieldNAInvalid = "  n/a — not a directory"
+)
 
 // Chip indices. Chip 0 is "shared", a REAL default rather than the no-op chip every
 // claude override field starts with, which is why this field exposes Isolate()
@@ -48,12 +53,26 @@ const (
 // picker are all present.
 type DepsField struct {
 	chipRow
+	// target is what the selected directory turned out to be, and so which inert
+	// placeholder to render. Only targetGit leaves the field live; the embedded
+	// chipRow's disabled flag is derived from it in SetTarget rather than set
+	// independently, so the two can never disagree about whether the field is inert.
+	target targetKind
 }
 
 // NewDepsField builds the field, starting on "shared" — today's behaviour, so an
 // untouched form creates exactly the session it created before.
 func NewDepsField() *DepsField {
-	return &DepsField{chipRow{options: []string{"shared", "isolated"}}}
+	return &DepsField{chipRow: chipRow{options: []string{"shared", "isolated"}}}
+}
+
+// SetTarget records what the selected target is, marking the field inert for anything
+// but a git repo — only a git target gets a worktree, and seeding is what there is to
+// isolate. The chip selection is retained, so flipping back to a git target restores
+// it (the branch picker retains its selection for the same reason).
+func (f *DepsField) SetTarget(k targetKind) {
+	f.target = k
+	f.SetDisabled(k != targetGit)
 }
 
 // HandleKeyPress cycles the chips with the arrow keys; every other key is a no-op
@@ -75,6 +94,16 @@ func (f *DepsField) Isolate() bool {
 	return !f.disabled && f.cursor == depsIsolated
 }
 
+// inertNote is the placeholder for the current inert target: which of the two
+// non-git verdicts the path landed on. Only reached while disabled, so the git
+// case returns the direct wording it can never render.
+func (f *DepsField) inertNote() string {
+	if f.target == targetInvalid {
+		return depsFieldNAInvalid
+	}
+	return depsFieldNADirect
+}
+
 // Render renders the field on a single line: label, then the chip row (or the dim
 // placeholder when inert). The height is the same either way, so the form does not
 // jump when the target changes.
@@ -82,7 +111,7 @@ func (f *DepsField) Render() string {
 	var s strings.Builder
 	s.WriteString(mfLabelStyle().Render("Dependencies"))
 	if f.disabled {
-		s.WriteString(mfDimStyle().Render(depsFieldNA))
+		s.WriteString(mfDimStyle().Render(f.inertNote()))
 		return s.String()
 	}
 	s.WriteString(" ")

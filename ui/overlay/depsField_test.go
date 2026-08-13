@@ -13,18 +13,22 @@ import (
 // form reads from that config key: something to isolate exists.
 var linkedPaths = []string{"node_modules"}
 
-// Both rows the field can render must fit the 42 inner cells an 80-col terminal
+// Every row the field can render must fit the 42 inner cells an 80-col terminal
 // yields — and unlike the claude fields, this one shares that budget with its own
-// label, because it renders on a single line (see depsField.go).
+// label, because it renders on a single line (see depsField.go). Driven through
+// SetTarget, which is the only thing that picks between the two placeholders, so
+// adding a third verdict cannot skip the measurement.
 func TestDepsFieldRowWidths(t *testing.T) {
 	f := NewDepsField()
 	f.Focus()
 	assert.LessOrEqual(t, lipgloss.Width(f.Render()), claudeFieldInnerWidth,
 		"the chip row must fit beside its label")
 
-	f.SetDisabled(true)
-	assert.LessOrEqual(t, lipgloss.Width(f.Render()), claudeFieldInnerWidth,
-		"the inert placeholder must fit beside its label")
+	for _, k := range []targetKind{targetDirect, targetInvalid} {
+		f.SetTarget(k)
+		assert.LessOrEqual(t, lipgloss.Width(f.Render()), claudeFieldInnerWidth,
+			"the inert placeholder for target %d must fit beside its label", k)
+	}
 }
 
 // The section exists only when link_paths names something to isolate. With an empty
@@ -134,4 +138,65 @@ func TestFitOverlay_KeepsTheHeadingOnAPlainPrompt(t *testing.T) {
 	o := NewTextInputOverlay("Send to session", "")
 	o.SetSize(80, 8)
 	assert.Contains(t, o.Render(), "Send to session")
+}
+
+// ...and it is scoped to the DEFAULT heading, which is the part that is easy to get
+// wrong: openForkForm builds an ordinary create overlay and overwrites Title with
+// "Fork from checkpoint · <stamp>", which its own comment calls the only thing on
+// screen saying this submit forks rather than creates — and which checkpoint it forks
+// from. Shedding it as decoration hands the user a form indistinguishable from a plain
+// create that quietly forks on submit.
+//
+// Same fixture and same size as the drop test above, so the two differ in exactly the
+// thing under test: at 80×24 this form is over budget either way.
+func TestFitOverlay_KeepsAnOverriddenHeading(t *testing.T) {
+	o := NewSessionCreateOverlay(mixedProfiles, twoAccounts, []string{"/repo/a"}, "claude", linkedPaths)
+	o.SetBranchResults([]string{"main", "develop", "feature/x"}, o.BranchFilterVersion())
+	o.Title = "Fork from checkpoint · 14:32"
+	o.SetSize(80, 24)
+
+	out := o.Render()
+	assert.LessOrEqual(t, strings.Count(out, "\n")+1, 24, "still bounded by the terminal")
+	assert.Contains(t, out, "Fork from checkpoint",
+		"an overridden heading carries what nothing else on the form says")
+	assert.Contains(t, out, "14:32", "including which checkpoint, not just that it forks")
+	assert.Contains(t, out, "Create", "and the submit control still survives")
+}
+
+// The clip of last resort takes the tail, so on its own it takes the submit button —
+// the one control the overlay exists for. Driven below the 24-row floor, where the
+// heading stage has already been spent and cannot buy another row.
+func TestFitOverlay_ClipKeepsTheSubmitButton(t *testing.T) {
+	t.Run("create form", func(t *testing.T) {
+		o := NewSessionCreateOverlay(mixedProfiles, twoAccounts, []string{"/repo/a"}, "claude", linkedPaths)
+		o.SetSize(80, 12)
+		out := o.Render()
+		assert.LessOrEqual(t, strings.Count(out, "\n")+1, 12)
+		assert.Contains(t, out, "Create")
+	})
+	t.Run("plain overlay", func(t *testing.T) {
+		o := NewTextInputOverlay("Send to session", "")
+		o.SetSize(80, 6)
+		out := o.Render()
+		assert.LessOrEqual(t, strings.Count(out, "\n")+1, 6)
+		assert.Contains(t, out, "Enter")
+	})
+}
+
+// #545, applied to this field: the two inert targets are not the same fact, and the
+// wrong one tells the user they have a session they can create. The branch picker had
+// to grow this distinction; a field that borrows its vocabulary must borrow the half
+// that fixed it, or the two rows sit one section apart contradicting each other.
+func TestDepsField_InertNoteNamesWhichNonGitTarget(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude", linkedPaths)
+	o.SetSize(80, 40)
+
+	o.SetTargetValidity(true, true, "") // a directory, but not a repo
+	assert.Contains(t, o.Render(), "direct session")
+
+	o.SetTargetValidity(false, false, "") // not a directory at all
+	out := o.Render()
+	assert.Contains(t, out, "not a directory")
+	assert.NotContains(t, out, "n/a — direct session",
+		"a path that is not a directory must not be reported as a creatable direct session")
 }

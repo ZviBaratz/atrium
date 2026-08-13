@@ -53,7 +53,7 @@ func tiHintStyle() lipgloss.Style { return theme.Current().OverlayHintStyle() }
 //
 // THE RULE (#466): this footer owns the navigation keys. A per-field hint earns its
 // place on a label line only by saying something the footer does not — the form has
-// nine sections, and repeating "↑↓ …" on each turns a hint into wallpaper. #460
+// ten sections, and repeating "↑↓ …" on each turns a hint into wallpaper. #460
 // applied this to Effort and Permissions and stopped there, leaving Account and the
 // Profile picker restating it; #466 finished the sweep and pinned the result with
 // TestCreateFormHints_FooterOwnsTheNavKeys, which counts the glyph across the whole
@@ -231,13 +231,21 @@ func (t *TextInputOverlay) compose() (content string, innerWidth int, divider st
 //   - Height: the create form's constant-height sections can total several rows more
 //     than a short terminal (an 80×24 screen with profiles, the claude fields, and an
 //     account picker needs over 30). Spacing is shed in stages — blank filler lines
-//     first, then divider lines (pure visual separation), then the create form's own
+//     first, then divider lines (pure visual separation), then a generic create-form
 //     heading — so the form compacts instead of scrolling. If even that is not enough
-//     (a terminal below the 24-row floor), the tail is clipped outright: a partially
-//     visible form is degraded but stable, while an oversize View() is not. The
-//     heading stage was added when a link_paths install gained the Dependencies
-//     section (#481) and pushed the tallest form one row past the budget, where the
-//     clip's victim is the Create button.
+//     (a terminal below the 24-row floor), the tail is clipped, but never the last
+//     line: both compose() branches end in the submit button, and a form that has
+//     lost the one control it exists for is worse than one missing a field. A
+//     partially visible form is degraded but stable; an oversize View() is not.
+//
+// The heading stage was added when a link_paths install gained the Dependencies
+// section (#481) and pushed the tallest form one row past the budget. It drops only
+// the DEFAULT heading: a caller that overrides Title is saying something the rest of
+// the form does not, and openForkForm is the live case — "Fork from checkpoint · <ts>"
+// is the sole on-screen evidence that this submit forks rather than creates, and which
+// checkpoint it forks from (app/app_fork.go). Comparing against createFormTitle keeps
+// that automatic for the next such caller, which a bool someone must remember to set
+// would not.
 func (t *TextInputOverlay) fitOverlay(content string, innerWidth int, divider string) string {
 	lines := strings.Split(content, "\n")
 	for i, l := range lines {
@@ -250,21 +258,25 @@ func (t *TextInputOverlay) fitOverlay(content string, innerWidth int, divider st
 	if budget := t.height - 4; budget > 0 {
 		lines = dropLinesToFit(lines, budget, func(l string) bool { return lipgloss.Width(l) == 0 })
 		lines = dropLinesToFit(lines, budget, func(l string) bool { return l == divider })
-		// Third stage, and the reason it exists: the tail of the create form is the
-		// Create button, so the clip below removes the one control the form is for.
-		// Its own heading is the cheapest line on the screen — a bordered box holding
-		// a Title field and a Create button is not something a user needs told is the
-		// new-session form — so it goes first. dropLinesToFit cannot do this: it
-		// preserves index 0 by contract, which is exactly the line being dropped.
+		// Third stage: the default heading is the cheapest line on the screen — a
+		// bordered box holding a Title field and a Create button is not something a
+		// user needs told is the new-session form. An overridden one is not cheap at
+		// all (see above), so it is kept and the clip below absorbs the row instead.
+		// dropLinesToFit cannot express either case: it preserves index 0 by contract,
+		// which is exactly the line in question.
 		//
 		// One line, not a loop. It buys back the last row rather than promising a
-		// budget it cannot deliver, and anything still over falls through to the clip
-		// as before.
-		if len(lines) > budget && t.isCreateForm && len(lines) > 1 {
+		// budget it cannot deliver, and anything still over falls through to the clip.
+		if len(lines) > budget && t.isCreateForm && t.Title == createFormTitle {
 			lines = lines[1:]
 		}
+		// Clip the tail, keeping the last line: it is the submit button in both
+		// compose() branches, and dropping it leaves a form that cannot be submitted
+		// from the keyboard's own affordance. budget ≥ 1 here, so the head slice is
+		// never negative; the three-index form stops append from writing back into
+		// the line it just cut.
 		if len(lines) > budget {
-			lines = lines[:budget]
+			lines = append(lines[:budget-1:budget-1], lines[len(lines)-1])
 		}
 	}
 	return tiStyle().Render(strings.Join(lines, "\n"))

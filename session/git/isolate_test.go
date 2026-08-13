@@ -1,14 +1,29 @@
 package git
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"fmt"
 	"io/fs"
+	stdlog "log"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ZviBaratz/atrium/log"
 )
+
+// captureWarnings redirects the package's warning logger into a buffer for the
+// duration of the test, and returns a func reading what has been written so far.
+func captureWarnings(t *testing.T) func() string {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := log.WarningLog
+	log.WarningLog = stdlog.New(&buf, "", 0)
+	t.Cleanup(func() { log.WarningLog = prev })
+	return buf.String
+}
 
 // setupIsolatedWorktree is setupSessionWorktree for a dependency-isolating session:
 // the flag is pushed in before Setup, exactly as Instance.Start and
@@ -264,5 +279,70 @@ func TestIsolatedSessionIsUnaffectedByTheDirOnlyIgnoreTrap(t *testing.T) {
 	mustRunGit(t, wtPath, "add", ".")
 	if staged := mustRunGit(t, wtPath, "ls-files", "-s"); strings.Contains(staged, rel) {
 		t.Fatalf("the session's private tree leaked into a pause commit:\n%s", staged)
+	}
+}
+
+// Skipping the link must not also skip the diagnosis. linkLocalPath refuses an entry
+// git would not ignore in the worktree, because the symlink would land in pause's
+// `git add .`; an isolated session creates no symlink, but it is the one session
+// guaranteed to FILL that path — so an unignored entry there is a whole dependency
+// tree committed onto the branch and into any PR cut from it.
+//
+// The ignore rule exists in the origin checkout here but has not been committed, so it
+// never reaches the session's base — the case linkLocalPath's own comment names, and
+// the one a session created off an older base hits without doing anything unusual.
+func TestIsolatedSessionWarnsWhenTheDepPathIsNotIgnored(t *testing.T) {
+	repoPath := newTestRepo(t)
+	const rel = "node_modules"
+	// Written but deliberately NOT committed: nothing carries it to the worktree.
+	if err := os.WriteFile(filepath.Join(repoPath, ".gitignore"), []byte(rel+"\n"), 0644); err != nil {
+		t.Fatalf("write .gitignore: %v", err)
+	}
+	makeDepsDir(t, repoPath, rel)
+	writeLinkConfig(t, []string{rel})
+
+	warnings := captureWarnings(t)
+	wt := setupIsolatedWorktree(t, repoPath, "isolate-unignored")
+
+	got := warnings()
+	if !strings.Contains(got, rel) || !strings.Contains(got, "not ignored") {
+		t.Fatalf("expected a warning naming %q as unignored, got:\n%s", rel, got)
+	}
+
+	// And the hazard the warning is about is real, not theoretical: what the session
+	// installs at that path is staged by exactly what pause runs.
+	wtPath := wt.GetWorktreePath()
+	if err := os.MkdirAll(filepath.Join(wtPath, rel), 0755); err != nil {
+		t.Fatalf("simulate install: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(wtPath, rel, "marker.txt"), []byte("private"), 0644); err != nil {
+		t.Fatalf("simulate install: %v", err)
+	}
+	mustRunGit(t, wtPath, "add", ".")
+	if staged := mustRunGit(t, wtPath, "ls-files", "-s"); !strings.Contains(staged, rel) {
+		t.Fatalf("expected the unignored tree to be staged (the reason for the warning), got:\n%s", staged)
+	}
+}
+
+// The complement, and the reason the probe is slash-terminated: a dir-only rule
+// ("node_modules/") is a perfectly good ignore for the real directory an isolated
+// session ends up with, even though linkLocalPath must refuse it for a symlink. A
+// probe copied verbatim from the shared path would warn here — on the commonest
+// .gitignore spelling in the ecosystem — about a session that is entirely fine.
+func TestIsolatedSessionDoesNotWarnForADirOnlyIgnoreRule(t *testing.T) {
+	for _, pattern := range []string{"node_modules", "node_modules/"} {
+		t.Run(pattern, func(t *testing.T) {
+			repoPath := newTestRepo(t)
+			const rel = "node_modules"
+			commitGitignore(t, repoPath, pattern)
+			makeDepsDir(t, repoPath, rel)
+			writeLinkConfig(t, []string{rel})
+
+			warnings := captureWarnings(t)
+			setupIsolatedWorktree(t, repoPath, "isolate-quiet")
+			if got := warnings(); got != "" {
+				t.Fatalf("expected no warning for an ignored path, got:\n%s", got)
+			}
+		})
 	}
 }

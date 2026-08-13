@@ -1095,8 +1095,12 @@ func (m *home) newSessionFormOverlay() (_ *overlay.TextInputOverlay, isGit bool)
 // seedOverlay fills a freshly built create-form overlay with the free-text values and
 // project selection shared by the prefill and crash-recovery paths. SetTitleValue("")
 // is a harmless no-op on a fresh field; SelectPath is skipped for an empty path (and a
-// no-op for a non-candidate one). Branch/profile/model/account are not seeded — they
-// are re-derived from the target, exactly as on a fresh form.
+// no-op for a non-candidate one). Branch/profile/model/account/dependencies are not
+// seeded — every one of them is re-derived from the target or left at its default,
+// exactly as on a fresh form. The dependency choice is the one that is not recoverable
+// that way (nothing about the path implies it), so a restored crash draft comes back on
+// "shared"; config.SessionDraft carries free text only, and widening it is a separate
+// change from #481.
 func seedOverlay(ov *overlay.TextInputOverlay, title, prompt, path string) {
 	ov.SetTitleValue(title)
 	ov.SetPrompt(prompt)
@@ -1620,8 +1624,15 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	// spawns the staged plan via proceedOverCapMsg. An explicit "unlimited"
 	// (max_sessions ≤ 0) yields Limit 0 and never fires.
 	branch := ov.GetSelectedBranch()
+	// `!direct &&`, not the accessor alone: the field's own inert guard keys off the
+	// last verdict the overlay was TOLD, and retargeting clears that verdict without
+	// disabling the field (ClearTargetValidity, deliberately — flipping it on every
+	// path keystroke flickers the section). A submit inside that debounce window would
+	// otherwise carry a choice made for a git repo into a direct session, which has no
+	// worktree to isolate, and persist isolate_deps=true on it. `direct` here is
+	// re-derived from disk a few lines above, so it is the verdict that actually holds.
 	plan := spawnPlan{
-		titles: titles, path: path, direct: direct, isolateDeps: ov.GetIsolateDeps(), programs: programs,
+		titles: titles, path: path, direct: direct, isolateDeps: !direct && ov.GetIsolateDeps(), programs: programs,
 		branch: branch, prompt: prompt, account: sel, fork: fork,
 	}
 
