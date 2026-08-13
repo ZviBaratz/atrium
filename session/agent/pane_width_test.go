@@ -62,7 +62,19 @@ import (
 // claudeLocalPermissionVisible, aiderConfirmVisible and the token helpers they call), so the
 // alternatives ledger below skips them. Beyond that, the width-bearing surfaces outside
 // Prompts/Gates/BusyMarkers — PermissionMode's footer markers, LiveSpinner, SuggestionVisible,
-// PasteCollapsed — have no coverage here at all.
+// PasteCollapsed, BackgroundWork — have no coverage here at all.
+//
+// BackgroundWork is the newest of those and the one with the most obvious width exposure, so
+// say what is known rather than leave it implied. Its chips ("N shells", "N monitors") sit in
+// the footer's TAIL, after the permission-mode indicator, and claude renders that line
+// truncate-on-overflow — the same mechanism registry.go records for the interrupt marker,
+// which at width 30 reads "⏸ manual mode on · esc to …". So the chip certainly stops being
+// visible somewhere below full width, and no rung here proves where. It is filed with
+// LiveSpinner rather than with the gates and prompts because it shares their failure mode
+// rather than the prompts': a truncated chip is a MISS, which reads as the plain idle the
+// poller reported before the detector existed, never a wrong action on a live dialog. Driving
+// the ladder for it needs a real background shell alive in a driven session — worth doing,
+// and not done here.
 
 // paneCapture is one captured pane plus the width it was driven at (see the header on the two
 // entries that are transcriptions rather than verbatim captures).

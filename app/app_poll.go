@@ -345,7 +345,18 @@ func deliverReadyPrompts(results []instanceMetaResult) []tea.Cmd {
 // a lock. The keeper pays a re-read per cycle instead — bounded, and only for a session
 // that has a prompt queued while the user is attached elsewhere.
 func endedAskingNow(inst *session.Instance, state tmux.PaneState) (bool, transcript.Stamp, bool) {
-	if state != tmux.PaneIdle {
+	// PaneBackground counts as settled here, and must: it is only ever raised on a pane
+	// whose TURN has ended (poll.go demotes a would-be idle, never a working state), so the
+	// transcript is exactly as final as it is under PaneIdle. Without it, a turn that ends
+	// by asking a question while a background shell is live would never run ComputeAsked —
+	// silently dropping #571's question hold and the EventAsked notification for precisely
+	// the sessions this feature exists to keep visible.
+	//
+	// Necessary but NOT sufficient, and the other half is in another package: the hold is
+	// `asked && Unread()`, so it also needs the turn-end into a chip-held Pending to raise
+	// the unread bit (session.setStatusTurnEnded). With only this half, `asked` is computed
+	// for a conjunction that is always false — the hold reads as present and does nothing.
+	if state != tmux.PaneIdle && state != tmux.PaneBackground {
 		return inst.EndedAsking(), transcript.Stamp{}, false
 	}
 	asked, stamp, ok := inst.ComputeAsked()
@@ -423,11 +434,22 @@ const promptDeliveryTimeout = 60 * time.Second
 // "loading" transition window. PanePending is held the same as PaneWorking: the main turn
 // has ended but a background sub-agent is still in flight (#290), so although the input box
 // is idle and typable, delivering now would interleave a new turn with the still-running one
-// — a zero-clock follow-up must wait for the sub-agent to finish. But a chatty agent that
-// writes continuously on boot can stay PaneWorking indefinitely and stall the first message
-// forever; once the prompt has been queued longer than promptDeliveryTimeout we drop only
-// that busy check. A zero queuedAt disables the timeout (the prompt was queued without a
-// timestamp), falling back to the strict idle-pane requirement.
+// — a zero-clock follow-up must wait for the sub-agent to finish.
+//
+// PaneBackground is deliberately NOT held, and the asymmetry is the point: a sub-agent's
+// turn interleaves with a new one, whereas a detached background shell or monitor does not.
+// Holding it would strand the follow-up outright rather than merely delay it — a quick-send
+// carries a ZERO queuedAt, which disables the timeout valve below, so a session-length
+// Monitor would keep every later message queued for the rest of the session with no
+// release. The case that DOES need holding — the turn ended by asking something — is held
+// by unansweredQuestion instead, which reaches a chip-held row because the turn-end raises
+// unread there too (session.setStatusTurnEnded).
+//
+// But a chatty agent that writes continuously on boot can stay PaneWorking indefinitely and
+// stall the first message forever; once the prompt has been queued longer than
+// promptDeliveryTimeout we drop only that busy check. A zero queuedAt disables the timeout
+// (the prompt was queued without a timestamp), falling back to the strict idle-pane
+// requirement.
 func promptDeliveryReady(state tmux.PaneState, awaitingInput, unansweredQuestion bool, queuedAt, now time.Time) bool {
 	if !awaitingInput {
 		return false
@@ -583,7 +605,8 @@ var diffContentFloor = 15 * time.Second
 //   - never computed — there is no number to preserve;
 //   - a writing status — Running, Loading and Pending all mean the agent may have
 //     the tree open right now. Pending is deliberately in that set: the main turn
-//     ended but a background sub-agent is still working (#290);
+//     ended but background work — a sub-agent (#290), or a shell/monitor the turn left
+//     running — may still be writing;
 //   - the status changed since the last computation — this is the Running→Ready
 //     edge, the moment the agent's final write lands and the chip matters most;
 //   - the floor has lapsed, covering the writers no status can see.

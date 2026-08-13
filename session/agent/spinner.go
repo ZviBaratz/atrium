@@ -16,6 +16,13 @@ import (
 // interrupt hint and the chips render side by side — and a live 2.1.210 busy pane keeps
 // "esc to interrupt" intact down to width 56. Chips never displace it.
 //
+// Two of those chips are now read as a signal in their own right — background.go matches
+// the "N shells"/"N monitors" counts to catch a turn that ENDED while work it started kept
+// running. That is not in tension with the paragraph above; it depends on it. Because the
+// chips and the interrupt hint co-exist rather than compete, a chip beside a live marker
+// means a running turn with a background job, which is why the marker still outranks it and
+// the chip is consulted only where the answer would otherwise be idle.
+//
 // What actually drops the marker is that the footer lights the hint off the CLI's
 // narrowest notion of busy: the bundle tracks isLoading / isExternalLoading /
 // betweenCalls as separate states and only isLoading shows the hint. A turn can be
