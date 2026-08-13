@@ -69,7 +69,7 @@ func (g *Worktree) setupFromExistingBranch() error {
 			}
 			return fmt.Errorf("failed to create worktree from remote branch %s: %w", g.branchName, err)
 		}
-		return nil
+		return g.recordBaseCommit()
 	}
 
 	// Create a new worktree from the existing local branch
@@ -84,6 +84,19 @@ func (g *Worktree) setupFromExistingBranch() error {
 		return fmt.Errorf("failed to create worktree from branch %s: %w", g.branchName, err)
 	}
 
+	return g.recordBaseCommit()
+}
+
+// recordBaseCommit stores the commit the session resumes from so the diff pane
+// has a correct base. Without it, GetBaseCommitSHA() returns "" and every diff
+// invocation skips computation (returning errBaseCommitNotSet), leaving the diff
+// tab empty for the lifetime of the session.
+func (g *Worktree) recordBaseCommit() error {
+	output, err := g.runGitCommand(g.worktreePath, "rev-parse", "HEAD")
+	if err != nil {
+		return fmt.Errorf("failed to record base commit for branch %s: %w", g.branchName, err)
+	}
+	g.setBaseCommitSHA(strings.TrimSpace(output))
 	return nil
 }
 
