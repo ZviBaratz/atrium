@@ -272,7 +272,19 @@ func (t *TextInputOverlay) fitOverlay(content string, innerWidth int, divider st
 		}
 		// Clip the tail, keeping the last line: it is the submit button in both
 		// compose() branches, and dropping it leaves a form that cannot be submitted
-		// from the keyboard's own affordance. budget ≥ 1 here, so the head slice is
+		// from the keyboard's own affordance.
+		//
+		// What this actually costs, measured rather than assumed (the fork form at
+		// 80×24 renders one row over budget, since it keeps its heading): the line
+		// taken is the one directly above the button, which is the hint footer — so
+		// that form loses "⌃S create · ⌃R clear", the #466 rule's single owner of the
+		// navigation keys. That is the right trade against the alternatives (Enter and
+		// Esc still work, and the keys are discoverable elsewhere, whereas the heading
+		// is the only statement anywhere that this submit forks), but it is a real
+		// loss and the next row it would take is a FIELD.
+		// TestFitOverlay_ClipTakesTheHintBeforeAnyField pins that boundary.
+		//
+		// budget ≥ 1 here, so the head slice is
 		// never negative; the three-index form stops append from writing back into
 		// the line it just cut.
 		if len(lines) > budget {
