@@ -91,8 +91,9 @@ var tokyoNightDay = &Theme{
 		BadgeBg:   lipgloss.Color("#7847bd"), // == Purple
 		BadgeFg:   lipgloss.Color("#e1e2e7"), // == Bg
 	},
-	Glyphs:  plainGlyphs(),
-	Borders: Borders{Style: lipgloss.RoundedBorder()},
+	Glyphs:      plainGlyphs(),
+	agentGlyphs: plainAgentGlyphs(),
+	Borders:     Borders{Style: lipgloss.RoundedBorder()},
 }
 
 // catppuccinLatte is the light twin of catppuccinMocha: catppuccin's "latte"
@@ -133,8 +134,9 @@ var catppuccinLatte = &Theme{
 		BadgeBg:   lipgloss.Color("#8839ef"), // == Purple
 		BadgeFg:   lipgloss.Color("#eff1f5"), // == Bg
 	},
-	Glyphs:  plainGlyphs(),
-	Borders: Borders{Style: lipgloss.RoundedBorder()},
+	Glyphs:      plainGlyphs(),
+	agentGlyphs: plainAgentGlyphs(),
+	Borders:     Borders{Style: lipgloss.RoundedBorder()},
 }
 
 // lightTwin maps a dark theme to its light counterpart. It is what `theme: auto`

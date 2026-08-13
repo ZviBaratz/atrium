@@ -243,20 +243,150 @@ func assertGlyphWidths(t *testing.T, name string, g Glyphs) {
 // the width sweep above and the fidelity-rung test — cannot disagree about it.
 const contextRampRungs = 8
 
+// themeAtRung is compose()'s agent-table half without the process-global: the default
+// palette theme, carrying one named fidelity rung. A bare &Theme{agentGlyphs: …}
+// literal is not a substitute — AgentGlyph consults the palette's polarity, and a zero
+// Palette has no colours to read.
+func themeAtRung(set string) *Theme {
+	t := *Get(DefaultThemeName)
+	t.agentGlyphs = agentGlyphsFor(set)
+	return &t
+}
+
 // TestAgentGlyphWidths extends the same invariant to the agent identity glyphs:
 // each must be a single cell so the list's column math holds, and every entry
 // must resolve to a non-empty glyph (including the unknown-key fallback).
+//
+// Swept over every rung, like TestGlyphWidths above. It used to measure the one
+// resolved table Get() returns, which was the whole table there was; now a rung it
+// never visits is a rung nothing measures. It resolves through AgentGlyph rather
+// than reading the map, so the accessor's fallback branch is measured too.
+//
+// The theme is built here rather than through SetGlyphSet because this file is
+// in-package: agentGlyphsFor is reachable directly, and a test that leaves the
+// process-global alone cannot leak a rung into whatever runs next under -shuffle.
 func TestAgentGlyphWidths(t *testing.T) {
-	th := Get(DefaultThemeName)
-	for key := range agentGlyphs {
-		g, _ := th.AgentGlyph(key)
+	for _, set := range []string{GlyphSetNerd, GlyphSetPlain, GlyphSetASCII} {
+		th := themeAtRung(set)
+		for _, key := range th.AgentKeys() {
+			g, _ := th.AgentGlyph(key)
+			if w := runewidth.StringWidth(g); w != 1 {
+				t.Errorf("%s rung: agent glyph %s = %q has width %d, want 1", set, key, g, w)
+			}
+		}
+		g, _ := th.AgentGlyph("unknown-agent")
 		if w := runewidth.StringWidth(g); w != 1 {
-			t.Errorf("agent glyph %s = %q has width %d, want 1", key, g, w)
+			t.Errorf("%s rung: unknown-key fallback glyph %q has width %d, want 1", set, g, w)
 		}
 	}
-	g, _ := th.AgentGlyph("unknown-agent")
-	if w := runewidth.StringWidth(g); w != 1 {
-		t.Errorf("unknown-key fallback glyph %q has width %d, want 1", g, w)
+}
+
+// TestAgentRungsShareOneKeySet pins what makes Theme.AgentKeys well defined: every
+// rung names the same agents, so "which agents does Atrium know" has one answer
+// whatever fidelity the user is on. A key present on one rung and missing on another
+// would render as an unrecognised session on exactly one of them — and the ? legend,
+// which projects AgentKeys, would list a different set of agents per rung.
+func TestAgentRungsShareOneKeySet(t *testing.T) {
+	want := themeAtRung(GlyphSetPlain).AgentKeys()
+	require.NotEmpty(t, want, "no agent keys at all: every assertion below would be vacuous")
+	for _, set := range []string{GlyphSetNerd, GlyphSetPlain, GlyphSetASCII, "bogus-rung"} {
+		got := themeAtRung(set).AgentKeys()
+		require.Equalf(t, want, got, "the %s rung names a different set of agents than the plain one", set)
+	}
+}
+
+// TestAgentGlyphsFollowTheRung pins the wiring, which is the half of #674 that every
+// other guard here is structurally blind to: the rung the user selected has to reach
+// the agent table on the COMPOSED theme.
+//
+// Nothing else can say it. The width and collision sweeps in this file build their own
+// theme (themeAtRung), and package ui's coverage guard reads Current() and compares
+// AgentGlyph against AgentGlyph — self-consistent whatever table is underneath. Delete
+// compose()'s line and all of them stay green while an ascii user gets Unicode again,
+// which is exactly the defect this PR fixed.
+func TestAgentGlyphsFollowTheRung(t *testing.T) {
+	// The known default, not the entry state: CI runs -shuffle=on.
+	t.Cleanup(func() { SetGlyphSet(GlyphSetPlain) })
+
+	const probe = "claude" // any real key: what is asserted is which table answered
+	plain, ascii := plainAgentGlyphs()[probe], asciiAgentGlyphs()[probe]
+	require.NotEqual(t, plain, ascii, "the two rungs spell this agent the same, so nothing below discriminates")
+
+	for _, tc := range []struct{ set, want string }{
+		{GlyphSetPlain, plain},
+		{GlyphSetNerd, plain}, // two rungs, not three: nerd shares the plain table
+		{GlyphSetASCII, ascii},
+		{"bogus-rung", plain}, // an unknown rung falls back to plain, like glyphsFor
+	} {
+		SetGlyphSet(tc.set)
+		g, _ := Current().AgentGlyph(probe)
+		require.Equalf(t, tc.want, g, "on the %s rung the composed theme paints %q for %s", tc.set, g, probe)
+	}
+}
+
+// TestASCIIAgentGlyphsDoNotCollide holds the CONSTRAINTS asciiAgentGlyphs' first-free-
+// letter rule exists to satisfy — the same job TestASCIIContextRampDoesNotCollide does
+// for the meter, and for a sharper version of the same reason.
+//
+// Not the derivation itself, which no test here holds: spell gemini "Z" and the suite
+// stays green, and generic's "." is outside the rule by construction. That is the right
+// split — the rule is guidance for picking the next value, the constraints below are
+// what makes a value wrong.
+//
+// The agent glyph is pinned to the far right of a session row (ui/row.go's agentSeg),
+// so it shares ONE FRAME with every mark in the ascii Glyphs table: the status gutter,
+// the git chips, the fold markers on the repo header above it, the context meter. The
+// four deliberate collisions asciiGlyphs allows itself are argued from "no screen shows
+// both meanings"; that argument is unavailable here, so this table gets no collisions
+// at all.
+//
+// Case-insensitively, which is the part a naive check would miss and the part that
+// decided the values: the mnemonic X (codeX) and V (antigraVity) are the case-twins of
+// Muted/MarkChecked and Behind/FoldOpen, and case height is the weakest distinction a
+// font can make — on the fonts this rung exists for. Distinctness within the table and
+// the 7-bit floor itself are asserted here too, the latter because asciiAgentGlyphs is
+// built from the plain table: an agent added there and not here inherits its Unicode
+// glyph into the rung that exists to have none, which is #674 exactly.
+func TestASCIIAgentGlyphsDoNotCollide(t *testing.T) {
+	g := asciiGlyphs()
+	taken := map[string]string{}
+	rv := reflect.ValueOf(g)
+	rt := rv.Type()
+	for i := 0; i < rt.NumField(); i++ {
+		f := rt.Field(i)
+		if f.Type.Kind() != reflect.String {
+			continue
+		}
+		if s := rv.Field(i).String(); s != "" {
+			taken[strings.ToLower(s)] = f.Name
+		}
+	}
+	for _, frame := range g.SpinnerFrames {
+		taken[strings.ToLower(frame)] = "SpinnerFrames"
+	}
+	for _, rung := range g.ContextRamp {
+		taken[strings.ToLower(rung)] = "ContextRamp"
+	}
+	require.NotEmpty(t, taken, "nothing to collide with: this test would pass by having nothing to say")
+
+	byGlyph := map[string]string{}
+	th := themeAtRung(GlyphSetASCII)
+	for _, key := range th.AgentKeys() {
+		mark, _ := th.AgentGlyph(key)
+		for _, r := range mark {
+			require.Lessf(t, r, rune(0x80),
+				"ascii agent glyph %s = %q is not 7-bit — it inherited the plain rung's Unicode mark, "+
+					"which is the tofu this rung exists to avoid", key, mark)
+		}
+		if owner, clash := taken[strings.ToLower(mark)]; clash {
+			t.Errorf("ascii agent glyph %s = %q collides with Glyphs.%s (case-insensitively), "+
+				"which paints on the same row", key, mark, owner)
+		}
+		if other, dup := byGlyph[strings.ToLower(mark)]; dup {
+			t.Errorf("ascii agent glyphs %s and %s are both %q (case-insensitively): "+
+				"two agents that paint as one", other, key, mark)
+		}
+		byGlyph[strings.ToLower(mark)] = key
 	}
 }
 

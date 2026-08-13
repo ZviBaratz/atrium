@@ -88,7 +88,8 @@ func helpRow(key, desc string) string {
 // The cheatsheet is generated from keys.HelpGroups — help is a projection of
 // the keymap registry, never authored beside it (#371). Layout and prose live
 // in that table; only the rendering rules live here. The glyph legend below is
-// likewise a projection of the active Glyphs table (see legendGroups).
+// likewise a projection of the theme's two glyph tables — the Glyphs struct and
+// the agent identity table (see legendGroups).
 func (h helpTypeGeneral) toContent() string {
 	lines := []string{helpTitleStyle().Render("Atrium — Keys")}
 	for _, group := range keys.HelpGroups() {
@@ -126,11 +127,11 @@ type legendGroup struct {
 	entries []legendEntry
 }
 
-// legendGroups projects the active Glyphs table into the '?' legend, grouped
-// status / git / badges. Every entry reads its glyph from the live Glyphs set, so
+// legendGroups projects the theme's glyph tables into the '?' legend, grouped
+// status / git / badges / agents. Every entry reads its glyph from the live theme, so
 // the legend can never drift from what a row actually paints, and it re-renders
 // under whichever fidelity rung is active. Completeness — every row-vocabulary
-// glyph field is present — is pinned by TestLegendCoversRowVocabulary.
+// glyph is present — is pinned by TestLegendCoversRowVocabulary, over both tables.
 func legendGroups() []legendGroup {
 	t := theme.Current()
 	g := t.Glyphs
@@ -172,7 +173,39 @@ func legendGroups() []legendGroup {
 			{glyph: contextRampSample(g), style: t.DimStyle(), label: "context"},
 			{glyph: g.AutoBadge, rendered: t.BadgeStyle().Render(" " + g.AutoBadge + "AUTO "), label: "auto-accepting"},
 		}},
+		{"agents", agentLegendEntries(t)},
 	}
+}
+
+// agentLegendEntries decodes the row's far-right column: which CLI a session runs.
+// That column is pinned there (ui/row.go's agentSeg) precisely so the question is
+// answerable at a glance, and until #673 the legend said nothing about it.
+//
+// It is not the last undecoded mark on a row: prCheckGlyph's ✗/•/✓ and runGlyph's ▸
+// are inline rune literals rather than Glyphs fields, and ui/row.go declares them out
+// of scope for the legend where runGlyph is defined. They also each annotate a chip
+// that is legible without them — a PR number, a port — whereas the agent glyph is the
+// whole statement, so it is the one whose absence from the legend left a fact on the
+// row with nowhere to look it up.
+//
+// Keys and glyphs both come from the theme's agent table, which is what makes this a
+// projection rather than a second copy: the label IS the key the table is keyed by
+// (session/agent's canonical Key, the same string the row resolves a program to), so
+// the legend cannot name an agent the table does not have or spell one differently.
+// Each entry carries the agent's own accent, so brand colour and glyph agree here the
+// way they do on the row.
+func agentLegendEntries(t *theme.Theme) []legendEntry {
+	keys := t.AgentKeys()
+	entries := make([]legendEntry, 0, len(keys))
+	for _, key := range keys {
+		glyph, c := t.AgentGlyph(key)
+		entries = append(entries, legendEntry{
+			glyph: glyph,
+			style: lipgloss.NewStyle().Foreground(c),
+			label: key,
+		})
+	}
+	return entries
 }
 
 // contextRampSample returns the ramp rung the legend stands the meter in for —

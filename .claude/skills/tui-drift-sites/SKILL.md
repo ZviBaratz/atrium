@@ -163,11 +163,26 @@ lie. Don't "fix" them.
 
 ## Adding or changing a glyph — width first, legend second
 
-1. **It must measure width 1.** Guarded across every palette × glyph-set
-   combination by `TestGlyphWidths`, `TestAgentGlyphWidths`,
-   `TestNoteGlyphIsSingleCellEverywhere` in `ui/theme/theme_test.go`. A 2-cell
-   glyph is not cosmetic — it breaks the column math and the view-bounds
-   invariant, which is exactly what `TestGlyphWidths` says it guards.
+There are **two** glyph tables, and which one you are in decides which guards fire:
+the `Glyphs` struct (declared in `ui/theme/theme.go`, filled per rung in
+`ui/theme/registry.go`) and the agent identity table (`ui/theme/agent.go`). Both are
+rung-aware, both project into the `?` legend, and until #674/#673 the second was
+neither. A theme carries both — `Glyphs` exported, the agent table behind
+`AgentGlyph`/`AgentKeys`.
+
+1. **It must measure width 1.** Guarded by `TestGlyphWidths`,
+   `TestAgentGlyphWidths`, `TestNoteGlyphIsSingleCellEverywhere` in
+   `ui/theme/theme_test.go`. A 2-cell glyph is not cosmetic — it breaks the column
+   math and the view-bounds invariant, which is exactly what `TestGlyphWidths` says
+   it guards.
+
+   "Across every palette × glyph-set" is the shape of the *invariant*, not of any one
+   of those three sweeps, and the axes they actually walk differ:
+   `TestGlyphWidths` is every palette × every rung, `TestAgentGlyphWidths` every rung
+   on the default palette (`themeAtRung`), `TestNoteGlyphIsSingleCellEverywhere` every
+   palette on whichever rung is current. Every rung is the property to preserve in the agent
+   sweep rather than to assume — it used to measure only the one table `Get()` returns,
+   and a rung a sweep never visits is a rung nothing measures at all.
 
    Distinguish what the *tests* assert from *why the rule exists*. The three tests
    above assert width 1 for column math; none of them mentions ghosting. But the
@@ -183,13 +198,44 @@ lie. Don't "fix" them.
    output, diffs — sanitize at the boundary (`SanitizeWidth`, `ui/theme/panel.go`).
    See `verify-tui`'s `measurement.md` for the mechanism in full.
 2. **It must reach the `?` legend**, or be excluded with a reason.
-   `app/help_legend_test.go`'s `TestLegendCoversRowVocabulary` reflects over the
-   live `Glyphs` table, so a new field forces a decision. Note one exclusion
-   exists purely because its glyph coincidentally appears elsewhere in the legend
-   prose — the loop would pass by accident without it.
+   `app/help_legend_test.go`'s `TestLegendCoversRowVocabulary` covers **both** tables:
+   it reflects over the live `Glyphs` struct, so a new field forces a decision, and
+   walks `theme.AgentKeys()` (`assertLegendCoversAgents`), so a new agent does too.
+   The agent half is #673's; before it, agent identity was in no legend at all and
+   #672 added a sixth glyph without tripping anything.
+
+   Two things that half does differently, both worth copying into the next guard of
+   this shape. It asserts the glyph **and its label together** — a bare containment
+   check is what the `Glyphs` exclusion map has to apologise for twice, where a mark
+   passes because some unrelated entry happens to paint it. And it runs on more than
+   one rung, because the legend is a projection of the *active* tables.
 3. **Prefer plain single-cell non-PUA Unicode.** There is no reliable way to probe
    for a patched font; the three-rung ladder (`nerd`/`plain`/`ascii`) in
    `ui/theme/registry.go` is the answer, not detection.
+4. **It needs an ascii form too — and the table will not tell you it is missing.**
+   `asciiGlyphs()` and `asciiAgentGlyphs()` are both built *from* the plain table, so
+   a glyph added to plain alone is silently Unicode on the rung whose entire purpose
+   is to have none. That is #674 exactly: the agent table had no rung, and a user on
+   `glyph_set: ascii` got a status column of `* ? ~ Y` with `✻ ❖ ✦ ≡ ✜` still painted
+   beside it. `TestASCIIAgentGlyphsDoNotCollide` fails on an inherited Unicode mark
+   in the agent table; on the `Glyphs` struct that check exists for `ContextRamp`
+   alone (`TestContextRampRungs`), so a new *field* is still on you.
+
+   The agent table is **two** rungs, not three (`agentGlyphsFor`): plain and nerd
+   share one, because the nerd rung exists to overlay vendor PUA icons and this table
+   deliberately carries none.
+
+   **`asciiGlyphs()`' tolerable-collision argument does not extend to the agent
+   table.** Those four reuses are argued from "no screen shows both meanings"; the
+   agent glyph is pinned to the far right of a session row, so it shares one frame
+   with the status gutter, the git chips, the fold markers and the context meter.
+   Case-insensitively, too — `X` and `V` are the case-twins of Muted/MarkChecked and
+   Behind/FoldOpen, and case height is the weakest distinction a font can make, on
+   exactly the fonts this rung exists for. The rule the values were derived by is written
+   into `asciiAgentGlyphs()`' comment; what `TestASCIIAgentGlyphsDoNotCollide` executes is
+   the constraint set that rule serves (7-bit, no case-insensitive collision, distinct
+   within the table), not the derivation — a different letter meeting those is a review
+   conversation, not a build break.
 
 ## Adding a UI state — 7 sites, three of them fixture files
 
