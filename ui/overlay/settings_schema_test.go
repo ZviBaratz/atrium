@@ -154,57 +154,87 @@ func TestEveryRowHasAKnownCategoryAndScope(t *testing.T) {
 	}
 }
 
-// glossExemptRows are the enum rows whose options carry no gloss, each for one of two
-// reasons: the vocabulary is *dynamic* (it grows when a profile, theme or splash
-// variant is added, so an exhaustive map would rot silently), or it is a bare on/off
-// pair on a row that declares no `detail` at all, so contextLine's fallback is
-// firstSentence("") — empty, and unable to describe the state the user is not in.
-//
-// That second reason used to read "self-glossing on/off; the summary carries the
-// meaning", and group_mode was exempt on it. It is not the summary contextLine falls
-// back to, it is the detail: group_mode's opened "A divider and tinted headers per
-// account." and was the panel's only visible help while clustering was OFF (#511).
-// An on/off pair with a detail earns no exemption — it gets glosses.
+// glossExemptDynamic are the enum rows exempt from the gloss guard because their
+// vocabulary is *dynamic*: it grows when a profile, theme or splash variant is added, so
+// an exhaustive map would rot silently.
 //
 // Spec §6 supplies glosses for the enums whose options are a fixed, non-obvious
 // vocabulary — five at the time it was written, six since context_indicator
 // (off/count/percent/bar) landed. Those are exactly where the 300-443-char run-on
 // descriptions lived, so the guard below stays strict where it earns its keep. The
-// count is not asserted anywhere on purpose: it is the exemption list below that has
-// to stay honest, and TestEnumRowsGlossEveryOption fails for any row missing from both.
-var glossExemptRows = map[string]string{
-	"default_program":      "dynamic: option list is the user's profile names",
-	"theme":                "dynamic: grows with every theme added to the registry (plus the reserved `auto`, glossed by the summary)",
-	"splash":               "dynamic: grows with every splash variant (the random and off modes are glossed)",
+// count is not asserted anywhere on purpose: it is the exemption lists here that have
+// to stay honest, and TestEnumRowsGlossEveryOption fails for any row missing from all.
+var glossExemptDynamic = map[string]string{
+	"default_program": "dynamic: option list is the user's profile names",
+	"theme":           "dynamic: grows with every theme added to the registry (plus the reserved `auto`, glossed by the summary)",
+	"splash":          "dynamic: grows with every splash variant (the random and off modes are glossed)",
+}
+
+// glossExemptNoDetail are the bare on/off rows exempt because they declare no `detail` at
+// all, so contextLine's fallback is firstSentence("") — empty, and unable to describe the
+// state the user is not in.
+//
+// The no-detail half is the whole reason, and it is a separate map so the guard can CHECK
+// it rather than trust this comment: TestEnumRowsGlossEveryOption requires detail == ""
+// for every row listed here. The reason used to read "self-glossing on/off; the summary
+// carries the meaning", and group_mode was exempt on it — but it is not the summary
+// contextLine falls back to, it is the detail, so group_mode's ("A divider and tinted
+// headers per account.") was the panel's only visible help while clustering was OFF
+// (#511). Adding a detail to any row here re-opens that bug, and would otherwise do it
+// silently: the gloss guard skips these rows, and the leadsWithOptionName guards below
+// only catch a fallback sentence that *opens with* an option's name.
+var glossExemptNoDetail = map[string]string{
 	"model_indicator":      "self-glossing on/off, and no detail for the fallback to misdescribe",
 	"effort_indicator":     "self-glossing on/off, and no detail for the fallback to misdescribe",
 	"permission_indicator": "self-glossing on/off, and no detail for the fallback to misdescribe",
 }
 
+// glossExemptRows is every gloss-guard exemption, whatever its reason.
+func glossExemptRows() map[string]string {
+	all := make(map[string]string, len(glossExemptDynamic)+len(glossExemptNoDetail))
+	for k, v := range glossExemptDynamic {
+		all[k] = v
+	}
+	for k, v := range glossExemptNoDetail {
+		all[k] = v
+	}
+	return all
+}
+
 // TestEnumRowsGlossEveryOption pins that each fixed-vocabulary enum option carries a
 // one-line gloss. This is what replaced the run-on descriptions: if an option has no
 // gloss, its meaning went missing rather than moving.
+//
+// It also holds glossExemptNoDetail to its stated premise — those rows must have no
+// detail — so the exemption cannot quietly become the #511 bug again.
 func TestEnumRowsGlossEveryOption(t *testing.T) {
 	cfg := config.DefaultConfig()
+	exempt := glossExemptRows()
 	seenExempt := map[string]bool{}
 	for _, r := range newSettingRows(cfg) {
 		if r.kind != kindEnum {
-			assert.NotContainsf(t, glossExemptRows, r.key,
+			assert.NotContainsf(t, exempt, r.key,
 				"row %q is exempted from the gloss guard but is not an enum row", r.key)
 			continue
 		}
-		if reason, ok := glossExemptRows[r.key]; ok {
+		if reason, ok := exempt[r.key]; ok {
 			seenExempt[r.key] = true
 			t.Logf("row %q exempt from the gloss guard: %s", r.key, reason)
+			if _, noDetail := glossExemptNoDetail[r.key]; noDetail {
+				assert.Emptyf(t, r.detail,
+					"row %q is exempt from the gloss guard because it has no detail, but it now "+
+						"has one — its first sentence is contextLine's fallback under BOTH options, "+
+						"which is #511. Gloss the options instead of exempting the row.", r.key)
+			}
 			continue
 		}
 		for _, opt := range r.options(cfg) {
 			assert.NotEmptyf(t, r.gloss[opt], "enum row %q has no gloss for option %q", r.key, opt)
 		}
 	}
-	// The exemption list must not outlive the rows it names, or it would silently
+	// The exemption lists must not outlive the rows they name, or they would silently
 	// excuse a future row that reuses a retired key.
-	for key := range glossExemptRows {
+	for key := range exempt {
 		assert.Truef(t, seenExempt[key], "glossExemptRows names %q, which is no longer an enum row", key)
 	}
 }
@@ -375,7 +405,7 @@ func unglossedOptions(r settingRow, cfg *config.Config) []string {
 // of them.
 //
 // Splash is that row and is why this exists: its pattern vocabulary is dynamic, so only random
-// and off are glossed (see glossExemptRows), and a detail opening "Off leaves the plain
+// and off are glossed (see glossExemptDynamic), and a detail opening "Off leaves the plain
 // wordmark ..." is what the panel then said while rain, tunnel, ripple, galaxy or aurora was
 // selected — copy about the one rung the user had not picked.
 //
