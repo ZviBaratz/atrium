@@ -202,7 +202,7 @@ func TestEveryEnumRowsRichValueIsOfferedFirst(t *testing.T) {
 // dynamicValueRows are the enum rows whose option strings are not a fixed vocabulary, so
 // their rendered width is not something the panel's geometry can be budgeted against. The
 // same three rows are exempt from the gloss guard for the same underlying reason
-// (glossExemptRows) — their vocabulary grows outside this package.
+// (glossExemptDynamic) — their vocabulary grows outside this package.
 var dynamicValueRows = map[string]string{
 	"theme":           "theme names grow with the registry; tokyo-night alone is 15 cells",
 	"splash":          "variant names grow with every splash added",
@@ -1047,7 +1047,7 @@ func TestExpandedHelpNamesTheApplyTimingForEveryRow(t *testing.T) {
 // way the sentence it replaces did.
 var helpOverflowAllowed = map[string]string{
 	"splash": "its Options block is 8 of the 17 lines on its own — the header, plus random, " +
-		"five variant names and off — and glossExemptRows keeps the five variant names " +
+		"five variant names and off — and glossExemptDynamic keeps the five variant names " +
 		"unglossed (only random and off carry a gloss) precisely because that vocabulary " +
 		"grows with every variant added to the engine",
 	"notifications_finished": "fits at exactly 17 lines while live; over only in its inert " +

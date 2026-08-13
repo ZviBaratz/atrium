@@ -665,6 +665,15 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			detail: "A divider and tinted headers per account. Manual reordering stays " +
 				"available: J/K within a repo group, `{` / `}` for groups inside one cluster " +
 				"(a move across an account boundary is refused), `[` / `]` for whole clusters.",
+			// An on/off pair still needs glosses: contextLine shows the selected option's
+			// gloss and, failing that, firstSentence(detail) — which is the same sentence
+			// under BOTH options, so an unglossed row here described the clustered list
+			// while clustering was off (#511). Each gloss says what the list looks like in
+			// its own state.
+			gloss: map[string]string{
+				"off": "repo groups only, every session under its repo",
+				"on":  "a divider and tinted header per account",
+			},
 			// Display value is off/on; the stored config value stays repo/account, so
 			// config.json and a future third grouping axis keep their vocabulary.
 			get: groupModeOnOff,

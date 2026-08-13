@@ -291,7 +291,7 @@ which is what dissolves the 300–443-char run-on descriptions.
 | Row | Summary | Detail / gloss |
 |---|---|---|
 | Sort within group | `Row order inside each repo group.` | **gloss:** `creation` = the manual order you set with J/K. `status` = floats blocked and unread sessions to the top. **detail:** Group order stays manual either way (`{` / `}`). |
-| Account clustering | `Add a top-level cluster per Claude account above the repo groups.` | **detail:** A divider and tinted headers per account. Manual reordering stays available: J/K within a repo group, `{` / `}` for groups inside one cluster (a move across an account boundary is refused), `[` / `]` for whole clusters. |
+| Account clustering | `Add a top-level cluster per Claude account above the repo groups.` | **gloss:** `off` = repo groups only, every session under its repo. `on` = a divider and tinted header per account. (Added by #511: an on/off pair is not self-glossing when the row has a `detail`, because the detail's first sentence is the context line under *both* options.) **detail:** A divider and tinted headers per account. Manual reordering stays available: J/K within a repo group, `{` / `}` for groups inside one cluster (a move across an account boundary is refused), `[` / `]` for whole clusters. |
 | Model chip | `Per-session model chip, shown whenever the model is known.` | — |
 | Effort chip | `Per-session reasoning-effort chip; claude only.` | — |
 | Permission chip | `Per-session permission-mode chip: plan, accept-edits, auto.` | — |
