@@ -62,6 +62,9 @@ func compose() *Theme {
 	}
 	t := *Get(name)
 	t.Glyphs = glyphsFor(curGlyphSet)
+	// Both glyph tables take the rung, or the ascii floor is a floor under half the
+	// marks a session row paints (#674).
+	t.agentGlyphs = agentGlyphsFor(curGlyphSet)
 	return &t
 }
 

@@ -89,8 +89,33 @@ var glyphExemptFromIdentity = map[agent.Key]string{}
 // missing on every theme. Width and contrast for the entries that DO exist belong
 // to TestAgentGlyphWidths and TestAgentBrandColoursStayLegible in ui/theme, which
 // range over those tables.
+//
+// Every RUNG is not enough, though, and that is the one axis this used to skip. Since
+// #674 the table has an ascii form (plain letters, chosen against the row's 7-bit
+// vocabulary), so distinctness is a per-rung property: two agents can be distinct on
+// the plain rung and identical on the floor a user drops to when their font cannot
+// draw it. Coverage is not per-rung — the rungs share one key set, which ui/theme's
+// TestAgentRungsShareOneKeySet holds — but it is swept anyway, because sweeping is
+// what makes that statement true here rather than assumed here.
 func TestEveryAgentAdapterHasAnIdentityGlyph(t *testing.T) {
-	th := theme.Get(theme.DefaultThemeName)
+	// theme.Current() is a process global. Restore the KNOWN default rather than
+	// whatever was set on entry: CI runs -shuffle=on, so entry state is not a fixed
+	// value, and the sweep below leaves the ascii rung behind on its last iteration.
+	t.Cleanup(func() { theme.SetGlyphSet(theme.GlyphSetPlain) })
+
+	for _, set := range []string{theme.GlyphSetPlain, theme.GlyphSetNerd, theme.GlyphSetASCII} {
+		t.Run(set, func(t *testing.T) {
+			restore := theme.SetGlyphSet(set)
+			defer restore()
+			assertAdaptersAreTellableApart(t, theme.Current())
+		})
+	}
+}
+
+// assertAdaptersAreTellableApart runs the two halves of the invariant against one
+// resolved theme — one palette × one fidelity rung.
+func assertAdaptersAreTellableApart(t *testing.T, th *theme.Theme) {
+	t.Helper()
 
 	// Both premises of the comparison, asserted so the guard cannot pass vacuously:
 	// a registry to walk, and a fallback to recognise.
@@ -124,10 +149,10 @@ func TestEveryAgentAdapterHasAnIdentityGlyph(t *testing.T) {
 	}
 	require.Emptyf(t, uncovered,
 		"adapter %v resolves through AgentGlyph to the same mark an unrecognised agent gets "+
-			"(%q in the dim generic accent): give each one an entry in agentGlyphs, "+
-			"ui/theme/agent.go, or every place that paints agent identity — the session row's "+
-			"agent column, the in-session bar, the profile pickers — shows that session as one "+
-			"Atrium does not know",
+			"(%q in the dim generic accent): give each one an entry in every rung of the agent "+
+			"table, ui/theme/agent.go, or every place that paints agent identity — the session "+
+			"row's agent column, the in-session bar, the profile pickers — shows that session as "+
+			"one Atrium does not know",
 		uncovered, generic.glyph)
 
 	// Covered is half of tellable apart; the other half is that no two adapters
@@ -138,11 +163,20 @@ func TestEveryAgentAdapterHasAnIdentityGlyph(t *testing.T) {
 	// whatever accent the row would have given them. Nothing forces an accent either:
 	// an adapter with no agentColors entry rides Palette.Fg, which is why more than
 	// one of them does today.
+	//
+	// The generic fallback joins the adapters here, and is the reason this is a check
+	// on the glyph rather than on the mark twice over: Adapters() excludes it, so the
+	// uncovered loop above can only see it from the other direction (an adapter that
+	// resolves LIKE generic, colour included). A generic glyph equal to a real agent's
+	// fails neither of those — the colours differ — while painting an unrecognised
+	// program as that agent in both pickers, which draw from the glyph alone.
 	byGlyph := map[string][]agent.Key{}
 	for _, a := range adapters {
 		g, _ := th.AgentGlyph(string(a.Key))
 		byGlyph[g] = append(byGlyph[g], a.Key)
 	}
+	genericGlyph, _ := th.AgentGlyph(string(agent.KeyGeneric))
+	byGlyph[genericGlyph] = append(byGlyph[genericGlyph], agent.KeyGeneric)
 	var shared []string
 	for g, keys := range byGlyph {
 		if len(keys) > 1 {
@@ -153,5 +187,5 @@ func TestEveryAgentAdapterHasAnIdentityGlyph(t *testing.T) {
 	slices.Sort(shared)
 	require.Emptyf(t, shared, "these adapters resolve to one glyph — %s — so they paint as "+
 		"the same agent wherever identity is drawn from the glyph alone; give each its own "+
-		"entry in agentGlyphs, ui/theme/agent.go", shared)
+		"entry in the agent table, ui/theme/agent.go", shared)
 }

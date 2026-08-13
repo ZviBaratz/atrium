@@ -1,6 +1,10 @@
 package theme
 
-import "charm.land/lipgloss/v2"
+import (
+	"sort"
+
+	"charm.land/lipgloss/v2"
+)
 
 // Agent identity: one glyph + accent per agent key (the canonical keys from
 // session/agent, passed as plain strings so theme stays a leaf package). The
@@ -8,14 +12,14 @@ import "charm.land/lipgloss/v2"
 // vendor logos — because there is no reliable way to probe for a patched font,
 // and a glyph whose measured width differs from its rendered width desyncs
 // bubbletea's incremental renderer (the list-ghosting defect). Every entry must
-// measure width 1; TestAgentGlyphWidths guards the invariant.
+// measure width 1; TestAgentGlyphWidths guards the invariant, on every rung.
 //
-// That test iterates this table, so it can only speak for the entries that exist.
-// Whether the table COVERS session/agent's registry is a question this package
-// cannot ask — a leaf cannot see the registry — so it is guarded from package ui,
-// by TestEveryAgentAdapterHasAnIdentityGlyph. Editing this table and running only
+// That test iterates these tables, so it can only speak for the entries that exist.
+// Whether they COVER session/agent's registry is a question this package cannot ask
+// — a leaf cannot see the registry — so it is guarded from package ui, by
+// TestEveryAgentAdapterHasAnIdentityGlyph. Editing a table here and running only
 // `go test ./ui/theme` will therefore not tell you whether an agent is missing, nor
-// whether two of them now share a glyph — that test covers both.
+// whether two of them now share a glyph — that test covers both, per rung.
 //
 // A new glyph is checked against two surfaces, and the second is the one that is easy
 // to skip: every rung of the Glyphs table (nerd/plain/ascii — Waiting is why codex is
@@ -23,13 +27,73 @@ import "charm.land/lipgloss/v2"
 // at all. agy's "✜" is a plus-shaped cross; the nearest thing the row draws is
 // prCheckGlyph's failing-CI "✗" (ui/row.go), a saltire rather than a plus. A star was
 // the other candidate for agy and would have read as a second gemini.
-var agentGlyphs = map[string]string{
-	"claude":  "✻", // claude code's own spinner glyph
-	"codex":   "❖", // ◆ would collide with Glyphs.Waiting
-	"gemini":  "✦",
-	"aider":   "≡",
-	"agy":     "✜", // a plus-cross; see the note above on what that was checked against
-	"generic": "•",
+func plainAgentGlyphs() map[string]string {
+	return map[string]string{
+		"claude":  "✻", // claude code's own spinner glyph
+		"codex":   "❖", // ◆ would collide with Glyphs.Waiting
+		"gemini":  "✦",
+		"aider":   "≡",
+		"agy":     "✜", // a plus-cross; see the note above on what that was checked against
+		"generic": "•",
+	}
+}
+
+// asciiAgentGlyphs is the 7-bit floor for agent identity: the rung a user selects to
+// say this font cannot render plain Unicode. Until #674 there was no such rung here,
+// so the status column degraded to `* ? ~ Y` and the agent column beside it kept
+// painting tofu.
+//
+// Built FROM plainAgentGlyphs so a key added there is never silently absent — but note
+// that it is then silently UNICODE here until it is given a form below, which is the
+// #674 defect re-armed. TestASCIIAgentGlyphsDoNotCollide fails on that.
+//
+// The values follow one rule, so they are checkable rather than taste: take the first
+// letter of the agent's own name, uppercased, that is not already claimed by an earlier
+// entry and whose lowercase form is not in the ascii row vocabulary. That vocabulary,
+// read off asciiGlyphs rather than remembered, is `! # % & * + - / = > ? Y \ ^ _ o v x
+// | ~` and the digits 1-8 — every distinct mark in the table, its spinner frames and
+// its context ramp. The agent glyph is pinned to the far right of the SAME line
+// (ui/row.go's agentSeg) as the rest of them, so the "no screen shows both meanings"
+// argument asciiGlyphs makes for its four deliberate collisions is not available here:
+// every one of those marks shares a frame with this one.
+//
+//	claude  C  free
+//	codex   D  c is claude's and o is ReadySeen, so co(d)ex
+//	gemini  G  free
+//	aider   A  free — aider has been in this table since #67, so it keeps the letter
+//	agy     N  a and g are claimed and Y is Branch, which exhausts the key: fall to the
+//	           product name, a(n)tigravity
+//	generic .  not a name. The quietest 7-bit mark there is, standing in for "•" — the
+//	           unknown-agent marker should recede, not announce itself
+//
+// Case-twins are excluded, not just exact matches, which is what rules out the more
+// mnemonic X (codeX) and V (antigraVity): "x" is Muted AND MarkChecked, "v" is Behind
+// AND FoldOpen, and case height is the weakest distinction a font can make — on exactly
+// the fonts this rung exists for. Uppercase also separates the mark from the row's
+// lowercase text chips (`dev`, `2h`, `18.9k`); the nearest neighbour checked is the
+// AUTO badge's "A", which is a word on its own background rather than a lone mark.
+func asciiAgentGlyphs() map[string]string {
+	g := plainAgentGlyphs()
+	g["claude"] = "C"
+	g["codex"] = "D"
+	g["gemini"] = "G"
+	g["aider"] = "A"
+	g["agy"] = "N"
+	g["generic"] = "."
+	return g
+}
+
+// agentGlyphsFor returns the agent identity table for a fidelity rung. Two rungs, not
+// the Glyphs table's three: the nerd rung exists to overlay vendor PUA icons, and this
+// table deliberately has none (see the header comment — there is no reliable
+// patched-font probe, and the plain marks render on a patched font anyway). So nerd and
+// plain share one table, and anything unrecognized falls back to plain, the set that
+// never renders tofu.
+func agentGlyphsFor(set string) map[string]string {
+	if set == GlyphSetASCII {
+		return asciiAgentGlyphs()
+	}
+	return plainAgentGlyphs()
 }
 
 // agentColors carries the brand accents that identify an agent at a glance.
@@ -63,12 +127,43 @@ var agentColorsLight = map[string]Color{
 	"gemini": lipgloss.Color("#2774f2"), // #4285f4 darkened: 2.75 -> 3.34 on tokyo-night-day
 }
 
+// agentTable is the identity table this theme resolves against — its fidelity rung,
+// stamped by compose(). The fallback is for a Theme built without one (a literal in a
+// test, say): naming every agent in the plain rung is a better answer than painting
+// every session as one Atrium does not recognise, which is what an empty map would do.
+func (t *Theme) agentTable() map[string]string {
+	if t.agentGlyphs == nil {
+		return plainAgentGlyphs()
+	}
+	return t.agentGlyphs
+}
+
+// AgentKeys returns this theme's agent identity keys, sorted.
+//
+// It exists so a caller outside this package can enumerate the table without being
+// able to mutate it — the ? legend projects it (app/help.go's legendGroups) and
+// TestLegendCoversRowVocabulary walks it to require that every entry reaches the
+// legend or is excluded with a reason. A method rather than a package function
+// because the table is per-rung: the keys happen to be the same on every rung today
+// (TestAgentRungsShareOneKeySet), and reading them off the theme is what keeps that a
+// fact about the tables rather than an assumption in every caller.
+func (t *Theme) AgentKeys() []string {
+	table := t.agentTable()
+	keys := make([]string, 0, len(table))
+	for k := range table {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // AgentGlyph returns the identity glyph and color for an agent key (unknown
 // keys get the neutral generic marker). Key is string(agent.Resolve(p).Key).
 func (t *Theme) AgentGlyph(key string) (string, Color) {
-	g, ok := agentGlyphs[key]
+	table := t.agentTable()
+	g, ok := table[key]
 	if !ok {
-		key, g = "generic", agentGlyphs["generic"]
+		key, g = "generic", table["generic"]
 	}
 	// Polarity first: a brand accent that has a light form must use it on a light
 	// palette, or the mark it exists to make is one nobody can see.

@@ -86,6 +86,11 @@ type Theme struct {
 	Palette Palette
 	Glyphs  Glyphs
 	Borders Borders
+	// agentGlyphs is the agent identity table's fidelity rung (see agent.go), the
+	// second glyph table a theme carries. Unexported, unlike Glyphs, because it is a
+	// map: a struct copies with the theme, a map would hand every caller of Current()
+	// a live handle on the shared table. Read it through AgentGlyph/AgentKeys.
+	agentGlyphs map[string]string
 }
 
 // Semantic style helpers. Each returns a fresh style so callers can chain

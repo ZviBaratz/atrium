@@ -2,6 +2,7 @@ package app
 
 import (
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -12,15 +13,21 @@ import (
 )
 
 // TestLegendCoversRowVocabulary pins the #378 legend-completeness contract: the
-// '?' legend renders every status/git/badge glyph that can appear on a row,
-// grouped, sourced from the live Glyphs table so it cannot drift. Reflection over
-// Glyphs forces a decision for any field added later — a new glyph must land in
-// the legend or in the documented exclusion set below, or this test fails.
+// '?' legend renders every status/git/badge/agent glyph that can appear on a row,
+// grouped, sourced from the live theme so it cannot drift. Reflection over Glyphs
+// forces a decision for any field added later — a new glyph must land in the legend
+// or in the documented exclusion set below, or this test fails.
+//
+// A theme carries TWO glyph tables, and for #672's whole life this test could see
+// only one: agent identity is a map keyed by agent name, not a Glyphs field, so
+// adding "✜" for agy tripped nothing here and the mark reached no legend. The second
+// half below closes that, walking theme.AgentKeys — see the comment there for why it
+// asserts the glyph and its label together, and why it runs on two rungs.
 func TestLegendCoversRowVocabulary(t *testing.T) {
 	defer theme.SetGlyphSet(theme.GlyphSetPlain)()
 
 	content := ansi.Strip(helpTypeGeneral{}.toContent())
-	for _, header := range []string{"status", "git", "badges"} {
+	for _, header := range []string{"status", "git", "badges", "agents"} {
 		require.Containsf(t, content, header, "legend must render the %q group", header)
 	}
 
@@ -80,6 +87,67 @@ func TestLegendCoversRowVocabulary(t *testing.T) {
 	require.Contains(t, content, g.ContextRamp[len(g.ContextRamp)-1],
 		"the context meter's full rung must appear in the legend")
 	require.Contains(t, content, "context", "the context meter's legend entry must be labelled")
+
+	assertLegendCoversAgents(t)
+}
+
+// agentExcludedFromLegend names the agent identity keys allowed not to reach the '?'
+// legend, each with the reason. It is empty, and the exact-set assertion below is what
+// keeps it that way: the agent column is pinned to the far right of the row so "which
+// CLI is this" is answerable at a glance, and an agent the legend cannot decode leaves
+// that question answerable only by guessing.
+var agentExcludedFromLegend = map[string]string{}
+
+// assertLegendCoversAgents is the half of the completeness contract the reflection
+// above structurally cannot state. Agent identity lives in a map in ui/theme keyed by
+// agent name (ui/theme/agent.go), not in the Glyphs struct, so a seventh agent adds no
+// field for reflect to find — #672 added a sixth and nothing here noticed.
+//
+// theme.AgentKeys is the enumeration, which is what makes this a guard rather than a
+// hand-kept list: package app cannot read the table, but it can be told what is in it.
+//
+// It asserts the glyph and its label TOGETHER. A bare glyph containment check is what
+// the excluded map above has to apologise for twice — Handoff's "→" and the accounts
+// pair pass by coincidence, because some other entry happens to paint the same mark —
+// and an agent glyph is the worst case for that, since the ascii rung spells these as
+// plain letters that occur all over the help text.
+//
+// Two rungs, because the legend is a projection of the ACTIVE tables and #674 was
+// precisely a table that ignored the rung: plain, and the ascii floor where every
+// agent glyph is a different character.
+func assertLegendCoversAgents(t *testing.T) {
+	t.Helper()
+
+	excluded := make([]string, 0, len(agentExcludedFromLegend))
+	for k := range agentExcludedFromLegend {
+		excluded = append(excluded, k)
+	}
+	sort.Strings(excluded)
+	require.Equal(t, []string{}, excluded,
+		"the set of agents allowed to stay out of the ? legend changed; the legend decodes "+
+			"every other glyph the row paints, so an addition here needs an argued reason in "+
+			"review, not just a map entry")
+
+	for _, set := range []string{theme.GlyphSetPlain, theme.GlyphSetASCII} {
+		restore := theme.SetGlyphSet(set)
+		content := ansi.Strip(helpTypeGeneral{}.toContent())
+		keys := theme.Current().AgentKeys()
+		require.NotEmptyf(t, keys, "%s rung: no agent keys, so the loop below would say nothing", set)
+		for _, key := range keys {
+			if _, skip := agentExcludedFromLegend[key]; skip {
+				continue
+			}
+			glyph, _ := theme.Current().AgentGlyph(key)
+			require.Containsf(t, content, glyph+" "+key,
+				"%s rung: agent %q paints %q on the row's far-right column, and the ? legend "+
+					"must decode it — add it to legendGroups' agents entry (app/help.go) or to "+
+					"agentExcludedFromLegend with a reason", set, key, glyph)
+		}
+		restore()
+	}
+	// Back to the known default rather than to whatever was current on entry: CI runs
+	// -shuffle=on, so "whatever was there" is not a fixed value.
+	t.Cleanup(func() { theme.SetGlyphSet(theme.GlyphSetPlain) })
 }
 
 // TestLegendLinesFit is the width invariant nothing used to check, and the

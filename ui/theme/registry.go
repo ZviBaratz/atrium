@@ -211,8 +211,9 @@ var tokyoNight = &Theme{
 		BadgeBg:     lipgloss.Color("#bb9af7"),
 		BadgeFg:     lipgloss.Color("#1a1b26"),
 	},
-	Glyphs:  plainGlyphs(),
-	Borders: Borders{Style: lipgloss.RoundedBorder()},
+	Glyphs:      plainGlyphs(),
+	agentGlyphs: plainAgentGlyphs(),
+	Borders:     Borders{Style: lipgloss.RoundedBorder()},
 }
 
 var catppuccinMocha = &Theme{
@@ -237,8 +238,9 @@ var catppuccinMocha = &Theme{
 		BadgeBg:     lipgloss.Color("#cba6f7"),
 		BadgeFg:     lipgloss.Color("#1e1e2e"),
 	},
-	Glyphs:  plainGlyphs(),
-	Borders: Borders{Style: lipgloss.RoundedBorder()},
+	Glyphs:      plainGlyphs(),
+	agentGlyphs: plainAgentGlyphs(),
+	Borders:     Borders{Style: lipgloss.RoundedBorder()},
 }
 
 // unicodeFallback reuses the Tokyo Night palette (colors are fine without a
@@ -246,10 +248,11 @@ var catppuccinMocha = &Theme{
 // colored themes now also default to plainGlyphs(), this theme's distinction is the
 // square border. It stays registered for back-compat with configs set to "unicode".
 var unicodeFallback = &Theme{
-	Name:    "unicode",
-	Palette: tokyoNight.Palette,
-	Glyphs:  plainGlyphs(),
-	Borders: Borders{Style: lipgloss.NormalBorder()},
+	Name:        "unicode",
+	Palette:     tokyoNight.Palette,
+	Glyphs:      plainGlyphs(),
+	agentGlyphs: plainAgentGlyphs(),
+	Borders:     Borders{Style: lipgloss.NormalBorder()},
 }
 
 // registry maps theme names to themes. Adding a theme is one var + one entry.
