@@ -27,11 +27,12 @@ fi
 case "$path" in
 *keys/registry.go)
 	cat >&2 <<-'EOF'
-		keys/registry.go touched — a keybinding has 9 sites, all but one guarded.
+		keys/registry.go touched — a keybinding has 10 sites, all but one guarded.
 
 		  1  keys/keys.go            KeyName const + doc comment
 		  2  keys/registry.go        the Entry                      <- you are here
 		  2b keys/registry.go        the Entry's Action             <- and here
+		  2c keys/registry.go        the Entry's Effect             <- and here
 		  3  keys/help_layout.go     a HelpRow (or a Mentions)
 		  4  app/app_update.go       case keys.KeyX: in dispatchAction
 		  5  keys/registry_test.go   TestActionVocabulary_Golden
@@ -47,7 +48,10 @@ case "$path" in
 		key, or drive it through handleKeyPress in a test.
 
 		Site 2b is the name a user's config.json binds to: add to the vocabulary,
-		never rename it. Site 6 is two tables now — the keybindings one and the
+		never rename it. Site 2c is mandatory and its zero value is invalid, so
+		omitting it fails rather than defaulting to permissive — decide between
+		EffectObserve, EffectView and EffectMutate against the handler, not the
+		label. Site 6 is two tables now — the keybindings one and the
 		action-names one, which is a two-column split, so inserting a row reflows it.
 
 		Site 7 fails in a file you were not editing: the palette reaches every action,
