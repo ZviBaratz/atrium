@@ -47,15 +47,24 @@ func plainAgentGlyphs() map[string]string {
 // that it is then silently UNICODE here until it is given a form below, which is the
 // #674 defect re-armed. TestASCIIAgentGlyphsDoNotCollide fails on that.
 //
-// The values follow one rule, so they are checkable rather than taste: take the first
-// letter of the agent's own name, uppercased, that is not already claimed by an earlier
-// entry and whose lowercase form is not in the ascii row vocabulary. That vocabulary,
-// read off asciiGlyphs rather than remembered, is `! # % & * + - / = > ? Y \ ^ _ o v x
-// | ~` and the digits 1-8 — every distinct mark in the table, its spinner frames and
-// its context ramp. The agent glyph is pinned to the far right of the SAME line
-// (ui/row.go's agentSeg) as the rest of them, so the "no screen shows both meanings"
-// argument asciiGlyphs makes for its four deliberate collisions is not available here:
-// every one of those marks shares a frame with this one.
+// The values were derived by a rule, so they are arguable rather than taste: take the
+// first letter of the agent's own name, uppercased, that is not already claimed by an
+// earlier entry and whose lowercase form is not in the ascii row vocabulary. (generic
+// is the one entry outside it — not a name to take a letter from; see below.) The rule
+// is a convention for picking the NEXT one; what a test can hold is the constraint it
+// exists to satisfy, and TestASCIIAgentGlyphsDoNotCollide holds exactly that: 7-bit, no
+// case-insensitive collision with the ascii Glyphs vocabulary, distinct within the
+// table. A different letter meeting those is a review conversation, not a build break.
+//
+// That vocabulary, read off asciiGlyphs rather than remembered, is `! # % & * + - / =
+// > ? Y \ ^ _ o v x | ~` and the digits 1-8 — every distinct mark in the table, its
+// spinner frames and its context ramp. The agent glyph does not share a LINE with all
+// of it: agentSeg is pinned to the far right of the row's first line (ui/list_render.go),
+// while the git chips those marks build are on its second and the fold markers are on
+// the repo header above. It shares a FRAME with every one of them, which is the level
+// the argument turns on — the whole list is on screen at once, so the "no screen shows
+// both meanings" reasoning asciiGlyphs makes for its four deliberate collisions is not
+// available here.
 //
 //	claude  C  free
 //	codex   D  c is claude's and o is ReadySeen, so co(d)ex

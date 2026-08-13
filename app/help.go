@@ -179,8 +179,14 @@ func legendGroups() []legendGroup {
 
 // agentLegendEntries decodes the row's far-right column: which CLI a session runs.
 // That column is pinned there (ui/row.go's agentSeg) precisely so the question is
-// answerable at a glance, and until #673 it was the one glyph on the row the legend
-// said nothing about.
+// answerable at a glance, and until #673 the legend said nothing about it.
+//
+// It is not the last undecoded mark on a row: prCheckGlyph's ✗/•/✓ and runGlyph's ▸
+// are inline rune literals rather than Glyphs fields, and ui/row.go declares them out
+// of scope for the legend where runGlyph is defined. They also each annotate a chip
+// that is legible without them — a PR number, a port — whereas the agent glyph is the
+// whole statement, so it is the one whose absence from the legend left a fact on the
+// row with nowhere to look it up.
 //
 // Keys and glyphs both come from the theme's agent table, which is what makes this a
 // projection rather than a second copy: the label IS the key the table is keyed by

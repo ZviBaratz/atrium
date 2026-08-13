@@ -324,9 +324,14 @@ func TestAgentGlyphsFollowTheRung(t *testing.T) {
 	}
 }
 
-// TestASCIIAgentGlyphsDoNotCollide is the rule asciiAgentGlyphs states, made
-// executable — the same job TestASCIIContextRampDoesNotCollide does for the meter,
-// and for a sharper version of the same reason.
+// TestASCIIAgentGlyphsDoNotCollide holds the CONSTRAINTS asciiAgentGlyphs' first-free-
+// letter rule exists to satisfy — the same job TestASCIIContextRampDoesNotCollide does
+// for the meter, and for a sharper version of the same reason.
+//
+// Not the derivation itself, which no test here holds: spell gemini "Z" and the suite
+// stays green, and generic's "." is outside the rule by construction. That is the right
+// split — the rule is guidance for picking the next value, the constraints below are
+// what makes a value wrong.
 //
 // The agent glyph is pinned to the far right of a session row (ui/row.go's agentSeg),
 // so it shares ONE FRAME with every mark in the ascii Glyphs table: the status gutter,

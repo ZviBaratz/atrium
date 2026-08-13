@@ -170,17 +170,19 @@ rung-aware, both project into the `?` legend, and until #674/#673 the second was
 neither. A theme carries both — `Glyphs` exported, the agent table behind
 `AgentGlyph`/`AgentKeys`.
 
-1. **It must measure width 1.** Guarded across every palette × glyph-set
-   combination by `TestGlyphWidths`, `TestAgentGlyphWidths`,
-   `TestNoteGlyphIsSingleCellEverywhere` in `ui/theme/theme_test.go`. A 2-cell
-   glyph is not cosmetic — it breaks the column math and the view-bounds
-   invariant, which is exactly what `TestGlyphWidths` says it guards.
+1. **It must measure width 1.** Guarded by `TestGlyphWidths`,
+   `TestAgentGlyphWidths`, `TestNoteGlyphIsSingleCellEverywhere` in
+   `ui/theme/theme_test.go`. A 2-cell glyph is not cosmetic — it breaks the column
+   math and the view-bounds invariant, which is exactly what `TestGlyphWidths` says
+   it guards.
 
-   `TestGlyphWidths` and `TestAgentGlyphWidths` walk **every rung**, which is a
-   property to preserve rather than to assume: the second used to measure only the
-   one table `Get()` returns, and a rung a sweep never visits is a rung nothing
-   measures at all. (`TestNoteGlyphIsSingleCellEverywhere`'s "everywhere" is every
-   *palette*, not every rung.)
+   "Across every palette × glyph-set" is the shape of the *invariant*, not of any one
+   of those three sweeps, and the axes they actually walk differ:
+   `TestGlyphWidths` is every palette × every rung, `TestAgentGlyphWidths` every rung
+   on the default palette (`themeAtRung`), `TestNoteGlyphIsSingleCellEverywhere` every
+   palette on whichever rung is current. Every rung is the property to preserve in the agent
+   sweep rather than to assume — it used to measure only the one table `Get()` returns,
+   and a rung a sweep never visits is a rung nothing measures at all.
 
    Distinguish what the *tests* assert from *why the rule exists*. The three tests
    above assert width 1 for column math; none of them mentions ghosting. But the
@@ -229,8 +231,11 @@ neither. A theme carries both — `Glyphs` exported, the agent table behind
    with the status gutter, the git chips, the fold markers and the context meter.
    Case-insensitively, too — `X` and `V` are the case-twins of Muted/MarkChecked and
    Behind/FoldOpen, and case height is the weakest distinction a font can make, on
-   exactly the fonts this rung exists for. The rule the values follow is written into
-   `asciiAgentGlyphs()`' comment and executed by `TestASCIIAgentGlyphsDoNotCollide`.
+   exactly the fonts this rung exists for. The rule the values were derived by is written
+   into `asciiAgentGlyphs()`' comment; what `TestASCIIAgentGlyphsDoNotCollide` executes is
+   the constraint set that rule serves (7-bit, no case-insensitive collision, distinct
+   within the table), not the derivation — a different letter meeting those is a review
+   conversation, not a build break.
 
 ## Adding a UI state — 7 sites, three of them fixture files
 

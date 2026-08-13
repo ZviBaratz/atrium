@@ -42,7 +42,12 @@ func TestLegendCoversRowVocabulary(t *testing.T) {
 		"SelectionMark": "cursor selection bar (affordance, not a row status)",
 		"MarkChecked":   "multi-select mark (affordance, not a row status)",
 		"TextCursor":    "text-input caret (not a row status)",
-		"Modified":      "settings-panel modified marker (panel chrome, not a row status)",
+		// Modified is also a coincidental pass waiting to happen, and newly so since #674:
+		// the agents group paints generic's "•" on the plain rung, which is exactly this
+		// glyph, and its ascii "*" is Ready's. Categorized on the merits — panel chrome —
+		// but if it were ever un-excluded, the loop below would pass without the legend
+		// gaining a Modified entry at all.
+		"Modified": "settings-panel modified marker (panel chrome, not a row status)",
 		// Handoff's "→" happens to occur elsewhere in the legend prose, so the loop below
 		// would pass without this entry — by coincidence, not by design. It is categorized
 		// here anyway: the glyph is panel chrome, and a copy edit that drops that arrow
@@ -128,26 +133,31 @@ func assertLegendCoversAgents(t *testing.T) {
 			"every other glyph the row paints, so an addition here needs an argued reason in "+
 			"review, not just a map entry")
 
-	for _, set := range []string{theme.GlyphSetPlain, theme.GlyphSetASCII} {
-		restore := theme.SetGlyphSet(set)
-		content := ansi.Strip(helpTypeGeneral{}.toContent())
-		keys := theme.Current().AgentKeys()
-		require.NotEmptyf(t, keys, "%s rung: no agent keys, so the loop below would say nothing", set)
-		for _, key := range keys {
-			if _, skip := agentExcludedFromLegend[key]; skip {
-				continue
-			}
-			glyph, _ := theme.Current().AgentGlyph(key)
-			require.Containsf(t, content, glyph+" "+key,
-				"%s rung: agent %q paints %q on the row's far-right column, and the ? legend "+
-					"must decode it — add it to legendGroups' agents entry (app/help.go) or to "+
-					"agentExcludedFromLegend with a reason", set, key, glyph)
-		}
-		restore()
-	}
-	// Back to the known default rather than to whatever was current on entry: CI runs
-	// -shuffle=on, so "whatever was there" is not a fixed value.
+	// Registered BEFORE the sweep, and back to the known default rather than to whatever
+	// was current on entry: CI runs -shuffle=on, so "whatever was there" is not a fixed
+	// value. Before, because a require failure inside the loop is a runtime.Goexit — a
+	// cleanup registered after it would never be registered at all, leaving the rung this
+	// test happened to fail on set for everything that runs next.
 	t.Cleanup(func() { theme.SetGlyphSet(theme.GlyphSetPlain) })
+
+	for _, set := range []string{theme.GlyphSetPlain, theme.GlyphSetASCII} {
+		func() {
+			defer theme.SetGlyphSet(set)()
+			content := ansi.Strip(helpTypeGeneral{}.toContent())
+			keys := theme.Current().AgentKeys()
+			require.NotEmptyf(t, keys, "%s rung: no agent keys, so the loop below would say nothing", set)
+			for _, key := range keys {
+				if _, skip := agentExcludedFromLegend[key]; skip {
+					continue
+				}
+				glyph, _ := theme.Current().AgentGlyph(key)
+				require.Containsf(t, content, glyph+" "+key,
+					"%s rung: agent %q paints %q on the row's far-right column, and the ? legend "+
+						"must decode it — add it to legendGroups' agents entry (app/help.go) or to "+
+						"agentExcludedFromLegend with a reason", set, key, glyph)
+			}
+		}()
+	}
 }
 
 // TestLegendLinesFit is the width invariant nothing used to check, and the
