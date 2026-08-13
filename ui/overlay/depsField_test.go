@@ -200,3 +200,29 @@ func TestDepsField_InertNoteNamesWhichNonGitTarget(t *testing.T) {
 	assert.NotContains(t, out, "n/a — direct session",
 		"a path that is not a directory must not be reported as a creatable direct session")
 }
+
+// What the clip costs, pinned — because the render is the only place it is visible
+// and no assertion above could see it. The fork form keeps its heading and so runs
+// one row over budget at 80×24; the row the clip takes is the one above the button,
+// which is the hint footer. That is a defensible trade (Enter and Esc still work,
+// and #466 makes the footer the only owner of ⌃S/⌃R, but the heading is the only
+// statement anywhere that this submit forks) — and it is one row from being a much
+// worse one, because the next line up is a real field.
+//
+// So this asserts the boundary rather than the trade: every field survives, and the
+// hint is what pays. A failure here means the form grew and the clip has started
+// eating content the user has to fill in.
+func TestFitOverlay_ClipTakesTheHintBeforeAnyField(t *testing.T) {
+	o := NewSessionCreateOverlay(mixedProfiles, twoAccounts, []string{"/repo/a"}, "claude", linkedPaths)
+	o.SetBranchResults([]string{"main", "develop", "feature/x"}, o.BranchFilterVersion())
+	o.Title = "Fork from checkpoint · 14:32"
+	o.SetSize(80, 24)
+	out := o.Render()
+
+	for _, field := range []string{"Project", "Title", "Prompt", "Model", "Effort", "Permissions", "Account", "Dependencies"} {
+		assert.Contains(t, out, field, "the clip must not reach a field the user has to fill in")
+	}
+	assert.Contains(t, out, "Create", "nor the control the form exists for")
+	assert.NotContains(t, out, "⌃R clear",
+		"the hint footer is the designated sacrifice; if it now survives, the budget moved — re-read fitOverlay")
+}
