@@ -15,6 +15,7 @@ const (
 	stopAccount
 	stopTextarea
 	stopBranch
+	stopDeps
 	stopEnter
 )
 
@@ -83,6 +84,7 @@ func (t *TextInputOverlay) isEffortField() bool     { return t.currentStop() == 
 func (t *TextInputOverlay) isAccountPicker() bool   { return t.currentStop() == stopAccount }
 func (t *TextInputOverlay) isTextarea() bool        { return t.currentStop() == stopTextarea }
 func (t *TextInputOverlay) isBranchPicker() bool    { return t.currentStop() == stopBranch }
+func (t *TextInputOverlay) isDepsField() bool       { return t.currentStop() == stopDeps }
 func (t *TextInputOverlay) isEnterButton() bool     { return t.currentStop() == stopEnter }
 
 // hasAccountSection reports whether the form shows the Account picker. It requires
@@ -108,10 +110,10 @@ func (t *TextInputOverlay) setFocusIndex(i int) {
 	t.updateFocusState()
 }
 
-// stopEnabled reports whether a stop can take focus: the branch picker is disabled for
-// any target but a git repo — a directory without one, or not a directory at all — and
-// the model field when the effective program is not claude; every other stop is always
-// enabled.
+// stopEnabled reports whether a stop can take focus: the branch picker and the
+// dependency field are disabled for any target but a git repo — a directory without one,
+// or not a directory at all — and the model, effort and permission-mode fields when the
+// effective program is not claude; every other stop is always enabled.
 func (t *TextInputOverlay) stopEnabled(kind focusStop) bool {
 	if kind == stopBranch && t.branchPicker != nil && t.branchPicker.Disabled() {
 		return false
@@ -123,6 +125,9 @@ func (t *TextInputOverlay) stopEnabled(kind focusStop) bool {
 		return false
 	}
 	if kind == stopEffort && t.effortField != nil && t.effortField.Disabled() {
+		return false
+	}
+	if kind == stopDeps && t.depsField != nil && t.depsField.Disabled() {
 		return false
 	}
 	return true
@@ -193,6 +198,13 @@ func (t *TextInputOverlay) updateFocusState() {
 			t.accountPicker.Focus()
 		} else {
 			t.accountPicker.Blur()
+		}
+	}
+	if t.depsField != nil {
+		if t.isDepsField() {
+			t.depsField.Focus()
+		} else {
+			t.depsField.Blur()
 		}
 	}
 }

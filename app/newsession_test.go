@@ -489,7 +489,7 @@ func emptyTargetForm(t *testing.T, title string) *home {
 	t.Helper()
 	h := newCreateFormHome(t)
 	h.state = statePrompt
-	ov := overlay.NewSessionCreateOverlay(h.appConfig.GetProfiles(), h.appConfig.ClaudeAccounts, nil, h.program)
+	ov := overlay.NewSessionCreateOverlay(h.appConfig.GetProfiles(), h.appConfig.ClaudeAccounts, nil, h.program, nil)
 	ov.SetTitleValue(title)
 	ov.Submitted = true
 	h.textInputOverlay = ov
@@ -621,4 +621,95 @@ func TestComposeProgramFlags(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "claude", got)
 	})
+}
+
+// The per-session link_paths opt-out (#481) must survive the whole submit path: the
+// form's chip → createSessionFromForm → spawnPlan → startNewSession →
+// session.InstanceOptions → the Instance the list holds. Every hop is a place the
+// value could be dropped, and none of them would fail a compile.
+//
+// The default arm is the regression guard that matters most: an ordinary session must
+// still be shared, or every user starts paying for a feature they did not ask for.
+func TestCreateSessionFromForm_IsolateDepsReachesTheInstance(t *testing.T) {
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	require.True(t, git.IsGitRepo(context.Background(), cwd), "test must run inside a git repository")
+
+	for _, tc := range []struct {
+		name   string
+		choose bool
+		want   bool
+	}{
+		{"untouched form stays shared", false, false},
+		{"isolated selected", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newCreateFormHome(t)
+			h.appConfig.LinkPaths = []string{"node_modules"} // the section's precondition
+			h.newSessionPath = cwd
+			h.state = statePrompt
+			ov, _ := h.newSessionFormOverlay()
+			h.textInputOverlay = ov
+			ov.HandleKeyPress(keyMsg("tab"))
+			ov.HandleKeyPress(keyMsg("tab"))
+			ov.HandleKeyPress(textMsg("deps"))
+			if tc.choose {
+				ov.FocusDeps()
+				ov.HandleKeyPress(keyMsg("right"))
+			}
+			require.Equal(t, tc.want, ov.GetIsolateDeps(), "form state precondition")
+
+			require.NotNil(t, h.createSessionFromForm(""))
+			inst := h.list.GetSelectedInstance()
+			require.NotNil(t, inst)
+			assert.Equal(t, tc.want, inst.IsolateDeps())
+			assert.Equal(t, tc.want, inst.ToInstanceData().IsolateDeps,
+				"and it must be persisted, or a resume would start linking again")
+		})
+	}
+}
+
+// The debounce window. A form pointed at a git repo, switched to "isolated", and then
+// retargeted at a plain directory has a stale verdict: retargetNewSession calls
+// ClearTargetValidity, which deliberately does NOT disable the dependent sections
+// (flipping them on every path keystroke flickers the form), so the field's own inert
+// guard still reports the choice made for the previous target. Submitting inside that
+// window would persist a direct session — which has no worktree to isolate — carrying
+// isolate_deps=true, and publish it as `"direct": true, "isolated": true`.
+//
+// The submit re-derives `direct` from disk, so that is the verdict the plan must use.
+func TestCreateSessionFromForm_DirectTargetIsNeverIsolated(t *testing.T) {
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	require.True(t, git.IsGitRepo(context.Background(), cwd), "test must run inside a git repository")
+	plain := t.TempDir() // a directory, but not a repo
+
+	h := newCreateFormHome(t)
+	h.appConfig.LinkPaths = []string{"node_modules"}
+	h.newSessionPath = cwd
+	h.state = statePrompt
+	ov, _ := h.newSessionFormOverlay()
+	h.textInputOverlay = ov
+	ov.HandleKeyPress(keyMsg("tab"))
+	ov.HandleKeyPress(keyMsg("tab"))
+	ov.HandleKeyPress(textMsg("deps-direct"))
+
+	// Chosen while the target was a git repo...
+	ov.FocusDeps()
+	ov.HandleKeyPress(keyMsg("right"))
+	require.True(t, ov.GetIsolateDeps(), "form state precondition")
+
+	// ...then retargeted, with the fresh verdict still in flight.
+	ov.UpdateDirCandidates([]string{plain, cwd})
+	ov.SelectPath(plain)
+	ov.ClearTargetValidity()
+	require.Equal(t, plain, ov.GetSelectedPath(), "precondition: the form is on the new target")
+	require.True(t, ov.GetIsolateDeps(), "precondition: the stale choice survives the clear")
+
+	require.NotNil(t, h.createSessionFromForm(""))
+	inst := h.list.GetSelectedInstance()
+	require.NotNil(t, inst)
+	assert.False(t, inst.IsolateDeps(),
+		"a direct session has no worktree to isolate and must not be marked isolated")
+	assert.False(t, inst.ToInstanceData().IsolateDeps, "nor persist the flag")
 }

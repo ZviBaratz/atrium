@@ -119,7 +119,7 @@ func TestVariantRefusals_SurviveAn80ColRender(t *testing.T) {
 					{Name: "cursor", Program: "cursor"},
 				}
 				h.textInputOverlay = overlay.NewSessionCreateOverlay(
-					h.appConfig.GetProfiles(), h.appConfig.ClaudeAccounts, []string{repo}, h.program)
+					h.appConfig.GetProfiles(), h.appConfig.ClaudeAccounts, []string{repo}, h.program, nil)
 				h.textInputOverlay.FocusTitle()
 				typeString(h, "race")
 				h.textInputOverlay.FocusVariants()

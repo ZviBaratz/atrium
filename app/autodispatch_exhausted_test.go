@@ -188,7 +188,7 @@ func TestStartNewSession_RefusesUnpinnedAllLimitedPool(t *testing.T) {
 	require.NoError(t, h.appState.SetAccountLimited("work-2", ""))
 	before := h.list.NumInstances()
 
-	_, err := h.startNewSession("s", t.TempDir(), true, "echo", "", "", nil, false, nil)
+	_, err := h.startNewSession("s", t.TempDir(), true, false, "echo", "", "", nil, false, nil)
 
 	require.Error(t, err, "an unpinned spawn onto a fully-limited pool must not be silent")
 	assert.Contains(t, err.Error(), "work", "the refusal names the pool")

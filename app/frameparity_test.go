@@ -64,7 +64,7 @@ func frameStates() []frameState {
 		{"default", stateDefault, nil},
 		{"prompt", statePrompt, func(h *home, _ *session.Instance) {
 			h.textInputOverlay = overlay.NewSessionCreateOverlay(
-				h.appConfig.GetProfiles(), h.appConfig.ClaudeAccounts, nil, h.program)
+				h.appConfig.GetProfiles(), h.appConfig.ClaudeAccounts, nil, h.program, nil)
 		}},
 		{"help", stateHelp, func(h *home, _ *session.Instance) {
 			h.textOverlay = overlay.NewTextOverlay("help")

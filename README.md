@@ -157,6 +157,7 @@ To ask how long a session has held its status, subtract `status_changed_at` — 
 | `tmux_name` | The tmux session name, for scripts that want tmux directly |
 | `queued_prompts` | Prompts waiting to be delivered |
 | `auto_yes`, `direct`, `unread`, `muted`, `note` | Session flags and annotation |
+| `isolated` | Created dependency-isolated, so it got none of the [`link_paths`](#linked-paths) symlinks. Records the choice made at creation, not what `link_paths` says now |
 | `created_at`, `updated_at` | RFC 3339, or `null` when unrecorded |
 | `status_changed_at` | When `status` last changed, RFC 3339; `null` for a session not yet observed by a build that records it |
 | `diff` | `added`, `removed`, `files_changed`, `commits`, `behind`, `dirty`, and `unpushed` (`null` when not yet computed) |
@@ -549,7 +550,9 @@ git -C <your repo> for-each-ref refs/atrium/undo/
 destroyed and rebuilt. So are gitignored files that lived in the worktree: a
 local `.env`, a build cache, downloaded dependencies. They were never in a commit
 to restore from, and only the paths named by
-[`carry_files`](#carried-files) and [`link_paths`](#linked-paths) are re-seeded.
+[`carry_files`](#carried-files) and [`link_paths`](#linked-paths) are re-seeded — the
+latter unless the session was created dependency-isolated, which gets none of them by
+design and refills them with its setup script or its agent's own install.
 The agent's conversation usually returns — Atrium resumes it the same way it does
 after a pause, for the agents that support it. When Atrium can see there is no
 transcript to resume, the session comes back with a fresh agent and the notice
@@ -860,9 +863,49 @@ copy** — it is the original checkout's tree under another name. Writes through
 land in your own working copy and are visible to every other session at once, so
 an agent that runs `npm install` (or `rm -rf node_modules`) inside one session
 changes the dependency tree for all of them. That is exactly why linking beats
-copying for a large tree, but it is the one place a session is deliberately not
-isolated: link paths whose contents you are content to share, and prefer
-`carry_files` when a session needs its own copy.
+copying for a large tree: link paths whose contents you are content to share, and
+prefer `carry_files` when a session needs its own copy of a *file*.
+
+##### Dependency-isolated sessions
+
+Sharing is right for the sessions that only read the tree, and wrong for the one
+whose job is to change it — an upgrade session's `npm install` rewrites the tree
+your other sessions (and anything else running from that checkout) resolve
+through. So the choice is **per session**, made when the session is created.
+
+Wherever `link_paths` is configured, the new-session form grows a **Dependencies**
+row with two settings:
+
+- **shared** (the default, and today's behaviour) — the paths are symlinked, as above.
+- **isolated** — this worktree gets **none** of them. No symlink, and no empty
+  directory either: the worktree looks exactly like a fresh clone where nobody has
+  run `npm install` yet, which is the state every tool already handles. Whatever the
+  session installs there is a real, private directory that no other session and no
+  part of your checkout can see, and it is deleted with the worktree on pause or
+  kill.
+
+The choice is fixed for the session's life and survives a restart and a
+pause/resume — the links are re-seeded on every worktree materialization, so a
+resumed isolated session stays isolated. It has no effect on `carry_files`, which
+are already per-session copies, and none on a **direct** (non-git) session, which
+has no worktree at all — the row renders inert there, like the base-branch row.
+
+An isolated session starts with nothing installed. If the repo has a
+[setup script](#setup-scripts), that script runs immediately afterwards and
+installs into the now-private tree; without one, the agent's first `npm install`
+does the same thing, just later. That applies to **every** materialization, not
+just the first: the private tree is ordinary worktree content, so pausing deletes
+it and resuming starts empty again. A setup script is what makes that automatic,
+and it is why an isolated session is worth pausing less casually than a shared one.
+
+The path still has to be gitignored *in the session's worktree*, exactly as a
+linked one does — otherwise the tree the session installs is untracked rather than
+ignored, and pause commits it onto the branch. Atrium logs a warning at session
+start when it is not. A directory-only rule (`node_modules/`) is fine here, unlike
+for a symlink.
+
+Nothing in the session list marks a session isolated; the choice is visible in
+`atrium ls --json` as `isolated`.
 
 #### Setup scripts
 
@@ -938,7 +981,12 @@ rather than failing.
 
 One interaction to know about: a script that runs `npm install` under a path listed in
 [`link_paths`](#linked-paths) is writing into your own checkout's tree, shared by every
-other session at once. Linking and installing are alternatives, not a pair.
+other session at once — so for an ordinary session, linking and installing are
+alternatives rather than a pair. They *are* a pair for a session created with
+Dependencies set to **isolated**
+([dependency-isolated sessions](#dependency-isolated-sessions)): that worktree gets no
+links, so the script installs into a tree of its own. That is the combination to reach
+for when a session's job is to change dependencies.
 
 #### Managed ports
 

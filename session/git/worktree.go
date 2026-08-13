@@ -82,6 +82,14 @@ type Worktree struct {
 	// has both off, reproducing the historical local-preferred behavior.
 	updateBaseOnCreate   bool
 	fastForwardLocalBase bool
+	// isolateDeps, when true, suppresses link_paths seeding for this worktree: no
+	// symlink is created, so nothing the session installs can reach the origin
+	// checkout (#481). Unlike the two above it is a per-SESSION choice rather than a
+	// config default, so it is pushed in by the Instance (SetIsolateDeps, from Start
+	// and from the storage restore) rather than read here, and it is consulted on
+	// every Setup — including the paused→resume recreation. A zero-value Worktree
+	// (test literals) has it off, reproducing the shared-link behavior.
+	isolateDeps bool
 	// statsCache caches rev-list commit counts (ahead/behind) for revListCacheTTL
 	// and the dirty flag for dirtyCacheTTL. The dirty TTL (1s) is shorter than the
 	// rev-list TTL (3s) because dirty reflects uncommitted file edits that should
@@ -280,6 +288,24 @@ func (g *Worktree) SetBaseContext(ctx context.Context) {
 // instance Start/restore); it is creation-fixed thereafter.
 func (g *Worktree) SetGHConfigDir(dir string) {
 	g.ghConfigDir = dir
+}
+
+// SetIsolateDeps marks this worktree dependency-isolated, so seedLocalPaths creates
+// none of the link_paths symlinks and the session's dependency writes stay inside it
+// (#481). Call before the worktree is shared with background goroutines (from instance
+// Start/restore); it is creation-fixed thereafter.
+//
+// Both call sites are load-bearing. Setting it only on the Start path makes the flag
+// work at creation and silently lose it on the next app restart AND on every resume,
+// because Resume calls Setup on the worktree NewWorktreeFromStorage rebuilt, not on
+// the one Start built.
+func (g *Worktree) SetIsolateDeps(v bool) {
+	g.isolateDeps = v
+}
+
+// IsolateDeps reports whether link_paths seeding is suppressed for this worktree.
+func (g *Worktree) IsolateDeps() bool {
+	return g.isolateDeps
 }
 
 // ghContext returns ctx tagged with this worktree's GH_CONFIG_DIR so the gh

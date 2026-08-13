@@ -29,7 +29,7 @@ func newFanOutHome(t *testing.T, path string) *home {
 	h.newSessionPath = path
 	h.state = statePrompt
 	ov := overlay.NewSessionCreateOverlay(
-		h.appConfig.GetProfiles(), h.appConfig.ClaudeAccounts, []string{path}, h.program)
+		h.appConfig.GetProfiles(), h.appConfig.ClaudeAccounts, []string{path}, h.program, nil)
 	h.textInputOverlay = ov
 	ov.FocusTitle()
 	return h

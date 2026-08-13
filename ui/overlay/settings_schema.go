@@ -472,9 +472,10 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			reset:          func(c *config.Config) { c.LinkPaths = nil },
 			summary:        "Gitignored paths symlinked into each new worktree, e.g. node_modules.",
 			detail: "Comma-separated repo-relative paths. A symlink, not a copy, so every " +
-				"session shares one directory. Ignore the path with a pattern that has no " +
-				"trailing slash — with one, git does not treat the symlink as ignored and it " +
-				"lands in pause commits.",
+				"session shares one directory — unless the session was created with " +
+				"Dependencies set to isolated, which gives it none of them. Ignore the path " +
+				"with a pattern that has no trailing slash — with one, git does not treat the " +
+				"symlink as ignored and it lands in pause commits.",
 			get: func(c *config.Config) string { return displayList(c.GetLinkPaths()) },
 			editGet: func(c *config.Config) string {
 				return strings.Join(c.GetLinkPaths(), ", ")

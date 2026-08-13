@@ -227,6 +227,15 @@ type Instance struct {
 	// nil-vs-direct distinction.
 	direct bool
 
+	// isolateDeps marks a "dependency-isolating" session: one that gets none of the
+	// config's link_paths symlinks, so an `npm install` it runs cannot reach the origin
+	// checkout or any sibling session (#481). Chosen at session creation, persisted, and
+	// pushed onto the Worktree — which is what consults it, on every Setup including the
+	// paused→resume recreation. Creation-fixed and read without the lock, like direct.
+	//
+	// Meaningless for a direct session, which has no worktree and never seeds at all.
+	isolateDeps bool
+
 	// claudeAccount / claudeConfigDir / claudeAccountDefault pin the Claude Code
 	// account chosen at creation. claudeConfigDir is injected into the tmux
 	// session as CLAUDE_CONFIG_DIR at launch; claudeAccount is the badge label;
@@ -606,6 +615,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		Unread:          i.Unread(),
 		Muted:           i.Muted(),
 		Direct:          i.direct,
+		IsolateDeps:     i.isolateDeps,
 
 		ClaudeAccount:        i.claudeAccount,
 		ClaudeConfigDir:      i.claudeConfigDir,
@@ -700,6 +710,7 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 		UpdatedAt:    data.UpdatedAt,
 		Program:      data.Program,
 		direct:       data.Direct,
+		isolateDeps:  data.IsolateDeps,
 
 		claudeAccount:        data.ClaudeAccount,
 		claudeConfigDir:      data.ClaudeConfigDir,
@@ -758,6 +769,11 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 			branchPrefix,
 		)
 		instance.gitWorktree.SetGHConfigDir(instance.ghConfigDir)
+		// Not just cosmetic on the restore path: Resume calls Setup — and therefore
+		// seedLocalPaths — on THIS worktree, not on the one Start built, so without this
+		// an isolated session would silently start linking again after the first app
+		// restart or the first pause/resume (#481).
+		instance.gitWorktree.SetIsolateDeps(instance.isolateDeps)
 		// A state.json predating the unpushed field omits it. Resolve that gap
 		// conservatively — assume none of the ahead commits are pushed, which is the
 		// pre-field behavior — rather than as a literal 0, which would claim nothing
@@ -1090,6 +1106,10 @@ type InstanceOptions struct {
 	// Direct creates a direct (non-git) session: the agent runs in Path with no worktree,
 	// branch, or diff. Set when Path is not a git repository.
 	Direct bool
+	// IsolateDeps creates a dependency-isolating session: the config's link_paths are
+	// not symlinked into its worktree, so what it installs stays private to it (#481).
+	// Ignored for a Direct session, which never seeds anything.
+	IsolateDeps bool
 }
 
 // NewInstance creates a not-yet-started Instance from opts. The tmux session
@@ -1104,16 +1124,17 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 	}
 
 	return &Instance{
-		Title:      opts.Title,
-		status:     Ready,
-		Path:       absPath,
-		Program:    opts.Program,
-		Height:     0,
-		Width:      0,
-		CreatedAt:  t,
-		UpdatedAt:  t,
-		baseBranch: opts.Branch,
-		direct:     opts.Direct,
+		Title:       opts.Title,
+		status:      Ready,
+		Path:        absPath,
+		Program:     opts.Program,
+		Height:      0,
+		Width:       0,
+		CreatedAt:   t,
+		UpdatedAt:   t,
+		baseBranch:  opts.Branch,
+		direct:      opts.Direct,
+		isolateDeps: opts.IsolateDeps,
 	}, nil
 }
 
@@ -1272,6 +1293,13 @@ func (i *Instance) IsDirect() bool {
 	return i.direct
 }
 
+// IsolateDeps reports whether this session is dependency-isolating: its worktree gets
+// none of the config's link_paths symlinks, so what it installs stays private to it.
+// Chosen at creation and fixed for the session's life (#481).
+func (i *Instance) IsolateDeps() bool {
+	return i.isolateDeps
+}
+
 // operableGitSession reports whether the instance is a started, non-paused git session
 // with a live worktree pointer — i.e. one it is safe to run diff/PR git I/O against.
 // It is false for an unstarted, paused, or direct session. This names the intent of the
@@ -1393,9 +1421,10 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		if err != nil {
 			return fmt.Errorf("failed to create git worktree: %w", err)
 		}
-		// Pin the gh account before publishing the worktree to other goroutines, so
-		// the write happens-before any poll-loop read behind i.mu.
+		// Pin the gh account and the seeding mode before publishing the worktree to
+		// other goroutines, so the writes happen-before any poll-loop read behind i.mu.
 		gitWorktree.SetGHConfigDir(i.ghConfigDir)
+		gitWorktree.SetIsolateDeps(i.isolateDeps)
 		i.mu.Lock()
 		i.gitWorktree = gitWorktree
 		i.mu.Unlock()

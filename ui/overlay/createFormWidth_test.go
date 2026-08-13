@@ -71,39 +71,47 @@ func TestCreateForm_ComposesWithinInnerWidth(t *testing.T) {
 		after func(*TextInputOverlay)
 	}{
 		{"bare claude form", func() *TextInputOverlay {
-			return NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+			return NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude", nil)
 		}, nil},
+		{"link paths", func() *TextInputOverlay {
+			return NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude", []string{"node_modules"})
+		}, nil},
+		// The Dependencies row goes inert for a non-git target, and its placeholder is
+		// the longest string that row ever holds — the case most likely to overflow.
+		{"link paths, direct target", func() *TextInputOverlay {
+			return NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude", []string{"node_modules"})
+		}, func(o *TextInputOverlay) { o.SetTargetValidity(true, true, "") }},
 		{"profiles", func() *TextInputOverlay {
-			return NewSessionCreateOverlay(mixedProfiles, nil, []string{"/repo/a"}, "")
+			return NewSessionCreateOverlay(mixedProfiles, nil, []string{"/repo/a"}, "", nil)
 		}, nil},
 		{"profiles and accounts", func() *TextInputOverlay {
-			return NewSessionCreateOverlay(mixedProfiles, twoAccounts, []string{"/repo/a"}, "")
+			return NewSessionCreateOverlay(mixedProfiles, twoAccounts, []string{"/repo/a"}, "", nil)
 		}, nil},
 		{"pinned overrides", func() *TextInputOverlay {
-			return NewSessionCreateOverlay(pinnedProfiles, nil, []string{"/repo/a"}, "")
+			return NewSessionCreateOverlay(pinnedProfiles, nil, []string{"/repo/a"}, "", nil)
 		}, nil},
 		{"non-claude selected", func() *TextInputOverlay {
-			o := NewSessionCreateOverlay(mixedProfiles, nil, []string{"/repo/a"}, "")
+			o := NewSessionCreateOverlay(mixedProfiles, nil, []string{"/repo/a"}, "", nil)
 			selectOnlyNonClaude(o) // the claude fields go inert → claudeFieldNA
 			return o
 		}, nil},
 		{"project hint", func() *TextInputOverlay {
-			o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+			o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude", nil)
 			o.SetProjectHint("detecting project…") // the widest smart-dispatch note
 			return o
 		}, nil},
 		{"clear armed", func() *TextInputOverlay {
-			o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+			o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude", nil)
 			ctrlR(o) // arms the footer's "⌃R again" spelling
 			return o
 		}, nil},
 		{"direct target", func() *TextInputOverlay {
-			o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+			o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude", nil)
 			o.SetTargetValidity(true, true, "") // a directory that is not a git repo
 			return o
 		}, nil},
 		{"invalid target", func() *TextInputOverlay {
-			o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+			o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude", nil)
 			o.SetTargetValidity(false, false, "") // not a directory at all
 			return o
 		}, nil},
@@ -112,14 +120,14 @@ func TestCreateForm_ComposesWithinInnerWidth(t *testing.T) {
 			// shared setup calls SetBranchResults, which clears the errored flag, so the
 			// failure is armed in `after` — a state is only covered if the fixture ends
 			// in it.
-			o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+			o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude", nil)
 			o.SetTargetValidity(true, false, "develop") // an ordinary branch name, not "main"
 			return o
 		}, func(o *TextInputOverlay) {
 			o.SetBranchSearchError(o.BranchFilterVersion())
 		}},
 		{"title verdict", func() *TextInputOverlay {
-			o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+			o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude", nil)
 			o.SetTitleError(strings.Repeat("x", titleVerdictBudget))
 			return o
 		}, nil},
@@ -130,7 +138,7 @@ func TestCreateForm_ComposesWithinInnerWidth(t *testing.T) {
 			// import app, where the copy lives; the copy is held to this number by app's
 			// TestVariantRefusals_SurviveAn80ColRender, and the number itself by
 			// TestVariantPicker_ErrorFillsTheLabelLine.
-			o := NewSessionCreateOverlay(mixedProfiles, nil, []string{"/repo/a"}, "")
+			o := NewSessionCreateOverlay(mixedProfiles, nil, []string{"/repo/a"}, "", nil)
 			o.SetVariantError(strings.Repeat("x", variantErrorBudget))
 			return o
 		}, nil},
@@ -161,6 +169,7 @@ func TestCreateForm_ComposesWithinInnerWidth(t *testing.T) {
 				{"effort", stopEffort},
 				{"mode", stopMode},
 				{"account", stopAccount},
+				{"deps", stopDeps},
 				{"prompt", stopTextarea},
 				{"branch", stopBranch},
 			} {
@@ -216,7 +225,7 @@ func TestPromptOverlays_ComposeWithinInnerWidth(t *testing.T) {
 // floor of 10, the cursor cell bubbles renders past its Width, and the " (…)" wrapper. Move
 // any of those and this fails.
 func TestTitleVerdict_FillsTheRow(t *testing.T) {
-	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude", nil)
 	o.SetSize(createOverlayWidth, 24)
 	o.SetTitleError(strings.Repeat("x", titleVerdictBudget))
 
@@ -228,7 +237,7 @@ func TestTitleVerdict_FillsTheRow(t *testing.T) {
 // number honest. Without it, titleVerdictBudget could drift down to any smaller value and
 // every assertion above would still pass while the copy got needlessly terse.
 func TestTitleVerdict_OneCellOverOverflows(t *testing.T) {
-	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude", nil)
 	o.SetSize(createOverlayWidth, 24)
 	o.SetTitleError(strings.Repeat("x", titleVerdictBudget+1))
 
