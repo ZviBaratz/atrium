@@ -157,7 +157,14 @@ func TestEveryRowHasAKnownCategoryAndScope(t *testing.T) {
 // glossExemptRows are the enum rows whose options carry no gloss, each for one of two
 // reasons: the vocabulary is *dynamic* (it grows when a profile, theme or splash
 // variant is added, so an exhaustive map would rot silently), or it is a bare on/off
-// pair that glosses itself and whose meaning is already in the row's summary.
+// pair on a row that declares no `detail` at all, so contextLine's fallback is
+// firstSentence("") — empty, and unable to describe the state the user is not in.
+//
+// That second reason used to read "self-glossing on/off; the summary carries the
+// meaning", and group_mode was exempt on it. It is not the summary contextLine falls
+// back to, it is the detail: group_mode's opened "A divider and tinted headers per
+// account." and was the panel's only visible help while clustering was OFF (#511).
+// An on/off pair with a detail earns no exemption — it gets glosses.
 //
 // Spec §6 supplies glosses for the enums whose options are a fixed, non-obvious
 // vocabulary — five at the time it was written, six since context_indicator
@@ -169,10 +176,9 @@ var glossExemptRows = map[string]string{
 	"default_program":      "dynamic: option list is the user's profile names",
 	"theme":                "dynamic: grows with every theme added to the registry (plus the reserved `auto`, glossed by the summary)",
 	"splash":               "dynamic: grows with every splash variant (the random and off modes are glossed)",
-	"group_mode":           "self-glossing on/off; the summary carries the meaning",
-	"model_indicator":      "self-glossing on/off",
-	"effort_indicator":     "self-glossing on/off",
-	"permission_indicator": "self-glossing on/off",
+	"model_indicator":      "self-glossing on/off, and no detail for the fallback to misdescribe",
+	"effort_indicator":     "self-glossing on/off, and no detail for the fallback to misdescribe",
+	"permission_indicator": "self-glossing on/off, and no detail for the fallback to misdescribe",
 }
 
 // TestEnumRowsGlossEveryOption pins that each fixed-vocabulary enum option carries a
