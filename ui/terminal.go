@@ -47,6 +47,26 @@ type TerminalPane struct {
 	width, height int
 	sessions      map[string]*terminalSession // terminalKey (instance tmux name) → session
 	currentKey    string                      // terminalKey of the currently displayed instance
+	// reapGen counts every request to reap a cached shell — CloseForInstance and
+	// Close — whether or not one was there to reap. EnsureSession snapshots it
+	// before its tmux round trip and re-reads it at install time, which is how a
+	// shell created during a pause or kill is closed instead of installed (#701):
+	// the done-handlers' reap can only close what is already in sessions, so an
+	// install landing after it would otherwise leave a shell in a deleted worktree
+	// that nothing but `atrium reset` sweeps.
+	//
+	// One counter for the whole pane rather than one per key: a reap of some OTHER
+	// instance during a create costs that create one retry on the next capture
+	// tick, which is cheaper than a per-key map that Close would have to invalidate
+	// without discarding.
+	reapGen uint64
+	// beforeInstall, when set, runs after EnsureSession's tmux round trip and
+	// before its install re-check. It is a test seam — the same idiom as app's
+	// cleanupTerminalForInstance and tmuxAvailable — and exists because the window
+	// it opens is exactly the one #701 loses: without it, landing a reap inside
+	// that window is a timing bet rather than an assertion. Nil in production, and
+	// set before the pane is shared with a goroutine — it is read without the lock.
+	beforeInstall func()
 	content       string
 	fallback      bool
 	// fallbackMessage is the raw fallback text while fallback is true, laid out
@@ -267,6 +287,15 @@ func (t *TerminalPane) ApplyFrame(key, content string, err error, at time.Time) 
 //
 // Safe against concurrent entry because the capture chain keeps exactly one
 // capture in flight at a time.
+//
+// Moving the I/O out of the lock is what makes the install a second decision
+// rather than a formality: a pause or a kill can complete during that round trip,
+// and the entry-time instance.Paused() check below cannot see it — pause() flips
+// the status as its LAST statement (session/pause.go) and Kill() never flips one
+// at all. So the install re-reads reapGen and the status, and closes the shell it
+// just created rather than caching one in a deleted worktree (#701). The other
+// half of that fix is app's shellStartRefused, which stops this being reached
+// during a teardown in the first place.
 func (t *TerminalPane) EnsureSession(instance *session.Instance) (string, error) {
 	if instance == nil || !instance.Started() || instance.Paused() {
 		return "", nil
@@ -286,9 +315,14 @@ func (t *TerminalPane) EnsureSession(instance *session.Instance) (string, error)
 		return "", nil
 	}
 
-	// Check if we already have a cached session for this instance.
+	// Check if we already have a cached session for this instance. The reap
+	// generation is snapshotted in the SAME critical section, and deliberately
+	// before the stale-entry delete below: that delete is this call's own
+	// bookkeeping, not a reap, so bumping there would make every recreate refuse
+	// its own install.
 	t.mu.Lock()
 	cached, ok := t.sessions[key]
+	gen := t.reapGen
 	t.mu.Unlock()
 	if ok && cached.tmuxSession != nil {
 		if cached.tmuxSession.DoesSessionExist() {
@@ -341,7 +375,28 @@ func (t *TerminalPane) EnsureSession(instance *session.Instance) (string, error)
 		}
 	}
 
+	if t.beforeInstall != nil {
+		t.beforeInstall()
+	}
+
+	// Re-read the status OUTSIDE t.mu: Paused() takes the instance's own lock, and
+	// t.mu is the lock String() holds for a whole render.
+	//
+	// It is not redundant with reapGen. handlePauseDone returns early when the
+	// pause reported an error (app/app_session.go) and never reaches its reap —
+	// while pause() has already removed the worktree and set Paused. reapGen is
+	// what covers the other direction: a kill sets no status at all, so its reap is
+	// the only signal there is.
+	pausedNow := instance.Paused()
+
 	t.mu.Lock()
+	if t.reapGen != gen || pausedNow {
+		t.mu.Unlock()
+		if err := ts.Close(); err != nil {
+			log.InfoLog.Printf("terminal pane: failed to close a shell reaped mid-create for %s: %v", key, err)
+		}
+		return "", nil
+	}
 	t.sessions[key] = &terminalSession{tmuxSession: ts, cwd: cwd}
 	width, height := t.width, t.height
 	t.mu.Unlock()
@@ -378,6 +433,7 @@ func (t *TerminalPane) Attach() (chan struct{}, error) {
 func (t *TerminalPane) Close() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.reapGen++ // an EnsureSession still in its round trip must not install into the emptied map
 	for title, s := range t.sessions {
 		if s.tmuxSession != nil {
 			if err := s.tmuxSession.Close(); err != nil {
@@ -394,6 +450,13 @@ func (t *TerminalPane) Close() {
 }
 
 // CloseForInstance kills the cached terminal session for a specific instance.
+//
+// It can only close what is already cached, which is why it also bumps reapGen —
+// unconditionally, and the empty-cache case is the one that matters. The pause and
+// kill done-handlers call this the moment their teardown lands; a shell whose
+// EnsureSession is still mid-round-trip is not in the map yet, so without the bump
+// the reap would silently no-op and the install would then cache a shell in a
+// worktree that no longer exists (#701).
 func (t *TerminalPane) CloseForInstance(inst *session.Instance) {
 	if inst == nil {
 		return
@@ -401,6 +464,7 @@ func (t *TerminalPane) CloseForInstance(inst *session.Instance) {
 	key := terminalKey(inst)
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.reapGen++
 	if s, ok := t.sessions[key]; ok {
 		if s.tmuxSession != nil {
 			if err := s.tmuxSession.Close(); err != nil {

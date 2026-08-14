@@ -1454,7 +1454,10 @@ var dispatchExempt = map[keys.KeyName]string{
 // with a reason. Read that map rather than trusting this sentence for its contents;
 // it currently covers KeyQuit, for the reason below, and the tab keys — the
 // terminal tab starts a shell in the worktree the first time it renders, so "tab
-// switching" above is not as inert as it reads.
+// switching" above is not as inert as it reads. What makes admitting them safe is
+// not this switch but shellStartRefused (app_frames.go), which withholds that
+// create while an action is in flight — including from the two routes that reach
+// it with no keypress and so could never have been covered here (#701).
 //
 // KeyUndoKill's absence is load-bearing rather than an oversight: this gate is the
 // only thing making an undo single-flight. Two presses before the restore returns

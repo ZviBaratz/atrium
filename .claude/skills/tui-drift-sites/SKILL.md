@@ -144,10 +144,13 @@ second press would recreate a branch the first one already claimed
 (`TestBusyGateStillExcludesUndo` pins it). `KeyQuit` is *in*, despite being
 `EffectMutate`, because it is the escape hatch from a wedged action — carried as a
 named entry in `busyGateMutationExempt`, with the reason, rather than by softening
-its classification. The tab keys are in it too, admitted for
-navigation but reaching the terminal tab's shell. Read the map itself rather than a
-count here, and read its note before adding a reason — an exemption is the one way
-to silence this guard.
+its classification. The tab keys are in it too, admitted for navigation and
+`EffectMutate` because the terminal tab starts a shell — but what makes admitting
+them safe is a gate *outside* this switch: `shellStartRefused`
+(`app/app_frames.go`) withholds that shell while an action is in flight, which is
+also the only thing that could cover the two routes to it that involve no keypress
+(#701). Read the map itself rather than a count here, and read its note before
+adding a reason — an exemption is the one way to silence this guard.
 
 Site 7 is mandatory for every *dispatchable* action, and it is the one that fails
 in a file you were not editing — the palette reaches every action, so an un-gated

@@ -16,6 +16,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -614,6 +615,110 @@ func TestEnsureSessionReapsLegacyTermSession(t *testing.T) {
 	tp.mu.Unlock()
 	require.True(t, created, "the new-keyed shell session must be created")
 	require.False(t, legacy.DoesSessionExist(), "the orphaned legacy term_ session must be reaped")
+}
+
+// shellOnSocket reports whether the instance's <key>_term shell is alive on
+// Atrium's tmux socket, and registers a cleanup that reaps it either way. The
+// cache map cannot answer this: the whole of #701 is a shell that exists on the
+// socket while no entry names it.
+func shellOnSocket(t *testing.T, inst *session.Instance) bool {
+	t.Helper()
+	probe := tmux.NewSessionWithName(context.Background(), terminalKey(inst)+"_term", "probe", "/bin/sh")
+	t.Cleanup(func() { _ = probe.Close() })
+	return probe.DoesSessionExist()
+}
+
+// A pause or kill completing while EnsureSession is still in its tmux round trip
+// used to orphan the shell: CloseForInstance can only reap what is already in the
+// cache, and the install lands afterwards. Reproduced 10/10 on the unpatched tree
+// by sleeping 5ms between the two; the beforeInstall seam makes it an assertion
+// rather than a timing bet. Drives a real tmux server (self-skips without tmux).
+func TestEnsureSessionDropsAShellReapedMidCreate(t *testing.T) {
+	testutil.RequireTmux(t)
+	t.Cleanup(log.Initialize(t.TempDir(), false))
+
+	instance := makeStartedInstance(t, "reaped-mid-create")
+	defer func() { _ = instance.Kill() }()
+
+	tp := NewTerminalPane(context.Background())
+	tp.SetSize(80, 30)
+	t.Cleanup(tp.Close)
+
+	// The done-handler's reap, landing after new-session and before the install —
+	// the interleaving the issue draws. The cache is empty here, so CloseForInstance
+	// closes nothing and only its generation bump records that it ran.
+	tp.beforeInstall = func() { tp.CloseForInstance(instance) }
+
+	key, err := tp.EnsureSession(instance)
+	require.NoError(t, err)
+
+	// assert, not require, deliberately: the socket check below is the one that is
+	// about the bug rather than about a map, and a fatal on either line above would
+	// stop it from ever running — including under the mutations that prove it.
+	tp.mu.Lock()
+	_, cached := tp.sessions[terminalKey(instance)]
+	tp.mu.Unlock()
+	assert.Empty(t, key, "a shell reaped mid-create must not be reported as ready")
+	assert.False(t, cached, "the reaped shell must not be installed after the reap")
+	assert.False(t, shellOnSocket(t, instance),
+		"the shell survived on the socket, in a worktree the teardown removed, with "+
+			"nothing left to reap it but `atrium reset`")
+}
+
+// The other half of the same install check, and the reason it is two conditions.
+// handlePauseDone returns before its reap when the pause reported an error, so no
+// generation bump ever happens — while pause() has already removed the worktree
+// and set Paused. Only the status re-read catches that one.
+func TestEnsureSessionDropsAShellWhoseInstancePausedMidCreate(t *testing.T) {
+	testutil.RequireTmux(t)
+	t.Cleanup(log.Initialize(t.TempDir(), false))
+
+	instance := makeStartedInstance(t, "paused-mid-create")
+	defer func() { _ = instance.Kill() }()
+
+	tp := NewTerminalPane(context.Background())
+	tp.SetSize(80, 30)
+	t.Cleanup(tp.Close)
+
+	// Deliberately no CloseForInstance: the generation is untouched, so this test
+	// fails if the status arm is dropped even though the reap arm survives.
+	tp.beforeInstall = func() { instance.SetStatus(session.Paused) }
+
+	key, err := tp.EnsureSession(instance)
+	require.NoError(t, err)
+
+	tp.mu.Lock()
+	_, cached := tp.sessions[terminalKey(instance)]
+	tp.mu.Unlock()
+	assert.Empty(t, key, "a shell whose instance paused mid-create must not be reported as ready")
+	assert.False(t, cached, "a paused instance must not end up with a cached shell")
+	assert.False(t, shellOnSocket(t, instance),
+		"the shell survived in the worktree the pause removed")
+}
+
+// The positive control for both guards above: with nothing reaping and nothing
+// pausing, the same call installs a shell and leaves it running. Without this, an
+// EnsureSession that refused unconditionally would pass every assertion above.
+func TestEnsureSessionInstallsAnUnraceedShell(t *testing.T) {
+	testutil.RequireTmux(t)
+	t.Cleanup(log.Initialize(t.TempDir(), false))
+
+	instance := makeStartedInstance(t, "unraced")
+	defer func() { _ = instance.Kill() }()
+
+	tp := NewTerminalPane(context.Background())
+	tp.SetSize(80, 30)
+	t.Cleanup(tp.Close)
+
+	key, err := tp.EnsureSession(instance)
+	require.NoError(t, err)
+	require.Equal(t, terminalKey(instance), key)
+
+	tp.mu.Lock()
+	_, cached := tp.sessions[key]
+	tp.mu.Unlock()
+	require.True(t, cached, "an unraced create must install its shell")
+	require.True(t, shellOnSocket(t, instance), "an unraced create must leave a live shell")
 }
 
 func TestTerminalCloseForInstance(t *testing.T) {

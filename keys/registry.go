@@ -277,7 +277,9 @@ var Registry = []Entry{
 	// Cycling reaches the terminal tab, so it inherits that tab's effect (see
 	// KeyTabTerminal). Nothing else covers it: the tab is a rendering surface, not
 	// a dispatched action, so no other Entry is in a position to classify the shell
-	// it starts. Reclassify these two the day the surface itself is gated.
+	// it starts. Reclassify these two the day a gate on THIS classification covers
+	// that surface — #701 gated it on an action being in flight, which is a
+	// different question and leaves the idle case exactly as it was.
 	{Name: KeyTab, Action: "next_tab", Effect: EffectMutate, Binding: key.NewBinding(
 		key.WithKeys("tab"),
 		key.WithHelp("tab", "switch tab"),
@@ -410,7 +412,14 @@ var Registry = []Entry{
 	// resolves a capture target — so this key's one job is to put an unrestricted
 	// shell in the worktree, which is a fleet session that outlives the keypress.
 	// A gate on this classification wants the TAB, not the key: block the surface
-	// and the two cycling keys below can go back to observing.
+	// and the two cycling keys above can go back to observing.
+	//
+	// #701 built that surface gate (home.shellStartRefused, app/app_frames.go) but
+	// wired only its own condition to it — an action in flight — so all three keys
+	// stay EffectMutate: in an idle TUI the shell still starts. #522 is what makes
+	// the reclassification true, by adding --readonly to the same predicate; the
+	// exemption in the opener rule above is for a gate on THIS classification, and
+	// a busy gate is not one.
 	{Name: KeyTabTerminal, Action: "tab_terminal", Effect: EffectMutate, Binding: key.NewBinding(
 		key.WithKeys("3"),
 		key.WithHelp("3", "terminal tab"),
