@@ -52,9 +52,9 @@ func TestEveryRegistryEntryDeclaresAnEffect(t *testing.T) {
 // what its rows can do, because those rows are themselves classified here.
 func TestKeyEffects_Golden(t *testing.T) {
 	want := map[KeyName]Effect{
-		// Observing: leaves no fleet, repo, config or agent state changed once the
-		// keypress is over. Some of these do read I/O (KeyOpenPR shells out to gh,
-		// KeyHints can decode an image) — reading is not changing.
+		// Observing: changes nothing Atrium owns. Several of these read from disk or
+		// start a process that outlives the keypress (KeyOpenPR and KeyHints both
+		// reach an OS opener); neither is the test. See the Effect doc.
 		KeyUp:             EffectObserve,
 		KeyDown:           EffectObserve,
 		KeyShiftUp:        EffectObserve,
@@ -72,7 +72,6 @@ func TestKeyEffects_Golden(t *testing.T) {
 		KeyOpenPR:         EffectObserve,
 		KeyCmdLog:         EffectObserve,
 		KeyCommandPalette: EffectObserve,
-		KeyEscape:         EffectObserve,
 		KeyRedraw:         EffectObserve,
 
 		// View-only: writes state.json, and what it writes is the arrangement of
@@ -90,6 +89,10 @@ func TestKeyEffects_Golden(t *testing.T) {
 		KeyMoveGroupDown:   EffectView,
 		KeyMoveAccountUp:   EffectView,
 		KeyMoveAccountDown: EffectView,
+		// esc's third role: backing out of focus mode persists the layout it
+		// returns to. The other two roles (exit scroll, clear filter) do not
+		// persist, which is why the help desc naming only those reads as Observe.
+		KeyEscape: EffectView,
 
 		// Mutating: a session, a repo, the config, or an agent.
 		//

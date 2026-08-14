@@ -68,15 +68,19 @@ const (
 	// does. Never write it deliberately — it exists so that omitting the field
 	// fails a test instead of defaulting into "safe".
 	EffectUnset Effect = iota
-	// EffectObserve reads: it leaves no fleet, repo, config or agent state
-	// changed once the keypress is over.
+	// EffectObserve changes nothing ATRIUM OWNS.
 	//
-	// The line is "changes nothing", not "touches nothing" — several observing
-	// keys do I/O. Open PR (w) shells out to `gh pr view --web`; the open form of
-	// hint mode reads and decodes an image file. Both read. What disqualifies a
-	// key is leaving something behind: a process still running, a file rewritten,
-	// an agent given an instruction. That is the test to apply, and it is why the
-	// terminal tab is not here — its shell outlives the keypress.
+	// The line is ownership, not I/O and not liveness — both of the weaker tests
+	// misfile the keys below. Observing keys read from disk (hint mode decodes an
+	// image) and start processes that outlive the keypress by design: open-PR (w)
+	// and hint mode's URL branch hand a target to xdg-open/open through
+	// actions.OpenInBrowser, and on Linux the clipboard helpers persist in order to
+	// own the selection. None of those are Atrium's to track or reap.
+	//
+	// What disqualifies a key is changing something Atrium is responsible for: a
+	// session on its socket, a worktree, a branch, state.json or config.json, an
+	// agent's conversation. That is why the terminal tab is not here — its shell is
+	// a session in Atrium's own fleet, which Atrium must later reap.
 	EffectObserve
 	// EffectView changes the arrangement of the view and nothing else — fold
 	// state, the list/preview split, the layout preset, list order. Persisted
@@ -216,11 +220,13 @@ var Registry = []Entry{
 		key.WithHelp("L", "command log"),
 	)},
 	// The timeline itself is read-only — restoring a checkpoint is claude's own
-	// Esc-Esc, not ours — but the overlay arms two actions, and both mutate. It
-	// reports AttachRequested, reaching the keyboard-to-the-agent hand-off above
-	// without going through KeyEnter; and ForkRequested, which app_checkpoints.go's
-	// forkFromCheckpoint turns into a NEW session seeded from the conversation.
-	// The fork is the worse of the two, so it is the one this classification is for.
+	// Esc-Esc, not ours — but the overlay arms three actions (checkpointOverlay.go:
+	// enter, f, r) and two of them are why this is Mutate. AttachRequested reaches
+	// the keyboard-to-the-agent hand-off above without going through KeyEnter.
+	// ForkRequested reaches forkFromCheckpoint, which opens the create FORM seeded
+	// from the conversation — the session appears only if the user submits it, so
+	// this is KeyNew's effect arrived at sideways rather than a session made here.
+	// RefreshRequested (r) reloads the timeline and is the read-only one.
 	{Name: KeyCheckpoints, Action: "checkpoints", Effect: EffectMutate, Binding: key.NewBinding(
 		key.WithKeys("H"),
 		key.WithHelp("H", "checkpoints"),
@@ -438,12 +444,14 @@ var Registry = []Entry{
 		key.WithKeys("ctrl+q"),
 		key.WithHelp("ctrl-q", "attach/detach"),
 	)},
-	// Hint mode copies a match to the clipboard; its capital form also opens a URL
-	// in the browser, or an image path in ATRIUM'S OWN overlay — actHint
-	// (app/app_hints.go) deliberately refuses the OS opener, which over SSH would
-	// launch a viewer on the wrong machine. The image branch reads and decodes a
-	// file, which is I/O but not a change; nothing here reaches the fleet, the
-	// repo, the config or the agent.
+	// Hint mode copies a match to the clipboard, and its capital form also opens
+	// what can be opened. The two branches of actHint (app/app_hints.go) differ in
+	// WHICH opener, and only the image one refuses the OS: an IMAGE PATH renders in
+	// Atrium's own overlay, because handing it to xdg-open over SSH would launch a
+	// viewer on the wrong machine (#398). A URL does go to the OS opener, via
+	// actions.OpenInBrowser — and OpenableURL accepts file://, so a local file
+	// spelled that way goes with it. Reading a file and handing a target to the
+	// OS are both fine here; neither changes anything Atrium owns.
 	{Name: KeyHints, Action: "hints", Effect: EffectObserve, Binding: key.NewBinding(
 		key.WithKeys("f"),
 		key.WithHelp("f", "copy/open from screen"),
@@ -482,7 +490,14 @@ var Registry = []Entry{
 		key.WithKeys("ctrl+pgup", "ctrl+pgdown"),
 		key.WithHelp("ctrl-pgup/pgdn", "cycle sessions"),
 	)},
-	{Name: KeyEscape, DocOnly: true, Effect: EffectObserve, Binding: key.NewBinding(
+	// EffectView, not Observe, and the help text is why it reads wrong: esc has a
+	// THIRD role neither this desc nor keys.go's comment mentions. Its last branch
+	// in handleKeyPress (app/app_update.go) backs out of focus mode via
+	// exitFocusLayout -> applyLayoutPreset -> appState.SetLayout, which saves
+	// state.json — the same write that makes the layout and split keys EffectView.
+	// Classify the handler, not the label: reachable as layout-key-into-focus, then
+	// esc.
+	{Name: KeyEscape, DocOnly: true, Effect: EffectView, Binding: key.NewBinding(
 		key.WithKeys("esc"),
 		key.WithHelp("esc", "exit scroll / clear filter"),
 	)},

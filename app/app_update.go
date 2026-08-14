@@ -1451,9 +1451,10 @@ var dispatchExempt = map[keys.KeyName]string{
 // a keys.Effect, and TestBusyAllowlistNeverAdmitsAMutation (key_effect_test.go)
 // requires everything this switch admits to be observing or view-only. A key added
 // here that turns out to mutate fails there unless busyGateMutationExempt names it
-// with a reason. It names four today: KeyQuit, for the reason below, and the three
-// tab keys — the terminal tab starts a shell in the worktree the first time it
-// renders, so "tab switching" above is not as inert as it reads.
+// with a reason. Read that map rather than trusting this sentence for its contents;
+// it currently covers KeyQuit, for the reason below, and the tab keys — the
+// terminal tab starts a shell in the worktree the first time it renders, so "tab
+// switching" above is not as inert as it reads.
 //
 // KeyUndoKill's absence is load-bearing rather than an oversight: this gate is the
 // only thing making an undo single-flight. Two presses before the restore returns

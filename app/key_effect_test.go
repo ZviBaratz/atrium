@@ -35,15 +35,22 @@ var busyGateMutationExempt = map[keys.KeyName]string{
 	// comment names as admitted, and it is the terminal TAB — not the keypress —
 	// that mutates, by lazily starting a shell when the capture chain first
 	// resolves it (TerminalPane.EnsureSession, which refuses an unstarted or
-	// paused instance). Blocking the keys would make the view unnavigable during
-	// every async action to stop a shell the next frame starts anyway.
+	// paused instance). Keeping them admitted keeps the view navigable mid-action.
 	//
-	// The residual is real and predates this classification: pause() flips the
-	// status LAST, after removing the worktree, so mid-pause the guard does not
-	// fire and the tab can start a shell in a tree being deleted. handlePauseDone
-	// reaps it, but only if EnsureSession has installed it in the cache by then —
-	// #701 has the interleaving. Gating the surface is the fix, there and in #522;
-	// these exemptions are where both will be found.
+	// That is a trade, not a free pass, and the cost is #701. pause() and the kill
+	// paths all flip status LAST, after removing the worktree, so mid-action the
+	// Paused() guard does not fire and opening the tab can start a shell in a tree
+	// being deleted. The done-handlers reap it via CleanupTerminalForInstance, but
+	// only what EnsureSession has already installed in the cache — lose that
+	// interleaving on a KILL and the shell outlives its worktree, its branch and
+	// its instance record, with nothing left to reap it.
+	//
+	// So blocking these keys WOULD close part of #701 — the part where the user is
+	// on preview or diff when the action begins. It would not close the rest: an
+	// already-active terminal tab starts its shell from the capture chain with no
+	// keypress at all, and the tab bar is clickable (TabAtZone -> SetActiveTab in
+	// app_msgs.go), a route that never consults the busy gate. Gating the surface
+	// is what closes all three, there and in #522.
 	keys.KeyTabTerminal: "selects the terminal tab, whose lazy shell is the mutation; " +
 		"see the shared note above",
 	keys.KeyTab:      "cycles onto the terminal tab; see the shared note above",

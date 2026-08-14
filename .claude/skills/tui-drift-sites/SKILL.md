@@ -103,7 +103,7 @@ are not guessable from a key's label:
   command palette is `EffectObserve` for exactly that reason (`runPaletteAction`
   re-enters `dispatchAction`, so its rows are classified); `!`, `H` and `v` are not,
   because their surfaces reach something no `Entry` owns: shell verbs for `!`; an
-  attach *and* a fork into a brand-new session for `H`; and, for `v`, the bare `x`
+  attach *and* a fork that opens the create form for `H`; and, for `v`, the bare `x`
   that `handleMultiSelectState` matches literally before it resolves the rest
   through `GlobalKeyStringsMap` (so its pause/resume/kill really are classified —
   only `x` is not). The tab keys are `EffectMutate` for the same rule: the terminal
@@ -144,9 +144,10 @@ second press would recreate a branch the first one already claimed
 (`TestBusyGateStillExcludesUndo` pins it). `KeyQuit` is *in*, despite being
 `EffectMutate`, because it is the escape hatch from a wedged action — carried as a
 named entry in `busyGateMutationExempt`, with the reason, rather than by softening
-its classification. The other three entries there are the tab keys, which are
-admitted for navigation but reach the terminal tab's shell; read that note before
-adding a fourth reason, because an exemption is the one way to silence this guard.
+its classification. The tab keys are in it too, admitted for
+navigation but reaching the terminal tab's shell. Read the map itself rather than a
+count here, and read its note before adding a reason — an exemption is the one way
+to silence this guard.
 
 Site 7 is mandatory for every *dispatchable* action, and it is the one that fails
 in a file you were not editing — the palette reaches every action, so an un-gated
