@@ -38,10 +38,12 @@ var busyGateMutationExempt = map[keys.KeyName]string{
 	// paused instance). Blocking the keys would make the view unnavigable during
 	// every async action to stop a shell the next frame starts anyway.
 	//
-	// The residual is real and predates this classification: mid-pause the
-	// instance is not Paused() yet, so opening the tab can start a shell in a
-	// worktree the pause is removing. Gating the surface is the fix, and it is
-	// #522's to make; these exemptions are where it will be found.
+	// The residual is real and predates this classification: pause() flips the
+	// status LAST, after removing the worktree, so mid-pause the guard does not
+	// fire and the tab can start a shell in a tree being deleted. handlePauseDone
+	// reaps it, but only if EnsureSession has installed it in the cache by then —
+	// #701 has the interleaving. Gating the surface is the fix, there and in #522;
+	// these exemptions are where both will be found.
 	keys.KeyTabTerminal: "selects the terminal tab, whose lazy shell is the mutation; " +
 		"see the shared note above",
 	keys.KeyTab:      "cycles onto the terminal tab; see the shared note above",
