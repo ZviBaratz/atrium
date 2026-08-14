@@ -109,6 +109,14 @@ var (
 
 			if daemonFlag {
 				cfg := config.LoadConfig()
+				// Activate the configured theme before tmux.Init for the same reason
+				// theme.SetMono is resolved above: the managed tmux config is rendered by
+				// Init, and tmux draws the in-session status band. A theme activated later
+				// (inside app.Run / newHome) writes the band's palette into the config first
+				// and leaves every session started this run using the default palette on
+				// that surface. The COLORFGBG ladder mirrors the initialScheme logic in app.
+				theme.Set(cfg.GetTheme())
+				theme.SetScheme(theme.ResolveScheme(nil, os.Getenv("COLORFGBG")))
 				if err := tmux.Init(cfg.TmuxConfigOverride, cfg.GetSessionContextBar()); err != nil {
 					log.WarningLog.Printf("failed to initialize tmux config: %v", err)
 				}
@@ -125,6 +133,14 @@ var (
 			// any project. When there is no repo context, session creation guides you to
 			// pick one rather than failing at startup.
 			cfg := config.LoadConfig()
+			// Activate the configured theme before tmux.Init for the same reason
+			// theme.SetMono is resolved above: the managed tmux config is rendered by
+			// Init, and tmux draws the in-session status band. A theme activated later
+			// (inside app.Run / newHome) writes the band's palette into the config first
+			// and leaves every session started this run using the default palette on
+			// that surface. The COLORFGBG ladder mirrors the initialScheme logic in app.
+			theme.Set(cfg.GetTheme())
+			theme.SetScheme(theme.ResolveScheme(nil, os.Getenv("COLORFGBG")))
 
 			// Enforce one interactive atrium per data dir (issue #230). A second TUI
 			// sharing this state.json would let this run's exit-time autoyes daemon
