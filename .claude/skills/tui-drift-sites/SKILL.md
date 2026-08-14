@@ -58,7 +58,7 @@ cannot install it. Once per machine:
 
 `enabledPlugins` does the rest. Until you run it the skill simply will not resolve.
 
-## Adding a keybinding — 9 sites, all but one guarded
+## Adding a keybinding — 10 sites, every one guarded
 
 At last count: **63 registry entries** and **52 dispatch-case lines**, with a dozen-odd
 drift guards in `keys/*_test.go` and **4** in `app/dispatch_coverage_test.go`.
@@ -75,17 +75,45 @@ a number no decision hangs on just taxes every unrelated test someone adds.
 | 1 | `keys/keys.go` — the `KeyName` const, with a doc comment | `revive:exported` via `just lint`; `TestKeyNames_AllRegisteredOrDeliberatelyAbsent` |
 | 2 | `keys/registry.go` — the `Entry` (`WithKeys` + `WithHelp`, plus `Layer`/`DocOnly`) | `TestRegistry_NoDuplicateKeyStrings`, `TestRegistry_LayerTags`, `TestRegistry_DocumentedOnlyEntries` |
 | 2b | `keys/registry.go` — the `Entry`'s `Action`, its name in `config.json` (empty for a `DocOnly` entry) | `TestRegistry_EveryDispatchedEntryHasAnAction`, `TestRegistry_NoDuplicateActions`, `TestRegistry_ActionNamesAreSnakeCase`, `TestActionVocabulary_Golden` |
+| 2c | `keys/registry.go` — the `Entry`'s `Effect`: what pressing the key can change | `TestEveryRegistryEntryDeclaresAnEffect`, `TestKeyEffects_Golden`, `TestBusyAllowlistNeverAdmitsAMutation` |
 | 3 | `keys/help_layout.go` — a `HelpRow` in `HelpGroups`, or a `Mentions` entry | `TestHelpGroups_CoverEveryBinding` (fails structurally, before any rendering) |
 | 4 | `app/app_update.go` — `case keys.KeyX:` in `dispatchAction` | `TestEveryRegistryActionHasADispatchCase` — see below |
 | 5 | `keys/registry_test.go` — the string→action pair in the golden inventory | itself (`TestGlobalKeyStringsMap_GoldenInventory`) |
 | 6 | `README.md` — **two** tables: `#### Keybindings` and `##### Action names`, backtick-wrapped, each in its own section | `TestReadmeDocumentsEveryBinding` **and** `TestReadmeDocumentsEveryAction` |
 | 7 | `app/palette_gates.go` — a `paletteGates` entry (`global()` / `needsSelection` / `perSession`) | `TestEveryPaletteActionHasAGate` **and** `TestPaletteGatesAgreeWithDispatch` (both directions) |
-| 8 | `app/app_update.go` `keyAllowedWhileBusy` — *only if* it must work during an async action | manual |
+| 8 | `app/app_update.go` `keyAllowedWhileBusy` — *only if* it must work during an async action | `TestBusyAllowlistNeverAdmitsAMutation` one way only — see below |
 
-Site 2b is the newest and the one with the longest memory: an `Action` is the name a
-user's `config.json` binds to, so unlike every other identifier here it can be added to
-but never renamed. `TestActionVocabulary_Golden` is what makes a rename fail rather than
-silently stop honoring an override that used to work.
+Site 2b has the longest memory: an `Action` is the name a user's `config.json` binds
+to, so unlike every other identifier here it can be added to but never renamed.
+`TestActionVocabulary_Golden` is what makes a rename fail rather than silently stop
+honoring an override that used to work.
+
+Site 2c is the newest, and the only site whose *omission* is caught rather than
+merely its drift: `EffectUnset` is the zero value and is invalid, so an `Entry` that
+says nothing about what its key can change fails
+`TestEveryRegistryEntryDeclaresAnEffect` instead of defaulting into "safe". Read the
+`Effect` doc comment before choosing — it carries the taxonomy and the two rules that
+are not guessable from a key's label:
+
+- **Classify the handler, not the name.** `approve` (`a`) is `EffectMutate` and
+  changes nothing in Atrium: it taps Enter on the agent's own tool-permission
+  dialog. Read as observing, a read-only mode lets a bystander authorize an `rm -rf`.
+- **An opener carries the worst effect reachable through the surface it opens**,
+  unless another gate on this same classification already covers that surface. The
+  command palette is `EffectObserve` for exactly that reason (`runPaletteAction`
+  re-enters `dispatchAction`, so its rows are classified); `!`, `H` and `v` are not,
+  because their surfaces reach something no `Entry` owns: shell verbs for `!`; an
+  attach *and* a fork that opens the create form for `H`; and, for `v`, the bare `x`
+  that `handleMultiSelectState` matches literally before it resolves the rest
+  through `GlobalKeyStringsMap` (so its pause/resume/kill really are classified —
+  only `x` is not). The tab keys are `EffectMutate` for the same rule: the terminal
+  tab starts a shell in the worktree the first time it renders.
+
+`EffectView` — persists view state (fold, split, preset, list order) and nothing
+else — exists because the busy-gate deliberately admits six keys that write
+`state.json`, so a two-value split makes the site-8 guard below fail on its first run
+over correct code. `keys/effect_test.go`'s golden is the authority on which key is
+which; don't restate the classification anywhere else.
 
 Site 6's second table is the one that surprises: `##### Action names` is a **two-column**
 split of the whole vocabulary, so adding one action reflows every row after the midpoint
@@ -102,6 +130,24 @@ no `Entry` owns and no override can move.
 Plus, situationally: `ui/menu.go`'s context hint sets (`defaultHintKeys` and
 friends) if the key should appear in the bar — guarded in the reverse direction
 only, by `ui/menu_scan_test.go`.
+
+**Site 8 is guarded in one direction only, and it is the direction that catches the
+cheaper mistake.** `TestBusyAllowlistNeverAdmitsAMutation` (`app/key_effect_test.go`)
+rejects a key added to `keyAllowedWhileBusy` whose `Effect` is `EffectMutate` — the
+allowlist can no longer quietly grow a key that races the in-flight action it was
+meant to wait for. Nothing tells you a key *belongs* there, because "must work
+mid-action" is not a property the registry can hold; that judgement is still yours.
+
+Two absences in that switch are load-bearing and must not be "fixed". `KeyUndoKill`
+is out because the gate is the only thing making a restore single-flight, and a
+second press would recreate a branch the first one already claimed
+(`TestBusyGateStillExcludesUndo` pins it). `KeyQuit` is *in*, despite being
+`EffectMutate`, because it is the escape hatch from a wedged action — carried as a
+named entry in `busyGateMutationExempt`, with the reason, rather than by softening
+its classification. The tab keys are in it too, admitted for
+navigation but reaching the terminal tab's shell. Read the map itself rather than a
+count here, and read its note before adding a reason — an exemption is the one way
+to silence this guard.
 
 Site 7 is mandatory for every *dispatchable* action, and it is the one that fails
 in a file you were not editing — the palette reaches every action, so an un-gated

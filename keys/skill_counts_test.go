@@ -71,9 +71,10 @@ func TestSkillCountsMatchTheTree(t *testing.T) {
 // dispatchCaseLines counts `case keys.Key` lines inside dispatchAction, and only there.
 //
 // Scoping it to the function is the whole point. `app/app_update.go` holds a second
-// switch over key names — keyAllowedWhileBusy's, which the skill lists as site *7* — so
-// a whole-file count returns 51 where site 4 is 50, mixing two different switches into
-// one number. The first version of this guard did exactly that, faithfully reproducing
+// switch over key names — keyAllowedWhileBusy's, which the skill lists as site *8* — so
+// a whole-file count returns more than site 4 does, mixing two different switches into
+// one number. (The exact totals are what the assertion below reads out of the tree;
+// naming them here would be one more count to rot.) The first version of this guard did exactly that, faithfully reproducing
 // the error in the skill's own recount recipe.
 //
 // It is the same defect the guard exists to prevent, one level up: measuring something

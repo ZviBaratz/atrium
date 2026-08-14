@@ -1447,6 +1447,15 @@ var dispatchExempt = map[keys.KeyName]string{
 // narrow: pure navigation, scrolling, pane sizing, tab switching, list collapse,
 // and help — nothing that mutates a session, opens an overlay, or drives tmux/git.
 //
+// That rule is now checked rather than merely stated: every registered key carries
+// a keys.Effect, and TestBusyAllowlistNeverAdmitsAMutation (key_effect_test.go)
+// requires everything this switch admits to be observing or view-only. A key added
+// here that turns out to mutate fails there unless busyGateMutationExempt names it
+// with a reason. Read that map rather than trusting this sentence for its contents;
+// it currently covers KeyQuit, for the reason below, and the tab keys — the
+// terminal tab starts a shell in the worktree the first time it renders, so "tab
+// switching" above is not as inert as it reads.
+//
 // KeyUndoKill's absence is load-bearing rather than an oversight: this gate is the
 // only thing making an undo single-flight. Two presses before the restore returns
 // would run the same record twice, and the second run would recreate a branch and
