@@ -58,7 +58,7 @@ cannot install it. Once per machine:
 
 `enabledPlugins` does the rest. Until you run it the skill simply will not resolve.
 
-## Adding a keybinding — 10 sites, all but one guarded
+## Adding a keybinding — 10 sites, every one guarded
 
 At last count: **63 registry entries** and **52 dispatch-case lines**, with a dozen-odd
 drift guards in `keys/*_test.go` and **4** in `app/dispatch_coverage_test.go`.
@@ -102,8 +102,12 @@ are not guessable from a key's label:
   unless another gate on this same classification already covers that surface. The
   command palette is `EffectObserve` for exactly that reason (`runPaletteAction`
   re-enters `dispatchAction`, so its rows are classified); `!`, `H` and `v` are not,
-  because the keys *their* surfaces answer are shell verbs, an attach, and
-  `handleMultiSelectState`'s raw-string table, none of which any `Entry` owns.
+  because their surfaces reach something no `Entry` owns: shell verbs for `!`; an
+  attach *and* a fork into a brand-new session for `H`; and, for `v`, the bare `x`
+  that `handleMultiSelectState` matches literally before it resolves the rest
+  through `GlobalKeyStringsMap` (so its pause/resume/kill really are classified —
+  only `x` is not). The tab keys are `EffectMutate` for the same rule: the terminal
+  tab starts a shell in the worktree the first time it renders.
 
 `EffectView` — persists view state (fold, split, preset, list order) and nothing
 else — exists because the busy-gate deliberately admits six keys that write
@@ -138,9 +142,11 @@ Two absences in that switch are load-bearing and must not be "fixed". `KeyUndoKi
 is out because the gate is the only thing making a restore single-flight, and a
 second press would recreate a branch the first one already claimed
 (`TestBusyGateStillExcludesUndo` pins it). `KeyQuit` is *in*, despite being
-`EffectMutate`, because it is the escape hatch from a wedged action — carried as the
-one named entry in `busyGateMutationExempt`, with the reason, rather than by
-softening its classification.
+`EffectMutate`, because it is the escape hatch from a wedged action — carried as a
+named entry in `busyGateMutationExempt`, with the reason, rather than by softening
+its classification. The other three entries there are the tab keys, which are
+admitted for navigation but reach the terminal tab's shell; read that note before
+adding a fourth reason, because an exemption is the one way to silence this guard.
 
 Site 7 is mandatory for every *dispatchable* action, and it is the one that fails
 in a file you were not editing — the palette reaches every action, so an un-gated

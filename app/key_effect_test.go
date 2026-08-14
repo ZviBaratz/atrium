@@ -30,29 +30,50 @@ var busyGateMutationExempt = map[keys.KeyName]string{
 		"mutation — but it is the escape hatch from a wedged action, and swallowing it " +
 		"with a busy notice would leave no way out but ctrl+c. Stated at " +
 		"keyAllowedWhileBusy's doc comment",
+
+	// The three tab keys share one reason: tab switching is what the gate's doc
+	// comment names as admitted, and it is the terminal TAB — not the keypress —
+	// that mutates, by lazily starting a shell when the capture chain first
+	// resolves it (TerminalPane.EnsureSession, which refuses an unstarted or
+	// paused instance). Blocking the keys would make the view unnavigable during
+	// every async action to stop a shell the next frame starts anyway.
+	//
+	// The residual is real and predates this classification: mid-pause the
+	// instance is not Paused() yet, so opening the tab can start a shell in a
+	// worktree the pause is removing. Gating the surface is the fix, and it is
+	// #522's to make; these exemptions are where it will be found.
+	keys.KeyTabTerminal: "selects the terminal tab, whose lazy shell is the mutation; " +
+		"see the shared note above",
+	keys.KeyTab:      "cycles onto the terminal tab; see the shared note above",
+	keys.KeyShiftTab: "cycles onto the terminal tab; see the shared note above",
 }
 
 // TestBusyAllowlistNeverAdmitsAMutation is the subset check: every key the
 // busy-gate lets through mid-action must be observing or view-only.
 //
-// The assertion is membership in a set, not `!= EffectMutate`, so an unclassified
-// key fails here too — a name whose Effect nobody wrote is exactly the case that
-// must not read back as safe.
+// It walks every KeyName rather than every Registry entry, and the difference is
+// the whole point. Iterating Registry would only ever ask about names an Entry
+// already classifies — which TestEveryRegistryEntryDeclaresAnEffect has already
+// made non-Unset — so the unclassified case could not arise. The name that can is
+// the UNregistered one: KeyScreensaver dispatches without an Entry, EffectOf
+// returns EffectUnset for it, and adding it to the allowlist must fail rather than
+// read back as safe. Asserting membership in a set, not `!= EffectMutate`, is what
+// makes that hold.
 func TestBusyAllowlistNeverAdmitsAMutation(t *testing.T) {
 	var admitted []string
-	for _, e := range keys.Registry {
-		if !keyAllowedWhileBusy(e.Name) {
+	for name := keys.KeyName(0); name < keys.NumKeyNames; name++ {
+		if !keyAllowedWhileBusy(name) {
 			continue
 		}
-		if busyGateMutationExempt[e.Name] != "" {
+		if busyGateMutationExempt[name] != "" {
 			continue
 		}
-		switch keys.EffectOf(e.Name) {
+		switch keys.EffectOf(name) {
 		case keys.EffectObserve, keys.EffectView:
 			continue
 		}
-		admitted = append(admitted, fmt.Sprintf("%q (key %q) is %s",
-			e.Binding.Help().Desc, keys.PrimaryKey(e.Name), keys.EffectOf(e.Name)))
+		admitted = append(admitted, fmt.Sprintf("%s is %s",
+			keyLabel(name), keys.EffectOf(name)))
 	}
 	assert.Empty(t, admitted, "keyAllowedWhileBusy admits these mid-action, but their "+
 		"Effect says they change a session, repo, config or agent — which is what the "+
@@ -61,10 +82,10 @@ func TestBusyAllowlistNeverAdmitsAMutation(t *testing.T) {
 		"busyGateMutationExempt with the reason")
 }
 
-// exemptLabel names a KeyName the way the subset check above does — the help desc
+// keyLabel names a KeyName the way the subset check above does — the help desc
 // plus the key — because keys.LabelOf alone reports the merge action as "m", which
 // is the identifier a reader is least able to search for.
-func exemptLabel(name keys.KeyName) string {
+func keyLabel(name keys.KeyName) string {
 	for _, e := range keys.Registry {
 		if e.Name == name {
 			return fmt.Sprintf("%q (key %q)", e.Binding.Help().Desc, keys.PrimaryKey(name))
@@ -85,7 +106,7 @@ func TestBusyGateExemptionsAreRealAndReasoned(t *testing.T) {
 	}
 
 	for name, reason := range busyGateMutationExempt {
-		label := exemptLabel(name)
+		label := keyLabel(name)
 		assert.NotEmptyf(t, reason, "%s is exempted with no reason", label)
 		assert.Truef(t, registered[name],
 			"%s is exempted but has no Registry entry — nothing to exempt", label)

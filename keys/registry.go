@@ -68,8 +68,15 @@ const (
 	// does. Never write it deliberately — it exists so that omitting the field
 	// fails a test instead of defaulting into "safe".
 	EffectUnset Effect = iota
-	// EffectObserve reads: it changes nothing outside transient view state, and
-	// in particular reaches no disk, no fleet, no repo, no config and no agent.
+	// EffectObserve reads: it leaves no fleet, repo, config or agent state
+	// changed once the keypress is over.
+	//
+	// The line is "changes nothing", not "touches nothing" — several observing
+	// keys do I/O. Open PR (w) shells out to `gh pr view --web`; the open form of
+	// hint mode reads and decodes an image file. Both read. What disqualifies a
+	// key is leaving something behind: a process still running, a file rewritten,
+	// an agent given an instruction. That is the test to apply, and it is why the
+	// terminal tab is not here — its shell outlives the keypress.
 	EffectObserve
 	// EffectView changes the arrangement of the view and nothing else — fold
 	// state, the list/preview split, the layout preset, list order. Persisted
@@ -209,9 +216,11 @@ var Registry = []Entry{
 		key.WithHelp("L", "command log"),
 	)},
 	// The timeline itself is read-only — restoring a checkpoint is claude's own
-	// Esc-Esc, not ours — but the overlay's one action is attach (AttachRequested
-	// in app/app_checkpoints.go), so this key reaches the keyboard-to-the-agent
-	// hand-off above without going through KeyEnter.
+	// Esc-Esc, not ours — but the overlay arms two actions, and both mutate. It
+	// reports AttachRequested, reaching the keyboard-to-the-agent hand-off above
+	// without going through KeyEnter; and ForkRequested, which app_checkpoints.go's
+	// forkFromCheckpoint turns into a NEW session seeded from the conversation.
+	// The fork is the worse of the two, so it is the one this classification is for.
 	{Name: KeyCheckpoints, Action: "checkpoints", Effect: EffectMutate, Binding: key.NewBinding(
 		key.WithKeys("H"),
 		key.WithHelp("H", "checkpoints"),
@@ -259,11 +268,15 @@ var Registry = []Entry{
 		key.WithKeys("ctrl+p"),
 		key.WithHelp("ctrl-p", "pause all"),
 	)},
-	{Name: KeyTab, Action: "next_tab", Effect: EffectObserve, Binding: key.NewBinding(
+	// Cycling reaches the terminal tab, so it inherits that tab's effect (see
+	// KeyTabTerminal). Nothing else covers it: the tab is a rendering surface, not
+	// a dispatched action, so no other Entry is in a position to classify the shell
+	// it starts. Reclassify these two the day the surface itself is gated.
+	{Name: KeyTab, Action: "next_tab", Effect: EffectMutate, Binding: key.NewBinding(
 		key.WithKeys("tab"),
 		key.WithHelp("tab", "switch tab"),
 	)},
-	{Name: KeyShiftTab, Action: "prev_tab", Effect: EffectObserve, Binding: key.NewBinding(
+	{Name: KeyShiftTab, Action: "prev_tab", Effect: EffectMutate, Binding: key.NewBinding(
 		key.WithKeys("shift+tab"),
 		key.WithHelp("shift-tab", "prev tab"),
 	)},
@@ -279,11 +292,14 @@ var Registry = []Entry{
 		key.WithKeys("U"),
 		key.WithHelp("U", "undo the last kill"),
 	)},
-	// Entering the mode mutates nothing by itself, but the mode's own keys are raw
-	// strings in handleMultiSelectState (app/app_keys.go) — x/p/r there run batch
-	// kill/pause/resume, and no Entry owns them, so a registry walk cannot see them.
-	// This key is the only registry-level gate over that table, so it carries its
-	// effect (#522 gates the handler separately for the same reason).
+	// Entering the mode mutates nothing by itself, but the mode runs batch
+	// kill/pause/resume over the marked set. Most of that table IS visible to a
+	// registry walk: handleMultiSelectState (app/app_keys.go) matches only esc and
+	// a literal "x", then resolves the rest through GlobalKeyStringsMap and
+	// switches on KeyPause/KeyResume/KeyKill — all registered, all EffectMutate,
+	// all override-aware. The unowned one is plain "x" (batch kill, the key the
+	// mode's own bar advertises), and this key is the only registry-level gate
+	// over it, so it carries that effect.
 	{Name: KeyMultiSelect, Action: "multi_select", Effect: EffectMutate, Binding: key.NewBinding(
 		key.WithKeys("v"),
 		key.WithHelp("v", "multi-select"),
@@ -382,7 +398,14 @@ var Registry = []Entry{
 		key.WithKeys("2"),
 		key.WithHelp("2", "diff tab"),
 	)},
-	{Name: KeyTabTerminal, Action: "tab_terminal", Effect: EffectObserve, Binding: key.NewBinding(
+	// Opening the terminal tab starts a shell. TerminalPane.EnsureSession
+	// (ui/terminal.go) runs tmux new-session for <name>_term with the user's
+	// $SHELL in the instance's working directory, lazily, the first time the tab
+	// resolves a capture target — so this key's one job is to put an unrestricted
+	// shell in the worktree, which is a fleet session that outlives the keypress.
+	// A gate on this classification wants the TAB, not the key: block the surface
+	// and the two cycling keys below can go back to observing.
+	{Name: KeyTabTerminal, Action: "tab_terminal", Effect: EffectMutate, Binding: key.NewBinding(
 		key.WithKeys("3"),
 		key.WithHelp("3", "terminal tab"),
 	)},
@@ -415,9 +438,12 @@ var Registry = []Entry{
 		key.WithKeys("ctrl+q"),
 		key.WithHelp("ctrl-q", "attach/detach"),
 	)},
-	// Hint mode copies a match to the clipboard, and its capital form also opens it
-	// in the browser or the OS handler. Neither reaches the fleet, the repo, the
-	// config or the agent.
+	// Hint mode copies a match to the clipboard; its capital form also opens a URL
+	// in the browser, or an image path in ATRIUM'S OWN overlay — actHint
+	// (app/app_hints.go) deliberately refuses the OS opener, which over SSH would
+	// launch a viewer on the wrong machine. The image branch reads and decodes a
+	// file, which is I/O but not a change; nothing here reaches the fleet, the
+	// repo, the config or the agent.
 	{Name: KeyHints, Action: "hints", Effect: EffectObserve, Binding: key.NewBinding(
 		key.WithKeys("f"),
 		key.WithHelp("f", "copy/open from screen"),
@@ -447,7 +473,12 @@ var Registry = []Entry{
 	// which is what DocOnly means — but "exhaustive" is the property that makes
 	// the zero value work, and an entry exempted from classification is an entry
 	// whose reclassification nobody would review.
-	{Name: KeySessionCycle, DocOnly: true, Layer: LayerAttached, Effect: EffectObserve, Binding: key.NewBinding(
+	// Mutate for the same reason KeyEnter is, and it must not disagree with it: a
+	// cycle is not a view change but a real detach-and-attach (cycleTarget,
+	// app/app_session.go, says so), so each hop hands the raw keyboard to a
+	// DIFFERENT agent. A classification that refused the attach key and permitted
+	// this one would be inconsistent with itself.
+	{Name: KeySessionCycle, DocOnly: true, Layer: LayerAttached, Effect: EffectMutate, Binding: key.NewBinding(
 		key.WithKeys("ctrl+pgup", "ctrl+pgdown"),
 		key.WithHelp("ctrl-pgup/pgdn", "cycle sessions"),
 	)},

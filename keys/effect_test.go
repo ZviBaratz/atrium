@@ -52,18 +52,17 @@ func TestEveryRegistryEntryDeclaresAnEffect(t *testing.T) {
 // what its rows can do, because those rows are themselves classified here.
 func TestKeyEffects_Golden(t *testing.T) {
 	want := map[KeyName]Effect{
-		// Observing: reads only. No disk, no fleet, no repo, no config, no agent.
+		// Observing: leaves no fleet, repo, config or agent state changed once the
+		// keypress is over. Some of these do read I/O (KeyOpenPR shells out to gh,
+		// KeyHints can decode an image) — reading is not changing.
 		KeyUp:             EffectObserve,
 		KeyDown:           EffectObserve,
 		KeyShiftUp:        EffectObserve,
 		KeyShiftDown:      EffectObserve,
 		KeyNextUnread:     EffectObserve,
 		KeyNextNeedsInput: EffectObserve,
-		KeyTab:            EffectObserve,
-		KeyShiftTab:       EffectObserve,
 		KeyTabPreview:     EffectObserve,
 		KeyTabDiff:        EffectObserve,
-		KeyTabTerminal:    EffectObserve,
 		KeyHelp:           EffectObserve,
 		KeyFilter:         EffectObserve,
 		KeyToggleMark:     EffectObserve,
@@ -73,7 +72,6 @@ func TestKeyEffects_Golden(t *testing.T) {
 		KeyOpenPR:         EffectObserve,
 		KeyCmdLog:         EffectObserve,
 		KeyCommandPalette: EffectObserve,
-		KeySessionCycle:   EffectObserve,
 		KeyEscape:         EffectObserve,
 		KeyRedraw:         EffectObserve,
 
@@ -94,6 +92,15 @@ func TestKeyEffects_Golden(t *testing.T) {
 		KeyMoveAccountDown: EffectView,
 
 		// Mutating: a session, a repo, the config, or an agent.
+		//
+		// The tab keys are here because the terminal tab starts a shell in the
+		// worktree the first time it renders (TerminalPane.EnsureSession), and the
+		// two cycling keys reach it. They are the entries most likely to look
+		// misfiled; the reason is on KeyTabTerminal in registry.go.
+		KeyTab:            EffectMutate,
+		KeyShiftTab:       EffectMutate,
+		KeyTabTerminal:    EffectMutate,
+		KeySessionCycle:   EffectMutate,
 		KeyNew:            EffectMutate,
 		KeyPrompt:         EffectMutate,
 		KeySmartDispatch:  EffectMutate,

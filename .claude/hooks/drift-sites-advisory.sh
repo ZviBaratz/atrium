@@ -27,7 +27,7 @@ fi
 case "$path" in
 *keys/registry.go)
 	cat >&2 <<-'EOF'
-		keys/registry.go touched — a keybinding has 10 sites, all but one guarded.
+		keys/registry.go touched — a keybinding has 10 sites, every one guarded.
 
 		  1  keys/keys.go            KeyName const + doc comment
 		  2  keys/registry.go        the Entry                      <- you are here
