@@ -381,6 +381,12 @@ type home struct {
 	// Deliberately in-memory only: the next launch should re-try the file rather
 	// than inherit a verdict from a transient failure.
 	outboxPoisoned map[string]bool
+	// createsInFlight maps a session started from an `atrium new` request to the
+	// spool file that asked for it, so settleCreateRequest can remove that file on
+	// a successful start or reject it with the failure (#703). The entry is what
+	// keeps the drain from re-executing a request whose file it deliberately left
+	// in place; in-memory only, for outboxPoisoned's reason.
+	createsInFlight map[*session.Instance]string
 	// notifier emits the terminal bell / desktop notification when a background
 	// session finishes a turn or blocks on a prompt (see app_notify.go, config
 	// Notifications). nil disables notification (hand-built test homes).

@@ -91,6 +91,7 @@ if one is missing from this table.
 | `ls` | List sessions, as a table or as JSON for scripts |
 | `peek` | Print what a session's pane is showing, without attaching |
 | `send` | Queue a prompt for a session |
+| `new` | Create a session without a TUI |
 | `doctor` | Check core dependencies (tmux, git, gh) and agent CLI heuristic versions |
 | `reap` | List tmux servers Atrium left behind, and stop them on request |
 | `profiles` | Manage agent profiles (e.g. `profiles detect`) |
@@ -124,10 +125,10 @@ Global flags:
 
 #### Scripting Atrium
 
-`ls`, `peek` and `send` are the headless surface: three primitives — list the
-fleet, read a screen, send a message — that let a script or an orchestrator agent
-drive Atrium without a TTY. None of them start the TUI, take its lock, or need a
-terminal.
+`ls`, `peek`, `send` and `new` are the headless surface: four primitives — list
+the fleet, read a screen, send a message, create a session — that let a script or
+an orchestrator agent drive Atrium without a TTY. None of them start the TUI, take
+its lock, or need a terminal.
 
 **`atrium ls`** prints a table; `--json` emits an array for `jq`. It reads stored
 state and never touches tmux, so it works with no tmux server running at all.
@@ -201,14 +202,54 @@ Undelivered messages expire after 24 hours, on the grounds that a day-old prompt
 describes a tree that has moved on. Sending to a paused session is allowed — the
 queue is persisted, so the prompt waits for the resume.
 
+**`atrium new`** creates a session — worktree, branch and agent — from a script,
+a CI job, or an agent working through a queue of issues.
+
+```bash
+atrium new fix-auth                              # in the current repo
+atrium new fix-auth "start on the parser"        # with a first prompt
+atrium new fix-auth --path ~/src/web --profile codex
+atrium new fix-auth --wait 60s                   # block, then print the branch
+```
+
+It is a producer on the same terms as `send`, and for the same reason: the TUI is
+the only thing that creates sessions, so `new` spools a request to
+`outbox/create/` and the running Atrium executes it through exactly the path the
+new-session key uses. Everything that path enforces still applies — the session
+cap, the tmux version floor, and above all the title check.
+
+That check matters more from a script than from the keyboard. A session's branch
+and tmux names derive from its title, so choosing a title is choosing a branch; a
+title whose derived names are already taken is **refused**, never silently
+suffixed, because a caller that asked for `fix-auth` and got `fix-auth-2` would
+push to a branch it never named. Run inside a session's worktree — where an agent
+usually is — `new` targets that worktree's *repo*, and says so on stderr.
+
+Two of the TUI's gates ask the user a question rather than refusing: crossing the
+host-derived session cap, and routing to a fully rate-limited account pool. A
+headless request has nobody to ask, so it is refused with the reason; `--force`
+answers both in advance. An explicit `max_sessions` is not one of them — it
+refuses in the TUI too, and `--force` does not reach it.
+
+`--wait` blocks until the session actually exists and then prints its branch and
+worktree, read back from what Atrium recorded rather than derived from the title.
+Without it the command is honestly fire-and-forget: it prints what it queued, and
+`atrium ls` is how you watch for the result.
+
+Both spools are drained by the TUI's poll loop, which is **suspended while you
+are attached to a session** — Atrium has handed the terminal to tmux and its
+event loop is parked until you detach. Nothing is lost, but "within about a
+second" assumes a TUI watching the list rather than one sitting inside a pane.
+
 `ls` and `peek` only ever read: they will not create, rewrite, or clean up
 anything in the data directory, so running `atrium ls` on a loop alongside a live
 Atrium is safe.
 
-If a title exists in more than one repo, any of the three commands will report
-the ambiguity and list the candidates; `--path <repo>` picks one.
+If a title exists in more than one repo, `ls`, `peek` and `send` will report the
+ambiguity and list the candidates; `--path <repo>` picks one. (`new` takes
+`--path` too, but to choose where the session is created, not to disambiguate.)
 
-All three exit 0 on success and 1 on failure, with the reason on stderr.
+All four exit 0 on success and 1 on failure, with the reason on stderr.
 
 <br />
 

@@ -75,6 +75,18 @@ func hostCapacityLine(limit, live int) string {
 	return fmt.Sprintf("Host capacity is %d, with %d already running", limit, live)
 }
 
+// hardCapMessage is the explicit-cap refusal, written once for the three sites
+// that refuse outright rather than confirm: the create form's open gate, the
+// smart-dispatch pre-route guard, and the create drain (#703).
+//
+// An explicit max_sessions is the one gate with no accept path anywhere — not the
+// soft cap's confirmation, and not `atrium new --force` — because neither
+// proceedOverCapMsg nor proceedExhaustedMsg re-checks it, so a bypass here would
+// be a bypass everywhere.
+func hardCapMessage(limit int) string {
+	return fmt.Sprintf("you can't create more than %d sessions (max_sessions in config.json)", limit)
+}
+
 // overCapMessage is the host-capacity confirmation text: it names the derived cap
 // and the live count so the tradeoff — more sessions queue rather than
 // parallelize — is explicit at the moment the user crosses it, and it names the key

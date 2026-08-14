@@ -26,9 +26,15 @@ func (g *Worktree) Setup() error {
 	// creation; once the branch exists it holds the session's committed work (including the
 	// WIP commit pause makes), so resume must reuse it rather than `branch -D` it away and
 	// rebuild from baseRef — which silently discarded that work for base-branch sessions
-	// (#146). Branch existence is the discriminator: creation never collides because the
-	// new-session form blocks a title whose branch slug already exists (app/app_session.go),
-	// so a pre-existing branch here means a resume of a base-branch or HEAD-based session.
+	// (#146). Branch existence is the discriminator: creation never collides because every
+	// path that creates a session first refuses a title whose branch slug already exists —
+	// the new-session form and smart auto-dispatch through variantTitleConflict, and the
+	// `atrium new` drain through variantTitleConflictIn (both app/app_session.go) — so a
+	// pre-existing branch here means a resume of a base-branch or HEAD-based session.
+	//
+	// That is a contract on those callers, not something this function can check: a
+	// creation that skipped the check would not fail here, it would take the resume
+	// branch and silently adopt someone else's work.
 	var setupErr error
 	if _, refErr := g.runGitCommand(g.repoPath, "show-ref", "--verify", fmt.Sprintf("refs/heads/%s", g.branchName)); refErr == nil {
 		setupErr = g.setupFromExistingBranch()

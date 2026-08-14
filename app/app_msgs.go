@@ -734,6 +734,12 @@ func (m *home) resumeAfterSuspendedLoop(extra ...tea.Cmd) tea.Cmd {
 }
 
 func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd) {
+	// Close out an `atrium new` request first, before either branch below returns:
+	// the outcome this message carries is the only thing that tells a waiting
+	// `--wait` whether the session it asked for exists (#703). A session that came
+	// from the form or smart-dispatch is a map miss.
+	m.settleCreateRequest(msg.instance, msg.err)
+
 	// Normally re-select the just-started instance: it corrects a possibly-stale
 	// selection index, the failure path's teardown (m.list.Kill below) targets the
 	// selected row, and an auto-open attach drops into it. The exception is #439: on

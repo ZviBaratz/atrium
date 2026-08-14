@@ -293,8 +293,7 @@ func (m *home) handleSmartDispatchSubmit(line string) tea.Cmd {
 	if sc := m.sessionCap(); capVerdict(sc, m.list.NumInstances(), 1) == capBlock {
 		m.textInputOverlay = nil
 		m.state = stateDefault
-		return m.handleError(
-			fmt.Errorf("you can't create more than %d sessions (max_sessions in config.json)", sc.Limit))
+		return m.handleError(errors.New(hardCapMessage(sc.Limit)))
 	}
 
 	// Refuse before routing when tmux is unusable — missing, or too old for the
@@ -1232,8 +1231,7 @@ func (m *home) openCreateFormSeeded(seedPath string, focusTitle bool, prefill *P
 	// A hard (explicit) cap refuses opening a form that could not be submitted; a
 	// host-derived soft cap lets the form open and confirms at submit instead.
 	if sc := m.sessionCap(); capVerdict(sc, m.list.NumInstances(), 1) == capBlock {
-		return m.handleError(
-			fmt.Errorf("you can't create more than %d sessions (max_sessions in config.json)", sc.Limit))
+		return m.handleError(errors.New(hardCapMessage(sc.Limit)))
 	}
 
 	// Refuse to open the form when tmux is unusable (missing, or too old for the
@@ -1403,10 +1401,31 @@ const (
 //   - the latest async verdict that the title's branch already exists in the
 //     target repo (an orphan from a killed session would make Start fail late).
 func (m *home) titleConflict(title string) string {
+	if c := m.titleConflictIn(m.newSessionGroup, title); c != "" {
+		return c
+	}
 	if strings.TrimSpace(title) == "" {
 		return ""
 	}
-	group := m.newSessionGroup
+	if m.titleBranchExists && m.titleBranchName == git.BranchNameForSession(m.appConfig.BranchPrefix, title) {
+		return titleErrBranchExists
+	}
+	return ""
+}
+
+// titleConflictIn is titleConflict's first two rules against an explicitly
+// supplied repo group: the ones that compare derived names to the loaded
+// instances, and nothing else.
+//
+// It exists because the third rule is create-form state. m.newSessionGroup, and
+// the m.titleBranchExists/m.titleBranchName verdict, are both written by the
+// form's own async checks (scheduleTitleCheck, retargetNewSession), so a caller
+// with no form — the create drain (#703) — must neither read a verdict computed
+// for someone else's target nor write the group and retarget an open form.
+func (m *home) titleConflictIn(group, title string) string {
+	if strings.TrimSpace(title) == "" {
+		return ""
+	}
 	prefix := m.appConfig.BranchPrefix
 	cand := tmux.QualifiedSessionName(group, title)
 	for _, inst := range m.list.GetInstances() {
@@ -1419,9 +1438,6 @@ func (m *home) titleConflict(title string) string {
 		if session.OwnedSiblingCollides(cand, inst) {
 			return titleErrNameTaken
 		}
-	}
-	if m.titleBranchExists && m.titleBranchName == git.BranchNameForSession(prefix, title) {
-		return titleErrBranchExists
 	}
 	return ""
 }
@@ -1499,15 +1515,40 @@ func (m *home) variantTitleConflict(candidate, path string, direct bool) string 
 	if c := m.titleConflict(candidate); c != "" {
 		return c
 	}
-	if !direct {
-		branch := git.BranchNameForSession(m.appConfig.BranchPrefix, candidate)
-		if git.LocalBranchExists(m.ctx, path, branch) {
-			// The same verdict titleConflict returns for the async check, and it rides
-			// the same Title row — so it is the same constant. Two spellings of one
-			// fact is how the interpolating version survived here after the other was
-			// bounded (#545).
-			return titleErrBranchExists
-		}
+	return m.branchSlugConflict(candidate, path, direct)
+}
+
+// variantTitleConflictIn is variantTitleConflict for a caller with no create
+// form: the same two verdicts against an explicitly supplied repo group, with
+// titleConflictIn in place of titleConflict for the reason documented there.
+//
+// The create drain (#703) runs this, so a headless create is held to the bar the
+// form's submit enforces — including the branch check, which is the one
+// git.Worktree.Setup relies on having happened. Setup treats a pre-existing branch
+// as a resume, so a create that skipped this would silently adopt someone else's
+// branch instead of failing.
+func (m *home) variantTitleConflictIn(group, candidate, path string, direct bool) string {
+	if c := m.titleConflictIn(group, candidate); c != "" {
+		return c
+	}
+	return m.branchSlugConflict(candidate, path, direct)
+}
+
+// branchSlugConflict reports whether candidate's branch slug already exists in the
+// target repo — the synchronous check the single-create submit runs, because an
+// orphan branch from a killed session would otherwise make a background Start fail
+// late.
+func (m *home) branchSlugConflict(candidate, path string, direct bool) string {
+	if direct {
+		return "" // no worktree, no branch to collide with
+	}
+	branch := git.BranchNameForSession(m.appConfig.BranchPrefix, candidate)
+	if git.LocalBranchExists(m.ctx, path, branch) {
+		// The same verdict titleConflict returns for the async check, and it rides
+		// the same Title row — so it is the same constant. Two spellings of one
+		// fact is how the interpolating version survived here after the other was
+		// bounded (#545).
+		return titleErrBranchExists
 	}
 	return ""
 }
@@ -2416,21 +2457,36 @@ func (m *home) resolveSpawnPool(plan spawnPlan) (string, []config.ClaudeAccount)
 // multi-member pool has no currently-available member; (nil, false) to proceed.
 // Evaluated once per batch, mirroring the soft-cap gate.
 func (m *home) gateAllExhausted(plan spawnPlan) (tea.Cmd, bool) {
-	if plan.account != nil && plan.account.Member != nil {
-		return nil, false // a deliberate member pin bypasses availability
+	poolName, members, exhausted := m.allExhausted(plan)
+	if !exhausted {
+		return nil, false
 	}
-	poolName, members := m.resolveSpawnPool(plan)
-	if len(members) < 2 {
-		return nil, false // singleton/empty pool: nothing to skip
+	return m.confirmAllExhausted(plan, poolName, members), true
+}
+
+// allExhausted is gateAllExhausted's verdict without the dialog: it reports
+// whether plan would route to a pool with no currently-available member, and
+// names the pool so a caller can say which.
+//
+// Split out because a headless create has nobody to confirm with and must not
+// stage a modal to find out (#703). Keeping one predicate is what stops the two
+// callers from drifting — skipping this gate entirely is what shipped #483.
+func (m *home) allExhausted(plan spawnPlan) (pool string, members []config.ClaudeAccount, exhausted bool) {
+	if plan.account != nil && plan.account.Member != nil {
+		return "", nil, false // a deliberate member pin bypasses availability
+	}
+	poolName, poolMembers := m.resolveSpawnPool(plan)
+	if len(poolMembers) < 2 {
+		return "", nil, false // singleton/empty pool: nothing to skip
 	}
 	avail := m.appState.GetAccountAvailability()
 	// The len(members) < 2 guard above is deliberate and NOT redundant with allLimited:
 	// SelectPoolMember reports allLimited for a singleton pool whose one account is
 	// limited, but a pool of one has nothing to rotate, so it must not raise the confirm.
-	if _, allLimited := config.SelectPoolMember(members, avail, m.appState.GetAccountRotation(poolName), time.Now()); !allLimited {
-		return nil, false
+	if _, allLimited := config.SelectPoolMember(poolMembers, avail, m.appState.GetAccountRotation(poolName), time.Now()); !allLimited {
+		return "", nil, false
 	}
-	return m.confirmAllExhausted(plan, poolName, members), true
+	return poolName, poolMembers, true
 }
 
 // confirmAllExhausted stages a confirm for a fully-rate-limited pool. On accept
