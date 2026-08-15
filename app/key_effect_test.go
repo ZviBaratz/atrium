@@ -37,20 +37,28 @@ var busyGateMutationExempt = map[keys.KeyName]string{
 	// resolves it (TerminalPane.EnsureSession, which refuses an unstarted or
 	// paused instance). Keeping them admitted keeps the view navigable mid-action.
 	//
-	// That is a trade, not a free pass, and the cost is #701. pause() and the kill
-	// paths all flip status LAST, after removing the worktree, so mid-action the
-	// Paused() guard does not fire and opening the tab can start a shell in a tree
-	// being deleted. The done-handlers reap it via CleanupTerminalForInstance, but
-	// only what EnsureSession has already installed in the cache — lose that
-	// interleaving on a KILL and the shell outlives its worktree, its branch and
-	// its instance record, with nothing left to reap it.
+	// That trade used to have a cost — #701 — and the exemption now rests on the
+	// fix rather than on the hazard. Mid-action the Paused() guard cannot fire:
+	// pause() flips the status as its LAST statement, after removing the worktree,
+	// and Kill() never flips one at all, so opening the tab could start a shell in a
+	// tree being deleted. The done-handlers reap it via CleanupTerminalForInstance,
+	// but only what EnsureSession has already installed in the cache — losing that
+	// interleaving on a KILL left a shell outliving its worktree, its branch and its
+	// instance record, with nothing but `atrium reset` to reap it.
 	//
-	// So blocking these keys WOULD close part of #701 — the part where the user is
-	// on preview or diff when the action begins. It would not close the rest: an
-	// already-active terminal tab starts its shell from the capture chain with no
-	// keypress at all, and the tab bar is clickable (TabAtZone -> SetActiveTab in
-	// app_msgs.go), a route that never consults the busy gate. Gating the surface
-	// is what closes all three, there and in #522.
+	// Blocking these keys would have closed only part of that — the part where the
+	// user is on preview or diff when the action begins. Two routes reach the shell
+	// with no keypress: an already-active terminal tab starts one from the capture
+	// chain, and the tab bar is clickable (TabAtZone -> SetActiveTab in app_msgs.go),
+	// which never consults the busy gate. So the SURFACE is what is gated —
+	// home.shellStartRefused (app_frames.go) withholds the create for all three
+	// routes, and TerminalPane.EnsureSession closes a shell reaped mid-create. That
+	// is what makes admitting these keys inert while an action is in flight, and it
+	// is the predicate #522 extends.
+	//
+	// They stay EffectMutate regardless: the gate is on an action being in flight,
+	// not on this classification, so in an idle TUI the shell still starts. See
+	// KeyTabTerminal in keys/registry.go.
 	keys.KeyTabTerminal: "selects the terminal tab, whose lazy shell is the mutation; " +
 		"see the shared note above",
 	keys.KeyTab:      "cycles onto the terminal tab; see the shared note above",

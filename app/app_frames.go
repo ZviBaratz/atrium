@@ -120,11 +120,48 @@ func (m *home) resolveFrameTarget() frameTarget {
 		// A missing shell is not a reason to skip: creating one is tmux work too,
 		// and doing it here on the main thread is what this change removes.
 		sess, key, _ := m.tabbedWindow.TerminalCaptureTarget(selected)
+		// A shell that does not exist yet has to be CREATED, which is the one thing
+		// a teardown in flight must not race (#701). An existing one keeps being
+		// captured — this gate withholds a shell, it does not freeze the tab.
+		if sess == nil && m.shellStartRefused(selected) {
+			return frameTarget{}
+		}
 		return frameTarget{terminal: sess, termKey: key, termInstance: selected}
 	default:
 		// The diff tab renders from cached git metadata and captures nothing.
 		return frameTarget{}
 	}
+}
+
+// shellStartRefused reports whether the terminal tab must not start a shell for
+// inst right now. Creating one runs tmux new-session with the user's $SHELL in
+// inst.WorkingDir(), and a pause or a kill is in the middle of deleting that
+// directory — on a kill, its branch and its instance record too, so the shell it
+// leaves behind has nothing left to reap it but `atrium reset` (#701).
+//
+// It gates the creation SURFACE rather than the keys, because two of the three
+// routes there involve no keypress at all: an already-active terminal tab starts
+// its shell from the capture chain on every tick, and the tab bar is clickable
+// (TabAtZone → SetActiveTab in app_msgs.go), which never reaches the busy gate.
+// Dropping the tab keys from keyAllowedWhileBusy would close neither, and would
+// make the view unnavigable during every async action to stop a shell the next
+// frame starts anyway.
+//
+// Both conditions are read on the update thread, which is the only place
+// actionInFlight may be read at all (see its declaration). retiring is not
+// redundant with it, and the pairing is what covers a kill: asyncActionDoneMsg
+// clears actionInFlight one message BEFORE killDoneMsg reaches the reap in
+// applyKillDone, and messages are processed in between.
+//
+// It deliberately does not ask which action is in flight. A rename or a
+// run-command start withholds a first shell for its duration too — self-correcting
+// on the next tick, and cheaper than an enumeration of the destructive actions
+// that would rot the first time one is added.
+//
+// #522 (--readonly) adds its condition HERE. One predicate, not a second gate:
+// a read-only session must refuse a shell in the repo by the same routes.
+func (m *home) shellStartRefused(inst *session.Instance) bool {
+	return m.actionInFlight || m.retiring[inst]
 }
 
 // captureFrameCmd sleeps for delay, then captures off the update thread.
