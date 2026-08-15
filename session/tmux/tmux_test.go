@@ -132,6 +132,11 @@ func TestStartupGates(t *testing.T) {
 		{"claude idle box has no gate", "claude", "│ > │  ? for shortcuts", false},
 		{"claude ignores aider gate string", "claude", "Open documentation url for more info", false},
 		{"aider ignores claude gate string", "aider", "Do you trust the files in this folder?", false},
+		{"gemini folder-trust option rows", "gemini", "● 1. Trust folder (repo)\n  3. Don't trust", true},
+		// 0.55.1 gave gemini the same headline claude uses, and gemini deliberately does NOT
+		// key on it — it is unreachable once a narrow pane wraps it across the dialog's box
+		// border (#713). So the shared string must gate claude above and not gemini here.
+		{"gemini ignores the shared headline", "gemini", "Do you trust the files in this folder?", false},
 		// Pre-adapter, every non-claude program matched aider's documentation gate and
 		// received its stray 'D' keystroke; an unknown agent must match nothing.
 		{"unknown agent has no gates", "someagent", "Open documentation url for more info", false},
@@ -155,7 +160,9 @@ func TestPollClassifiesStartupGateAsGate(t *testing.T) {
 		{"claude folder-trust", "claude", "Quick safety check…\n ❯ 1. Yes, I trust this folder\n Enter to confirm · Esc to cancel"},
 		{"claude new MCP server", "claude", "New MCP server found in this project: nanoclaw\n [Enter] to approve"},
 		{"codex folder-trust", "codex", "Do you trust the contents of this directory?\n› 1. Yes, continue"},
-		{"gemini folder-trust", "gemini", "Do you trust this folder?\n● 1. Trust folder"},
+		// Keyed on the option row, not the headline: gemini's headline is unreachable on a
+		// narrow pane (#713, session/agent/gemini_pane_test.go).
+		{"gemini folder-trust", "gemini", "Do you trust the files in this folder?\n● 1. Trust folder (repo)\n  3. Don't trust"},
 		{"aider first-run docs", "aider", "Open documentation url for more info? (Y)es/(N)o/(D)on't ask again [Yes]:"},
 	}
 	for _, tc := range cases {

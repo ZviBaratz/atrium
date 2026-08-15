@@ -12,7 +12,10 @@ func TestAdaptersExposesSeededVersions(t *testing.T) {
 		// by its version; the pin records that every capture in registry.go came from
 		// the ungated (hint-list) footer branch. #337.
 		KeyClaude: {"2.1.210", GranularityMinor, map[string]bool{"tengu_copper_thistle": false}},
-		KeyGemini: {"0.27", GranularityMinor, nil},
+		// Re-driven at 0.55.1 for the folder-trust gate (#713); the busy and confirmation
+		// literals are still only bundle-grep presence at that version, which registry.go's
+		// gemini header spells out.
+		KeyGemini: {"0.55.1", GranularityMinor, nil},
 		KeyCodex:  {"0.147.0", GranularityMinor, nil},
 		KeyAider:  {"0.86.2", GranularityMinor, nil},
 		KeyAgy:    {"1.1.11", GranularityMinor, nil},

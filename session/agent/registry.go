@@ -819,21 +819,31 @@ var codex = &Adapter{
 	// is installed (see session/naming.go).
 }
 
-// Gemini CLI (google-gemini/gemini-cli, React-Ink). Strings verified against
-// the installed 0.27 package source: LoadingIndicator.js renders "(esc to
-// cancel, 5s)" above the input box whenever streaming state is neither Idle nor
-// WaitingForConfirmation, and ToolConfirmationMessage.js includes "No, suggest
-// changes (esc)" in every confirmation variant. The pre-adapter matcher,
-// "Yes, allow once", no longer appears anywhere in the package.
+// Gemini CLI (google-gemini/gemini-cli, React-Ink). The three heuristic surfaces below sit
+// at two different evidence tiers, and #713 is what the difference costs — say which is
+// which rather than let one word cover both.
+//
+// DRIVEN at 0.55.1: the folder-trust Gate, captured live on a width ladder by
+// scripts/drive-agent.sh and pinned in gemini_pane_test.go. That is the only surface
+// here a pane has actually rendered.
+//
+// BUNDLE-GREP ONLY at 0.55.1: "esc to cancel" (4 files) and "No, suggest changes (esc)"
+// (4 files) are still present in @google/gemini-cli/bundle, and the pre-adapter matcher
+// "Yes, allow once" is still absent. Presence is necessary and NOT sufficient — this
+// file's own rule — and #713 is the proof: the gate literal that rotted was verified the
+// same way, from the 0.27 package source (FolderTrustDialog.js), and a grep of the shipped
+// bundle cannot see that a live pane truncates or wraps a string out of a matcher's window.
+// Reaching either of those two needs auth and a real turn, which is why they stayed
+// ungraded when the gate was re-driven.
 var gemini = &Adapter{
 	Key:         KeyGemini,
 	DisplayName: "Gemini CLI",
 	aliases:     []string{"gemini"},
 
-	// Heuristic strings verified against gemini 0.27. Minor granularity: the
-	// confirmation wording tracks minor releases; pure patch bumps within a
-	// minor don't warrant a warning.
-	VerifiedVersion:  "0.27",
+	// Re-driven at 0.55.1 for the gate (#713); see the header for what that does and does
+	// not cover. Minor granularity: the confirmation wording tracks minor releases; pure
+	// patch bumps within a minor don't warrant a warning.
+	VerifiedVersion:  "0.55.1",
 	DriftGranularity: GranularityMinor,
 
 	BusyMarkers: []string{"esc to cancel"},
@@ -857,9 +867,42 @@ var gemini = &Adapter{
 	},
 
 	Gates: []Gate{
-		// FolderTrustDialog.js: "Do you trust this folder?" with "Trust folder"
-		// pre-highlighted.
-		{Contains: []string{"Do you trust this folder"}},
+		// The folder-trust dialog, keyed on its OPTION ROWS and deliberately not on its
+		// headline. Driven live at 0.55.1 (#713); the ladder is geminiTrustGateLadder.
+		//
+		// What it renders, read off the bundle that draws it — bundle/interactiveCli-*.js,
+		// four of them at 0.55.1; the FolderTrustDialog.js this comment used to name is not
+		// in the package at all any more. A title Text of "Do you trust the files in this
+		// folder?", then the discovery blurb, then a RadioButtonSelect whose three labels
+		// are `Trust folder (${dirName})`, `Trust parent folder (${parentFolder})` and
+		// "Don't trust" — options LAST, which is half of why they are the anchor. The other
+		// consequence of that template: "Trust folder" is a LEFT-ANCHORED prefix of a label
+		// whose tail is the working directory's name, so it survives right-to-left
+		// truncation no matter how long that name is.
+		//
+		// The other half is what the headline does on a narrow pane, and it is worse than
+		// "wraps out of the window". gemini draws the dialog inside a rounded box, so a
+		// wrapped headline has the box's own "│" between its halves ("… in this     │" /
+		// "│ folder?"). flattenChrome joins on whitespace, and a "│" is not whitespace, so
+		// the wrap is UNREPAIRABLE: measured on residue-free captures, the headline is
+		// unreachable at widths 40, 24 and 20 at every GateWindow up to 200 — more lines
+		// than any of those panes has, so effectively the whole pane. Codex wraps without a
+		// box and its widened GateWindow therefore works; the same remedy buys gemini
+		// nothing, which corrects #713's own guess that widening "would also work at width
+		// 40". TestGeminiTrustGateHeadlineIsUnreachableBelowWidth80 pins it.
+		//
+		// Both entries are listed because a gate's Contains is an alternation and both rows
+		// are on screen at every width the gate is proven at, so either being reworded
+		// leaves a live anchor. The headline is NOT added as a third: it fires only at
+		// widths where these two already do, so it would be dead string.
+		//
+		// The floor is 24 and 20 is a KNOWN MISS — the rows themselves truncate there
+		// ("● 1. Trust fo…", "3. Don't tr…"), which no window can undo, and no literal
+		// short enough to survive it would be worth having. That is parity with agy, whose
+		// gate also floors at 24 (wantRungs' "agy/gate"), and it fails the safe way:
+		// a missed gate reads as idle. TestGeminiTrustGateOptionRowsAreTruncatedAtWidth20
+		// holds the miss so it stays a disclosed limit rather than a surprise.
+		{Contains: []string{"Trust folder", "Don't trust"}},
 	},
 
 	Resume:        func(program string) string { return program + " --resume latest" },

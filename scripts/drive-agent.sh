@@ -1200,7 +1200,8 @@ VERBS
   wait <regex> [secs]      poll until the pane matches; dumps the pane on timeout
   ladder <label> [w...]    resize + capture at each width (default 120 60 40 34 28 26 24 20)
   fresh [width]            restart in a NEW workspace at <width> — for a once-per-path
-                           screen (a trust gate) that a resize cannot bring back
+                           screen (a trust gate) that a resize cannot bring back, and
+                           for any dialog TALLER than the pane (see THE JUDGEMENT)
   sample <label> [s] [i]   capture a frame every i seconds for s seconds
   emit [prefix] [--join]   print Go fixtures for every capture, to stdout
   status                   run, size, capture count, live-fleet count
@@ -1254,6 +1255,13 @@ THE JUDGEMENT — what this script does NOT do for you
     whatever sits nearest the bottom and is short enough not to truncate. "Key on the
     question, never the option text" is BACKWARDS for a gate, where the question is
     the long thing.
+  * A wrap inside a BORDERED box is not repaired by flattening either. flattenChrome
+    joins on whitespace, and a box's "│" is not whitespace, so gemini's wrapped
+    headline reads "…in this │ │ folder?" and no GateWindow reassembles it (#713).
+    Codex wraps the same text with no border and its widened window works. Check
+    whether the region has a border before concluding a wrap is recoverable.
+  * A RESIZED rung is not always equal to a natively-narrow one — see the cost-saver
+    below for when it is, and #713 for when it is not.
   * Pick the literal by the NARROWEST REACHABLE pane, not by your capture width. An
     agent's pane is Atrium's PREVIEW pane (app/app_layout.go GetPreviewSize →
     ui/list.go SetSessionPreviewSize → session/instance.go SetPreviewSize), the list
@@ -1274,10 +1282,20 @@ THE JUDGEMENT — what this script does NOT do for you
     footer, so an unmatched dialog still satisfies HasBusyMarker and the row latches
     Working forever.
 
-COST-SAVER
+COST-SAVER, AND ITS ONE LIMIT
   Resize a LIVE dialog instead of re-running turns. A dialog waits for input, so one
   API turn covers the whole ladder — that is what `ladder` is for. `sample` needs a
   turn in flight, and `fresh` needs a new workspace, so budget those separately.
+
+  It holds while the dialog FITS the pane, which is the case #647 verified it on (a trust
+  gate resized to 28, diffed byte for byte against one started at 28). Once the dialog
+  is taller than the pane it stops holding: the CLI repaints only its own region, so the
+  rows above keep torn fragments of the previous, WIDER frame. Those fragments are live
+  content to a matcher. gemini's width-40 resize rung carried a leftover headline on one
+  line, where the real dialog's headline is wrapped — enough to report the headline
+  REACHABLE at 40 when it is not (#713). A rung whose bytes depend on the previous rung
+  is a fixture that lies; drive it with `fresh <width>` instead. `up`'s own width is
+  free of this, being the first render there is.
 EOF
 }
 
