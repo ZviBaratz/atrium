@@ -131,21 +131,28 @@ func lostRecoveryHome(t *testing.T, removeWorkingDir bool) (*session.Instance, *
 }
 
 // Site 3, the lost-session recovery — the one that was not a reap site at all, on
-// success or failure. RecoverLostSession is pause() verbatim, so it frees the
-// working directory the same way, and the shell in it was left running with nothing
-// to collect it.
+// success or failure.
+//
+// What this pins is the wiring: that the caller samples WorkingDirGone after the
+// recovery and reaps on it. The fixture does not itself free a worktree —
+// newCaptureHome builds a direct session, whose pause branch never touches the
+// directory — so the test removes the directory to put the recovery in the state a
+// git session's own removal leaves behind. That a recovery really does free a
+// worktree is pause()'s behaviour, and RecoverLostSession is pause() verbatim: held
+// by session.TestWorkingDirGone_CleanPauseFreesTheWorktree over that same body.
 func TestLostRecovery_ReapsTheShellStrandedInTheRemovedWorkingDir(t *testing.T) {
 	inst, captured := lostRecoveryHome(t, true)
 
 	require.Equal(t, []*session.Instance{inst}, *captured,
-		"a lost-session recovery frees the working directory too, so it must reap the shell left in it")
+		"a recovery that leaves no working directory behind must reap the shell that was in it")
 }
 
-// The negative control for site 3, and the one only this site can reach: Pause
-// refuses a direct session and both batch entry points filter them out, so a
-// recovery is the single route by which one is parked. Its working directory is the
-// user's own checkout, still very much on disk — reaping would kill a live shell in
-// the user's real repo.
+// The negative control for site 3, and the one only this site reaches with a shell at
+// stake: Pause refuses a direct session and both batch entry points filter them out.
+// (A load parks one too — session.recoverInPlace's direct branch and parkOverBudget —
+// but nothing is cached that early.) Its working directory is the user's own
+// checkout, still very much on disk, so reaping would kill a live shell in the user's
+// real repo.
 func TestLostRecovery_DirectSessionInALiveDirectoryKeepsItsShell(t *testing.T) {
 	inst, captured := lostRecoveryHome(t, false)
 

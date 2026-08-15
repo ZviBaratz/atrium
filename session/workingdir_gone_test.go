@@ -92,11 +92,13 @@ func TestWorkingDirGone_OrphanedWorktreeIsStillFreed(t *testing.T) {
 		"the orphan branch frees the directory too, and it returns before removeWorktree exists — a fix plumbing that local reports the opposite here")
 }
 
-// The second negative control, and the one only a lost-session recovery can reach:
-// Pause refuses a direct session outright and both batch entry points filter them
-// out, so RecoverLostSession is the single route by which a direct session is
-// parked. It has no worktree at all — its working directory is the user's own
-// checkout — so reaping would kill a shell in a directory that is very much there.
+// The second negative control, and the one only a lost-session recovery reaches with
+// a shell at stake: Pause refuses a direct session outright and both batch entry
+// points filter them out. (Two load-time paths park a direct session too —
+// recoverInPlace's direct branch and parkOverBudget, both under bringOnline — but a
+// load has no cached terminal shell to strand yet.) A direct session has no worktree
+// at all; its working directory is the user's own checkout, so reaping would kill a
+// shell in a directory that is very much there.
 func TestWorkingDirGone_DirectSessionRecoveryTouchesNothing(t *testing.T) {
 	dir := t.TempDir()
 	inst := &Instance{Title: "d", status: Running, started: true, direct: true, Path: dir, tmuxSession: directTmux("d")}

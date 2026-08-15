@@ -58,11 +58,13 @@ func (i *Instance) TmuxAlive() bool {
 	return ts != nil && ts.DoesSessionExist()
 }
 
-// Pause stops the tmux session and removes the worktree, preserving the branch —
-// with one deliberate exception: a pause whose auto-commit of dirty work fails keeps
-// the worktree, so the WIP it could not commit is left on disk to be rescued (see
-// pause). Callers that act on the removal — the terminal-shell reap in particular —
-// must therefore ask WorkingDirGone rather than assume it from a nil error.
+// Pause stops the tmux session and removes the worktree, preserving the branch. That
+// removal is not a postcondition. One branch skips it deliberately — a pause whose
+// auto-commit of dirty work fails keeps the worktree, so the WIP it could not commit
+// is left on disk to be rescued — and the removal is best-effort besides, so it can
+// simply fail with the directory still there (see pause for the full set). Callers
+// that act on the removal — the terminal-shell reap in particular — must therefore
+// ask WorkingDirGone rather than assume it from a nil error.
 //
 // A direct (non-git) session has no worktree to free and runs in the user's real
 // directory, so "pausing" it would only detach a still-running agent while the UI
@@ -80,12 +82,11 @@ func (i *Instance) Pause() error {
 // polling it and the user can bring it back with Resume. It reuses the Pause path —
 // committing any uncommitted work and removing the worktree.
 //
-// Two of pause's branches make that last clause conditional. One is reachable only
-// from here: it does not refuse a direct session the way Pause does, and a direct
-// session has no worktree at all — that branch detaches the pane and stops the run
-// command without committing or removing anything, in what is the user's own
-// checkout. The other, the failed-WIP-commit branch that keeps the worktree on
-// purpose, it shares with Pause. Hence WorkingDirGone for anything that acts on the
+// That last clause is conditional here for everything listed on pause, plus one case
+// reachable only from this entry point: it does not refuse a direct session the way
+// Pause does, and a direct session has no worktree at all — that branch detaches the
+// pane and stops the run command without committing or removing anything, in what is
+// the user's own checkout. Hence WorkingDirGone for anything that acts on the
 // removal.
 func (i *Instance) RecoverLostSession() error {
 	return i.pause()
@@ -110,13 +111,16 @@ func isAutoPauseCommit(subject string) bool {
 
 // pause stops the tmux session and removes the worktree, preserving the branch.
 //
-// "Removes the worktree" holds for every branch below except two: the direct-session
-// branch, which has no worktree at all, and the failed-WIP-commit branch, which keeps
-// one on purpose. The returned error does not distinguish them — that WIP branch
-// errors while keeping the worktree, and the orphaned-worktree branch frees the
-// directory while returning a tc.Err() that is nil whenever its own steps succeeded.
-// A caller that needs the outcome must measure it — WorkingDirGone — rather than read
-// it off err or off Paused().
+// Read "removes the worktree" as an intent, not a postcondition: it is conditional
+// and best-effort, and paths below leave the directory standing on purpose (the
+// failed-WIP-commit branch, which keeps the work it could not commit), by
+// construction (the direct-session branch has no worktree; the two guard returns at
+// the top touch nothing), and by failure (wt.Remove() and its os.RemoveAll fallback
+// can both fail, leaving the directory exactly where it was). The returned error
+// discriminates none of that — the WIP branch errors while keeping the worktree, and
+// the orphaned-worktree branch frees the directory while returning a tc.Err() that is
+// nil whenever its own steps succeeded. A caller that needs the outcome must measure
+// it — WorkingDirGone — rather than read it off err or off Paused().
 func (i *Instance) pause() error {
 	if !i.isStarted() {
 		return fmt.Errorf("cannot pause instance that has not been started")
