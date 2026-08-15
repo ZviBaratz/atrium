@@ -441,3 +441,32 @@ func TestRejectionSweepIsThrottled(t *testing.T) {
 	h.drainOutbox()
 	assert.NoFileExists(t, other+".rejected")
 }
+
+// TestRejectionSweepRunsEvenWhenThePromptSpoolIsUnreadable pins the ordering. The sweep
+// collects receipts from BOTH spools and the create spool has no other collector —
+// drainCreateRequests deliberately does not sweep, on the grounds that this runs first
+// on the same tick. Below drainOutbox's early return that stops being true: one
+// unreadable prompt directory strands the sweep for the life of the process, and every
+// refused `atrium new` then leaks a receipt with nothing left to collect it.
+//
+// Asserted on lastRejectionSweep rather than on a collected file, because making the
+// parent directory unreadable necessarily takes the nested create spool with it — the
+// question here is only whether the sweep was reached.
+func TestRejectionSweepRunsEvenWhenThePromptSpoolIsUnreadable(t *testing.T) {
+	h := drainHome(t)
+	dir, err := outbox.Dir()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.Chmod(dir, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	// A real precondition, not drainOutbox's nil: it returns nil for an empty spool too,
+	// so asserting that would pass whether or not the read actually failed — and the
+	// mutation this test exists to catch would survive.
+	_, listErr := outbox.List()
+	require.Error(t, listErr, "precondition: the prompt spool must be unreadable")
+
+	require.Nil(t, h.drainOutbox(), "the drain bails on the unreadable spool")
+	assert.False(t, h.lastRejectionSweep.IsZero(),
+		"the receipt GC must not be gated behind the prompt spool being readable")
+}

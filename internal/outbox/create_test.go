@@ -76,15 +76,16 @@ func TestWriteCreatePreservesExplicitCreatedAt(t *testing.T) {
 	assert.True(t, want.Equal(entries[0].Request.CreatedAt))
 }
 
-// TestWriteCreateRejectsIncompleteRequest: a request with no title or no path
+// TestWriteCreateRejectsIncompleteRequest: a request with no title or no usable path
 // cannot be executed by any drain, so it must never reach the spool — the same
-// up-front refusal Write applies. readCreate enforces the same pair on the way back
-// in (TestReadCreateRefusesABlankTitleOrPath), for a file written by hand.
+// up-front refusal Write applies. readCreate enforces the same rules on the way back
+// in (TestReadCreateRefusesAnUnusableRecord), for a file written by hand.
 func TestWriteCreateRejectsIncompleteRequest(t *testing.T) {
 	cases := map[string]Request{
 		"no title":         {Path: "/repo"},
 		"whitespace title": {Title: "   ", Path: "/repo"},
 		"no path":          {Title: "t"},
+		"relative path":    {Title: "t", Path: "web"},
 		"neither":          {},
 	}
 	for name, r := range cases {
@@ -374,17 +375,33 @@ func TestClearOnAnAbsentSpoolIsNotAnError(t *testing.T) {
 	assert.Zero(t, removed)
 }
 
-// TestReadCreateRefusesABlankTitleOrPath: WriteCreate refuses to write that pair, so
-// readCreate refuses to hand it back. Nothing this package produces can fail it — a
-// file written by hand can, and a Request that gets past the decoder is executed
-// exactly like any other, with no second opinion downstream: the drain's title check
-// deliberately answers "no conflict" for a blank title, and filepath.Abs("") is the
-// draining TUI's own working directory with a nil error.
-func TestReadCreateRefusesABlankTitleOrPath(t *testing.T) {
-	for _, tc := range []struct{ name, body string }{
-		{"empty title", `{"version":1,"title":"","path":"/repo"}`},
-		{"whitespace title", `{"version":1,"title":"  ","path":"/repo"}`},
-		{"no path", `{"version":1,"title":"fix-auth"}`},
+// TestReadCreateRefusesAnUnusableRecord: WriteCreate refuses to write these, so
+// readCreate refuses to hand them back. Nothing this package produces can fail them — a
+// file written by hand can, and a Request that gets past the decoder is executed exactly
+// like any other, with no second opinion downstream.
+//
+// Each case is asserted against its OWN reason rather than a shared substring, because
+// the reasons are what the caller's --wait prints and because a guard that reported the
+// wrong cause would otherwise pass: the "web" case is a valid title with a valid-looking
+// path, and only the absolute-path rule separates it from a legitimate request.
+//
+// Why each is unusable:
+//   - a blank title is not caught downstream — titleConflictIn answers "no conflict" for
+//     one, so the drain would build a session whose row renders empty;
+//   - a relative path is resolved by filepath.Abs against the *draining TUI's* working
+//     directory with a nil error, so "" builds a worktree wherever atrium was launched
+//     from and "web" builds one in a child of it;
+//   - a missing created_at makes expired() answer false forever, so the record would
+//     survive every TTL sweep and still be executable by whichever TUI started next.
+func TestReadCreateRefusesAnUnusableRecord(t *testing.T) {
+	const stamped = `"created_at":"2026-08-15T00:00:00Z"`
+	for _, tc := range []struct{ name, body, reason string }{
+		{"empty title", `{"version":1,"title":"","path":"/repo",` + stamped + `}`, "no title"},
+		{"whitespace title", `{"version":1,"title":"  ","path":"/repo",` + stamped + `}`, "no title"},
+		{"no path", `{"version":1,"title":"fix-auth",` + stamped + `}`, "no absolute path"},
+		{"relative path", `{"version":1,"title":"fix-auth","path":"web",` + stamped + `}`, "no absolute path"},
+		{"dot path", `{"version":1,"title":"fix-auth","path":".",` + stamped + `}`, "no absolute path"},
+		{"no created_at", `{"version":1,"title":"fix-auth","path":"/repo"}`, "no created_at"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sandbox(t)
@@ -394,7 +411,69 @@ func TestReadCreateRefusesABlankTitleOrPath(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, entries, 1)
 			require.Error(t, entries[0].Err, "an unusable record must surface as Err, not as a Request")
-			assert.Contains(t, entries[0].Err.Error(), "no title or no path")
+			assert.Contains(t, entries[0].Err.Error(), tc.reason)
 		})
 	}
+
+	// The control: the same shape with all three satisfied decodes into a Request, so
+	// none of the above is passing because ListCreates rejects everything.
+	t.Run("a usable record", func(t *testing.T) {
+		sandbox(t)
+		writeRawCreate(t, "1700000000000000000-abc.json",
+			`{"version":1,"title":"fix-auth","path":"/repo",`+stamped+`}`)
+
+		entries, err := ListCreates()
+		require.NoError(t, err)
+		require.Len(t, entries, 1)
+		require.NoError(t, entries[0].Err)
+		assert.Equal(t, "fix-auth", entries[0].Request.Title)
+	})
+}
+
+// TestExpiredNeverDiscardsARecordWithNoTimestamp pins the branch readCreate now stands
+// in front of. expired() answers false for a zero time on purpose — treating it as
+// infinitely old would silently discard a future version's record — which is exactly why
+// a version-1 record that merely omits created_at cannot be allowed through the decoder:
+// it would be immortal and executable rather than immortal and inert.
+func TestExpiredNeverDiscardsARecordWithNoTimestamp(t *testing.T) {
+	assert.False(t, expired(time.Time{}, time.Now().Add(1000*TTL)),
+		"a zero timestamp is never expired, however long the horizon")
+	assert.True(t, expired(time.Now().Add(-2*TTL), time.Now()),
+		"and the control: a real timestamp past the horizon is")
+}
+
+// TestReadCreateTrimsAPaddedTitle: a padded title is not blank, so it passes every
+// check and then reaches tmux.QualifiedSessionName and git.BranchNameForSession with
+// its padding intact. The result is a session no `atrium new` invocation can ever
+// address, because the CLI trims what it is given — a mismatch nothing downstream
+// notices. Normalised at both ends rather than refused: the caller's intent is
+// unambiguous.
+func TestReadCreateTrimsAPaddedTitle(t *testing.T) {
+	sandbox(t)
+	writeRawCreate(t, "1700000000000000000-abc.json",
+		`{"version":1,"title":"  fix-auth  ","path":"/repo","created_at":"2026-08-15T00:00:00Z"}`)
+
+	entries, err := ListCreates()
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.NoError(t, entries[0].Err)
+	assert.Equal(t, "fix-auth", entries[0].Request.Title)
+}
+
+// TestWriteCreateTrimsTheTitleItStores is the producer half, so the two ends agree
+// without either relying on the other.
+//
+// Asserted on the bytes on disk, not through ListCreates: readCreate trims too, so a
+// round trip cannot tell which end did it and would stay green with this trim deleted.
+// What the file holds is the part that matters here — it is what an atrium built from a
+// different commit, or a human reading the spool, sees.
+func TestWriteCreateTrimsTheTitleItStores(t *testing.T) {
+	sandbox(t)
+	path, err := WriteCreate(Request{Title: "  fix-auth  ", Path: "/repo"})
+	require.NoError(t, err)
+
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"title":"fix-auth"`)
+	assert.NotContains(t, string(raw), `"title":"  fix-auth`)
 }

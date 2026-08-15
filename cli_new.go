@@ -157,8 +157,10 @@ func runNew(out, errOut io.Writer, r newRequest) error {
 		Path:    path,
 		Program: program,
 		Branch:  r.branch,
-		Prompt:  strings.TrimRight(r.prompt, "\r\n"),
-		Force:   r.force,
+		// Tail only, for runSend's reason: trailing newlines are an artifact of how the
+		// text arrived (a heredoc, a pipe), while leading whitespace could be meaningful.
+		Prompt: strings.TrimRight(r.prompt, "\r\n"),
+		Force:  r.force,
 	})
 	if err != nil {
 		return err
@@ -331,36 +333,65 @@ func checkTitleFree(prefix, title, path string, instances []session.InstanceData
 func waitForCreate(out io.Writer, path, title, repo string, timeout time.Duration) error {
 	if err := awaitSpool(path, timeout, spoolWaitCopy{
 		refused: "atrium did not create the session",
-		timedOut: fmt.Sprintf("waited %s and no atrium TUI created the session; the request is still "+
-			"queued and is picked up the next time one runs", timeout),
+		// Neither half of the obvious wording is knowable from here. "No TUI created it"
+		// is wrong while one is mid-create — the record is deliberately held for the whole
+		// of Start, so its presence means "queued or being built", and this side cannot
+		// tell those apart. "Picked up the next time one runs" is wrong when a TUI is
+		// running but attached: its poll loop is parked, and the request drains on detach
+		// rather than on a relaunch. Say only what is true of the file.
+		timedOut: fmt.Sprintf("waited %s without a session appearing; the request is still in the "+
+			"outbox — either queued, or being built right now, since a create is held there until "+
+			"its worktree, branch and agent exist. A running atrium drains it on its next tick, or "+
+			"on detach if it is attached to a session; otherwise the next one to start does", timeout),
 	}); err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(out, "created %q%s\n", title, createdBranchClause(title, repo))
+	// The record's absence is necessary evidence, not sufficient. Reject writes the
+	// receipt first but unlinks the record even when that write fails (outbox.Reject),
+	// so "gone, no receipt" is reachable without a session ever existing — on a full or
+	// read-only data dir, which is exactly when the receipt cannot be written. Read the
+	// row back and require it: the drain holds the record until persistInstances has
+	// returned, so a session that really was created is in state.json by now, and the
+	// alternative is printing `created` and exiting 0 for one that is not.
+	d, err := storedSession(title, repo)
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "created %q%s\n", title, createdBranchClause(d))
 	return nil
 }
 
-// createdBranchClause names the branch and worktree the TUI recorded, or "" when
-// it recorded neither — a direct (non-git) session has no branch, and a session
-// this process cannot find is one it should not describe.
-func createdBranchClause(title, repo string) string {
+// storedSession reads back the row the TUI recorded for this create. A miss is an
+// error rather than a quieter success: it is the one thing that separates a direct
+// (non-git) session, which legitimately has no branch to print, from a create whose
+// outcome was lost.
+func storedSession(title, repo string) (session.InstanceData, error) {
 	instances, err := loadStoredInstances()
 	if err != nil {
-		log.ErrorLog.Printf("created the session but could not read back its branch: %v", err)
-		return ""
+		return session.InstanceData{}, fmt.Errorf(
+			"atrium took the request but this process could not read back the session it made: %w", err)
 	}
 	want := filepath.Clean(repo)
 	for _, d := range instances {
-		if d.Title != title || filepath.Clean(d.Path) != want {
-			continue
+		if d.Title == title && filepath.Clean(d.Path) == want {
+			return d, nil
 		}
-		if d.Branch == "" {
-			return "" // a direct session: no worktree, no branch
-		}
-		if d.Worktree.WorktreePath == "" {
-			return fmt.Sprintf(" on %s", d.Branch)
-		}
+	}
+	return session.InstanceData{}, fmt.Errorf(
+		"atrium took the request but recorded no session %q in %s; the outcome was lost rather than "+
+			"reported, so check %s and the log before retrying", title, repo, config.StateFileName)
+}
+
+// createdBranchClause names the branch and worktree the TUI recorded for d, or "" for
+// a direct (non-git) session, which has neither. Reached only with a row in hand, so ""
+// here means "no branch" and nothing else.
+func createdBranchClause(d session.InstanceData) string {
+	switch {
+	case d.Branch == "":
+		return ""
+	case d.Worktree.WorktreePath == "":
+		return fmt.Sprintf(" on %s", d.Branch)
+	default:
 		return fmt.Sprintf(" on %s (%s)", d.Branch, d.Worktree.WorktreePath)
 	}
-	return ""
 }

@@ -126,7 +126,7 @@ func TestCollapse_IgnoredWhenDownToSingleRepo(t *testing.T) {
 
 	// Kill repoB, leaving only repoA.
 	l.SetSelectedInstance(1)
-	_ = l.Kill()
+	_ = l.KillInstance(l.GetSelectedInstance())
 
 	out := l.String()
 	require.Contains(t, out, "alpha", "the lone surviving group must be visible")
@@ -160,7 +160,7 @@ func TestCollapsedRepos_PrunesVanishedRepos(t *testing.T) {
 	require.ElementsMatch(t, []string{"repoA", "repoB"}, l.CollapsedRepos())
 
 	l.SetSelectedInstance(1) // repoB
-	_ = l.Kill()
+	_ = l.KillInstance(l.GetSelectedInstance())
 	require.Equal(t, []string{"repoA"}, l.CollapsedRepos(), "repoB's stale key is pruned")
 }
 
@@ -172,7 +172,7 @@ func TestKill_AnchorOfCollapsedGroupKeepsSelectionVisible(t *testing.T) {
 	require.True(t, l.Collapse()) // collapse repoA (2 members)
 
 	l.SetSelectedInstance(0) // anchor
-	_ = l.Kill()
+	_ = l.KillInstance(l.GetSelectedInstance())
 	require.False(t, l.isHidden(l.selectedIdx), "selection must rest on a visible item after kill")
 }
 
@@ -234,4 +234,57 @@ func TestExpand_FromHeaderKeepsSelectionOnAnchor(t *testing.T) {
 	require.True(t, l.Expand())
 	require.Equal(t, 0, l.selectedIdx, "selection stays on the anchor after expanding")
 	require.False(t, l.isHidden(1), "the group's members are visible again")
+}
+
+// A fold is inert below two groups (effectiveCollapsed), so the row that reactivates
+// one is the *first* row of a NEW repo — a group AddInstanceKeepingFolds never touches.
+// The clamp therefore cannot be gated on the added row's own group having been folded:
+// that is the one case where nothing needs clamping.
+func TestAddInstanceKeepingFolds_NewRepoReactivatingAFoldClampsTheCursor(t *testing.T) {
+	l := newGroupList(t, "/x/repoA", "/x/repoA", "/x/repoB")
+	l.SetSize(80, 40)
+
+	// Fold repoA while two groups exist — Collapse refuses below that.
+	l.SetSelectedInstance(0)
+	require.True(t, l.Collapse())
+
+	// Kill repoB's only session. RemoveInstance never prunes l.collapsed, so the fold
+	// key survives while effectiveCollapsed makes it inert at one group.
+	l.RemoveInstance(l.items[2])
+	require.True(t, l.collapsed["repoA"], "the fold key survives the removal")
+	require.False(t, l.effectiveCollapsed("repoA"), "and is inert with one group left")
+
+	// Every repoA row is drawn, so the cursor can rest on a non-anchor member.
+	l.SetSelectedInstance(1)
+	require.False(t, l.isHidden(1), "precondition: the row is visible")
+
+	// A background create lands the first row of a third repo, taking the list back
+	// over two groups and reactivating repoA's fold underneath the cursor.
+	inst, err := session.NewInstance(session.InstanceOptions{Title: "bg", Path: "/x/repoC", Program: "echo"})
+	require.NoError(t, err)
+	l.AddInstanceKeepingFolds(inst)
+
+	require.True(t, l.effectiveCollapsed("repoA"), "the fold is live again at two groups")
+	require.False(t, l.isHidden(l.selectedIdx),
+		"the selection must still rest on a drawn row")
+	require.Equal(t, 0, l.selectedIdx, "and specifically on repoA's anchor")
+}
+
+// The other half of the contract: the fold this call is named for still survives, and a
+// list that needs no clamping keeps its cursor exactly where it was.
+func TestAddInstanceKeepingFolds_LeavesASettledCursorAlone(t *testing.T) {
+	l := newGroupList(t, "/x/repoA", "/x/repoA", "/x/repoB")
+	l.SetSize(80, 40)
+	l.SetSelectedInstance(2) // repoB's row, visible throughout
+	settled := l.GetSelectedInstance()
+
+	inst, err := session.NewInstance(session.InstanceOptions{Title: "bg", Path: "/x/repoA", Program: "echo"})
+	require.NoError(t, err)
+	l.AddInstanceKeepingFolds(inst)
+
+	// By identity, not by index: the insert lands above repoB, so AddInstance shifts
+	// the index to keep pointing at the same row. What must not happen is the clamp
+	// moving the cursor to a *different* session.
+	require.Same(t, settled, l.GetSelectedInstance(), "the clamp does not move a visible selection")
+	require.False(t, l.isHidden(l.selectedIdx))
 }

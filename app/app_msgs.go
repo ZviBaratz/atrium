@@ -844,13 +844,17 @@ func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd
 	// Leave a live progress row alone: its owner clears it when the operation
 	// finishes (the ranking in ui.Menu decides which line shows meanwhile).
 	//
-	// And leave the bar entirely alone for a background create. This is a bare SetState,
+	// And leave the bar's STATE alone for a background create. This is a bare SetState,
 	// so unlike Menu.SetInstance — which rewrites only StateDefault/StateEmpty, precisely
-	// so the periodic instanceChanged cannot do this — it overwrites a bar the user is
-	// mid-gesture in: StateVisual, StateFilter, StateHints and StateDiffComment all stay
-	// on screen while their mode is active, and with hint_bar off StateDefault renders as
-	// an empty row. A create nobody asked for must not reset it; instanceChanged, batched
-	// by startNewSession, moves it off StateEmpty through the protected path.
+	// so the periodic instanceChanged cannot do this — it would permanently drop a mode
+	// the user is mid-gesture in: StateVisual, StateFilter, StateHints and StateDiffComment
+	// each own the bar while their mode is active, and with hint_bar off StateDefault
+	// renders as an empty row. A create nobody asked for must not end one; instanceChanged,
+	// batched by startNewSession, moves it off StateEmpty through the protected path.
+	//
+	// The state, not the row: the drain's own notice still rides that row for a few
+	// seconds via Menu.SetNotice, which is independent of Menu.State. What this prevents
+	// is the mode being ended, not the bar being borrowed.
 	if msg.origin != spawnBackground && m.menu.State() != ui.StateBusy {
 		m.menu.SetState(ui.StateDefault)
 	}
@@ -867,10 +871,38 @@ func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd
 		return m, m.attachExec(msg.instance.Attach, msg.instance)
 	}
 
-	// No resize request for a background create, for startNewSession's reason: the
-	// WindowSizeMsg it asks for exits hint mode, and nothing about the terminal changed.
+	// A background create asks for no global resize — the WindowSizeMsg it would send
+	// exits hint mode (see the tea.WindowSizeMsg arm in Update) and reflows a frame
+	// nothing about the terminal changed. But one half of that resize IS load-bearing
+	// here, and only here: updateHandleWindowSizeEvent ends in SetSessionPreviewSize,
+	// the sole production caller that gives a session's detached tmux pane the
+	// preview's geometry, and it skips any instance that is not yet Started — which
+	// this one became three statements ago. Left unsized the pane keeps its
+	// new-session -d default: measured at 80 columns against a 116-column preview, so
+	// the preview renders it wrapped at the wrong width and every width-sensitive
+	// classifier in session/agent reads a capture taken at a width the pane never had.
+	// So size just the row this message is about.
 	if msg.origin == spawnBackground {
+		w, h := m.tabbedWindow.GetPreviewSize()
+		if err := sizeStartedPane(msg.instance, w, h); err != nil {
+			log.ErrorLog.Printf("could not size the pane for a background create: %v", err)
+		}
 		return m, m.instanceChanged()
 	}
 	return m, tea.Batch(tea.RequestWindowSize, m.instanceChanged())
+}
+
+// sizeStartedPane is Instance.SetPreviewSize, as a seam — config.detectAgentCommand's
+// precedent, and betweenSpoolSamples' in this same change.
+//
+// A var rather than a direct call because the effect is a pty ioctl whose visibility
+// belongs to tmux, not to Atrium: SetPreviewSize resizes the pty and tmux reacts to the
+// SIGWINCH on its own schedule and by its own client-size reconciliation rules, which
+// differ by version. A test that reads the width back through `display-message` was
+// green on one machine and red on CI for both reasons — it raced the propagation, and
+// where it did not race it measured tmux's policy rather than this branch. What has to
+// be pinned here is only that the call is made, with the preview's geometry, on exactly
+// the origin that no longer asks for a resize.
+var sizeStartedPane = func(inst *session.Instance, width, height int) error {
+	return inst.SetPreviewSize(width, height)
 }

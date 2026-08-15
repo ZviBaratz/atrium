@@ -420,10 +420,16 @@ func changedFiles(content string) []string {
 	return files
 }
 
-// MaxTitleLen is the 32-rune cap on a session title, and the definition every other
-// site cites rather than repeats: the new-session/rename input sets its CharLimit from
-// this constant (ui/overlay newTitleInput), so a generated name fits the same field by
-// construction rather than by agreement.
+// MaxTitleLen is the 32-rune cap on a session title, and the definition every site that
+// ENFORCES the cap cites rather than repeats: the new-session/rename input sets its
+// CharLimit from this constant (ui/overlay newTitleInput), so a generated name fits the
+// same field by construction rather than by agreement, and both `atrium new` and the
+// create drain measure against it.
+//
+// Enforcement is the whole scope of that. Three sites still spell 32 out — the two
+// naming prompts below and dispatch.go's title instruction — because they are asking a
+// model for a length rather than checking one, and a number interpolated into English
+// is not a citation. They are what a change here has to be carried to by hand.
 //
 // It lives here, and is exported, because it is a rule about titles rather than about
 // generated names, and `atrium new` has to enforce it too (#703): a CLI title has no

@@ -370,7 +370,12 @@ func Clear() (int, error) {
 		}
 		for _, de := range entries {
 			name := de.Name()
-			if !isMessageFile(name) {
+			// Both guards, as in listFiles, and most of all here: this is the walk that
+			// destroys what it matches. The name check alone already rejects the nested
+			// create/ entry, so IsDir is redundant today — which is exactly the claim
+			// listFiles makes about the pair, and a claim the package should be able to
+			// make about every walk rather than about one of three.
+			if de.IsDir() || !isMessageFile(name) {
 				continue // a receipt, a nested spool dir, or not ours at all
 			}
 			if err := Reject(filepath.Join(dir, name), clearReason); err != nil {
@@ -393,7 +398,7 @@ func sweepReceipts(dir string, now time.Time) {
 	for _, de := range entries {
 		name := de.Name()
 		base, ok := strings.CutSuffix(name, rejectedSuffix)
-		if !ok || !isMessageFile(base) {
+		if de.IsDir() || !ok || !isMessageFile(base) {
 			continue
 		}
 		info, err := de.Info()

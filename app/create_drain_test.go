@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -49,6 +50,20 @@ func refuseDrain(t *testing.T, h *home) {
 	require.NotNil(t, h.drainCreateRequests(), "a refusal is an outcome, not a no-op")
 	assert.Contains(t, h.menu.NoticeText(), "refused",
 		"a refused create request must say so at the TUI, not only in the receipt")
+}
+
+// disposeDrain is refuseDrain's counterpart for the disposal arms — an expired or
+// undecodable record. It asserts the opposite of the notice, and that is the point: the
+// notice exists so the person at the TUI can raise a cap or free a title, and neither is
+// what an expired file needs. Counting one would repaint a red error every ~500ms tick
+// for as long as a cron backlog takes to clear at createDisposalBudget a tick, and each
+// one overwrites whatever drainOutbox flashed. The caller still gets its receipt (each
+// test asserts that itself) and the log still gets its line.
+func disposeDrain(t *testing.T, h *home) {
+	t.Helper()
+	assert.Nil(t, h.drainCreateRequests(), "a disposal is nobody's to act on at the TUI")
+	assert.NotContains(t, h.menu.NoticeText(), "refused",
+		"and must not raise the refusal notice")
 }
 
 // titled returns the instance with this title, or nil.
@@ -409,7 +424,7 @@ func TestCreateDrainRejectsExpiredRequest(t *testing.T) {
 		CreatedAt: time.Now().Add(-outbox.TTL - time.Hour),
 	})
 
-	refuseDrain(t, h)
+	disposeDrain(t, h)
 
 	reason, ok := outbox.Rejection(path)
 	require.True(t, ok)
@@ -427,7 +442,7 @@ func TestCreateDrainRejectsUnreadableRequest(t *testing.T) {
 	path := filepath.Join(dir, "0000000000000000001-abcdabcd.json")
 	require.NoError(t, os.WriteFile(path, []byte(`{not json`), 0o644))
 
-	refuseDrain(t, h)
+	disposeDrain(t, h)
 
 	reason, ok := outbox.Rejection(path)
 	require.True(t, ok)
@@ -532,11 +547,40 @@ func TestCreateDrainRefusalsDoNotSpendTheStartBudget(t *testing.T) {
 	assert.True(t, rejected, "the expired request is disposed of")
 	assert.NotNil(t, titled(h, "fresh"), "and the live one still starts in the same tick")
 
-	// flashNotice writes one notice, so a tick that did both must not report only the
-	// half that went well — the refusal is the half the person at the TUI can act on.
+	// The disposal is silent at the TUI even beside a create: an expired file is not
+	// something the person here can act on, so it earns no clause. Its caller still
+	// learns why from the receipt asserted above.
 	notice := h.menu.NoticeText()
 	assert.Contains(t, notice, "created")
-	assert.Contains(t, notice, "refused", "a create must not swallow the refusal beside it")
+	assert.NotContains(t, notice, "refused", "a disposal is not a refusal")
+}
+
+// TestCreateDrainGivesOneTickOneGateOutcome pins what lets the create notice drop its
+// "and N refused" clause: reaching either outcome costs a gate evaluation, and
+// createGateBudget allows one per tick, so a create and a gate refusal can never share
+// a tick. Asserted on the two outcomes rather than on the unexported counter, so raising
+// the budget without restoring the clause fails here rather than silently dropping the
+// half the person at the TUI can act on.
+func TestCreateDrainGivesOneTickOneGateOutcome(t *testing.T) {
+	h := drainHome(t)
+	long := spoolCreate(t, outbox.Request{
+		Title: strings.Repeat("a", session.MaxTitleLen+1), Path: t.TempDir(),
+	})
+	spoolCreate(t, outbox.Request{Title: "fresh", Path: t.TempDir()})
+
+	// Tick one gates the older entry — the overlong title — and stops there.
+	require.NotNil(t, h.drainCreateRequests())
+	_, rejected := outbox.Rejection(long)
+	require.True(t, rejected, "the overlong title is refused at the gate")
+	assert.Contains(t, h.menu.NoticeText(), "refused")
+	assert.Nil(t, titled(h, "fresh"), "and the tick's one gate evaluation is spent")
+
+	// Tick two gates the survivor, and reports only the create.
+	require.NotNil(t, h.drainCreateRequests())
+	require.NotNil(t, titled(h, "fresh"))
+	notice := h.menu.NoticeText()
+	assert.Contains(t, notice, "created")
+	assert.NotContains(t, notice, "refused", "the refusal belonged to the previous tick")
 }
 
 // TestCreateDrainRejectsAnOverlongTitle: the CLI bounds the title, so this is for
@@ -811,7 +855,7 @@ func TestCreateDrainDiscardsExpiredRequestsInBulk(t *testing.T) {
 		})
 	}
 
-	refuseDrain(t, h)
+	disposeDrain(t, h)
 	assert.Zero(t, createSpoolCount(t), "expired requests are cheap and go in one tick")
 }
 
@@ -868,7 +912,7 @@ func TestCreateDrainRejectsABlankRequest(t *testing.T) {
 			path := filepath.Join(dir, "1700000000000000000-abc.json")
 			require.NoError(t, os.WriteFile(path, body, 0o644))
 
-			refuseDrain(t, h)
+			disposeDrain(t, h)
 
 			assert.Zero(t, h.list.NumInstances(), "nothing may be created from it")
 			reason, rejected := outbox.Rejection(path)
@@ -959,42 +1003,61 @@ func TestBackgroundCreateLeavesTheHintBarAlone(t *testing.T) {
 // WindowSizeMsg handler, which exits hint mode outright — the mode's frozen geometry is
 // invalid after a resize. Nothing about the terminal changed when a list row appeared,
 // so a background create must not ask for one, from either of the two places that do.
+//
+// Asserted on the two functions that decide rather than on the drain's return, because
+// the drain only forwards what startNewSession built — and because reaching it means
+// walking past a leaf that really starts a session.
 func TestBackgroundCreateAsksForNoResize(t *testing.T) {
 	h := drainHome(t)
-	spoolCreate(t, outbox.Request{Title: "fix-auth", Path: t.TempDir()})
-	drained := h.drainCreateRequests()
-	require.NotNil(t, drained)
-	inst := titled(h, "fix-auth")
-	require.NotNil(t, inst)
+	inst, spawned, err := h.startNewSession("fix-auth", t.TempDir(), true, false, "echo", "", "", nil, spawnBackground, nil)
+	require.NoError(t, err)
+	assert.False(t, requestsWindowSize(spawned), "startNewSession asked for a resize")
 
 	_, started := h.handleInstanceStarted(instanceStartedMsg{instance: inst, origin: spawnBackground})
+	assert.False(t, requestsWindowSize(started), "the start handler asked for a resize")
 
-	for name, cmd := range map[string]tea.Cmd{"the drain": drained, "the start handler": started} {
-		assert.NotContains(t, flattenCmd(cmd), tea.RequestWindowSize(),
-			"%s asked for a resize behind a background create", name)
-	}
-
-	// The control: an interactive start does ask, so the assertion above can fail.
-	_, interactive := h.handleInstanceStarted(instanceStartedMsg{instance: inst, origin: spawnInteractive})
-	assert.Contains(t, flattenCmd(interactive), tea.RequestWindowSize())
+	// The controls: the interactive origin does ask at both sites, so neither assertion
+	// above can be passing vacuously.
+	_, interactive, err := h.startNewSession("other", t.TempDir(), true, false, "echo", "", "", nil, spawnInteractive, nil)
+	require.NoError(t, err)
+	assert.True(t, requestsWindowSize(interactive))
+	_, startedInteractive := h.handleInstanceStarted(instanceStartedMsg{instance: inst, origin: spawnInteractive})
+	assert.True(t, requestsWindowSize(startedInteractive))
 }
 
-// flattenCmd runs cmd and returns every message it produces, descending into batches.
-// Compared against tea.RequestWindowSize()'s own message rather than a type name, so
-// the assertion cannot go quiet if bubbletea renames the (unexported) type.
-func flattenCmd(cmd tea.Cmd) []tea.Msg {
+// requestsWindowSize reports whether cmd asks for a resize, without running a single
+// leaf. That restraint is the point: the batch startNewSession returns carries the
+// closure that really runs `tmux new-session`, so a walk that invoked what it descended
+// into would start a session — on the developer's own socket, if the sandbox
+// TMUX_TMPDIR were ever absent (#581) — to answer a question about a command list.
+//
+// Identity, not messages: tea.RequestWindowSize is a package-level function, so its code
+// pointer is stable, while calling it yields a message type bubbletea keeps unexported.
+// One level of descent is the whole question, because both producers add it as a direct
+// member of the batch they return; calling a tea.Batch closure yields those members
+// rather than executing them.
+func requestsWindowSize(cmd tea.Cmd) bool {
 	if cmd == nil {
-		return nil
+		return false
 	}
-	msg := cmd()
-	if batch, ok := msg.(tea.BatchMsg); ok {
-		var out []tea.Msg
-		for _, c := range batch {
-			out = append(out, flattenCmd(c)...)
+	if sameCmd(cmd, tea.RequestWindowSize) {
+		return true
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok {
+		return false
+	}
+	for _, member := range batch {
+		if sameCmd(member, tea.RequestWindowSize) {
+			return true
 		}
-		return out
 	}
-	return []tea.Msg{msg}
+	return false
+}
+
+// sameCmd compares two commands by function identity.
+func sameCmd(a, b tea.Cmd) bool {
+	return reflect.ValueOf(a).Pointer() == reflect.ValueOf(b).Pointer()
 }
 
 // TestBackgroundCreateSpendsNoOneTimeState: the recent-path MRU feeds the create
@@ -1054,4 +1117,164 @@ func TestReconcileNamesAPersistFailureForWhatItIs(t *testing.T) {
 	require.True(t, rejected)
 	assert.Contains(t, reason, "could not record it")
 	assert.NotContains(t, reason, "could not be started", "the session did start; the record did not")
+}
+
+// TestBackgroundCreateDoesNotReflowTheFrameUnderAnOverlay: menuVisible is false in all
+// fifteen modal states, so flashNotice falls back to the errBox row and calls
+// recomputeLayout — the panes shrink by a row under the open overlay and grow back when
+// the toast expires. That is the #518 shape, and a create nobody asked for must not
+// cause it: the row now in the list is evidence enough. A refusal is the opposite case,
+// invisible at the TUI otherwise and actionable only by the person there, so it keeps
+// the fallback — asserted here too, because a fix that silenced both would look green.
+func TestBackgroundCreateDoesNotReflowTheFrameUnderAnOverlay(t *testing.T) {
+	h := drainHome(t)
+	h.state = stateWelcome // the state a fresh install sits in; menuVisible is false
+	require.False(t, h.menuVisible(), "precondition: the hint bar row is not available")
+
+	spoolCreate(t, outbox.Request{Title: "fix-auth", Path: t.TempDir()})
+	require.NotNil(t, h.drainCreateRequests())
+	require.NotNil(t, titled(h, "fix-auth"), "the create still happens behind the modal")
+	assert.False(t, h.errBox.HasContent(),
+		"a create nobody asked for must not take the errBox row under an open overlay")
+
+	// The control: a refusal in the same state does take it, so the assertion above is
+	// not passing merely because notices never reach the errBox from here.
+	spoolCreate(t, outbox.Request{
+		Title: strings.Repeat("a", session.MaxTitleLen+1), Path: t.TempDir(),
+	})
+	h.settleCreateRequest(titled(h, "fix-auth"), nil)
+	require.NotNil(t, h.drainCreateRequests())
+	assert.True(t, h.errBox.HasContent(), "a refusal is actionable and keeps the fallback row")
+}
+
+// TestCreateDrainStartsFromTheRequestedBaseBranch: --branch is carried across the wire
+// and then handed to startNewSession by hand, positionally, alongside ten other
+// arguments. Nothing else asserted it end to end, so executeCreateRequest could have
+// passed "" and every headless session would have branched off HEAD instead of the base
+// the caller named — silently, with a green suite. This is the "registered, documented
+// and dead" shape one layer in from a keybinding.
+//
+// Asserted through the worktree's recorded BaseRef rather than the unexported
+// baseBranch field: it is what Start actually used, and what state.json keeps. The
+// drain's own command is deliberately not run — startNewSession has already called
+// SetBaseBranch by the time it returns, so starting the instance here exercises the
+// same wiring without executing a batch that also carries a notice timer.
+func TestCreateDrainStartsFromTheRequestedBaseBranch(t *testing.T) {
+	testutil.RequireTmux(t)
+
+	h := drainHome(t)
+	h.program = "sleep 300" // a real Start: the session has to outlive the wait for it
+	repo := gitRepoWithBranch(t, "release/2.0")
+	spoolCreate(t, outbox.Request{Title: "fix-auth", Path: repo, Branch: "release/2.0"})
+
+	require.NotNil(t, h.drainCreateRequests())
+	inst := titled(h, "fix-auth")
+	require.NotNil(t, inst)
+	t.Cleanup(func() {
+		inst.RebindBaseContext(context.Background())
+		_ = inst.Kill()
+	})
+	require.NoError(t, inst.Start(true))
+
+	assert.Equal(t, "release/2.0", inst.ToInstanceData().Worktree.BaseRef,
+		"the session must be based on the branch the request named")
+}
+
+// TestCreateDrainWithoutABaseBranchUsesHead is the control for the test above: without
+// --branch the recorded base is empty, which is what makes "release/2.0" evidence that
+// the request's value arrived rather than something every create records anyway.
+func TestCreateDrainWithoutABaseBranchUsesHead(t *testing.T) {
+	testutil.RequireTmux(t)
+
+	h := drainHome(t)
+	h.program = "sleep 300" // a real Start: the session has to outlive the wait for it
+	repo := gitRepoWithBranch(t, "release/2.0")
+	spoolCreate(t, outbox.Request{Title: "fix-auth", Path: repo})
+
+	require.NotNil(t, h.drainCreateRequests())
+	inst := titled(h, "fix-auth")
+	require.NotNil(t, inst)
+	t.Cleanup(func() {
+		inst.RebindBaseContext(context.Background())
+		_ = inst.Kill()
+	})
+	require.NoError(t, inst.Start(true))
+
+	assert.Empty(t, inst.ToInstanceData().Worktree.BaseRef,
+		"an unflagged create bases on HEAD, recording no explicit base")
+}
+
+// TestCreateDrainRefusesABaseBranchForANonGitTarget: startNewSession drops the base
+// branch for a direct session, so without this the request would succeed, produce no
+// worktree and no branch, and report back as `created "fix-auth"` with no branch clause
+// — which is byte-identical to a legitimate direct create. Refusing is the only signal
+// that separates them, and it is also the only signal available when `direct` is wrong:
+// targetValidity infers it from git.IsGitRepo, which answers false for a transient
+// failure exactly as it does for "not a repo".
+func TestCreateDrainRefusesABaseBranchForANonGitTarget(t *testing.T) {
+	h := drainHome(t)
+	path := spoolCreate(t, outbox.Request{
+		Title: "fix-auth", Path: t.TempDir(), Branch: "release/2.0", // a plain dir, no git
+	})
+
+	refuseDrain(t, h)
+
+	reason, ok := outbox.Rejection(path)
+	require.True(t, ok)
+	assert.Contains(t, reason, "release/2.0", "the refusal names the branch that could not be used")
+	assert.Zero(t, h.list.NumInstances())
+}
+
+// TestCreateDrainStillCreatesADirectSessionWithoutABranch is the control: the refusal
+// above is about the combination, not about non-git targets, which `atrium new` supports.
+func TestCreateDrainStillCreatesADirectSessionWithoutABranch(t *testing.T) {
+	h := drainHome(t)
+	spoolCreate(t, outbox.Request{Title: "fix-auth", Path: t.TempDir()})
+
+	require.NotNil(t, h.drainCreateRequests())
+	assert.NotNil(t, titled(h, "fix-auth"))
+}
+
+// TestBackgroundCreateSizesItsOwnPane is the other half of "asks for no resize".
+// updateHandleWindowSizeEvent ends in SetSessionPreviewSize, the only production caller
+// that gives a detached tmux session the preview's geometry, and it skips any instance
+// that is not yet Started. tea.RequestWindowSize is what used to trigger it at exactly
+// the moment a new session became Started — so dropping that request for a background
+// create left the pane at its `new-session -d` default (measured: 80 columns against a
+// 116-column preview) until some unrelated resize happened to fix it. Every capture
+// taken meanwhile is wrapped at a width the pane never had, which is what every
+// width-sensitive classifier in session/agent then reads.
+//
+// Asserted at the seam rather than by reading the width back out of tmux. See
+// sizeStartedPane: the width tmux reports is the outcome of its own SIGWINCH handling
+// and client-size policy, so a test that read it was pinning tmux's behaviour and
+// raced its propagation. The two things this branch is actually responsible for are
+// that the call happens and that it carries the preview's geometry.
+func TestBackgroundCreateSizesItsOwnPane(t *testing.T) {
+	h := drainHome(t)
+	inst := addInstance(t, h, "sizeme", t.TempDir())
+	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 120, Height: 44})
+	wantW, wantH := h.tabbedWindow.GetPreviewSize()
+
+	var gotInst *session.Instance
+	var gotW, gotH int
+	restore := sizeStartedPane
+	t.Cleanup(func() { sizeStartedPane = restore })
+	sizeStartedPane = func(i *session.Instance, w, h int) error {
+		gotInst, gotW, gotH = i, w, h
+		return nil
+	}
+
+	h.handleInstanceStarted(instanceStartedMsg{instance: inst, origin: spawnBackground})
+
+	require.Same(t, inst, gotInst, "the pane sized must be the one this message is about")
+	assert.Equal(t, wantW, gotW, "sized to the preview's width")
+	assert.Equal(t, wantH, gotH, "and its height")
+
+	// The control: the interactive origin sizes nothing here, because the resize it
+	// asks for reaches every started instance through SetSessionPreviewSize. Without
+	// this, moving the call outside the origin check would still pass above.
+	gotInst = nil
+	h.handleInstanceStarted(instanceStartedMsg{instance: inst, origin: spawnInteractive})
+	assert.Nil(t, gotInst, "the interactive origin resizes through its WindowSizeMsg instead")
 }

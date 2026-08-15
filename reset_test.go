@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -256,4 +257,29 @@ func TestRunReset_RefusedResetLeavesTheSpoolAlone(t *testing.T) {
 
 	require.Error(t, runReset(context.Background(), noopExec()))
 	assert.FileExists(t, create, "a refused reset must not touch the spool either")
+}
+
+// TestRunReset_ClearsTheSpoolEvenWhenALaterStepFails is the ordering half of the test
+// above. `outbox.Clear` used to run last, which made the protection conditional on every
+// earlier step succeeding: `tmux.CleanupSessions` returns an error for anything but a
+// clean "no server" (an uninstalled or broken tmux qualifies), and `runReset` returns
+// there with state.json already emptied. The queued create then outlives the reset — and
+// with no session left for its title to collide with, the next TUI builds the worktree,
+// branch and agent the reset existed to erase. The reset still fails, and must; what it
+// must not do is fail leaving the one record that can undo it.
+func TestRunReset_ClearsTheSpoolEvenWhenALaterStepFails(t *testing.T) {
+	sandboxDataDir(t)
+	create, err := outbox.WriteCreate(outbox.Request{Title: "fix-auth", Path: t.TempDir()})
+	require.NoError(t, err)
+
+	brokenTmux := cmd_test.MockCmdExec{
+		RunFunc:    func(cmd *exec.Cmd) error { return nil },
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return nil, errors.New("tmux: command not found") },
+	}
+
+	require.Error(t, runReset(context.Background(), brokenTmux), "the reset itself still fails")
+	assert.NoFileExists(t, create, "but the request that could rebuild a session is gone")
+	reason, rejected := outbox.Rejection(create)
+	require.True(t, rejected, "and its caller is told why rather than reading the unlink as success")
+	assert.Contains(t, reason, "reset")
 }

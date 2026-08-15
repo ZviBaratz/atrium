@@ -26,10 +26,10 @@ import (
 const outboxDrainBudget = 50
 
 // rejectionSweepInterval is how often the receipt GC actually walks the spools. The
-// horizon it enforces is 24 hours, so running it on every ~500ms metadata tick — twice
-// a directory now that there are two spools — spends 170k directory reads a day to
-// delete a file that may sit an extra minute (#546 is the standing reason idle work in
-// this loop is worth a constant).
+// horizon it enforces is 24 hours, so running it on every ~500ms metadata tick — and
+// twice per tick now that there are two spools to walk — spends around 350k directory
+// reads a day (2/s × 2 dirs × 86400) to delete a file that may sit an extra minute
+// (#546 is the standing reason idle work in this loop is worth a constant).
 const rejectionSweepInterval = time.Minute
 
 // sweepRejectionsOccasionally runs the receipt GC at most once per
@@ -61,14 +61,20 @@ func (m *home) sweepRejectionsOccasionally(now time.Time) {
 // That prompt stays visible and cancelable: the queue overlay lists it, and
 // `atrium ls` reports it as queued_prompts.
 func (m *home) drainOutbox() tea.Cmd {
+	// Before the read, not after it. The sweep collects receipts from BOTH spools, and
+	// the create spool has no other collector — drainCreateRequests deliberately does
+	// not sweep, on the grounds that this runs first on the same tick. Below the early
+	// return that stops being true: one unreadable prompt directory would strand the
+	// sweep for the life of the process while the create drain kept working normally,
+	// leaking a receipt per refused `atrium new` with nothing left to collect them.
+	now := time.Now()
+	m.sweepRejectionsOccasionally(now)
+
 	entries, err := outbox.List()
 	if err != nil {
 		log.ErrorLog.Printf("failed to read the outbox: %v", err)
 		return nil
 	}
-
-	now := time.Now()
-	m.sweepRejectionsOccasionally(now)
 
 	var spent, queued int
 	var delivered []string

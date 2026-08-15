@@ -91,11 +91,13 @@ func (l *List) AddInstanceKeepingFolds(instance *session.Instance) (finalize fun
 	finalize = l.AddInstance(instance)
 	if wasCollapsed {
 		l.collapsed[key] = true
-		// The new row is hidden again, and AddInstance may have shifted the
-		// selection index past it; re-establish the navigable-selection invariant
-		// through the one function that owns it.
-		l.clampSelectionToNavigable()
 	}
+	// Unconditionally, and not only when this row's own group was folded: a fold is
+	// inert below two groups (effectiveCollapsed), so adding the *first* row of a new
+	// repo can hide rows in a group this call never touched. Every other AddInstance
+	// caller reaches the clamp through the SelectInstance that follows it; this one
+	// deliberately moves no cursor, so it is the only path that has to say so.
+	l.clampSelectionToNavigable()
 	return finalize
 }
 

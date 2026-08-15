@@ -31,13 +31,21 @@ import (
 	"github.com/ZviBaratz/atrium/ui/overlay"
 )
 
-// createStartBudget caps how many session starts may be in flight at once, counting
-// the ones still running from earlier ticks — not how many this tick may begin. One,
-// where the prompt drain's budget is 50: queuing a prompt is a map write, while
-// creating a session builds a git worktree, runs the repo's setup script and launches
-// a program in a pty. A script that spooled twenty would otherwise have twenty
+// createStartBudget caps how many SPOOLED session starts may be in flight at once,
+// counting the ones still running from earlier ticks — not how many this tick may
+// begin. One, where the prompt drain's budget is 50: queuing a prompt is a map write,
+// while creating a session builds a git worktree, runs the repo's setup script and
+// launches a program in a pty. A script that spooled twenty would otherwise have twenty
 // worktree setups running at once, contending on the same index.lock and coming back
 // to their callers as arbitrary-looking failures.
+//
+// Spooled, and only spooled: it is seeded from createsInFlight, which holdCreateRequest
+// alone writes, so it does not see the TUI's own starts. A variant fan-out spawns up to
+// maxVariantBatch sessions in one keypress, all in one repo, and this constant neither
+// counts nor limits them — a human asking for twenty is not the accident this guards
+// against, and refusing a spooled create because a fan-out is mid-flight would make
+// `atrium new` fail for a reason its caller cannot see. The number to hold in mind is
+// therefore "one from the spool, plus whatever the keyboard started".
 //
 // Counting in-flight starts is the whole point. A per-tick budget looks identical in a
 // single-tick test and delivers only a ~500ms stagger in production, because tick N+1
@@ -49,9 +57,19 @@ const createStartBudget = 1
 //
 // One, because those gates are git. Before executeCreateRequest can know whether a
 // request ends in a start or a refusal it runs targetValidity (git.IsGitRepo, then
-// git.CurrentBranchName), git.RepoGroupKey (rev-parse --show-toplevel) and
-// variantTitleConflictIn (git.LocalBranchExists) — several subprocess round trips,
-// synchronously, on the Bubble Tea update goroutine.
+// git.CurrentBranchName), git.RepoGroupKey (rev-parse --show-toplevel), and — for a
+// non-direct target — variantTitleConflictIn (git.LocalBranchExists) and allExhausted,
+// whose resolveSpawnPool adds git.GetRemoteURL. Five subprocess round trips,
+// synchronously, on the Bubble Tea update goroutine, before a verdict exists.
+//
+// Two of the five are redundant and deliberately left that way: IsGitRepo and
+// RepoGroupKey each run `rev-parse --show-toplevel` on the same path, and
+// CurrentBranchName resolves a head branch this path discards (it is the branch
+// picker's default label, which a headless request has no use for). Collapsing them
+// means the drain computing "is this a git target, and what group is it" by hand
+// instead of through the helpers the create form uses — a fourth hand-copied
+// pre-flight, which is the more expensive mistake. A sixth round trip follows on the
+// accept path, where startNewSession resolves GetRemoteURL a second time.
 //
 // Bounding starts alone does not bound that work: a refusal spends no start budget, so
 // a backlog refused for a full cap would gate every one of fifty requests inside a
@@ -63,8 +81,12 @@ const createGateBudget = 1
 // unreadable files and expired ones, which cost a receipt and an unlink apiece. Larger
 // than the budgets above because there is no git in that path — but not unbounded: a
 // two-day-old cron backlog would otherwise unlink thousands of expired requests inside
-// one Update, freezing the UI. Bounded, a backlog clears at 50 a tick while the loop
-// stays responsive.
+// one Update, freezing the UI. Bounded, a backlog clears at 50 a tick.
+//
+// It bounds the writes, not the reads. ListCreates is called before any budget applies
+// and decodes every file in the spool, so an N-request backlog still costs N ReadFile +
+// N Unmarshal on this goroutine, twice a second, until it clears. That is the honest
+// shape of "stays responsive" here: the unlink storm is spread out, the decode is not.
 //
 // A refusal that came out of the gates does not draw on it. The expensive part is
 // already paid by then, and withholding the receipt would only mean paying it again
@@ -87,10 +109,18 @@ const createDisposalBudget = 50
 // has live per-keystroke verdicts about a title and a cap, but re-runs both at submit
 // (createSessionFromForm), so a session appearing underneath is refused there rather
 // than let through. And for a spawnBackground create startNewSession moves no cursor,
-// opens no fold and asks for no resize, so there is nothing left for a state to be
-// surprised by. (It does still run instanceChanged, which repoints preview, diff and
-// menu at the selection — but the selection did not move, and the 100ms preview tick
-// runs the same call regardless.)
+// opens no fold and asks for no resize. (It does still run instanceChanged, which
+// repoints preview, diff and menu at the selection — but the selection did not move, and
+// the 100ms preview tick runs the same call regardless.)
+//
+// The one thing a state can still notice is the notice itself, which is why the two are
+// not raised the same way. menuVisible is false in all fifteen modal states, so
+// flashNotice falls back to the errBox row and recomputes the layout — the panes shrink
+// by a row under the open overlay and grow back when the toast expires, which is the
+// #518 shape. A create nobody asked for must not do that, and does not need to: its
+// evidence is the row now in the list. A refusal is the opposite case — invisible at the
+// TUI otherwise, and actionable only by the person there — so it keeps the fallback and
+// pays the row.
 //
 // Three things do hold it, none of them a state: a staged spawn plan, a pending quit
 // and an in-flight async action. See createDrainHeld.
@@ -111,11 +141,18 @@ func (m *home) drainCreateRequests() tea.Cmd {
 	started := len(m.createsInFlight)
 	var gated, disposed int
 	var cmds []tea.Cmd
+	// Gate refusals only. A disposal is charged to disposed and stays off this counter
+	// deliberately — see the notice below for why an expired file must not raise one.
 	var refused int
 
 	for _, e := range entries {
 		// Nothing more can be gated (so nothing more can be started or refused) and
 		// nothing more can be discarded: the rest of the spool is next tick's.
+		//
+		// Only a spool with 50+ disposable records reaches this; a healthy backlog
+		// leaves disposed at 0 and is bounded by the per-arm `continue`s below instead,
+		// walking the remaining entries to a map lookup apiece. Cheap, and not worth a
+		// cleverer condition while ListCreates has already read them all anyway.
 		if (started >= createStartBudget || gated >= createGateBudget) && disposed >= createDisposalBudget {
 			break
 		}
@@ -127,13 +164,10 @@ func (m *home) drainCreateRequests() tea.Cmd {
 
 		// Discards, gate evaluations and starts draw on separate budgets, so a backlog
 		// of expired requests cannot spend the one start this tick was allowed to make —
-		// and cannot buy itself unbounded git either. spend says which budget paid.
-		reject := func(reason string, spend *int) {
+		// and cannot buy itself unbounded git either. Each arm charges its own budget,
+		// so which one paid is read at the call site rather than through a parameter.
+		reject := func(reason string) {
 			m.rejectCreateRequest(e.Path, reason)
-			if spend != nil {
-				*spend++
-			}
-			refused++
 		}
 
 		switch {
@@ -146,7 +180,8 @@ func (m *home) drainCreateRequests() tea.Cmd {
 			// tick forever. ListCreates only ever surfaces files matching the
 			// spool's own name format, so this can only discard our own.
 			log.ErrorLog.Printf("discarding an unreadable create request: %v", e.Err)
-			reject("the request could not be read", &disposed)
+			reject("the request could not be read")
+			disposed++
 
 		case e.Request.Expired(now):
 			if disposed >= createDisposalBudget {
@@ -155,7 +190,8 @@ func (m *home) drainCreateRequests() tea.Cmd {
 			age := now.Sub(e.Request.CreatedAt).Round(time.Minute)
 			log.WarningLog.Printf("discarding a create request for %q: spooled %s ago, past the %s horizon",
 				e.Request.Title, age, outbox.TTL)
-			reject(fmt.Sprintf("the request was spooled %s ago, past the %s horizon", age, outbox.TTL), &disposed)
+			reject(fmt.Sprintf("the request was spooled %s ago, past the %s horizon", age, outbox.TTL))
+			disposed++
 
 		default:
 			// Both budgets, before the gates rather than after: whether this request
@@ -168,7 +204,8 @@ func (m *home) drainCreateRequests() tea.Cmd {
 			inst, cmd, reason := m.executeCreateRequest(e.Request)
 			if reason != "" {
 				log.WarningLog.Printf("refusing a create request for %q: %s", e.Request.Title, reason)
-				reject(reason, nil)
+				reject(reason)
+				refused++
 				continue
 			}
 			// The file deliberately stays until the start lands and the row is
@@ -190,18 +227,26 @@ func (m *home) drainCreateRequests() tea.Cmd {
 	// the create. Both events still reach the log and the callers' receipts.
 	switch {
 	case len(cmds) > 0:
-		// A tick that both created and refused reports both: flashNotice writes one
-		// notice, so naming only the create would silently drop the half the person at
-		// the TUI can actually act on.
-		text := "created a session from atrium new"
-		if refused > 0 {
-			text = fmt.Sprintf("%s (%d other request%s refused)", text, refused, plural(refused))
-		}
-		cmds = append(cmds, m.flashNotice(text, ui.NoticeInfo))
+		// showMenuNotice, not flashNotice: behind an overlay it shows nothing rather than
+		// taking the errBox row and reflowing the frame under it (see the header). The
+		// row appearing in the list is the evidence for this half; nothing is lost by
+		// staying quiet while a modal is up. Its nil is fine — cmds is non-empty.
+		//
+		// No "and N refused" clause either, because a tick cannot do both: reaching
+		// either outcome costs a gate evaluation, and createGateBudget allows one per
+		// tick, so refused is necessarily 0 here. A disposal can share the tick, but that
+		// is deliberately not an event this notice reports (see below).
+		cmds = append(cmds, m.showMenuNotice("created a session from atrium new", ui.NoticeInfo))
 	case refused > 0:
 		// A refusal reaches the person who ran `atrium new` as a receipt, but the
 		// person at the TUI is the one who can fix a cap or a taken title, and to them
 		// a silent tick is indistinguishable from no request at all.
+		//
+		// That argument is what scopes this to gate refusals. A disposal — an expired
+		// or undecodable file — is nobody's to fix, least of all from here, so counting
+		// one would paint a red error twice a second for the whole time a cron backlog
+		// takes to clear at createDisposalBudget a tick, each one overwriting whatever
+		// drainOutbox flashed. Disposals get their log line and their receipt instead.
 		return m.flashNotice(fmt.Sprintf("refused %d create request%s from atrium new", refused, plural(refused)),
 			ui.NoticeError)
 	default:
@@ -294,6 +339,18 @@ func (m *home) executeCreateRequest(r outbox.Request) (*session.Instance, tea.Cm
 		return nil, nil, fmt.Sprintf("%q is not a directory", path)
 	}
 
+	// A base branch for a target with no branches is a contradiction, and a silent one:
+	// startNewSession would drop it, Start would base on nothing, and --wait would print
+	// `created "x"` with no branch clause — which reads exactly like a legitimate direct
+	// session. Refusing gives the caller the one signal that separates them, and it is
+	// also the only signal available when `direct` is wrong: targetValidity infers it
+	// from git.IsGitRepo, which answers false for a transient failure (a fork failure
+	// under load, a cold-repo timeout, git off PATH) just as it does for "not a repo".
+	if direct && r.Branch != "" {
+		return nil, nil, fmt.Sprintf(
+			"%q has no git repository to take branch %q from", path, r.Branch)
+	}
+
 	// The group is derived here rather than read from m.newSessionGroup, which is
 	// create-form state this path must not touch — see titleConflictIn.
 	group := git.RepoGroupKey(m.ctx, path)
@@ -349,7 +406,16 @@ func (m *home) executeCreateRequest(r outbox.Request) (*session.Instance, tea.Cm
 	// pool, which is the only account choice this path can make.
 	inst, cmd, err := m.startNewSession(r.Title, path, direct, false, program, r.Branch, r.Prompt, sel, spawnBackground, nil)
 	if err != nil {
-		return nil, nil, err.Error()
+		// Never an empty reason. "" is this function's success sentinel, so an error
+		// whose Error() is empty would be read as a start that worked, and the caller
+		// would hold a nil instance under a key no instanceStartedMsg can ever settle —
+		// spending the one start budget for the life of the process, silently, with no
+		// notice and no receipt. Every error reachable today has a message; the sentinel
+		// should not depend on that staying true.
+		if reason := err.Error(); reason != "" {
+			return nil, nil, reason
+		}
+		return nil, nil, "the session could not be started"
 	}
 	return inst, cmd, ""
 }
@@ -388,10 +454,20 @@ func (m *home) holdCreateRequest(path string, inst *session.Instance) {
 // recorded. --wait reads the branch out of state.json the moment the file goes away,
 // so unlinking first would also race it into reporting a session with no branch.
 //
-// The remaining window is a crash between the two, which self-corrects rather than
-// duplicating: the next launch re-reads the file, and either the session persisted —
-// so the title collides and the request is refused — or it did not, and re-creating it
-// is exactly right. An orderly shutdown does not go through here at all, which is why
+// The remaining window is a crash between the two. It does not duplicate, but neither
+// is it two clean cases. The next launch re-reads the file and lands in one of three:
+// the session persisted, so the title collides and the request is refused; nothing was
+// built yet, and re-creating it is exactly right; or — the middle — Worktree.Setup got
+// as far as creating the branch and persistInstances never ran. State.json has no row,
+// so titleConflictIn sees no conflict, but branchSlugConflict's LocalBranchExists does,
+// and the request is refused with "branch already exists" on that launch and every one
+// after it, while the orphaned branch and worktree belong to no row that `atrium ls`
+// can show. The caller does hear it — the refusal writes its receipt like any other —
+// but the remedy is to delete the branch by hand. Closing it properly means the link
+// between a request and its session outliving the process, which createsInFlight (a
+// map, in memory) deliberately does not: see atrium#716.
+//
+// An orderly shutdown does not go through here at all, which is why
 // reconcileInFlightStarts settles what it adopts.
 func (m *home) settleCreateRequest(inst *session.Instance, startErr error) {
 	if startErr != nil {

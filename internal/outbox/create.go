@@ -24,7 +24,10 @@ package outbox
 //   - So the versioning story is: neither type ever needs the other's version.
 //     createVersion moves only when a Request's shape changes, and a Message
 //     stays at 1 regardless. Nothing here relies on expired's zero-timestamp
-//     branch, which readCreate's version gate makes unreachable anyway.
+//     branch — and note that the version gate is not what keeps it out of reach:
+//     it screens a *different* version, so a version-1 record that simply omits
+//     created_at passes it untouched. What keeps that branch off this spool's
+//     live path is readCreate's own created_at check.
 //
 // What it shares with the prompt spool is everything that is not the payload:
 // writeRecord's naming, isMessageFile's screening, and the receipt trio, whose
@@ -117,9 +120,14 @@ func CreateDir() (string, error) {
 // WriteCreate commits r to the create spool and returns the path it was written
 // to. It stamps Version and, unless the caller supplied one, CreatedAt.
 func WriteCreate(r Request) (string, error) {
-	if strings.TrimSpace(r.Title) == "" || r.Path == "" {
-		return "", errors.New("outbox: a create request needs a title and a path")
+	if strings.TrimSpace(r.Title) == "" || !filepath.IsAbs(r.Path) {
+		return "", errors.New("outbox: a create request needs a title and an absolute path")
 	}
+	// Normalised on the way out, and again on the way back in: a padded title is not
+	// blank, so it passes every check and then reaches tmux.QualifiedSessionName and
+	// git.BranchNameForSession with its padding intact — producing a session no
+	// `atrium new` invocation can address, because the CLI trims what it is given.
+	r.Title = strings.TrimSpace(r.Title)
 	if r.CreatedAt.IsZero() {
 		r.CreatedAt = time.Now()
 	}
@@ -174,17 +182,38 @@ func readCreate(path string) CreateEntry {
 			"create request %s has version %d, this atrium understands %d",
 			filepath.Base(path), r.Version, createVersion)}
 	}
-	// The same pair WriteCreate refuses to write, refused on the way back in. Nothing
-	// this package produces can fail it; a file written by hand can, and a Request that
-	// gets past here is executed exactly like any other. A blank title is not caught
-	// downstream — titleConflictIn deliberately returns "no conflict" for one, so the
-	// drain would build a session whose row renders empty — and a blank path is worse
-	// than blank: filepath.Abs("") is the *draining TUI's* working directory with a nil
-	// error, so the request would create a worktree wherever atrium happened to be
-	// launched from.
-	if strings.TrimSpace(r.Title) == "" || r.Path == "" {
+	// What WriteCreate refuses to write, refused on the way back in. Nothing this
+	// package produces can fail these; a file written by hand can, and a Request that
+	// gets past here is executed exactly like any other.
+	//
+	// A blank title is not caught downstream — titleConflictIn deliberately returns "no
+	// conflict" for one, so the drain would build a session whose row renders empty.
+	//
+	// The path is required to be absolute, not merely non-empty, because the hazard is
+	// not blankness: filepath.Abs resolves ANY relative path against the *draining
+	// TUI's* working directory, with a nil error. `""` yields that directory itself and
+	// `"web"` a child of it, and both mean the same thing — a worktree built wherever
+	// atrium happened to be launched from rather than where the writer meant. The
+	// producer always spools an absolute path (resolveNewTarget calls filepath.Abs), so
+	// nothing legitimate is turned away.
+	//
+	// A missing created_at is rejected rather than tolerated. WriteCreate stamps it, so
+	// its absence means a hand-written file — and expired() treats a zero time as never
+	// expired, deliberately, which would make such a record immortal AND executable: it
+	// would survive every TTL sweep and be built by whichever TUI started next, weeks
+	// later, against a branch point long moved on. The version gate does not stand in
+	// for this one; it screens a different version, not a missing field at this one.
+	r.Title = strings.TrimSpace(r.Title) // see WriteCreate: padding survives into the branch name
+	switch {
+	case r.Title == "":
 		return CreateEntry{Path: path, Err: fmt.Errorf(
-			"create request %s has no title or no path", filepath.Base(path))}
+			"create request %s has no title", filepath.Base(path))}
+	case !filepath.IsAbs(r.Path):
+		return CreateEntry{Path: path, Err: fmt.Errorf(
+			"create request %s has no absolute path (%q)", filepath.Base(path), r.Path)}
+	case r.CreatedAt.IsZero():
+		return CreateEntry{Path: path, Err: fmt.Errorf(
+			"create request %s has no created_at, so its age cannot be judged", filepath.Base(path))}
 	}
 	return CreateEntry{Path: path, Request: r}
 }

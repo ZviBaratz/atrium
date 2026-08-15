@@ -441,15 +441,19 @@ func TestNewWaitClearsConsumedReceipt(t *testing.T) {
 	assert.Empty(t, left)
 }
 
-// TestNewWaitTimesOut says the request is still queued, because it is: the
-// timeout is this process giving up, not Atrium refusing.
+// TestNewWaitTimesOut says the request is still in the outbox, because it is: the
+// timeout is this process giving up, not Atrium refusing. What it must not say is
+// which of the two states the record is in — untouched, or held open for the whole of
+// a Start already under way — because from here those are the same file, nor that a
+// relaunch is what picks it up, because an attached TUI drains it on detach.
 func TestNewWaitTimesOut(t *testing.T) {
 	sandboxDataDir(t)
 	_, _, err := newSession(t, newRequest{
 		title: "fix-auth", path: tempRepo(t), wait: 150 * time.Millisecond,
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "still queued")
+	assert.Contains(t, err.Error(), "still in the outbox")
+	assert.Contains(t, err.Error(), "on detach", "an attached TUI is the case the old wording misdirected")
 	assert.Len(t, spooledCreates(t), 1, "and it really is still there")
 }
 
@@ -559,7 +563,7 @@ func TestNewCreatesNoConfigFile(t *testing.T) {
 func TestNewCommandFlagsAreAllWired(t *testing.T) {
 	sandboxDataDir(t)
 	dir := tempRepo(t)
-	t.Cleanup(resetNewFlags)
+	restoreRootCmd(t)
 
 	cmd := rootCmd
 	cmd.SetOut(io.Discard)
@@ -585,7 +589,7 @@ func TestNewCommandFlagsAreAllWired(t *testing.T) {
 // together: --profile is mutually exclusive with --program, and --wait would block.
 func TestNewCommandProfileFlagIsWired(t *testing.T) {
 	sandboxDataDir(t)
-	t.Cleanup(resetNewFlags)
+	restoreRootCmd(t)
 
 	cmd := rootCmd
 	cmd.SetOut(io.Discard)
@@ -611,6 +615,22 @@ func resetNewFlags() {
 	newPathFlag, newProgramFlag, newProfileFlag, newBranchFlag = "", "", "", ""
 	newForceFlag = false
 	newWaitFlag = 0
+}
+
+// restoreRootCmd undoes what driving rootCmd through Execute leaves on it. The flag
+// variables above are only half the global state: SetArgs and SetOut/SetErr write to
+// the shared command object itself and are not cleared by a later Execute, so without
+// this the next test in this package to call rootCmd.Execute() — for any subcommand —
+// silently runs the argv this one left behind, with its output discarded. Latent
+// today, and exactly the kind of thing CI's -shuffle turns into a mystery.
+func restoreRootCmd(t *testing.T) {
+	t.Helper()
+	t.Cleanup(func() {
+		resetNewFlags()
+		rootCmd.SetArgs(nil)
+		rootCmd.SetOut(nil)
+		rootCmd.SetErr(nil)
+	})
 }
 
 // TestNewWaitDoesNotReadARefusalAsSuccess pins awaitSpool's sampling ORDER, which is
@@ -663,4 +683,35 @@ func TestNewProfileResolvesWithNoConfigFile(t *testing.T) {
 	entries := spooledCreates(t)
 	require.Len(t, entries, 1)
 	assert.Equal(t, "codex", entries[0].Request.Program)
+}
+
+// TestNewWaitRefusesToClaimASessionThatWasNeverRecorded closes the hole that made the
+// record's absence sufficient evidence. outbox.Reject writes the receipt first but
+// unlinks the record even when that write fails — and the conditions that break the
+// write (a full or read-only data dir) are exactly the ones that make it necessary. So
+// "record gone, no receipt" is reachable with no session behind it, and reading it as
+// success printed `created "fix-auth"` and exited 0 for a CI job to run against a
+// worktree that does not exist. Simulated here by removing the record without writing
+// either a receipt or a row, which is precisely the state that failure leaves on disk.
+func TestNewWaitRefusesToClaimASessionThatWasNeverRecorded(t *testing.T) {
+	sandboxDataDir(t)
+	dir := tempRepo(t)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 200 {
+			if entries, err := outbox.ListCreates(); err == nil && len(entries) == 1 {
+				_ = outbox.Remove(entries[0].Path) // no receipt, and no session recorded
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+
+	stdout, _, err := newSession(t, newRequest{title: "fix-auth", path: dir, wait: 5 * time.Second})
+	<-done
+	require.Error(t, err, "a vanished record with nothing behind it is not a creation")
+	assert.Contains(t, err.Error(), "recorded no session")
+	assert.NotContains(t, stdout, "created", "and nothing may be printed as if it were")
 }

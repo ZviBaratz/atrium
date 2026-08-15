@@ -127,7 +127,7 @@ Global flags:
 
 `ls`, `peek`, `send` and `new` are the headless surface: four primitives — list
 the fleet, read a screen, send a message, create a session — that let a script or
-an orchestrator agent drive Atrium without a TTY. None of them start the TUI, take
+an orchestrator agent drive Atrium without a TTY. None of them start the TUI, hold
 its lock, or need a terminal.
 
 **`atrium ls`** prints a table; `--json` emits an array for `jq`. It reads stored
@@ -209,8 +209,15 @@ a CI job, or an agent working through a queue of issues.
 atrium new fix-auth                              # in the current repo
 atrium new fix-auth "start on the parser"        # with a first prompt
 atrium new fix-auth --path ~/src/web --profile codex
+atrium new fix-auth --branch release/2.0         # base it on an existing branch
+atrium new fix-auth --program codex              # one agent, without a profile
 atrium new fix-auth --wait 60s                   # block, then print the branch
 ```
+
+`--program` and `--profile` are mutually exclusive, and with neither the session
+runs whatever the TUI's own new-session key would run. `--branch` chooses the
+*start point* only: the session still gets its own branch, derived from the title
+like any other.
 
 It is a producer on the same terms as `send`, and for the same reason: the TUI is
 the only thing that creates sessions, so `new` spools a request to
@@ -245,8 +252,9 @@ None of the four holds Atrium's lock or writes `state.json`, so running them on 
 loop alongside a live Atrium is safe. `ls` and `peek` only read it; `send` and
 `new` add one file each — the request they spool — and, when they are not blocking
 on `--wait`, take `tui.lock` and release it again to work out whether a TUI is
-there to warn you about. All four append to the shared, rotating `atrium.log` in
-the data directory, as every Atrium command does.
+there to warn you about — briefly and non-blockingly, so a held lock changes the
+warning rather than the outcome. All four append to the shared, rotating
+`atrium.log` in the data directory.
 
 A queued request is state, so `atrium reset` discards both spools along with
 everything else it wipes. Without that, a create request made before the reset
