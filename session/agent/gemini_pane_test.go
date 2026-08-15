@@ -250,8 +250,11 @@ func TestGeminiTrustGateDetectedAtEveryDrivenWidth(t *testing.T) {
 
 // THE #713 guard: the obvious fix is wrong, and it is wrong in a way a width-80 fixture
 // cannot show. Substituting the CURRENT headline — the literal a bundle grep hands you, and
-// the one the issue proposed before the ladder was driven — passes at 80 and fails at every
-// narrower rung.
+// the one #713 had to rule out — passes at 80 and fails at every rung where it wraps.
+//
+// The name says "once it wraps" rather than a width because that is what the mechanism is
+// keyed to, and because the boundary between 80 and 40 has not been driven: the rungs below
+// prove the wrapped case, not every width under 80.
 //
 // The sweep over GateWindow is the load-bearing half, and it is what makes this different
 // from codex's TestCodexTrustGateHeadlineFallsOutsideTheDefaultWindowAtWidth20. Codex's
@@ -260,7 +263,7 @@ func TestGeminiTrustGateDetectedAtEveryDrivenWidth(t *testing.T) {
 // flattenChrome's whitespace join cannot repair it, so no budget helps and GateWindow is not
 // an alternative fix here at all. If this ever starts passing at 40, gemini stopped drawing
 // the box or stopped wrapping, and the Gates comment needs re-measuring.
-func TestGeminiTrustGateHeadlineIsUnreachableBelowWidth80(t *testing.T) {
+func TestGeminiTrustGateHeadlineIsUnreachableOnceItWraps(t *testing.T) {
 	const headline = "Do you trust the files in this folder"
 
 	fires := func(pane string, window int) bool {
@@ -302,8 +305,8 @@ func TestGeminiTrustGateHeadlineIsUnreachableBelowWidth80(t *testing.T) {
 // cannot happen at this width. What the user loses is the "waiting on setup screen" hint and
 // gains a false completion ding, which is the #713 bug surviving at one width.
 //
-// Asserted rung by rung against BOTH option-row literals so a future edit that "fixes" this
-// by shortening one of them has to come here and say so.
+// Asserted against BOTH option-row literals, not just the gate's verdict, so a future edit
+// that "fixes" this by shortening one of them has to come here and say so.
 func TestGeminiTrustGateOptionRowsAreTruncatedAtWidth20(t *testing.T) {
 	_, up := gemini.GateUp(geminiTrustGatePane20)
 	require.False(t, up,

@@ -889,7 +889,7 @@ var gemini = &Adapter{
 		// than any of those panes has, so effectively the whole pane. Codex wraps without a
 		// box and its widened GateWindow therefore works; the same remedy buys gemini
 		// nothing, which corrects #713's own guess that widening "would also work at width
-		// 40". TestGeminiTrustGateHeadlineIsUnreachableBelowWidth80 pins it.
+		// 40". TestGeminiTrustGateHeadlineIsUnreachableOnceItWraps pins it.
 		//
 		// Both entries are listed because a gate's Contains is an alternation and both rows
 		// are on screen at every width the gate is proven at, so either being reworded
