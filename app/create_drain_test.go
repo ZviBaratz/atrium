@@ -735,3 +735,25 @@ func TestReconcileRejectsATornDownCreateRequest(t *testing.T) {
 	require.True(t, rejected, "an abandoned start owes its caller an answer")
 	assert.Contains(t, reason, "atrium exited before it finished starting")
 }
+
+// TestCreateDrainHoldsWhileAQuitIsPending: a deferred quit completes only when
+// nothing is Loading, so every session this drain starts postpones it by another
+// Start. Before #703 that was bounded by what the user had submitted themselves —
+// Loading had one producer, a keypress. A spool is bounded by nothing, so a queue of
+// twenty would keep building worktrees well after the user pressed q, re-arming the
+// "waiting for startup" notice at each completion.
+func TestCreateDrainHoldsWhileAQuitIsPending(t *testing.T) {
+	h := drainHome(t)
+	h.quitRequested = true
+	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: t.TempDir()})
+
+	assert.Nil(t, h.drainCreateRequests(), "a pending quit holds the drain")
+	assert.Zero(t, h.list.NumInstances(), "nothing may be created after the user asked to leave")
+	assert.FileExists(t, path, "and the request waits rather than being refused")
+
+	// The control: clear the quit and the same request creates, so the hold above is
+	// the quit and not some other refusal.
+	h.quitRequested = false
+	require.NotNil(t, h.drainCreateRequests())
+	assert.NotNil(t, titled(h, "fix-auth"))
+}

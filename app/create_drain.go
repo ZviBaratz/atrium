@@ -71,10 +71,10 @@ const createDisposalBudget = 50
 // or repoints the preview for a spawnBackground create, so there is nothing left for a
 // state to be surprised by.
 //
-// The one thing a state does gate is an *accepted* confirm, which is why a staged
-// spawn plan holds the drain — see stagedSpawnPlan.
+// Two things do hold it, neither of them a state: a staged spawn plan and a pending
+// quit. See createDrainHeld.
 func (m *home) drainCreateRequests() tea.Cmd {
-	if m.stagedSpawnPlan() {
+	if m.createDrainHeld() {
 		return nil
 	}
 
@@ -177,6 +177,26 @@ func (m *home) drainCreateRequests() tea.Cmd {
 	}
 	return tea.Batch(cmds...)
 }
+
+// createDrainHeld reports whether this tick must not create. Both cases are keyed on
+// what is actually true of the model rather than on a UI state — a state gate is what
+// deadlocked this drain behind the welcome modal.
+func (m *home) createDrainHeld() bool {
+	return m.stagedSpawnPlan() || m.quitPending()
+}
+
+// quitPending reports whether the user has asked to quit and is waiting on a start.
+//
+// A deferred quit completes when nothing is Loading (resumeQuitAfterStart), so every
+// session this drain starts postpones it by another Start. Before #703 that was
+// bounded by what the user had submitted themselves; a spool is not bounded by
+// anything, so a queue of twenty would keep building worktrees for a while after they
+// pressed q — and each completion would re-arm the "waiting for startup" notice.
+//
+// Holding costs the requests nothing: they stay queued, inside the same TTL, and are
+// created by the next Atrium — which is exactly what `atrium new` promises when no TUI
+// is running at all.
+func (m *home) quitPending() bool { return m.quitRequested }
 
 // stagedSpawnPlan reports whether a confirmation dialog is holding a spawn plan that
 // has already passed its title and cap checks.
