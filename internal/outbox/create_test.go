@@ -267,8 +267,10 @@ func TestWriteCreateLeavesNoTempFile(t *testing.T) {
 	assert.Empty(t, left)
 }
 
-// TestCreateDirIsUnderTheOutbox pins the on-disk layout the two-spool argument
-// rests on: nested, so listFiles' IsDir skip is what separates them.
+// TestCreateDirIsUnderTheOutbox pins the on-disk layout the two-spool argument rests
+// on: the create spool is nested inside the prompt one, which is why listFiles has to
+// reject that entry at all. Which of its two guards does the rejecting is not asserted
+// here — see TestListIgnoresTheCreateSubdirectory, which pins the property.
 func TestCreateDirIsUnderTheOutbox(t *testing.T) {
 	sandbox(t)
 	outboxDir, err := Dir()
@@ -284,4 +286,64 @@ func writeRawCreate(t *testing.T, name, content string) {
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644))
+}
+
+// TestClearRemovesBothSpools: `atrium reset` wipes Atrium's state, and a queued
+// create request is the one thing left that could rebuild some of it — with no
+// session left to collide with, every gate it meets on the next launch passes.
+func TestClearRemovesBothSpools(t *testing.T) {
+	sandbox(t)
+	msg, err := Write(Message{Title: "s", Path: "/repo", Text: "hi"})
+	require.NoError(t, err)
+	create, err := WriteCreate(req("t", "/repo"))
+	require.NoError(t, err)
+	require.NoError(t, Reject(create, "some reason"))
+	held, err := WriteCreate(req("held", "/repo"))
+	require.NoError(t, err)
+
+	removed, err := Clear()
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, removed, "the two live records are counted; a receipt is not a record")
+	assert.NoFileExists(t, msg)
+	assert.NoFileExists(t, held)
+	_, rejected := Rejection(create)
+	assert.False(t, rejected, "receipts go too, or reset leaves a refusal for a request it deleted")
+
+	entries, err := ListCreates()
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+	msgs, err := List()
+	require.NoError(t, err)
+	assert.Empty(t, msgs)
+}
+
+// TestClearLeavesForeignFilesAlone: the spool directory also holds WriteFileAtomic's
+// in-flight temp files, and a reset that deleted one would break a concurrent write it
+// has no business touching. Same rule as List's — only our own name format.
+func TestClearLeavesForeignFilesAlone(t *testing.T) {
+	sandbox(t)
+	dir, err := CreateDir()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	foreign := filepath.Join(dir, "notes.txt")
+	require.NoError(t, os.WriteFile(foreign, []byte("x"), 0o644))
+	tmp := filepath.Join(dir, ".1234567890123456789-abc.json.tmp-9")
+	require.NoError(t, os.WriteFile(tmp, []byte("x"), 0o644))
+
+	removed, err := Clear()
+	require.NoError(t, err)
+
+	assert.Zero(t, removed)
+	assert.FileExists(t, foreign)
+	assert.FileExists(t, tmp)
+}
+
+// TestClearOnAnAbsentSpoolIsNotAnError: reset runs on installs that never spooled
+// anything, which is most of them.
+func TestClearOnAnAbsentSpoolIsNotAnError(t *testing.T) {
+	sandbox(t)
+	removed, err := Clear()
+	require.NoError(t, err)
+	assert.Zero(t, removed)
 }

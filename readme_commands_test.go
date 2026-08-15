@@ -100,10 +100,11 @@ func TestEveryCommandHasAShortDescription(t *testing.T) {
 // discovers *while* mid-session — a lock would make it refuse in precisely the
 // situation it was written for.
 //
-// `new` is the one whose lock would be most tempting to take, since it is the only
-// headless command whose effect is a *write*. It must not: the write happens in the
-// TUI that already holds the lock, and taking it here would make `atrium new` work
-// only when there is nothing to execute the request (#703).
+// `new` is the one whose lock would be most tempting to take, since its effect is the
+// heaviest — a worktree, a branch and a running agent, where `send`'s is a queued
+// prompt and `reap`'s a dead tmux server. It must not: none of that happens here. The
+// work happens in the TUI that already holds the lock, so taking it would make `atrium
+// new` work only when there is nothing to execute the request (#703).
 func TestHeadlessCommandsTakeNoTUILock(t *testing.T) {
 	sandboxDataDir(t)
 

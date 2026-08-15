@@ -1385,10 +1385,10 @@ func TestShouldAutoOpen(t *testing.T) {
 	}
 
 	t.Run("flag off, no prompt", func(t *testing.T) {
-		assert.False(t, newHomeWithAutoAttach(false).shouldAutoOpen(newInst(""), false, false))
+		assert.False(t, newHomeWithAutoAttach(false).shouldAutoOpen(newInst(""), false, spawnInteractive))
 	})
 	t.Run("flag on, prompt set", func(t *testing.T) {
-		assert.False(t, newHomeWithAutoAttach(true).shouldAutoOpen(newInst("do a thing"), true, false))
+		assert.False(t, newHomeWithAutoAttach(true).shouldAutoOpen(newInst("do a thing"), true, spawnInteractive))
 	})
 	t.Run("flag on, prompt delivered before the parked start message", func(t *testing.T) {
 		// The keeper can deliver (and clear) the prompt while instanceStartedMsg is
@@ -1396,18 +1396,23 @@ func TestShouldAutoOpen(t *testing.T) {
 		// suppression so detaching from another session doesn't force-attach this one.
 		inst := newInst("do a thing")
 		inst.ClearPrompt("do a thing")
-		assert.False(t, newHomeWithAutoAttach(true).shouldAutoOpen(inst, true, false))
+		assert.False(t, newHomeWithAutoAttach(true).shouldAutoOpen(inst, true, spawnInteractive))
 	})
 	t.Run("flag on, no prompt, but not started", func(t *testing.T) {
 		// The most eligible case by policy, yet still false because the session is not
 		// running — the Started/TmuxAlive guard holds.
-		assert.False(t, newHomeWithAutoAttach(true).shouldAutoOpen(newInst(""), false, false))
+		assert.False(t, newHomeWithAutoAttach(true).shouldAutoOpen(newInst(""), false, spawnInteractive))
 	})
 }
 
 // TestAutoAttachEligible covers the pure auto-attach policy (independent of session
-// liveness), including the #387 rule that a fan-out variant never auto-attaches — a
-// bake-off must land on the list, not chain the user through every spawned session.
+// liveness) across every spawnOrigin: the #387 rule that a fan-out variant never
+// auto-attaches (a bake-off must land on the list, not chain the user through every
+// spawned session), and the #703 rule that a background create never does either.
+//
+// The table is over all three origins rather than the two that were bools, because the
+// policy is now a switch on a type whose values a future caller can add to — an origin
+// with no row here is a session that might attach without anyone deciding it should.
 func TestAutoAttachEligible(t *testing.T) {
 	on := func() *home {
 		cfg := config.DefaultConfig()
@@ -1415,10 +1420,34 @@ func TestAutoAttachEligible(t *testing.T) {
 		cfg.AutoAttach = &enabled
 		return &home{ctx: context.Background(), appConfig: cfg}
 	}
-	assert.True(t, on().autoAttachEligible(false, false), "flag on, no prompt, single create → eligible")
-	assert.False(t, on().autoAttachEligible(true, false), "a boot prompt suppresses auto-attach")
-	assert.False(t, on().autoAttachEligible(false, true), "a fan-out variant never auto-attaches")
-	assert.False(t, on().autoAttachEligible(true, true), "prompt and batch together stay suppressed")
+	for _, tc := range []struct {
+		name      string
+		hadPrompt bool
+		origin    spawnOrigin
+		want      bool
+	}{
+		{"interactive, no prompt", false, spawnInteractive, true},
+		{"interactive, boot prompt", true, spawnInteractive, false},
+		{"fan-out variant", false, spawnVariant, false},
+		{"fan-out variant with a prompt", true, spawnVariant, false},
+		{"background create", false, spawnBackground, false},
+		{"background create with a prompt", true, spawnBackground, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, on().autoAttachEligible(tc.hadPrompt, tc.origin))
+		})
+	}
+}
+
+// TestAutoAttachOriginsAreExhaustive is the guard behind that table: it fails when a
+// spawnOrigin is added without a decision about auto-attach being recorded above.
+//
+// The count is the datum, per CLAUDE.md's prose-says-why rule — the origins are a
+// contiguous iota, so the highest one names how many there are, and the table above
+// covers each of them.
+func TestAutoAttachOriginsAreExhaustive(t *testing.T) {
+	assert.Equal(t, spawnBackground, spawnOrigin(2),
+		"spawnOrigin gained a value; give it a row in TestAutoAttachEligible and update this bound")
 }
 
 // The off-cadence poll handler applies the polled state to the instance immediately, and

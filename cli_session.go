@@ -83,6 +83,39 @@ func readStateFile() ([]byte, error) {
 	return data, nil
 }
 
+// loadStoredConfig reads config.json the same way loadStoredInstances reads
+// state.json: directly, creating and touching nothing.
+//
+// config.LoadConfig would be the obvious call and is the wrong one here, for the
+// first of the reasons above — loadJSONFile sweeps "<file>.tmp-*" before reading, and
+// that glob is precisely the name writeFileAtomic gives an in-flight write. A TUI
+// saving config.json from the settings panel at the wrong moment loses the save. It
+// also seeds a default config.json when none exists, which is a write from a command
+// whose whole contract is that it performs none.
+//
+// What it must NOT do is improve on LoadConfig. loadJSONFile decodes into a zero
+// Config rather than onto the defaults, so a config.json that omits branch_prefix
+// yields "" and not a username-derived prefix. Decoding onto DefaultConfig here would
+// read better and be worse: this side would compute a prefix the draining TUI does not
+// use, and the title pre-check would answer about a branch nothing will create. So a
+// present file is decoded exactly as LoadConfig decodes it, defaults only for an
+// absent or unparseable one — the difference being that neither is written back.
+func loadStoredConfig() *config.Config {
+	dir, err := config.GetConfigDir()
+	if err != nil {
+		return config.DefaultConfig()
+	}
+	data, err := os.ReadFile(filepath.Join(dir, config.ConfigFileName))
+	if err != nil {
+		return config.DefaultConfig()
+	}
+	var cfg config.Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return config.DefaultConfig()
+	}
+	return &cfg
+}
+
 // loadStoredAccountKeys reads the account/pool-keyed slice of state.json for
 // doctor's orphaned-key section: the cluster order, the rate-limit flags and the
 // rotation cursors. Read-only, like every other headless state read (doctor can run

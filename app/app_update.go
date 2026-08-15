@@ -4,6 +4,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -788,8 +789,9 @@ func (m *home) resumeQuitAfterStart() (tea.Cmd, bool) {
 
 // anyLoading reports whether any session is still in its Start phase. Such a
 // session is on the list but not yet persisted, so quitting must wait for it (see
-// handleQuit). session.Loading has a single producer (createSessionFromForm) and
-// a single completion signal (instanceStartedMsg), so this covers the whole set.
+// handleQuit). Every producer of session.Loading goes through startNewSession — the
+// create form, smart auto-dispatch and the `atrium new` drain — and all of them
+// complete through the one signal (instanceStartedMsg), so this covers the whole set.
 func (m *home) anyLoading() bool {
 	for _, inst := range m.list.GetInstances() {
 		if inst.GetStatus() == session.Loading {
@@ -886,7 +888,12 @@ func (m *home) reconcileInFlightStarts(ctx context.Context) {
 	}
 
 	signalShutdown := ctx.Err() != nil
-	adopted := false
+	// This loop is the other completion path for a session an `atrium new` request is
+	// still holding open — and, unlike the crash window handleInstanceStarted leaves,
+	// an ordinary SIGTERM reaches it every time. Every branch below therefore settles:
+	// unsettled, the request file survives, the next launch re-reads it, and the
+	// caller is handed "already used" for a session that exists and is running.
+	var adopted []*session.Instance
 	for _, inst := range m.list.GetInstances() {
 		if inst.GetStatus() != session.Loading {
 			continue
@@ -899,7 +906,9 @@ func (m *home) reconcileInFlightStarts(ctx context.Context) {
 			if m.autoYes {
 				inst.AutoYes = true
 			}
-			adopted = true
+			// Settled below, after the persist, for handleInstanceStarted's reason:
+			// the row must be durable before the file that asked for it goes away.
+			adopted = append(adopted, inst)
 		case signalShutdown:
 			// Partial/failed under the cancelled ctx: its own deferred Kill ran on
 			// the dead ctx and couldn't clean up. Rebind to a live ctx and retry.
@@ -907,18 +916,27 @@ func (m *home) reconcileInFlightStarts(ctx context.Context) {
 			if err := inst.Kill(); err != nil {
 				log.WarningLog.Printf("shutdown: teardown of in-flight session %q: %v", inst.Title, err)
 			}
+			m.settleCreateRequest(inst, errors.New("atrium exited before it finished starting"))
 		default:
 			// Ctx still live: the force-quit abandon, or a rare non-signal event-loop
 			// error from p.Run(). Kill's teardown works as-is, no rebind needed.
 			if err := inst.Kill(); err != nil {
 				log.WarningLog.Printf("exit: teardown of in-flight session %q: %v", inst.Title, err)
 			}
+			m.settleCreateRequest(inst, errors.New("atrium exited before it finished starting"))
 		}
 	}
 
-	if adopted {
+	if len(adopted) > 0 {
 		if err := m.persistInstances(); err != nil {
 			log.WarningLog.Printf("shutdown: failed to persist adopted session(s): %v", err)
+			for _, inst := range adopted {
+				m.settleCreateRequest(inst, err)
+			}
+			return
+		}
+		for _, inst := range adopted {
+			m.settleCreateRequest(inst, nil)
 		}
 	}
 }

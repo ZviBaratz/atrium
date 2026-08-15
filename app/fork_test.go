@@ -356,7 +356,7 @@ func TestForkDoesNotAlsoQueueThePrompt(t *testing.T) {
 
 			// The returned cmd is deliberately not run: it is the background Start, and
 			// what is under test is what startNewSession put on the instance before it.
-			_, err := h.startNewSession("queued", t.TempDir(), true, false, "echo", "", prompt, nil, false, tc.fork)
+			_, err := h.startNewSession("queued", t.TempDir(), true, false, "echo", "", prompt, nil, spawnInteractive, tc.fork)
 			require.NoError(t, err)
 			require.Equal(t, before+1, h.list.NumInstances(), "the session was not created")
 

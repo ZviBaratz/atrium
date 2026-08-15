@@ -1,14 +1,19 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/internal/outbox"
+	"github.com/ZviBaratz/atrium/internal/testutil"
 	"github.com/ZviBaratz/atrium/session"
 
 	"github.com/stretchr/testify/assert"
@@ -28,6 +33,18 @@ func createSpoolCount(t *testing.T) int {
 	entries, err := outbox.ListCreates()
 	require.NoError(t, err)
 	return len(entries)
+}
+
+// refuseDrain runs the drain and asserts it refused rather than created. Both halves
+// matter: the caller learns why from a rejection receipt (asserted per-test below),
+// and the person at the TUI — the only one who can raise a cap or free a title — from
+// a notice. A tick that refuses in silence is indistinguishable to them from no
+// request at all.
+func refuseDrain(t *testing.T, h *home) {
+	t.Helper()
+	require.NotNil(t, h.drainCreateRequests(), "a refusal is an outcome, not a no-op")
+	assert.Contains(t, h.menu.NoticeText(), "refused",
+		"a refused create request must say so at the TUI, not only in the receipt")
 }
 
 // titled returns the instance with this title, or nil.
@@ -152,19 +169,14 @@ func TestCreateDrainSkipsRequestAlreadyInFlight(t *testing.T) {
 // feature exists to remove, and no unit test saw it because they all set the state
 // themselves.
 //
-// stateWelcome is the case that shipped; the rest are here because the failure was
-// "a state nobody thought about", so enumerating the ones an unattended TUI can
-// realistically sit in is the guard, not one example of it.
+// stateWelcome is the case that shipped, but the failure was "a state nobody thought
+// about", so this walks the enum instead of naming the states that came to mind. An
+// earlier version listed six of the then-21 by hand and omitted stateScreensaver —
+// literally the state an unattended TUI sits in. numStates is the bound, so a state
+// added later is covered without anyone remembering to add it here.
 func TestCreateDrainRunsInEveryUIState(t *testing.T) {
-	for name, st := range map[string]state{
-		"welcome":  stateWelcome,
-		"help":     stateHelp,
-		"confirm":  stateConfirm,
-		"settings": stateSettings,
-		"prompt":   statePrompt,
-		"visual":   stateVisual,
-	} {
-		t.Run(name, func(t *testing.T) {
+	for st := stateDefault; st < numStates; st++ {
+		t.Run(strconv.Itoa(int(st)), func(t *testing.T) {
 			h := drainHome(t)
 			h.state = st
 
@@ -175,11 +187,42 @@ func TestCreateDrainRunsInEveryUIState(t *testing.T) {
 	}
 }
 
+// TestCreateDrainDefersToAStagedSpawnPlan is the one exception, and it is keyed on
+// the staged plan rather than on a state.
+//
+// Accepting either capacity confirm goes straight to spawnVariants, which re-validates
+// neither the title nor the cap the plan was staged against. Creating in between would
+// let the accepted plan spawn a duplicate title — two sessions deriving one branch
+// slug, which Worktree.Setup reads as a resume — or spawn past the cap the user was
+// shown. Unlike a state gate this cannot deadlock: a staged plan means a human is
+// looking at a dialog, and the request is retried on the next tick regardless.
+func TestCreateDrainDefersToAStagedSpawnPlan(t *testing.T) {
+	for name, stage := range map[string]func(*home, spawnPlan){
+		"over cap":  func(h *home, p spawnPlan) { h.pendingOverCap = &p },
+		"exhausted": func(h *home, p spawnPlan) { h.pendingExhausted = &p },
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := drainHome(t)
+			dir := t.TempDir()
+			stage(h, spawnPlan{titles: []string{"fix-auth"}, path: dir, direct: true, programs: []string{"echo"}})
+			path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: dir})
+
+			assert.Nil(t, h.drainCreateRequests(), "a staged plan holds the drain")
+			assert.Zero(t, h.list.NumInstances(), "nothing may be created under a pending confirm")
+			assert.FileExists(t, path, "and the request waits rather than being refused")
+		})
+	}
+}
+
 // TestCreateDrainKeepsTheUsersSelection: startNewSession selects the row it
 // creates, which is right for a keypress and wrong for a request that arrived from
 // another terminal. #439 settled that a background event does not move a cursor a
-// human placed — and it is also what makes running in every UI state safe, since
-// the selection is the only thing this mutates that another state could read.
+// human placed.
+//
+// It is also the observable half of the spawnBackground wiring: that origin is what
+// suppresses the cursor move, the fold reset (below) and — the one with no cheap test,
+// since it needs a live tmux pane — auto-attach. Flip the drain to spawnInteractive and
+// this fails, which is the point.
 func TestCreateDrainKeepsTheUsersSelection(t *testing.T) {
 	h := drainHome(t)
 	mine := addInstance(t, h, "watching-this", t.TempDir())
@@ -192,8 +235,30 @@ func TestCreateDrainKeepsTheUsersSelection(t *testing.T) {
 	assert.Same(t, mine, h.list.GetSelectedInstance(), "the cursor must not move")
 }
 
-// TestCreateDrainSelectsTheFirstSession is the other side: with an empty list
-// there is no cursor to preserve, so the new row is the selection.
+// TestCreateDrainKeepsFoldedGroupsFolded: AddInstance unfolds the new row's repo
+// group unconditionally, which is right for a keypress — a session you just made must
+// not land hidden — and wrong here. A fold is a layout choice the user made and the
+// next collapse keypress persists, so a background create that opened one would make
+// its own unfold durable.
+func TestCreateDrainKeepsFoldedGroupsFolded(t *testing.T) {
+	h := drainHome(t)
+	dir := t.TempDir()
+	existing := addInstance(t, h, "already-here", dir)
+	folded := existing.GroupKey()
+	h.list.SetCollapsedRepos([]string{folded})
+	require.Equal(t, []string{folded}, h.list.CollapsedRepos(), "precondition: the group is folded")
+
+	spoolCreate(t, outbox.Request{Title: "fix-auth", Path: dir})
+	require.NotNil(t, h.drainCreateRequests())
+
+	require.NotNil(t, titled(h, "fix-auth"), "the session is still created")
+	assert.Equal(t, []string{folded}, h.list.CollapsedRepos(), "a background create may not unfold a group")
+}
+
+// TestCreateDrainSelectsTheFirstSession: with an empty list the new row ends up
+// selected — not because the drain selected it, but because it is the only row and
+// the cursor index is already 0. Pinned so a reader does not mistake the outcome for
+// the cursor move TestCreateDrainKeepsTheUsersSelection proves does not happen.
 func TestCreateDrainSelectsTheFirstSession(t *testing.T) {
 	h := drainHome(t)
 	spoolCreate(t, outbox.Request{Title: "fix-auth", Path: t.TempDir()})
@@ -212,7 +277,7 @@ func TestCreateDrainRejectsTitleAlreadyUsed(t *testing.T) {
 	addInstance(t, h, "fix-auth", dir)
 	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: dir})
 
-	assert.Nil(t, h.drainCreateRequests())
+	refuseDrain(t, h)
 
 	reason, ok := outbox.Rejection(path)
 	require.True(t, ok)
@@ -230,7 +295,7 @@ func TestCreateDrainRejectsExistingBranch(t *testing.T) {
 	repo := gitRepoWithBranch(t, h.appConfig.BranchPrefix+"fix-auth")
 	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: repo})
 
-	assert.Nil(t, h.drainCreateRequests())
+	refuseDrain(t, h)
 
 	reason, ok := outbox.Rejection(path)
 	require.True(t, ok)
@@ -257,7 +322,7 @@ func TestCreateDrainRejectsMissingDirectory(t *testing.T) {
 	gone := filepath.Join(t.TempDir(), "no-such-dir")
 	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: gone})
 
-	assert.Nil(t, h.drainCreateRequests())
+	refuseDrain(t, h)
 
 	reason, ok := outbox.Rejection(path)
 	require.True(t, ok)
@@ -275,7 +340,7 @@ func TestCreateDrainRejectsWhenTmuxUnusable(t *testing.T) {
 	t.Cleanup(func() { tmuxAvailable = orig })
 
 	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: t.TempDir()})
-	assert.Nil(t, h.drainCreateRequests())
+	refuseDrain(t, h)
 
 	reason, ok := outbox.Rejection(path)
 	require.True(t, ok)
@@ -293,7 +358,7 @@ func TestCreateDrainRejectsHardCapEvenWithForce(t *testing.T) {
 	addInstance(t, h, "already-here", t.TempDir())
 
 	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: t.TempDir(), Force: true})
-	assert.Nil(t, h.drainCreateRequests())
+	refuseDrain(t, h)
 
 	reason, ok := outbox.Rejection(path)
 	require.True(t, ok)
@@ -311,7 +376,7 @@ func TestCreateDrainRejectsSoftCapWithoutForce(t *testing.T) {
 	addInstance(t, h, "already-here", t.TempDir())
 
 	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: t.TempDir()})
-	assert.Nil(t, h.drainCreateRequests())
+	refuseDrain(t, h)
 
 	reason, ok := outbox.Rejection(path)
 	require.True(t, ok)
@@ -340,7 +405,7 @@ func TestCreateDrainRejectsExpiredRequest(t *testing.T) {
 		CreatedAt: time.Now().Add(-outbox.TTL - time.Hour),
 	})
 
-	assert.Nil(t, h.drainCreateRequests())
+	refuseDrain(t, h)
 
 	reason, ok := outbox.Rejection(path)
 	require.True(t, ok)
@@ -358,7 +423,7 @@ func TestCreateDrainRejectsUnreadableRequest(t *testing.T) {
 	path := filepath.Join(dir, "0000000000000000001-abcdabcd.json")
 	require.NoError(t, os.WriteFile(path, []byte(`{not json`), 0o644))
 
-	assert.Nil(t, h.drainCreateRequests())
+	refuseDrain(t, h)
 
 	reason, ok := outbox.Rejection(path)
 	require.True(t, ok)
@@ -420,6 +485,116 @@ func TestCreateDrainBudgetIsOnePerTick(t *testing.T) {
 	assert.Equal(t, 3, createSpoolCount(t), "and leaves the rest, in flight or waiting")
 }
 
+// TestCreateDrainBudgetCountsStartsStillInFlight is what the budget is actually for,
+// and the single-tick test above cannot see it: a per-tick budget looks identical
+// there while delivering only a ~500ms stagger in production, because the next tick
+// skips the still-running request without spending anything and starts the next one
+// regardless. Twenty spooled requests would then have twenty `git worktree add`
+// processes contending on one index.lock.
+func TestCreateDrainBudgetCountsStartsStillInFlight(t *testing.T) {
+	h := drainHome(t)
+	for _, title := range []string{"one", "two", "three"} {
+		spoolCreate(t, outbox.Request{Title: title, Path: t.TempDir()})
+	}
+
+	require.NotNil(t, h.drainCreateRequests())
+	require.Equal(t, 1, h.list.NumInstances(), "precondition: the first tick started one")
+
+	// The first start has not settled, so it is still in flight.
+	assert.Nil(t, h.drainCreateRequests(), "no second start while the first is still running")
+	assert.Equal(t, 1, h.list.NumInstances())
+
+	// Settle it, and the budget frees up.
+	h.settleCreateRequest(titled(h, "one"), nil)
+	require.NotNil(t, h.drainCreateRequests())
+	assert.Equal(t, 2, h.list.NumInstances(), "a settled start releases the budget")
+}
+
+// TestCreateDrainRefusalsDoNotSpendTheStartBudget: disposals and starts draw on
+// separate budgets. Sharing one would let a backlog of expired requests — a cron job
+// that ran while nothing was draining — spend the tick's only start, so a fresh
+// request behind them would wait one tick per stale entry and a --wait would time out
+// reporting "still queued" with a TUI running and draining the whole time.
+func TestCreateDrainRefusalsDoNotSpendTheStartBudget(t *testing.T) {
+	h := drainHome(t)
+	stale := spoolCreate(t, outbox.Request{
+		Title: "expired", Path: t.TempDir(), CreatedAt: time.Now().Add(-2 * outbox.TTL),
+	})
+	spoolCreate(t, outbox.Request{Title: "fresh", Path: t.TempDir()})
+
+	require.NotNil(t, h.drainCreateRequests())
+
+	_, rejected := outbox.Rejection(stale)
+	assert.True(t, rejected, "the expired request is disposed of")
+	assert.NotNil(t, titled(h, "fresh"), "and the live one still starts in the same tick")
+
+	// flashNotice writes one notice, so a tick that did both must not report only the
+	// half that went well — the refusal is the half the person at the TUI can act on.
+	notice := h.menu.NoticeText()
+	assert.Contains(t, notice, "created")
+	assert.Contains(t, notice, "refused", "a create must not swallow the refusal beside it")
+}
+
+// TestCreateDrainRejectsAnOverlongTitle: the CLI bounds the title, so this is for
+// what the CLI cannot speak for — a hand-written spool file, or one from a build whose
+// limit differs. The drain's contract is that it runs every gate the form runs, and
+// the form's title field is bounded by construction (CharLimit).
+func TestCreateDrainRejectsAnOverlongTitle(t *testing.T) {
+	h := drainHome(t)
+	long := strings.Repeat("a", session.MaxTitleLen+1)
+	path := spoolCreate(t, outbox.Request{Title: long, Path: t.TempDir()})
+
+	refuseDrain(t, h)
+
+	reason, ok := outbox.Rejection(path)
+	require.True(t, ok)
+	assert.Contains(t, reason, strconv.Itoa(session.MaxTitleLen))
+	assert.Zero(t, h.list.NumInstances())
+}
+
+// TestCreateDrainForceAcceptsAnExhaustedPoolByPinningAMember is the half of --force
+// that was documented in four places and provably unreachable: the drain skipped its
+// own gate and then handed startNewSession a nil selection, which fails closed on an
+// unpinned all-limited multi-member pool (#483) and answers "pick a member explicitly
+// to override" — a flag `atrium new` does not have. Accepting has to pin, exactly as
+// accepting the confirmation dialog does.
+func TestCreateDrainForceAcceptsAnExhaustedPoolByPinningAMember(t *testing.T) {
+	h := drainHome(t)
+	exhaustedPool(t, h)
+
+	// Without --force the same request is refused, which is the control: it proves the
+	// pool really is exhausted and that the accept below is not passing vacuously.
+	refused := spoolCreate(t, outbox.Request{Title: "no-force", Path: t.TempDir()})
+	refuseDrain(t, h)
+	reason, ok := outbox.Rejection(refused)
+	require.True(t, ok)
+	assert.Contains(t, reason, "rate-limited")
+	require.Zero(t, h.list.NumInstances(), "precondition: the pool blocks an unforced create")
+
+	path := spoolCreate(t, outbox.Request{Title: "forced", Path: t.TempDir(), Force: true})
+	require.NotNil(t, h.drainCreateRequests(), "--force must accept, not refuse")
+
+	inst := titled(h, "forced")
+	require.NotNil(t, inst, "the session must exist")
+	assert.NotEmpty(t, inst.ClaudeAccountName(),
+		"and be pinned to a member, or startNewSession would have refused it")
+	assert.FileExists(t, path, "an accepted request is held, not rejected")
+}
+
+// exhaustedPool configures a two-member claude pool with every member rate-limited —
+// the state that raises the all-exhausted confirm in the TUI and has nobody to ask
+// here. Two members, because gateAllExhausted deliberately exempts a singleton pool:
+// one account has nothing to rotate to.
+func exhaustedPool(t *testing.T, h *home) {
+	t.Helper()
+	h.appConfig.ClaudeAccounts = []config.ClaudeAccount{
+		{Name: "work-1", ConfigDir: "~/.claude-work", Pool: "work"},
+		{Name: "work-2", ConfigDir: "~/.claude-work2", Pool: "work"},
+	}
+	require.NoError(t, h.appState.SetAccountLimited("work-1", ""))
+	require.NoError(t, h.appState.SetAccountLimited("work-2", ""))
+}
+
 // TestCreateDrainRunsOnTheMetadataTick is the wiring guard. Every test above calls
 // drainCreateRequests directly, so all of them would still pass with the call
 // missing from Update — the command would be registered, documented and dead.
@@ -438,4 +613,125 @@ func TestCreateDrainEmptySpoolIsQuiet(t *testing.T) {
 	h := drainHome(t)
 	assert.Nil(t, h.drainCreateRequests())
 	assert.Zero(t, h.list.NumInstances())
+	assert.False(t, h.menu.HasNotice(), "nothing to report is not something to report")
+}
+
+// TestCreateSettlesOnlyAfterTheRowIsPersisted is the ordering drainOutbox documents
+// as load-bearing and this path originally inverted: it unlinked first and persisted
+// forty lines later.
+//
+// Two things go wrong in that window, and --wait sees both. A failed persist leaves a
+// live worktree, branch and tmux session recorded nowhere, reported to the caller as a
+// success; and even on the happy path --wait polls every 100ms and reads state.json
+// the instant the file goes away, so a read landing first finds no row and prints a
+// created session with no branch — byte-identical to the direct-session case.
+func TestCreateSettlesOnlyAfterTheRowIsPersisted(t *testing.T) {
+	h := drainHome(t)
+	cs := withCapturingStore(t, h)
+	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: t.TempDir()})
+	require.NotNil(t, h.drainCreateRequests())
+	inst := titled(h, "fix-auth")
+	require.NotNil(t, inst)
+
+	cs.saveErr = errors.New("disk full")
+	h.Update(instanceStartedMsg{instance: inst, origin: spawnBackground})
+
+	reason, rejected := outbox.Rejection(path)
+	require.True(t, rejected, "a create that could not be recorded is not a create that succeeded")
+	assert.Contains(t, reason, "disk full")
+}
+
+// TestCreateSettlesOnSuccessfulPersist is the positive control for the above: with the
+// save working, the same message clears the request rather than rejecting it.
+func TestCreateSettlesOnSuccessfulPersist(t *testing.T) {
+	h := drainHome(t)
+	withCapturingStore(t, h)
+	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: t.TempDir()})
+	require.NotNil(t, h.drainCreateRequests())
+	inst := titled(h, "fix-auth")
+	require.NotNil(t, inst)
+
+	h.Update(instanceStartedMsg{instance: inst, origin: spawnBackground})
+
+	assert.NoFileExists(t, path)
+	_, rejected := outbox.Rejection(path)
+	assert.False(t, rejected)
+}
+
+// TestForgetInstanceRejectsAnUnsettledCreateRequest: createsInFlight is a third map
+// keyed by *session.Instance, and forgetInstance exists so a removed session does not
+// pin one for the process lifetime. Dropping the entry silently would be worse than
+// the leak: the spool file would have nothing left to settle it, so it would be
+// re-read and re-created on the next launch while the caller's --wait timed out.
+func TestForgetInstanceRejectsAnUnsettledCreateRequest(t *testing.T) {
+	h := drainHome(t)
+	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: t.TempDir()})
+	require.NotNil(t, h.drainCreateRequests())
+	inst := titled(h, "fix-auth")
+	require.NotNil(t, inst)
+
+	h.forgetInstance(inst)
+
+	reason, rejected := outbox.Rejection(path)
+	require.True(t, rejected, "a removed session owes its caller an answer")
+	assert.Contains(t, reason, "removed before it finished starting")
+	assert.Empty(t, h.createsInFlight, "and the map must not pin the instance")
+}
+
+// TestReconcileSettlesAnAdoptedCreateRequest: an ordinary SIGTERM lands in the adopt
+// branch, which flips the session to Running and persists it without ever going
+// through handleInstanceStarted. Unsettled, the request survives, the next launch
+// re-reads it, and the title now collides — so the caller is handed "already used"
+// for a session that exists and is running.
+//
+// Needs a real tmux session, because the adopt branch is gated on Started().
+func TestReconcileSettlesAnAdoptedCreateRequest(t *testing.T) {
+	testutil.RequireTmux(t)
+
+	h := drainHome(t)
+	withCapturingStore(t, h)
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: "adopt-me", Path: t.TempDir(), Program: "sleep 300", Direct: true,
+	})
+	require.NoError(t, err)
+	inst.SetBaseContext(context.Background())
+	require.NoError(t, inst.Start(true))
+	require.True(t, inst.Started())
+	t.Cleanup(func() {
+		inst.RebindBaseContext(context.Background())
+		_ = inst.Kill()
+	})
+	h.list.AddInstance(inst)
+	inst.SetStatus(session.Loading) // the dropped instanceStartedMsg
+
+	path := spoolCreate(t, outbox.Request{Title: "adopt-me", Path: inst.Path})
+	h.createsInFlight = map[*session.Instance]string{inst: path}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // signal shutdown
+	h.reconcileInFlightStarts(ctx)
+
+	require.Equal(t, session.Running, inst.GetStatus(), "precondition: the session was adopted")
+	assert.NoFileExists(t, path, "an adopted session's request is closed out, not left behind")
+	_, rejected := outbox.Rejection(path)
+	assert.False(t, rejected, "adoption is a success, not a refusal")
+}
+
+// TestReconcileRejectsATornDownCreateRequest is the other half: a start that never
+// completed is killed at shutdown, and its caller must be told rather than left to
+// time out against a request nothing will ever pick up again.
+func TestReconcileRejectsATornDownCreateRequest(t *testing.T) {
+	h := drainHome(t)
+	withCapturingStore(t, h)
+	inst := addInstance(t, h, "never-finished", t.TempDir())
+	inst.SetStatus(session.Loading) // Loading but never Started: the partial case
+
+	path := spoolCreate(t, outbox.Request{Title: "never-finished", Path: inst.Path})
+	h.createsInFlight = map[*session.Instance]string{inst: path}
+
+	h.reconcileInFlightStarts(context.Background()) // live ctx: the force-quit abandon
+
+	reason, rejected := outbox.Rejection(path)
+	require.True(t, rejected, "an abandoned start owes its caller an answer")
+	assert.Contains(t, reason, "atrium exited before it finished starting")
 }

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,7 +34,8 @@ var (
 			"Creation is asynchronous. The request is spooled to the data directory and the\n" +
 			"running Atrium picks it up within about a second; with no Atrium running it\n" +
 			"stays queued and is created the next time one starts. Use --wait to block until\n" +
-			"the session actually exists, which is also the only way to be told its branch.\n\n" +
+			"the session actually exists and be told the branch it was given (`atrium ls`\n" +
+			"reports the same branch once it does).\n\n" +
 			"The title is the session's name, and because the branch and tmux names derive\n" +
 			"from it, choosing a title is choosing a branch. A title whose derived names are\n" +
 			"already taken is refused rather than silently suffixed.\n\n" +
@@ -66,8 +66,9 @@ var (
 )
 
 // newRequest is what the command line asked for, before any of it is resolved.
-// A struct rather than eight parameters because every field is a string and the
-// call site is a test as often as it is RunE.
+// A struct rather than eight parameters because most of them are strings that would
+// be interchangeable at a call site, and that call site is a test as often as it is
+// RunE.
 type newRequest struct {
 	title   string
 	path    string
@@ -123,10 +124,17 @@ func runNew(out, errOut io.Writer, r newRequest) error {
 			n, session.MaxTitleLen)
 	}
 
-	// One load for both the profile table and the branch prefix. LoadConfig is the
-	// read doctor and debug already use; the never-call-the-loader rule is about
-	// state.json's instance list, which loadStoredInstances handles.
-	cfg := config.LoadConfig()
+	if r.wait < 0 {
+		// Cobra parses "--wait -5s" happily. Left to the r.wait > 0 test below it would
+		// silently mean "do not wait", so a caller that fat-fingered a sign would be
+		// told the request was queued and never learn what became of it.
+		return fmt.Errorf("--wait %s is negative; pass a positive duration", r.wait)
+	}
+
+	// One read for both the profile table and the branch prefix, and a read is all it
+	// is: loadStoredConfig, not config.LoadConfig, for the reasons that function
+	// documents — the loader sweeps in-flight temp files and seeds a config.json.
+	cfg := loadStoredConfig()
 	program, err := resolveNewProgram(cfg, r.program, r.profile)
 	if err != nil {
 		return err
@@ -203,6 +211,17 @@ func resolveNewProgram(cfg *config.Config, program, profile string) (string, err
 // each worktree belongs to, so the repo is a lookup of a value Atrium itself
 // wrote, not an inference — and it is said out loud, because acting on a path the
 // caller did not type should never be silent.
+//
+// It applies to an explicit --path too, not only to the cwd default. An agent
+// scripting this passes --path "$PWD" as readily as it relies on the default, and the
+// two should not mean different things; the note on stderr is what keeps the override
+// visible either way. Pass the repo itself to opt out — it is not a worktree, so
+// there is nothing to redirect.
+//
+// The redirect target is re-validated because it comes off disk rather than off the
+// command line: a repo that has since been moved or deleted would otherwise be spooled
+// as a path that no longer exists, and the caller would be told "queued" for a request
+// the drain can only refuse minutes later.
 func resolveNewTarget(errOut io.Writer, flag string, instances []session.InstanceData) (string, error) {
 	target := flag
 	if target == "" {
@@ -221,6 +240,10 @@ func resolveNewTarget(errOut io.Writer, flag string, instances []session.Instanc
 	}
 
 	if owner, repo, ok := worktreeOwner(abs, instances); ok {
+		if !config.DirExists(repo) {
+			return "", fmt.Errorf("%s is session %q's worktree, but its repo %s is gone (pass --path)",
+				abs, owner, repo)
+		}
 		_, _ = fmt.Fprintf(errOut, "note: %s is session %q's worktree — creating in its repo %s\n",
 			abs, owner, repo)
 		return repo, nil
@@ -231,17 +254,32 @@ func resolveNewTarget(errOut io.Writer, flag string, instances []session.Instanc
 // worktreeOwner reports the session whose managed worktree contains path, and the
 // repo that worktree was cut from. Containment rather than equality, because an
 // agent is usually somewhere below the worktree root rather than at it.
+//
+// Both sides are resolved through symlinks first. Without that the check misses on
+// macOS as a matter of routine, where a data dir under /tmp is recorded as
+// /private/tmp — and a missed redirect is silent, producing a worktree of a worktree
+// rather than an error.
 func worktreeOwner(path string, instances []session.InstanceData) (title, repo string, ok bool) {
+	path = resolvePath(path)
 	for _, d := range instances {
 		wt := d.Worktree.WorktreePath
 		if wt == "" || d.Worktree.RepoPath == "" {
 			continue
 		}
-		if within(path, wt) {
+		if within(path, resolvePath(wt)) {
 			return d.Title, d.Worktree.RepoPath, true
 		}
 	}
 	return "", "", false
+}
+
+// resolvePath returns path with symlinks resolved, or path cleaned when it cannot be
+// resolved — a path that does not exist is not a reason to fail a containment test.
+func resolvePath(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	return filepath.Clean(path)
 }
 
 // within reports whether path is dir or sits underneath it. It compares cleaned
@@ -279,37 +317,25 @@ func checkTitleFree(prefix, title, path string, instances []session.InstanceData
 // waitForCreate blocks until the spooled request has been accounted for, then
 // reports the session that came of it.
 //
-// The protocol is `send --wait`'s: a rejection receipt first — it is written
-// before the request is unlinked, so a refusal can never be observed as a
-// success — then the file's disappearance, then the deadline. What differs is
-// what the disappearance means. The drain holds the request until Start has
-// finished, so the file going away says the worktree, the branch and the agent
-// all exist, not merely that some Atrium consumed the request.
+// The protocol is awaitSpool's, shared with `send --wait`. What differs is what the
+// file's disappearance means here: the drain holds the request until Start has
+// finished, so it going away says the worktree, the branch and the agent all exist,
+// not merely that some Atrium consumed the request.
 //
 // The branch is then read back out of state.json rather than derived from the
 // title. They would usually agree, but "usually" is not something to print: the
 // slug rules have a hash fallback for titles that sanitize to nothing, and a
 // non-git target has no branch at all.
 func waitForCreate(out io.Writer, path, title, repo string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for {
-		if reason, ok := outbox.Rejection(path); ok {
-			if err := outbox.ClearRejection(path); err != nil {
-				log.ErrorLog.Printf("failed to clear an outbox rejection receipt: %v", err)
-			}
-			return fmt.Errorf("atrium did not create the session: %s", reason)
-		}
-		if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
-			_, _ = fmt.Fprintf(out, "created %q%s\n", title, createdBranchClause(title, repo))
-			return nil
-		}
-		if !time.Now().Before(deadline) {
-			return fmt.Errorf(
-				"waited %s and no atrium TUI created the session; the request is still queued "+
-					"and is picked up the next time one runs", timeout)
-		}
-		time.Sleep(drainPollInterval)
+	if err := awaitSpool(path, timeout, spoolWaitCopy{
+		refused: "atrium did not create the session",
+		timedOut: fmt.Sprintf("waited %s and no atrium TUI created the session; the request is still "+
+			"queued and is picked up the next time one runs", timeout),
+	}); err != nil {
+		return err
 	}
+	_, _ = fmt.Fprintf(out, "created %q%s\n", title, createdBranchClause(title, repo))
+	return nil
 }
 
 // createdBranchClause names the branch and worktree the TUI recorded, or "" when

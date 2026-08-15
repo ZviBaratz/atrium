@@ -75,9 +75,13 @@ func hostCapacityLine(limit, live int) string {
 	return fmt.Sprintf("Host capacity is %d, with %d already running", limit, live)
 }
 
-// hardCapMessage is the explicit-cap refusal, written once for the three sites
-// that refuse outright rather than confirm: the create form's open gate, the
-// smart-dispatch pre-route guard, and the create drain (#703).
+// hardCapMessage is the explicit-cap refusal, written once for its three call sites:
+// the create form's open gate, the smart-dispatch pre-route guard, and the create
+// drain (#703).
+//
+// A fourth site refuses outright on the same verdict and deliberately does not use
+// this wording: createSessionFromForm's submit gate, which has a variant-error field
+// a few dozen cells wide and says "need N, M free (max_sessions)" instead.
 //
 // An explicit max_sessions is the one gate with no accept path anywhere — not the
 // soft cap's confirmation, and not `atrium new --force` — because neither
@@ -337,11 +341,15 @@ func (m *home) confirmOverCap(plan spawnPlan, limit, active int) tea.Cmd {
 // error surfaces alongside them.
 func (m *home) spawnVariants(plan spawnPlan) tea.Cmd {
 	total := len(plan.programs)
+	origin := spawnInteractive
+	if total > 1 {
+		origin = spawnVariant
+	}
 	cmds := make([]tea.Cmd, 0, total)
 	for i := range plan.programs {
 		created, err := m.startNewSession(
 			plan.titles[i], plan.path, plan.direct, plan.isolateDeps, plan.programs[i],
-			plan.branch, plan.prompt, plan.account, total > 1, plan.fork)
+			plan.branch, plan.prompt, plan.account, origin, plan.fork)
 		if err != nil {
 			if i == 0 {
 				if m.textInputOverlay != nil {

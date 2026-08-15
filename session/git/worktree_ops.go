@@ -26,15 +26,19 @@ func (g *Worktree) Setup() error {
 	// creation; once the branch exists it holds the session's committed work (including the
 	// WIP commit pause makes), so resume must reuse it rather than `branch -D` it away and
 	// rebuild from baseRef — which silently discarded that work for base-branch sessions
-	// (#146). Branch existence is the discriminator: creation never collides because every
-	// path that creates a session first refuses a title whose branch slug already exists —
-	// the new-session form and smart auto-dispatch through variantTitleConflict, and the
-	// `atrium new` drain through variantTitleConflictIn (both app/app_session.go) — so a
-	// pre-existing branch here means a resume of a base-branch or HEAD-based session.
+	// (#146). Branch existence is the discriminator, so a pre-existing branch here is
+	// read as a resume of a base-branch or HEAD-based session.
 	//
-	// That is a contract on those callers, not something this function can check: a
-	// creation that skipped the check would not fail here, it would take the resume
-	// branch and silently adopt someone else's work.
+	// That is a contract on the callers, not something this function can check: a
+	// creation whose title derives an existing branch slug does not fail here, it takes
+	// the resume branch and silently adopts someone else's work. Two of the three
+	// creation paths hold up their end — the new-session form (createSessionFromForm)
+	// and the `atrium new` drain (executeCreateRequest), both via the variantTitleConflict
+	// pair in app/app_session.go, which is the only predicate that consults
+	// git.LocalBranchExists. Smart auto-dispatch does not: it calls titleConflict, whose
+	// branch arm reads m.titleBranchExists, an async verdict only the create form ever
+	// schedules. An auto-dispatched title matching an orphan branch therefore reaches
+	// this line and resumes it (atrium#711).
 	var setupErr error
 	if _, refErr := g.runGitCommand(g.repoPath, "show-ref", "--verify", fmt.Sprintf("refs/heads/%s", g.branchName)); refErr == nil {
 		setupErr = g.setupFromExistingBranch()

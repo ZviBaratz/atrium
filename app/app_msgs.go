@@ -734,29 +734,37 @@ func (m *home) resumeAfterSuspendedLoop(extra ...tea.Cmd) tea.Cmd {
 }
 
 func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd) {
-	// Close out an `atrium new` request first, before either branch below returns:
-	// the outcome this message carries is the only thing that tells a waiting
-	// `--wait` whether the session it asked for exists (#703). A session that came
-	// from the form or smart-dispatch is a map miss.
-	m.settleCreateRequest(msg.instance, msg.err)
-
 	// Normally re-select the just-started instance: it corrects a possibly-stale
 	// selection index, the failure path's teardown (m.list.Kill below) targets the
 	// selected row, and an auto-open attach drops into it. The exception is #439: on
 	// a successful start with no auto-open, if the user navigated to another session
 	// during the slow async Start(), preserve their cursor instead of snapping it
 	// back to the new session.
-	if msg.err != nil || m.shouldAutoOpen(msg.instance, msg.hadPrompt, msg.fromBatch) ||
+	//
+	// A failed background create still has to move the cursor, because Kill acts on
+	// the selected row — so the row the user was on is captured and put back once the
+	// failed one is gone (#703).
+	restore := m.list.GetSelectedInstance()
+	if msg.err != nil || m.shouldAutoOpen(msg.instance, msg.hadPrompt, msg.origin) ||
 		m.list.GetSelectedInstance() == msg.instance {
 		m.list.SelectInstance(msg.instance)
 	}
 
 	if msg.err != nil {
+		// Close out an `atrium new` request before the teardown below: the outcome
+		// this message carries is the only thing that tells a waiting `--wait` whether
+		// the session it asked for exists (#703). A session that came from the form or
+		// smart-dispatch is a map miss. Rejecting first also means forgetInstance's
+		// own settle (a removal with no start outcome) finds nothing left to do.
+		m.settleCreateRequest(msg.instance, msg.err)
 		// Tear down the session that failed to start. Any teardown error is already
 		// logged inside KillInstance; the meaningful failure here is msg.err, which
 		// is surfaced below, so discard Kill's return rather than fight that modal.
 		_ = m.list.Kill()
 		m.forgetInstance(msg.instance) // the failed session is gone from the list; drop its bookkeeping
+		if restore != nil && restore != msg.instance {
+			m.list.SelectInstance(restore) // the cursor was only borrowed to aim Kill
+		}
 		// A quit deferred while this session was Loading (issue #268): the failed
 		// session is torn down and gone from the list, so resume the quit if it's now
 		// safe. Surface the start error last either way — if the quit re-defers (a
@@ -783,6 +791,12 @@ func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd
 	// failure a deferred+safe quit still gets its escape-hatch modal (via
 	// resumeQuitAfterStart → handleQuit) rather than a dead-end error toast.
 	if err := m.persistInstances(); err != nil {
+		// The session is live but unrecorded, so an `atrium new` caller must hear the
+		// failure rather than read the unlink as success and go looking in state.json
+		// for a branch that is not there. Its own wording, because the session did
+		// start — what failed is the record of it.
+		m.failCreateRequest(msg.instance,
+			fmt.Sprintf("the session was created but atrium could not record it: %v", err))
 		if m.quitRequested {
 			if cmd, done := m.resumeQuitAfterStart(); done {
 				return m, cmd
@@ -790,6 +804,10 @@ func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd
 		}
 		return m, m.handleError(err)
 	}
+
+	// Only now: the row is durable, so the request file going away means the session
+	// exists *and* --wait can read its branch back. See settleCreateRequest.
+	m.settleCreateRequest(msg.instance, nil)
 
 	// A quit deferred while this session was Loading (issue #268) takes precedence
 	// over the rest of the post-start handling (welcome, auto-open): now that this
@@ -822,7 +840,7 @@ func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd
 		m.menu.SetState(ui.StateDefault)
 	}
 
-	if m.shouldAutoOpen(msg.instance, msg.hadPrompt, msg.fromBatch) {
+	if m.shouldAutoOpen(msg.instance, msg.hadPrompt, msg.origin) {
 		// Drop straight into the new session, mirroring the KeyEnter attach path.
 		// Attach msg.instance directly rather than via m.list.Attach(): a background
 		// instanceStartedMsg from another freshly-created session could have moved

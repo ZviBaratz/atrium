@@ -125,21 +125,53 @@ func runSend(out, errOut io.Writer, selector, path, text string, wait time.Durat
 // before the message is unlinked, so a rejection can never be observed as a
 // successful delivery.
 func waitForDrain(path string, timeout time.Duration) error {
+	return awaitSpool(path, timeout, spoolWaitCopy{
+		refused: "atrium did not deliver the prompt",
+		timedOut: fmt.Sprintf("waited %s and no atrium TUI picked the prompt up; it is still queued "+
+			"in the outbox and will be delivered the next time one runs", timeout),
+	})
+}
+
+// spoolWaitCopy is the wording awaitSpool cannot supply: what a refusal and a timeout
+// are called for this particular command. Both are finished strings — the caller knows
+// its own timeout, so nothing here has to be a format.
+type spoolWaitCopy struct {
+	refused  string
+	timedOut string
+}
+
+// awaitSpool implements the completion protocol both `send --wait` and `new --wait`
+// use. A rejection receipt is checked first — it is written before the request is
+// unlinked, so a refusal can never be observed as a success — then the file's
+// disappearance, then the deadline.
+//
+// Shared because the ordering is the correctness, and two copies of an ordering drift.
+// What the two commands do differ about is what the disappearance *means* — for a
+// prompt, that some Atrium consumed it; for a create, that the session exists (the
+// drain holds the file until Start returns) — but that difference is in the callers'
+// wording and in what they do afterwards, not in the protocol.
+//
+// A Stat error other than "not found" is a bad data dir, not a completion: it is
+// reported rather than read as either outcome. Retrying to the deadline would turn a
+// permissions problem into a timeout that blames the TUI.
+func awaitSpool(path string, timeout time.Duration, wording spoolWaitCopy) error {
 	deadline := time.Now().Add(timeout)
 	for {
 		if reason, ok := outbox.Rejection(path); ok {
 			if err := outbox.ClearRejection(path); err != nil {
 				log.ErrorLog.Printf("failed to clear an outbox rejection receipt: %v", err)
 			}
-			return fmt.Errorf("atrium did not deliver the prompt: %s", reason)
+			return fmt.Errorf("%s: %s", wording.refused, reason)
 		}
-		if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		_, err := os.Stat(path)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
 			return nil
+		case err != nil:
+			return fmt.Errorf("failed to read the outbox: %w", err)
 		}
 		if !time.Now().Before(deadline) {
-			return fmt.Errorf(
-				"waited %s and no atrium TUI picked the prompt up; it is still queued in the outbox "+
-					"and will be delivered the next time one runs", timeout)
+			return errors.New(wording.timedOut)
 		}
 		time.Sleep(drainPollInterval)
 	}

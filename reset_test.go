@@ -16,6 +16,7 @@ import (
 
 	"github.com/ZviBaratz/atrium/cmd/cmd_test"
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/internal/outbox"
 	"github.com/ZviBaratz/atrium/internal/undo"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/git"
@@ -215,4 +216,44 @@ func TestRunReset_SurvivesARepositoryThatMoved(t *testing.T) {
 	stored, err := undo.Load()
 	require.NoError(t, err)
 	assert.Empty(t, stored, "the record goes even when its repository cannot be reached")
+}
+
+// TestRunReset_ClearsQueuedCreateRequests: a queued `atrium new` request is the one
+// piece of state that can *create* after the wipe. Everything else reset does is
+// ordered so nothing survives to re-persist a deleted session; a create request
+// defeats that from outside the lock by design, and with no session left to collide
+// with, every gate it meets on the next launch passes. So the next TUI would silently
+// build a worktree, a branch and an agent from a request made before the reset.
+func TestRunReset_ClearsQueuedCreateRequests(t *testing.T) {
+	sandboxDataDir(t)
+	create, err := outbox.WriteCreate(outbox.Request{Title: "fix-auth", Path: t.TempDir()})
+	require.NoError(t, err)
+	msg, err := outbox.Write(outbox.Message{Title: "s", Path: t.TempDir(), Text: "hi"})
+	require.NoError(t, err)
+
+	require.NoError(t, runReset(context.Background(), noopExec()))
+
+	assert.NoFileExists(t, create, "a queued create must not outlive the state it would rebuild")
+	assert.NoFileExists(t, msg)
+	entries, err := outbox.ListCreates()
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+}
+
+// TestRunReset_RefusedResetLeavesTheSpoolAlone: the refusal is "nothing was deleted",
+// and the spool is state like any other. A reset that bailed on a live TUI but had
+// already eaten a queued request would lose work the user never asked it to touch.
+func TestRunReset_RefusedResetLeavesTheSpoolAlone(t *testing.T) {
+	sandboxDataDir(t)
+	create, err := outbox.WriteCreate(outbox.Request{Title: "fix-auth", Path: t.TempDir()})
+	require.NoError(t, err)
+
+	lockPath, err := tuiLockPath()
+	require.NoError(t, err)
+	release, err := acquireTUILock(lockPath)
+	require.NoError(t, err)
+	defer release()
+
+	require.Error(t, runReset(context.Background(), noopExec()))
+	assert.FileExists(t, create, "a refused reset must not touch the spool either")
 }

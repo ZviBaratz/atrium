@@ -198,22 +198,39 @@ type instanceStartedMsg struct {
 	// the prompt before it is handled, which would otherwise flip shouldAutoOpen and
 	// force-attach the user into this session the moment they detach.
 	hadPrompt bool
-	// fromBatch marks a session spawned as one variant of a multi-session fan-out
-	// (#387). Auto-attach is suppressed for a batch: attaching into one variant and
-	// then, on each detach, chaining through the rest would bury the list the bake-off
-	// is meant to be viewed from.
-	fromBatch bool
+	// origin records who asked for the session. Auto-attach keys on it — see
+	// autoAttachEligible.
+	origin spawnOrigin
 }
+
+// spawnOrigin says who asked for a session, which settles two things a caller
+// should not get to answer separately: whether auto-attach may fire, and whether
+// the new row takes the cursor. They are one decision — "is a human watching this
+// keypress?" — and splitting them into two bools is how the drain came to suppress
+// neither (#703).
+type spawnOrigin int
+
+const (
+	// spawnInteractive is a keypress: select the new row, and attach if configured.
+	spawnInteractive spawnOrigin = iota
+	// spawnVariant is one session of a multi-session fan-out (#387). The row is
+	// selected, but auto-attach is suppressed: attaching into one variant and then,
+	// on each detach, chaining through the rest would bury the list the bake-off is
+	// meant to be viewed from.
+	spawnVariant
+	// spawnBackground is a request nobody is sitting in front of — today an `atrium
+	// new` spool entry drained on a tick (#703). Neither auto-attach nor the cursor
+	// move applies: the terminal belongs to whatever the user is actually doing.
+	spawnBackground
+)
 
 // autoAttachEligible is the pure auto-attach policy, independent of session liveness:
 // attach on the auto_attach flag, but never for a session created with a boot prompt
-// (hadPrompt — see shouldAutoOpen) and never for a fan-out variant (fromBatch — a
-// bake-off spawns N sessions from one submit; dropping the user into one and chaining
-// them through the rest on each detach is never what they want, so they should land on
-// the list). Split from shouldAutoOpen so the policy is unit-testable without a live
-// (Started/TmuxAlive) session.
-func (m *home) autoAttachEligible(hadPrompt, fromBatch bool) bool {
-	return m.appConfig.GetAutoAttach() && !hadPrompt && !fromBatch
+// (hadPrompt — see shouldAutoOpen) and only for a session a human just asked for
+// (spawnInteractive). Split from shouldAutoOpen so the policy is unit-testable without
+// a live (Started/TmuxAlive) session.
+func (m *home) autoAttachEligible(hadPrompt bool, origin spawnOrigin) bool {
+	return m.appConfig.GetAutoAttach() && !hadPrompt && origin == spawnInteractive
 }
 
 // shouldAutoOpen reports whether a freshly started session should be attached
@@ -227,8 +244,8 @@ func (m *home) autoAttachEligible(hadPrompt, fromBatch bool) bool {
 // not come up — and, because Started() short-circuits before TmuxAlive() (which
 // dereferences tmuxSession), keep unstarted instances (e.g. in tests) off both the
 // panic and the attach path.
-func (m *home) shouldAutoOpen(inst *session.Instance, hadPrompt, fromBatch bool) bool {
-	return m.autoAttachEligible(hadPrompt, fromBatch) && inst.Started() && inst.TmuxAlive()
+func (m *home) shouldAutoOpen(inst *session.Instance, hadPrompt bool, origin spawnOrigin) bool {
+	return m.autoAttachEligible(hadPrompt, origin) && inst.Started() && inst.TmuxAlive()
 }
 
 // autoNameDoneMsg is sent when a background name generation completes. instance
@@ -403,7 +420,7 @@ func (m *home) autoDispatch(res PrefillResult) (tea.Cmd, bool) {
 	// Never dependency-isolating: this is the smart-dispatch path, which has no form
 	// to ask, and shared is both the default and the answer for the read-only session
 	// an auto-dispatched one almost always is.
-	cmd, err := m.startNewSession(res.Title, res.Path, direct, false, m.program, "", res.Prompt, nil, false, nil)
+	cmd, err := m.startNewSession(res.Title, res.Path, direct, false, m.program, "", res.Prompt, nil, spawnInteractive, nil)
 	if err != nil {
 		return nil, false
 	}
@@ -985,12 +1002,20 @@ func (m *home) applyBatchKill(msg batchKillDoneMsg) batchKillDoneMsg {
 }
 
 // forgetInstance drops the per-instance bookkeeping a removed session leaves behind: its
-// notify first-observation/throttle state and any lost-recovery strike count. Both maps
-// are keyed by *session.Instance, so without this a killed session would pin its Instance
-// object (and everything it references) in memory for the process lifetime. Every caller
-// runs on the main loop, where these maps are otherwise read and written, so the deletes
-// don't race (and delete on a nil map is a harmless no-op for hand-built test homes).
+// notify first-observation/throttle state, any lost-recovery strike count, and any
+// unsettled `atrium new` request. All three maps are keyed by *session.Instance, so
+// without this a killed session would pin its Instance object (and everything it
+// references) in memory for the process lifetime. Every caller runs on the main loop,
+// where these maps are otherwise read and written, so the deletes don't race (and delete
+// on a nil map is a harmless no-op for hand-built test homes).
+//
+// The create request is *rejected* rather than dropped: a removed session is an outcome
+// its caller's --wait is entitled to, and silently deleting the map entry would leave
+// the spool file with nothing left to settle it — re-read, and re-created, on the next
+// launch. Settling is idempotent, so the ordinary failure path (which settles with the
+// real start error before calling this) is unaffected.
 func (m *home) forgetInstance(inst *session.Instance) {
+	m.settleCreateRequest(inst, errors.New("it was removed before it finished starting"))
 	delete(m.notifySeen, inst)
 	delete(m.lostStrikes, inst)
 }
@@ -1822,8 +1847,9 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 // while a bare pool routes rotation to that pool. fork, when non-nil, seeds the session's
 // conversation from a checkpoint of another one (#644) — an explicit parameter rather than
 // a read of m.pendingFork, because the post-confirm resume path spawns from a captured
-// plan with no form left to consult.
-func (m *home) startNewSession(title, path string, direct, isolateDeps bool, program, branch, prompt string, sel *overlay.AccountSelection, fromBatch bool, fork *session.ForkSeed) (tea.Cmd, error) {
+// plan with no form left to consult. origin says who asked, which decides whether the
+// new row takes the cursor and whether auto-attach may fire (see spawnOrigin).
+func (m *home) startNewSession(title, path string, direct, isolateDeps bool, program, branch, prompt string, sel *overlay.AccountSelection, origin spawnOrigin, fork *session.ForkSeed) (tea.Cmd, error) {
 	instance, err := session.NewInstance(session.InstanceOptions{
 		Title:       title,
 		Path:        path,
@@ -1953,8 +1979,22 @@ func (m *home) startNewSession(title, path string, direct, isolateDeps bool, pro
 
 	// Create the list row only now, on submit. AddInstance may insert it mid-list under its
 	// repo group, so select it by identity.
+	//
+	// A background create reorganises nothing a human arranged. The cursor stays put
+	// (#439), and so does the fold set: AddInstance unfolds the new row's group
+	// unconditionally — right for a keypress, where a session you just made must not
+	// land hidden — so the folds are captured across it rather than that unfold being
+	// made conditional on a caller ui.List cannot see. Both are restored here rather
+	// than in the drain because instanceChanged, batched below, is what tears down
+	// preview scroll mode and the hint overlay for the row it moves to; keeping the
+	// selection is only half the job if that still runs.
+	folds := m.list.CollapsedRepos()
 	finalizer := m.list.AddInstance(instance)
-	m.list.SelectInstance(instance)
+	if origin == spawnBackground {
+		m.list.SetCollapsedRepos(folds)
+	} else {
+		m.list.SelectInstance(instance)
+	}
 	if branch != "" {
 		instance.SetBaseBranch(branch)
 	}
@@ -1976,7 +2016,14 @@ func (m *home) startNewSession(title, path string, direct, isolateDeps bool, pro
 	startCmd := func() tea.Msg {
 		defer m.startWG.Done()
 		err := instance.Start(true)
-		return instanceStartedMsg{instance: instance, err: err, hadPrompt: prompt != "", fromBatch: fromBatch}
+		return instanceStartedMsg{instance: instance, err: err, hadPrompt: prompt != "", origin: origin}
+	}
+	// instanceChanged repoints the preview, diff and menu at the selected row — work
+	// that only makes sense when the selection just moved. Running it for a background
+	// create is what exits the preview's scroll mode and clears the hint overlay out
+	// from under whoever is using them.
+	if origin == spawnBackground {
+		return tea.Batch(tea.RequestWindowSize, startCmd), nil
 	}
 	return tea.Batch(tea.RequestWindowSize, m.instanceChanged(), startCmd), nil
 }
@@ -2480,7 +2527,7 @@ func (m *home) allExhausted(plan spawnPlan) (pool string, members []config.Claud
 		return "", nil, false // singleton/empty pool: nothing to skip
 	}
 	avail := m.appState.GetAccountAvailability()
-	// The len(members) < 2 guard above is deliberate and NOT redundant with allLimited:
+	// The len(poolMembers) < 2 guard above is deliberate and NOT redundant with allLimited:
 	// SelectPoolMember reports allLimited for a singleton pool whose one account is
 	// limited, but a pool of one has nothing to rotate, so it must not raise the confirm.
 	if _, allLimited := config.SelectPoolMember(poolMembers, avail, m.appState.GetAccountRotation(poolName), time.Now()); !allLimited {
@@ -2489,22 +2536,34 @@ func (m *home) allExhausted(plan spawnPlan) (pool string, members []config.Claud
 	return poolName, poolMembers, true
 }
 
+// pinSoonestMember is how an exhausted pool is *accepted*: it pins the member whose
+// rate limit resets first, for the whole batch.
+//
+// The pin is not cosmetic. startNewSession fails closed on an unpinned all-limited
+// multi-member pool — deliberately, since that is what shipped #483 — so any caller
+// that proceeds past the exhausted gate without pinning gets a refusal telling it to
+// "pick a member explicitly", which is not something every caller can do. One home for
+// it because there are now two accept paths: the confirmation dialog, and `atrium new
+// --force` answering that dialog in advance (#703).
+func (m *home) pinSoonestMember(pool string, members []config.ClaudeAccount) *overlay.AccountSelection {
+	avail := m.appState.GetAccountAvailability()
+	pinned := members[config.SoonestResetMember(members, avail)]
+	return &overlay.AccountSelection{Pool: pool, Member: &pinned}
+}
+
 // confirmAllExhausted stages a confirm for a fully-rate-limited pool. On accept
 // it pins the soonest-to-reset member for the whole batch and spawns; on decline
 // nothing is created (the dismissed form is stashed as a restorable draft, the
 // same rollback contract as confirmOverCap).
 func (m *home) confirmAllExhausted(plan spawnPlan, pool string, members []config.ClaudeAccount) tea.Cmd {
-	avail := m.appState.GetAccountAvailability()
-	soonest := config.SoonestResetMember(members, avail)
-	pinned := members[soonest]
-	plan.account = &overlay.AccountSelection{Pool: pool, Member: &pinned}
+	plan.account = m.pinSoonestMember(pool, members)
 	m.pendingExhausted = &plan
 	m.stashDirtyCreateForm()
 	m.textInputOverlay = nil
 	m.menu.SetState(ui.StateDefault)
 	m.resetTitleCheck()
 	return m.confirmAction(
-		allExhaustedMessage(pool, members, avail, pinned.Name),
+		allExhaustedMessage(pool, members, m.appState.GetAccountAvailability(), plan.account.Member.Name),
 		// The spawn this unblocks happens later, in the proceedExhaustedMsg handler,
 		// and announces itself with its own per-row Loading spinner. A label here
 		// would name an operation that is not running yet.

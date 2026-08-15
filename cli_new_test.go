@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -443,4 +444,164 @@ func TestNewWaitTimesOut(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "still queued")
 	assert.Len(t, spooledCreates(t), 1, "and it really is still there")
+}
+
+// TestNewRedirectsThroughASymlinkedWorktree: state.json records the path Atrium
+// resolved at creation, and the cwd an agent reports may reach the same directory by
+// another name — on macOS a data dir under /tmp is recorded as /private/tmp, which is
+// the default layout, not a corner case. A missed redirect is silent: it produces a
+// worktree of a worktree rather than an error.
+//
+// tempRepo resolves symlinks precisely so the rest of these tests are not testing the
+// platform's /tmp layout; this one reintroduces one deliberately.
+func TestNewRedirectsThroughASymlinkedWorktree(t *testing.T) {
+	sandboxDataDir(t)
+	repo := tempRepo(t)
+	worktree := tempRepo(t)
+	seedInstances(t, session.InstanceData{
+		Title: "Issue #703", Path: repo, Program: "claude",
+		Worktree: session.GitWorktreeData{RepoPath: repo, WorktreePath: worktree},
+	})
+
+	// A second name for the same worktree, which is what the caller stands in.
+	link := filepath.Join(t.TempDir(), "via-link")
+	require.NoError(t, os.Symlink(worktree, link))
+
+	_, stderr, err := newSession(t, newRequest{title: "follow-up", path: link})
+	require.NoError(t, err)
+
+	entries := spooledCreates(t)
+	require.Len(t, entries, 1)
+	assert.Equal(t, repo, entries[0].Request.Path, "a symlinked worktree is still a worktree")
+	assert.Contains(t, stderr, "Issue #703")
+}
+
+// TestNewRefusesWhenTheRedirectTargetIsGone: the repo path comes off disk rather than
+// off the command line, so unlike --path it has not been validated by anything. A repo
+// that has since been moved or deleted would otherwise be spooled as a path that no
+// longer exists — reported to the caller as "queued", and refused by the drain minutes
+// later where a fire-and-forget caller never sees it.
+func TestNewRefusesWhenTheRedirectTargetIsGone(t *testing.T) {
+	sandboxDataDir(t)
+	worktree := tempRepo(t)
+	gone := filepath.Join(t.TempDir(), "moved-away")
+	seedInstances(t, session.InstanceData{
+		Title: "Issue #703", Path: gone, Program: "claude",
+		Worktree: session.GitWorktreeData{RepoPath: gone, WorktreePath: worktree},
+	})
+
+	_, _, err := newSession(t, newRequest{title: "follow-up", path: worktree})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "is gone")
+	assert.Empty(t, spooledCreates(t), "a resolve failure spools nothing")
+}
+
+// TestNewRefusesANegativeWait: cobra parses "--wait -5s" happily, and a plain
+// `wait > 0` test would silently read it as "do not wait" — so a caller that
+// fat-fingered a sign would be told the request was queued and never learn what
+// became of it.
+func TestNewRefusesANegativeWait(t *testing.T) {
+	sandboxDataDir(t)
+	_, _, err := newSession(t, newRequest{title: "fix-auth", path: tempRepo(t), wait: -5 * time.Second})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "negative")
+	assert.Empty(t, spooledCreates(t), "a bad flag spools nothing")
+}
+
+// TestNewDoesNotSweepAnInFlightConfigWrite is the reason this command reads
+// config.json directly instead of calling config.LoadConfig.
+//
+// The loader's first act is sweepStaleTempFiles, whose glob is exactly the name
+// writeFileAtomic gives an in-flight write — so a TUI saving config.json from the
+// settings panel while a CI loop runs `atrium new` would have its rename fail and lose
+// the save silently. cli_session.go's never-call-the-loader rule opens with that
+// hazard; `new` is the command most advertised for running beside a live TUI.
+func TestNewDoesNotSweepAnInFlightConfigWrite(t *testing.T) {
+	dir := sandboxDataDir(t)
+	inFlight := filepath.Join(dir, ".config.json.tmp-123456")
+	require.NoError(t, os.WriteFile(inFlight, []byte(`{"default_program":"claude"}`), 0o644))
+
+	_, _, err := newSession(t, newRequest{title: "fix-auth", path: tempRepo(t)})
+	require.NoError(t, err)
+
+	assert.FileExists(t, inFlight, "another process's in-flight write must survive a headless read")
+}
+
+// TestNewCreatesNoConfigFile: the loader also seeds config.json from defaults when it
+// is absent, which is a write from a command whose whole contract is that it performs
+// none. TestNewNeverWritesState covers state.json; this covers the other one.
+func TestNewCreatesNoConfigFile(t *testing.T) {
+	dir := sandboxDataDir(t)
+	cfg := filepath.Join(dir, "config.json")
+	require.NoFileExists(t, cfg, "precondition: a fresh data dir has no config.json")
+
+	_, _, err := newSession(t, newRequest{title: "fix-auth", path: tempRepo(t)})
+	require.NoError(t, err)
+
+	assert.NoFileExists(t, cfg, "a pure producer creates nothing in the data dir but its request")
+}
+
+// TestNewCommandFlagsAreAllWired executes the cobra command itself, which nothing else
+// here does: every other test calls runNew directly, so a flag could be registered,
+// documented and dead — the CLI analogue of the drift-sites gap where nothing asserts
+// a registered key has a case in handleKeyPress.
+//
+// It sets every flag to a non-default value and reads them back off the spooled
+// request, so a flag whose registration is missing or bound to the wrong variable
+// fails here rather than shipping.
+func TestNewCommandFlagsAreAllWired(t *testing.T) {
+	sandboxDataDir(t)
+	dir := tempRepo(t)
+	t.Cleanup(resetNewFlags)
+
+	cmd := rootCmd
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{
+		"new", "fix-auth", "start on the parser",
+		"--path", dir, "--program", "codex", "--branch", "release/2.0", "--force",
+	})
+	require.NoError(t, cmd.Execute())
+
+	entries := spooledCreates(t)
+	require.Len(t, entries, 1)
+	got := entries[0].Request
+	assert.Equal(t, "fix-auth", got.Title, "the title argument")
+	assert.Equal(t, "start on the parser", got.Prompt, "the prompt argument")
+	assert.Equal(t, dir, got.Path, "--path")
+	assert.Equal(t, "codex", got.Program, "--program")
+	assert.Equal(t, "release/2.0", got.Branch, "--branch")
+	assert.True(t, got.Force, "--force")
+}
+
+// TestNewCommandProfileFlagIsWired covers the two flags the test above cannot set
+// together: --profile is mutually exclusive with --program, and --wait would block.
+func TestNewCommandProfileFlagIsWired(t *testing.T) {
+	sandboxDataDir(t)
+	t.Cleanup(resetNewFlags)
+
+	cmd := rootCmd
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"new", "fix-auth", "--path", tempRepo(t), "--profile", "nope"})
+	err := cmd.Execute()
+
+	require.Error(t, err, "--profile must reach resolveNewProgram")
+	assert.Contains(t, err.Error(), `no profile "nope"`)
+
+	// The flag variables are package-level and outlive an Execute, so --profile has to
+	// be cleared before the next run or it decides that one too.
+	resetNewFlags()
+	cmd.SetArgs([]string{"new", "fix-auth", "--path", tempRepo(t), "--wait", "1ms"})
+	err = cmd.Execute()
+	require.Error(t, err, "--wait must reach the wait loop")
+	assert.Contains(t, err.Error(), "waited 1ms")
+}
+
+// resetNewFlags clears the package-level flag variables cobra writes into. They
+// outlive a single Execute, so without this one test's --force leaks into the next.
+func resetNewFlags() {
+	newPathFlag, newProgramFlag, newProfileFlag, newBranchFlag = "", "", "", ""
+	newForceFlag = false
+	newWaitFlag = 0
 }

@@ -7,6 +7,7 @@ import (
 	cmd2 "github.com/ZviBaratz/atrium/cmd"
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/daemon"
+	"github.com/ZviBaratz/atrium/internal/outbox"
 	"github.com/ZviBaratz/atrium/internal/undo"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
@@ -111,6 +112,23 @@ func runReset(ctx context.Context, cmdExec cmd2.Executor) error {
 		log.WarningLog.Printf("reset: could not clear the undo journal: %v", err)
 	}
 	fmt.Printf("Undo journal has been cleared; %d retained branch ref%s released\n", dropped, plural(dropped))
+
+	// The spools last, and they are not an afterthought: a queued `atrium new` request
+	// is the one piece of state that can *create* after the wipe. Everything above is
+	// ordered so nothing survives to re-persist a deleted session, and a create request
+	// defeats that from outside the lock by design (`new` deliberately takes none) —
+	// with no session left to collide with, every gate it meets now passes, so the next
+	// launch silently builds a worktree, a branch and an agent from a request made
+	// before the reset. Queued prompts go too: they are harmless (nothing matches their
+	// target any more) but "wipes all Atrium-managed state" should not have an asterisk.
+	//
+	// Best-effort, like the undo journal above: a reset whose real work is done must not
+	// fail on a spool it could not read.
+	if cleared, err := outbox.Clear(); err != nil {
+		log.WarningLog.Printf("reset: could not clear the outbox: %v", err)
+	} else {
+		fmt.Printf("Outbox has been cleared; %d queued request%s discarded\n", cleared, plural(cleared))
+	}
 
 	return nil
 }

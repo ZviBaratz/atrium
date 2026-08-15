@@ -324,6 +324,53 @@ func SweepRejections(now time.Time) {
 	}
 }
 
+// Clear discards every queued record and every rejection receipt in both spools,
+// returning how many records it removed. For `atrium reset`, which wipes Atrium's
+// state and must not leave behind a create request that would rebuild some of it on
+// the next launch.
+//
+// It removes only files this package wrote — the record name format, and that name
+// plus the receipt suffix — never the directories, and never a stray file some other
+// process put there. A record it cannot delete is logged by the caller through the
+// returned error; the count reports what did go.
+func Clear() (int, error) {
+	var removed int
+	var firstErr error
+	for _, resolve := range []func() (string, error){Dir, CreateDir} {
+		dir, err := resolve()
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			if !errors.Is(err, fs.ErrNotExist) && firstErr == nil {
+				firstErr = fmt.Errorf("outbox: read spool dir: %w", err)
+			}
+			continue
+		}
+		for _, de := range entries {
+			name := de.Name()
+			base, isReceipt := strings.CutSuffix(name, rejectedSuffix)
+			if !isMessageFile(base) && !isMessageFile(name) {
+				continue
+			}
+			if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				if firstErr == nil {
+					firstErr = fmt.Errorf("outbox: remove %s: %w", name, err)
+				}
+				continue
+			}
+			if !isReceipt {
+				removed++
+			}
+		}
+	}
+	return removed, firstErr
+}
+
 func sweepReceipts(dir string, now time.Time) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
