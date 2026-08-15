@@ -132,7 +132,12 @@ func TestStartupGates(t *testing.T) {
 		{"claude idle box has no gate", "claude", "│ > │  ? for shortcuts", false},
 		{"claude ignores aider gate string", "claude", "Open documentation url for more info", false},
 		{"aider ignores claude gate string", "aider", "Do you trust the files in this folder?", false},
-		{"gemini folder-trust option rows", "gemini", "● 1. Trust folder (repo)\n  3. Don't trust", true},
+		// gemini's gate needs the accept row INSIDE a box whose bottom border ends the pane
+		// (#713) — the box is what separates a live dialog from the same words in the
+		// transcript, so a bare row is deliberately not enough here.
+		{"gemini folder-trust option rows", "gemini",
+			" ╭────────────────────────────╮\n │ ● 1. Trust folder (repo)   │\n │   3. Don't trust           │\n ╰────────────────────────────╯", true},
+		{"gemini option row outside a box is transcript", "gemini", "● 1. Trust folder (repo)\n  3. Don't trust", false},
 		// 0.55.1 gave gemini the same headline claude uses, and gemini deliberately does NOT
 		// key on it — it is unreachable once a narrow pane wraps it across the dialog's box
 		// border (#713). So the shared string must gate claude above and not gemini here.
@@ -160,9 +165,12 @@ func TestPollClassifiesStartupGateAsGate(t *testing.T) {
 		{"claude folder-trust", "claude", "Quick safety check…\n ❯ 1. Yes, I trust this folder\n Enter to confirm · Esc to cancel"},
 		{"claude new MCP server", "claude", "New MCP server found in this project: nanoclaw\n [Enter] to approve"},
 		{"codex folder-trust", "codex", "Do you trust the contents of this directory?\n› 1. Yes, continue"},
-		// Keyed on the option row, not the headline: gemini's headline is unreachable on a
-		// narrow pane (#713, session/agent/gemini_pane_test.go).
-		{"gemini folder-trust", "gemini", "Do you trust the files in this folder?\n● 1. Trust folder (repo)\n  3. Don't trust"},
+		// Keyed on the option row inside a live box, not the headline: gemini's headline is
+		// unreachable once a narrow pane wraps it across the box border, and the box is what
+		// proves the dialog is on screen rather than in scrollback (#713,
+		// session/agent/gemini_pane_test.go).
+		{"gemini folder-trust", "gemini",
+			" ╭──────────────────────────────────────╮\n │ Do you trust the files in this folder│\n │ ● 1. Trust folder (repo)             │\n │   3. Don't trust                     │\n ╰──────────────────────────────────────╯"},
 		{"aider first-run docs", "aider", "Open documentation url for more info? (Y)es/(N)o/(D)on't ask again [Yes]:"},
 	}
 	for _, tc := range cases {

@@ -1828,10 +1828,10 @@ var aiderIdlePane = strings.Join([]string{
 //
 // What changed at the vendor was the gate's HEADLINE, not its component. An earlier draft
 // here said "FolderTrustDialog.js is gone from the 0.55.1 bundle along with the literal it
-// carried", which is false twice over: the component ships in four bundle/interactiveCli-*.js
-// files carrying its own source marker (packages/cli/src/ui/components/FolderTrustDialog.tsx),
-// and only the standalone .js file is gone, because 0.55.1 ships bundled at all. A reader
-// told the component was removed stops looking for it.
+// carried", which is false twice over: the component ships in bundle/interactiveCli-*.js
+// carrying its own source marker (packages/cli/src/ui/components/FolderTrustDialog.tsx), and
+// only the standalone .js file is gone, because 0.55.1 ships bundled at all. A reader told
+// the component was removed stops looking for it.
 
 func TestGeminiBusyMarker(t *testing.T) {
 	working := strings.Join([]string{
@@ -1891,11 +1891,19 @@ func TestGeminiPrompts(t *testing.T) {
 }
 
 func TestGeminiGateAndResume(t *testing.T) {
-	// The shape, minimally: the gate keys on the option ROWS, so this composed pane carries
-	// them and not the headline. Verbatim 0.55.1 captures across a width ladder — including
-	// the width where the headline is unreachable and the width where the rows themselves
-	// truncate — are in gemini_pane_test.go; this stays here as the adapter's own smoke test.
-	_, ok := gemini.GateUp("Do you trust the files in this folder?\n● 1. Trust folder (repo)\n  2. Trust parent folder (tmp)\n  3. Don't trust")
+	// The shape, minimally: the gate keys on the accept ROW inside a live box, so this
+	// composed pane carries both and not the headline. Verbatim 0.55.1 captures across a
+	// width ladder — including the width where the headline is unreachable and the width
+	// where the rows themselves truncate — are in gemini_pane_test.go; this stays here as
+	// the adapter's own smoke test.
+	_, ok := gemini.GateUp(strings.Join([]string{
+		" ╭──────────────────────────────────────╮",
+		" │ Do you trust the files in this folder│",
+		" │ ● 1. Trust folder (repo)             │",
+		" │   2. Trust parent folder (tmp)       │",
+		" │   3. Don't trust                     │",
+		" ╰──────────────────────────────────────╯",
+	}, "\n"))
 	require.True(t, ok)
 
 	// The headline alone is not the anchor, and must not be mistaken for one: it is what

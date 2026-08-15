@@ -102,6 +102,51 @@ func footerBelowBox(content string) (string, bool) {
 	return strings.Join(lines[lastRule+1:], "\n"), true
 }
 
+// bottomBoxBlock returns the interior of the pane's bottom-most box, and true only when
+// that box's bottom border is the LAST non-empty line on screen. It is the liveness anchor
+// for a modal dialog the way footerBelowBox is for claude's footer, and the two conditions
+// do different jobs:
+//
+//   - "inside a box" separates a live dialog from the transcript. A phrase quoted in the
+//     conversation body is not boxed, so it cannot reach the returned block — which a
+//     bottom-N window (liveChromeLines) cannot promise, because the transcript scrolls
+//     through it.
+//   - "the border ends the pane" separates an OPEN dialog from a dismissed one. An agent
+//     that answers a modal draws its composer below where the modal was; the moment
+//     anything renders under the box, this returns false. Without it a dialog left in
+//     scrollback keeps matching forever, which for a startup gate means the queued first
+//     prompt is never delivered (registry_test.go's TestAgyTrustGate pins the same
+//     property for agy, which earns it by REPLACING the screen instead).
+//
+// Interior lines are returned joined by "\n", deliberately unflattened: a caller matching a
+// literal gets no cross-line synthesis, so two adjacent wrapped lines cannot manufacture a
+// phrase neither of them renders. A caller that needs wrap repair should flatten the result
+// itself and accept that cost knowingly.
+//
+// Input must already be cleaned for detection (ANSI stripped), like every other predicate
+// here — an ANSI-prefixed border is not a border to isHorizontalRule. Returns ("", false)
+// when the last line is not a border, or when no border sits above it to close the box.
+func bottomBoxBlock(content string) (string, bool) {
+	lines := strings.Split(content, "\n")
+
+	last := -1
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.TrimSpace(lines[i]) != "" {
+			last = i
+			break
+		}
+	}
+	if last < 0 || !isHorizontalRule(lines[last]) {
+		return "", false
+	}
+	for i := last - 1; i >= 0; i-- {
+		if isHorizontalRule(lines[i]) {
+			return strings.Join(lines[i+1:last], "\n"), true
+		}
+	}
+	return "", false
+}
+
 // footerRegion returns the live footer of the pane: the lines below the input box's bottom
 // border. Claude renders its status hints and the variable-height agent-team selector (one
 // line per teammate) there, and the busy marker sits among them — so anchoring to the box

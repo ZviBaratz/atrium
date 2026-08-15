@@ -64,7 +64,12 @@ func TestRender(t *testing.T) {
 
 	for _, want := range []string{
 		"Claude Code", "2.1.179", "2.1.170", "drifted",
-		"Gemini CLI", "ok",
+		// Both version strings asserted, not just the row label: until #715 round 3 this row
+		// checked only "Gemini CLI" and "ok", so the literals it renders could be edited to
+		// anything and the test would still pass — which is how it sat at 0.27.4/0.27 long
+		// after the registry pin moved. The claude row above already did this; this one now
+		// matches it.
+		"Gemini CLI", "0.55.9", "0.55.1", "ok",
 		"Codex", "not installed",
 		"Aider", "unknown",
 	} {
