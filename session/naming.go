@@ -420,14 +420,15 @@ func changedFiles(content string) []string {
 	return files
 }
 
-// MaxTitleLen mirrors the 32-char cap the new-session/rename title input enforces
-// (ui/overlay newTitleInput's CharLimit), so a generated name fits the same field.
+// MaxTitleLen is the 32-rune cap on a session title, and the definition every other
+// site cites rather than repeats: the new-session/rename input sets its CharLimit from
+// this constant (ui/overlay newTitleInput), so a generated name fits the same field by
+// construction rather than by agreement.
 //
-// Exported because it is a rule about titles rather than about generated names,
-// and `atrium new` has to enforce it too (#703): a CLI title has no input field to
-// stop at 32, and a session created past the cap could not be renamed to its own
-// name. That makes this the definition every non-interactive caller cites, with
-// the CharLimit as its interactive twin.
+// It lives here, and is exported, because it is a rule about titles rather than about
+// generated names, and `atrium new` has to enforce it too (#703): a CLI title has no
+// input field to stop at 32, and a session created past the cap could not be renamed to
+// its own name.
 const MaxTitleLen = 32
 
 // SlugTitle turns a raw line into a clean, bounded session title using the same

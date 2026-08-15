@@ -800,6 +800,11 @@ type home struct {
 	// not 10×/s — which would also perturb the tick-based idle hysteresis.
 	lastStatusPollSelection *session.Instance
 
+	// lastRejectionSweep is when the outbox receipt GC last walked the two spools. It
+	// enforces a 24h horizon, so it does not need the ~500ms metadata tick's cadence —
+	// see sweepRejectionsOccasionally. Zero means "never this run", which sweeps.
+	lastRejectionSweep time.Time
+
 	// selectedSince records when the current selection was last changed. The
 	// read-dwell (markSeenAfterDwell) requires the row to have been selected this
 	// long before clearing its unread state, so cursor travel through rows never

@@ -36,6 +36,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -116,7 +117,7 @@ func CreateDir() (string, error) {
 // WriteCreate commits r to the create spool and returns the path it was written
 // to. It stamps Version and, unless the caller supplied one, CreatedAt.
 func WriteCreate(r Request) (string, error) {
-	if r.Title == "" || r.Path == "" {
+	if strings.TrimSpace(r.Title) == "" || r.Path == "" {
 		return "", errors.New("outbox: a create request needs a title and a path")
 	}
 	if r.CreatedAt.IsZero() {
@@ -172,6 +173,18 @@ func readCreate(path string) CreateEntry {
 		return CreateEntry{Path: path, Err: fmt.Errorf(
 			"create request %s has version %d, this atrium understands %d",
 			filepath.Base(path), r.Version, createVersion)}
+	}
+	// The same pair WriteCreate refuses to write, refused on the way back in. Nothing
+	// this package produces can fail it; a file written by hand can, and a Request that
+	// gets past here is executed exactly like any other. A blank title is not caught
+	// downstream — titleConflictIn deliberately returns "no conflict" for one, so the
+	// drain would build a session whose row renders empty — and a blank path is worse
+	// than blank: filepath.Abs("") is the *draining TUI's* working directory with a nil
+	// error, so the request would create a worktree wherever atrium happened to be
+	// launched from.
+	if strings.TrimSpace(r.Title) == "" || r.Path == "" {
+		return CreateEntry{Path: path, Err: fmt.Errorf(
+			"create request %s has no title or no path", filepath.Base(path))}
 	}
 	return CreateEntry{Path: path, Request: r}
 }

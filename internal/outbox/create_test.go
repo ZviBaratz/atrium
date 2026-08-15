@@ -78,12 +78,14 @@ func TestWriteCreatePreservesExplicitCreatedAt(t *testing.T) {
 
 // TestWriteCreateRejectsIncompleteRequest: a request with no title or no path
 // cannot be executed by any drain, so it must never reach the spool — the same
-// up-front refusal Write applies.
+// up-front refusal Write applies. readCreate enforces the same pair on the way back
+// in (TestReadCreateRefusesABlankTitleOrPath), for a file written by hand.
 func TestWriteCreateRejectsIncompleteRequest(t *testing.T) {
 	cases := map[string]Request{
-		"no title": {Path: "/repo"},
-		"no path":  {Title: "t"},
-		"neither":  {},
+		"no title":         {Path: "/repo"},
+		"whitespace title": {Title: "   ", Path: "/repo"},
+		"no path":          {Title: "t"},
+		"neither":          {},
 	}
 	for name, r := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -307,8 +309,9 @@ func TestClearRemovesBothSpools(t *testing.T) {
 	assert.Equal(t, 2, removed, "the two live records are counted; a receipt is not a record")
 	assert.NoFileExists(t, msg)
 	assert.NoFileExists(t, held)
-	_, rejected := Rejection(create)
-	assert.False(t, rejected, "receipts go too, or reset leaves a refusal for a request it deleted")
+	reason, rejected := Rejection(create)
+	assert.True(t, rejected, "an existing receipt is left alone: deleting it is the same false success one step earlier")
+	assert.Equal(t, "some reason", reason, "and it still names the original refusal, not the reset")
 
 	entries, err := ListCreates()
 	require.NoError(t, err)
@@ -316,6 +319,29 @@ func TestClearRemovesBothSpools(t *testing.T) {
 	msgs, err := List()
 	require.NoError(t, err)
 	assert.Empty(t, msgs)
+}
+
+// TestClearLeavesAReceiptForEveryRecord is the property the count cannot show: a
+// producer blocked in `--wait` reads the record's disappearance as success, so a reset
+// that unlinked instead of rejecting would report itself to `atrium new --wait` as a
+// created session and exit 0 — with state.json just wiped, even the branch clause would
+// go quiet rather than give it away.
+func TestClearLeavesAReceiptForEveryRecord(t *testing.T) {
+	sandbox(t)
+	create, err := WriteCreate(req("fix-auth", "/repo"))
+	require.NoError(t, err)
+	msg, err := Write(Message{Title: "s", Path: "/repo", Text: "hi"})
+	require.NoError(t, err)
+
+	removed, err := Clear()
+	require.NoError(t, err)
+	assert.Equal(t, 2, removed)
+
+	for _, path := range []string{create, msg} {
+		reason, rejected := Rejection(path)
+		assert.True(t, rejected, "%s vanished with no receipt", filepath.Base(path))
+		assert.Equal(t, clearReason, reason)
+	}
 }
 
 // TestClearLeavesForeignFilesAlone: the spool directory also holds WriteFileAtomic's
@@ -346,4 +372,29 @@ func TestClearOnAnAbsentSpoolIsNotAnError(t *testing.T) {
 	removed, err := Clear()
 	require.NoError(t, err)
 	assert.Zero(t, removed)
+}
+
+// TestReadCreateRefusesABlankTitleOrPath: WriteCreate refuses to write that pair, so
+// readCreate refuses to hand it back. Nothing this package produces can fail it — a
+// file written by hand can, and a Request that gets past the decoder is executed
+// exactly like any other, with no second opinion downstream: the drain's title check
+// deliberately answers "no conflict" for a blank title, and filepath.Abs("") is the
+// draining TUI's own working directory with a nil error.
+func TestReadCreateRefusesABlankTitleOrPath(t *testing.T) {
+	for _, tc := range []struct{ name, body string }{
+		{"empty title", `{"version":1,"title":"","path":"/repo"}`},
+		{"whitespace title", `{"version":1,"title":"  ","path":"/repo"}`},
+		{"no path", `{"version":1,"title":"fix-auth"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sandbox(t)
+			writeRawCreate(t, "1700000000000000000-abc.json", tc.body)
+
+			entries, err := ListCreates()
+			require.NoError(t, err)
+			require.Len(t, entries, 1)
+			require.Error(t, entries[0].Err, "an unusable record must surface as Err, not as a Request")
+			assert.Contains(t, entries[0].Err.Error(), "no title or no path")
+		})
+	}
 }

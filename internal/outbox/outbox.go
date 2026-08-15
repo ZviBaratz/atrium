@@ -324,15 +324,32 @@ func SweepRejections(now time.Time) {
 	}
 }
 
-// Clear discards every queued record and every rejection receipt in both spools,
-// returning how many records it removed. For `atrium reset`, which wipes Atrium's
-// state and must not leave behind a create request that would rebuild some of it on
-// the next launch.
+// clearReason is what a producer blocked in --wait is told when `atrium reset` takes
+// its queued record away. It has to be a refusal rather than a silent unlink: the
+// record vanishing is the signal --wait reads as "done".
+const clearReason = "atrium reset discarded every queued request"
+
+// Clear discards every queued record in both spools, returning how many it removed.
+// For `atrium reset`, which wipes Atrium's state and must not leave behind a create
+// request that would rebuild some of it on the next launch.
 //
-// It removes only files this package wrote — the record name format, and that name
-// plus the receipt suffix — never the directories, and never a stray file some other
-// process put there. A record it cannot delete is logged by the caller through the
-// returned error; the count reports what did go.
+// It goes through Reject rather than unlinking, for the reason Reject exists: a
+// producer blocked in `--wait` cannot tell a discard from a delivery except by the
+// receipt, so a bare os.Remove here would have `atrium reset` report itself to a
+// waiting `atrium new --wait` as a successful creation — exit 0, and a CI job
+// proceeding against a session that does not exist.
+//
+// Existing receipts are therefore left alone rather than swept: a receipt is the only
+// record of a refusal its producer may not have read yet, and deleting it is the same
+// false success one step earlier. They are bounded already — SweepRejections drops
+// them at the TTL horizon.
+//
+// It touches only files this package wrote (the record name format), never the
+// directories, and never a stray file some other process put there. The count is of
+// records discarded cleanly: one whose receipt could not be written is reported through
+// the returned error and not counted, even though Reject removes it regardless — an
+// unreported failure being better than a record that is re-read and re-rejected
+// forever.
 func Clear() (int, error) {
 	var removed int
 	var firstErr error
@@ -353,19 +370,16 @@ func Clear() (int, error) {
 		}
 		for _, de := range entries {
 			name := de.Name()
-			base, isReceipt := strings.CutSuffix(name, rejectedSuffix)
-			if !isMessageFile(base) && !isMessageFile(name) {
-				continue
+			if !isMessageFile(name) {
+				continue // a receipt, a nested spool dir, or not ours at all
 			}
-			if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			if err := Reject(filepath.Join(dir, name), clearReason); err != nil {
 				if firstErr == nil {
-					firstErr = fmt.Errorf("outbox: remove %s: %w", name, err)
+					firstErr = fmt.Errorf("outbox: discard %s: %w", name, err)
 				}
 				continue
 			}
-			if !isReceipt {
-				removed++
-			}
+			removed++
 		}
 	}
 	return removed, firstErr

@@ -121,9 +121,8 @@ func runSend(out, errOut io.Writer, selector, path, text string, wait time.Durat
 // The drain unlinks the file whether it queued the prompt or threw it away — a
 // session killed between resolve and drain is the realistic case — so the file's
 // disappearance alone only means some Atrium consumed it. A discard therefore
-// leaves a receipt naming the reason, and that is checked first: it is written
-// before the message is unlinked, so a rejection can never be observed as a
-// successful delivery.
+// leaves a receipt naming the reason; awaitSpool owns the order the two are
+// sampled in, which is what keeps a discard from reading as a delivery.
 func waitForDrain(path string, timeout time.Duration) error {
 	return awaitSpool(path, timeout, spoolWaitCopy{
 		refused: "atrium did not deliver the prompt",
@@ -131,6 +130,13 @@ func waitForDrain(path string, timeout time.Duration) error {
 			"in the outbox and will be delivered the next time one runs", timeout),
 	})
 }
+
+// betweenSpoolSamples runs between awaitSpool's two samples. A no-op in production; a
+// var on config.detectAgentCommand's precedent, because the ORDER of those samples is
+// the whole invariant and nothing outside this function can force the window between
+// them — the drain landing a Reject there is a race of microseconds, so a test that
+// only sets up the resulting state proves nothing about which sample sees it first.
+var betweenSpoolSamples = func() {}
 
 // spoolWaitCopy is the wording awaitSpool cannot supply: what a refusal and a timeout
 // are called for this particular command. Both are finished strings — the caller knows
@@ -141,32 +147,53 @@ type spoolWaitCopy struct {
 }
 
 // awaitSpool implements the completion protocol both `send --wait` and `new --wait`
-// use. A rejection receipt is checked first — it is written before the request is
-// unlinked, so a refusal can never be observed as a success — then the file's
-// disappearance, then the deadline.
+// use: a rejection receipt means refused, the record's disappearance means done, and
+// the deadline means still queued.
 //
-// Shared because the ordering is the correctness, and two copies of an ordering drift.
-// What the two commands do differ about is what the disappearance *means* — for a
-// prompt, that some Atrium consumed it; for a create, that the session exists *and is
-// recorded*, since the drain holds the file until Start has completed and the row has
-// been persisted — but that difference is in the callers' wording and in what they do
-// afterwards, not in the protocol.
+// The sampling order is the correctness. Reject writes the receipt and then unlinks
+// the record, which guarantees only "if the record is gone, the receipt is already
+// there" — so the record's absence becomes conclusive only once the receipt has been
+// checked AFTER it. Sampling the receipt once, up front, loses the race outright:
+// receipt absent, then the drain completes both the write and the unlink, then Stat
+// returns ENOENT and a refusal for a taken title or a full cap is reported as a created
+// session, exit 0. The leading check below is only a fast path; the one that closes the
+// window is the re-read inside the ENOENT arm.
+//
+// Shared because two copies of an ordering drift. What the two commands differ about is
+// what the disappearance *means* — for a prompt, that some Atrium consumed it; for a
+// create, that the session exists *and is recorded*, since the drain holds the file
+// until Start has completed and the row has been persisted — but that difference is in
+// the callers' wording and in what they do afterwards, not in the protocol.
 //
 // A Stat error other than "not found" is a bad data dir, not a completion: it is
 // reported rather than read as either outcome. Retrying to the deadline would turn a
 // permissions problem into a timeout that blames the TUI.
 func awaitSpool(path string, timeout time.Duration, wording spoolWaitCopy) error {
+	refused := func() error {
+		reason, ok := outbox.Rejection(path)
+		if !ok {
+			return nil
+		}
+		if err := outbox.ClearRejection(path); err != nil {
+			log.ErrorLog.Printf("failed to clear an outbox rejection receipt: %v", err)
+		}
+		return fmt.Errorf("%s: %s", wording.refused, reason)
+	}
+
 	deadline := time.Now().Add(timeout)
 	for {
-		if reason, ok := outbox.Rejection(path); ok {
-			if err := outbox.ClearRejection(path); err != nil {
-				log.ErrorLog.Printf("failed to clear an outbox rejection receipt: %v", err)
-			}
-			return fmt.Errorf("%s: %s", wording.refused, reason)
+		if err := refused(); err != nil {
+			return err
 		}
+		betweenSpoolSamples()
 		_, err := os.Stat(path)
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
+			// The record went away between the two samples; the receipt for it, if
+			// there is one, is on disk by now.
+			if err := refused(); err != nil {
+				return err
+			}
 			return nil
 		case err != nil:
 			return fmt.Errorf("failed to read the outbox: %w", err)

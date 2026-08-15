@@ -1413,6 +1413,21 @@ func TestShouldAutoOpen(t *testing.T) {
 // The table is over all three origins rather than the two that were bools, because the
 // policy is now a switch on a type whose values a future caller can add to — an origin
 // with no row here is a session that might attach without anyone deciding it should.
+// TestAutoAttachOriginsAreExhaustive holds that to the enum.
+var autoAttachCases = []struct {
+	name      string
+	hadPrompt bool
+	origin    spawnOrigin
+	want      bool
+}{
+	{"interactive, no prompt", false, spawnInteractive, true},
+	{"interactive, boot prompt", true, spawnInteractive, false},
+	{"fan-out variant", false, spawnVariant, false},
+	{"fan-out variant with a prompt", true, spawnVariant, false},
+	{"background create", false, spawnBackground, false},
+	{"background create with a prompt", true, spawnBackground, false},
+}
+
 func TestAutoAttachEligible(t *testing.T) {
 	on := func() *home {
 		cfg := config.DefaultConfig()
@@ -1420,19 +1435,7 @@ func TestAutoAttachEligible(t *testing.T) {
 		cfg.AutoAttach = &enabled
 		return &home{ctx: context.Background(), appConfig: cfg}
 	}
-	for _, tc := range []struct {
-		name      string
-		hadPrompt bool
-		origin    spawnOrigin
-		want      bool
-	}{
-		{"interactive, no prompt", false, spawnInteractive, true},
-		{"interactive, boot prompt", true, spawnInteractive, false},
-		{"fan-out variant", false, spawnVariant, false},
-		{"fan-out variant with a prompt", true, spawnVariant, false},
-		{"background create", false, spawnBackground, false},
-		{"background create with a prompt", true, spawnBackground, false},
-	} {
+	for _, tc := range autoAttachCases {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, on().autoAttachEligible(tc.hadPrompt, tc.origin))
 		})
@@ -1442,12 +1445,21 @@ func TestAutoAttachEligible(t *testing.T) {
 // TestAutoAttachOriginsAreExhaustive is the guard behind that table: it fails when a
 // spawnOrigin is added without a decision about auto-attach being recorded above.
 //
-// The count is the datum, per CLAUDE.md's prose-says-why rule — the origins are a
-// contiguous iota, so the highest one names how many there are, and the table above
-// covers each of them.
+// It iterates the enum through its numSpawnOrigins sentinel rather than asserting a
+// bound on the highest value. A bound does not guard: the ordinary way an enum grows is
+// a new value appended after the last one, which leaves the last one's number unchanged
+// — so `spawnBackground == spawnOrigin(2)` still passes, and the new origin ships with
+// no row here and may auto-attach without anyone having decided it should. Iterating to
+// the sentinel fails wherever the value is inserted.
 func TestAutoAttachOriginsAreExhaustive(t *testing.T) {
-	assert.Equal(t, spawnBackground, spawnOrigin(2),
-		"spawnOrigin gained a value; give it a row in TestAutoAttachEligible and update this bound")
+	covered := map[spawnOrigin]bool{}
+	for _, tc := range autoAttachCases {
+		covered[tc.origin] = true
+	}
+	for o := spawnOrigin(0); o < numSpawnOrigins; o++ {
+		assert.True(t, covered[o],
+			"spawnOrigin %d has no row in autoAttachCases; decide whether it may auto-attach", o)
+	}
 }
 
 // The off-cadence poll handler applies the polled state to the instance immediately, and

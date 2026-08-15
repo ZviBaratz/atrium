@@ -1,6 +1,10 @@
 package ui
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/ZviBaratz/atrium/session"
+)
 
 // Repo-group fold state: collapse/expand a group, collapse-all toggling, and
 // the persisted set of collapsed repo keys.
@@ -70,6 +74,29 @@ func (l *List) ToggleCollapseAll() bool {
 // Used by callers to distinguish "already in that state" from "nothing to fold".
 func (l *List) HasMultipleGroups() bool {
 	return l.distinctRepoCount() > 1
+}
+
+// AddInstanceKeepingFolds adds instance without unfolding its repo group, for a
+// creation nobody is watching (`atrium new`, #703). AddInstance's unconditional
+// unfold is right for a keypress — a session you just made must not land hidden —
+// and wrong for a background create, which reorganises nothing a human arranged.
+//
+// It lives here, as the exact inverse of the one `delete(l.collapsed, key)` it
+// undoes, rather than in the caller as a CollapsedRepos/SetCollapsedRepos round
+// trip: that round trip is lossy, because CollapsedRepos prunes to keys present in
+// the list and would drop a fold held for a repo whose sessions are all gone.
+func (l *List) AddInstanceKeepingFolds(instance *session.Instance) (finalize func()) {
+	key := repoKey(instance)
+	wasCollapsed := l.collapsed[key]
+	finalize = l.AddInstance(instance)
+	if wasCollapsed {
+		l.collapsed[key] = true
+		// The new row is hidden again, and AddInstance may have shifted the
+		// selection index past it; re-establish the navigable-selection invariant
+		// through the one function that owns it.
+		l.clampSelectionToNavigable()
+	}
+	return finalize
 }
 
 // CollapsedRepos returns the collapsed repo keys still present in the list, sorted for stable

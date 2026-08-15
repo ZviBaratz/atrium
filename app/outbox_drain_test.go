@@ -407,3 +407,37 @@ func TestDrainClearsSpoolEvenIfPersistFails(t *testing.T) {
 	assert.Equal(t, 1, inst.QueueLen(), "the prompt is still queued in memory")
 	assert.Zero(t, spoolCount(t), "and the spool file is cleared rather than left to re-queue")
 }
+
+// TestRejectionSweepIsThrottled: the receipt GC enforces a 24-hour horizon and used to
+// run on every ~500ms metadata tick, walking both spool directories each time — ~170k
+// directory reads a day to collect a file that can wait. It must still run once per
+// launch, because a receipt left by a previous run for a producer that never came back
+// is exactly what it exists to collect.
+func TestRejectionSweepIsThrottled(t *testing.T) {
+	h := drainHome(t)
+	path, err := outbox.WriteCreate(outbox.Request{Title: "gone", Path: t.TempDir()})
+	require.NoError(t, err)
+	require.NoError(t, outbox.Reject(path, "a reason nobody read"))
+	stale := path + ".rejected"
+	require.NoError(t, os.Chtimes(stale, time.Now().Add(-2*outbox.TTL), time.Now().Add(-2*outbox.TTL)))
+
+	// A second receipt, aged the same way, to prove the second sweep is what is
+	// skipped rather than the collection being a one-shot.
+	other, err := outbox.WriteCreate(outbox.Request{Title: "gone-too", Path: t.TempDir()})
+	require.NoError(t, err)
+	require.NoError(t, outbox.Reject(other, "another"))
+
+	h.drainOutbox() // the first tick of the run sweeps
+	assert.NoFileExists(t, stale, "a receipt past the horizon is collected on the first tick")
+
+	require.NoError(t, os.Chtimes(other+".rejected",
+		time.Now().Add(-2*outbox.TTL), time.Now().Add(-2*outbox.TTL)))
+	h.drainOutbox()
+	assert.FileExists(t, other+".rejected", "and the next tick does not walk the spools again")
+
+	// The control: past the interval it sweeps again, so the throttle is a delay and
+	// not a one-shot.
+	h.lastRejectionSweep = time.Now().Add(-2 * rejectionSweepInterval)
+	h.drainOutbox()
+	assert.NoFileExists(t, other+".rejected")
+}

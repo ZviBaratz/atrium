@@ -330,12 +330,16 @@ func TestNewWaitReportsTheBranchTheTUIRecorded(t *testing.T) {
 
 	// Stand in for the TUI's drain: once the request appears, record the session
 	// it produced and clear the file — the order the real drain uses.
+	// writeInstances, not seedInstances: a require.NoError here would be a t.FailNow
+	// off the test goroutine, which testing forbids — it would kill this goroutine
+	// silently and surface as a wait timeout blaming the protocol.
+	var seedErr error
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		for range 200 {
 			if entries, err := outbox.ListCreates(); err == nil && len(entries) == 1 {
-				seedInstances(t, session.InstanceData{
+				seedErr = writeInstances(session.InstanceData{
 					Title: "fix-auth", Path: dir, Program: "claude", Branch: "zvi/fix-auth",
 					Worktree: session.GitWorktreeData{
 						RepoPath: dir, WorktreePath: "/worktrees/fix-auth", BranchName: "zvi/fix-auth",
@@ -350,6 +354,7 @@ func TestNewWaitReportsTheBranchTheTUIRecorded(t *testing.T) {
 
 	stdout, _, err := newSession(t, newRequest{title: "fix-auth", path: dir, wait: 5 * time.Second})
 	<-done
+	require.NoError(t, seedErr)
 	require.NoError(t, err)
 	assert.Contains(t, stdout, "created \"fix-auth\"")
 	assert.Contains(t, stdout, "zvi/fix-auth")
@@ -362,12 +367,13 @@ func TestNewWaitSaysNoBranchForADirectSession(t *testing.T) {
 	sandboxDataDir(t)
 	dir := tempRepo(t)
 
+	var seedErr error // see the note in TestNewWaitReportsTheBranchTheTUIRecorded
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		for range 200 {
 			if entries, err := outbox.ListCreates(); err == nil && len(entries) == 1 {
-				seedInstances(t, inst("fix-auth", dir)) // no Branch, no worktree
+				seedErr = writeInstances(inst("fix-auth", dir)) // no Branch, no worktree
 				_ = outbox.Remove(entries[0].Path)
 				return
 			}
@@ -377,6 +383,7 @@ func TestNewWaitSaysNoBranchForADirectSession(t *testing.T) {
 
 	stdout, _, err := newSession(t, newRequest{title: "fix-auth", path: dir, wait: 5 * time.Second})
 	<-done
+	require.NoError(t, seedErr)
 	require.NoError(t, err)
 	assert.Contains(t, stdout, "created \"fix-auth\"")
 	assert.NotContains(t, stdout, " on ", "a direct session has no branch to name")
@@ -604,4 +611,56 @@ func resetNewFlags() {
 	newPathFlag, newProgramFlag, newProfileFlag, newBranchFlag = "", "", "", ""
 	newForceFlag = false
 	newWaitFlag = 0
+}
+
+// TestNewWaitDoesNotReadARefusalAsSuccess pins awaitSpool's sampling ORDER, which is
+// the reverse of the writer's. Reject writes the receipt and then unlinks the record,
+// which guarantees only "if the record is gone, the receipt is there" — so the record
+// has to be sampled last. Sampling it first loses the race outright: receipt absent,
+// then the drain completes both halves, then Stat returns ENOENT and a refusal for a
+// taken title or a full cap is printed as `created "fix-auth"` with exit 0, sending a
+// CI job on against a session that does not exist.
+//
+// betweenSpoolSamples reproduces exactly that window; nothing outside awaitSpool can.
+func TestNewWaitDoesNotReadARefusalAsSuccess(t *testing.T) {
+	sandboxDataDir(t)
+	path, err := outbox.WriteCreate(outbox.Request{Title: "fix-auth", Path: tempRepo(t)})
+	require.NoError(t, err)
+
+	fired := false
+	betweenSpoolSamples = func() {
+		if fired {
+			return
+		}
+		fired = true
+		require.NoError(t, outbox.Reject(path, "a session named \"fix-auth\" already exists here"))
+	}
+	t.Cleanup(func() { betweenSpoolSamples = func() {} })
+
+	err = awaitSpool(path, 5*time.Second, spoolWaitCopy{refused: "refused", timedOut: "timed out"})
+	require.True(t, fired, "precondition: the window was reproduced")
+	require.Error(t, err, "a refusal read as a success is the whole failure mode")
+	assert.Contains(t, err.Error(), "already exists here")
+}
+
+// TestNewProfileResolvesWithNoConfigFile is the headless-bootstrap case --profile
+// exists for: a machine where an agent is installed and no TUI has ever run, so there
+// is no config.json to read. The fallback has to be LoadConfig's own — a plain
+// DefaultConfig carries no Profiles at all, so GetProfiles synthesizes a lone "claude"
+// and the flag is refused for a profile the draining TUI's table will list.
+func TestNewProfileResolvesWithNoConfigFile(t *testing.T) {
+	dir := sandboxDataDir(t)
+	require.NoFileExists(t, filepath.Join(dir, config.ConfigFileName),
+		"precondition: nothing has ever written a config")
+
+	bin := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "codex"), []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	_, _, err := newSession(t, newRequest{title: "fix-auth", path: tempRepo(t), profile: "codex"})
+	require.NoError(t, err)
+
+	entries := spooledCreates(t)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "codex", entries[0].Request.Program)
 }

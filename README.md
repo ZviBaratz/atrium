@@ -241,15 +241,19 @@ are attached to a session** — Atrium has handed the terminal to tmux and its
 event loop is parked until you detach. Nothing is lost, but "within about a
 second" assumes a TUI watching the list rather than one sitting inside a pane.
 
-None of the four takes Atrium's lock or loads its config the way the TUI does, so
-running them on a loop alongside a live Atrium is safe: `ls` and `peek` only ever
-read, and `send` and `new` add exactly one file each — the request they spool —
-and touch nothing else in the data directory.
+None of the four holds Atrium's lock or writes `state.json`, so running them on a
+loop alongside a live Atrium is safe. `ls` and `peek` only read it; `send` and
+`new` add one file each — the request they spool — and, when they are not blocking
+on `--wait`, take `tui.lock` and release it again to work out whether a TUI is
+there to warn you about. All four append to the shared, rotating `atrium.log` in
+the data directory, as every Atrium command does.
 
 A queued request is state, so `atrium reset` discards both spools along with
 everything else it wipes. Without that, a create request made before the reset
 would still be there afterwards, and — with no session left for its title to
-collide with — the next Atrium would build it.
+collide with — the next Atrium would build it. Each discarded request leaves the
+same rejection receipt any other refusal would, so a `--wait` blocked on one is
+told the reset took it rather than reading the file's disappearance as success.
 
 If a title exists in more than one repo, `ls`, `peek` and `send` will report the
 ambiguity and list the candidates; `--path <repo>` picks one. (`new` takes

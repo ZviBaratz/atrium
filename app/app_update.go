@@ -889,10 +889,17 @@ func (m *home) reconcileInFlightStarts(ctx context.Context) {
 
 	signalShutdown := ctx.Err() != nil
 	// This loop is the other completion path for a session an `atrium new` request is
-	// still holding open — and, unlike the crash window handleInstanceStarted leaves,
-	// an ordinary SIGTERM reaches it every time. Every branch below therefore settles:
+	// still holding open, and an ordinary SIGTERM reaches it whenever the Start
+	// goroutines join inside drainTimeout. Every branch below therefore settles:
 	// unsettled, the request file survives, the next launch re-reads it, and the
 	// caller is handed "already used" for a session that exists and is running.
+	//
+	// The drain-timeout return above is the exception, and it cannot settle: a Start is
+	// still running, so its outcome is not known and touching the instance would race
+	// the goroutine. That leaves the same self-correcting window handleInstanceStarted
+	// leaves between its persist and its unlink — the next launch re-reads the file and
+	// either the session persisted, so the title collides and the request is refused, or
+	// it did not, and re-creating it is right.
 	var adopted []*session.Instance
 	for _, inst := range m.list.GetInstances() {
 		if inst.GetStatus() != session.Loading {
@@ -931,7 +938,14 @@ func (m *home) reconcileInFlightStarts(ctx context.Context) {
 		if err := m.persistInstances(); err != nil {
 			log.WarningLog.Printf("shutdown: failed to persist adopted session(s): %v", err)
 			for _, inst := range adopted {
-				m.settleCreateRequest(inst, err)
+				// Not "could not be started": these reached `adopted` through
+				// inst.Started(), so the worktree, the branch and the agent all exist
+				// and what failed is the record of them. Telling a waiting --wait the
+				// session was never started is what sends a retrying script back to
+				// `atrium new` with the same title, to collide with the live tmux
+				// session and orphan branch the first run really did leave.
+				m.failCreateRequest(inst,
+					fmt.Sprintf("the session was created but atrium could not record it: %v", err))
 			}
 			return
 		}

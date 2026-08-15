@@ -34,8 +34,10 @@ func (g *Worktree) Setup() error {
 	// the resume branch and silently adopts someone else's work. Two of the three
 	// creation paths hold up their end — the new-session form (createSessionFromForm)
 	// and the `atrium new` drain (executeCreateRequest), both via the variantTitleConflict
-	// pair in app/app_session.go, which is the only predicate that consults
-	// git.LocalBranchExists. Smart auto-dispatch does not: it calls titleConflict, whose
+	// pair in app/app_session.go, the only *creation* predicate that consults
+	// git.LocalBranchExists (app_branchsearch.go and app_checkpoints.go call it for the
+	// form's async verdict and for checkpoint restore, neither of which gates a create).
+	// Smart auto-dispatch does not: it calls titleConflict, whose
 	// branch arm reads m.titleBranchExists, an async verdict only the create form ever
 	// schedules. An auto-dispatched title matching an orphan branch therefore reaches
 	// this line and resumes it (atrium#711).

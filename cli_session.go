@@ -93,25 +93,32 @@ func readStateFile() ([]byte, error) {
 // also seeds a default config.json when none exists, which is a write from a command
 // whose whole contract is that it performs none.
 //
-// What it must NOT do is improve on LoadConfig. loadJSONFile decodes into a zero
-// Config rather than onto the defaults, so a config.json that omits branch_prefix
-// yields "" and not a username-derived prefix. Decoding onto DefaultConfig here would
-// read better and be worse: this side would compute a prefix the draining TUI does not
-// use, and the title pre-check would answer about a branch nothing will create. So a
-// present file is decoded exactly as LoadConfig decodes it, defaults only for an
-// absent or unparseable one — the difference being that neither is written back.
+// What it must NOT do is improve on LoadConfig, in either half. loadJSONFile decodes
+// into a zero Config rather than onto the defaults, so a config.json that omits
+// branch_prefix yields "" and not a username-derived prefix; decoding onto
+// DefaultConfig here would read better and be worse, because this side would compute a
+// prefix the draining TUI does not use and the title pre-check would answer about a
+// branch nothing will create. And the fallback is SeededDefaultConfig, not
+// DefaultConfig, because that is what LoadConfig falls back to: DefaultConfig carries
+// no Profiles, so GetProfiles synthesizes a lone "claude" and `--profile codex` is
+// refused on the machine where no TUI has ever run — the headless-bootstrap case the
+// flag exists for, and the one machine with no config.json to read.
+//
+// So a present file is decoded exactly as LoadConfig decodes it and an absent or
+// unparseable one yields exactly what LoadConfig yields. The one difference is that
+// nothing is written back.
 func loadStoredConfig() *config.Config {
 	dir, err := config.GetConfigDir()
 	if err != nil {
-		return config.DefaultConfig()
+		return config.SeededDefaultConfig()
 	}
 	data, err := os.ReadFile(filepath.Join(dir, config.ConfigFileName))
 	if err != nil {
-		return config.DefaultConfig()
+		return config.SeededDefaultConfig()
 	}
 	var cfg config.Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return config.DefaultConfig()
+		return config.SeededDefaultConfig()
 	}
 	return &cfg
 }

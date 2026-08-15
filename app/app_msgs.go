@@ -735,17 +735,14 @@ func (m *home) resumeAfterSuspendedLoop(extra ...tea.Cmd) tea.Cmd {
 
 func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd) {
 	// Normally re-select the just-started instance: it corrects a possibly-stale
-	// selection index, the failure path's teardown (m.list.Kill below) targets the
-	// selected row, and an auto-open attach drops into it. The exception is #439: on
+	// selection index, and an auto-open attach drops into it. The exception is #439: on
 	// a successful start with no auto-open, if the user navigated to another session
 	// during the slow async Start(), preserve their cursor instead of snapping it
 	// back to the new session.
 	//
-	// A failed background create still has to move the cursor, because Kill acts on
-	// the selected row — so the row the user was on is captured and put back once the
-	// failed one is gone (#703).
-	restore := m.list.GetSelectedInstance()
-	if msg.err != nil || m.shouldAutoOpen(msg.instance, msg.hadPrompt, msg.origin) ||
+	// A failure does NOT select it. The teardown below names its target, so nothing
+	// here has to aim the cursor at a row that is about to be destroyed.
+	if m.shouldAutoOpen(msg.instance, msg.hadPrompt, msg.origin) ||
 		m.list.GetSelectedInstance() == msg.instance {
 		m.list.SelectInstance(msg.instance)
 	}
@@ -757,14 +754,17 @@ func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd
 		// smart-dispatch is a map miss. Rejecting first also means forgetInstance's
 		// own settle (a removal with no start outcome) finds nothing left to do.
 		m.settleCreateRequest(msg.instance, msg.err)
-		// Tear down the session that failed to start. Any teardown error is already
-		// logged inside KillInstance; the meaningful failure here is msg.err, which
-		// is surfaced below, so discard Kill's return rather than fight that modal.
-		_ = m.list.Kill()
+		// Tear down the session that failed to start, by name. KillInstance exists for
+		// exactly this — a target that need not be the selected row — where list.Kill
+		// destroys whatever the cursor is on: SelectInstance ends in
+		// clampSelectionToNavigable, which for a row hidden inside a folded group or
+		// filtered out by an active query snaps to the group anchor or the nearest
+		// visible row, so aiming the cursor first could have killed a live session the
+		// user was working in. Any teardown error is already logged inside KillInstance;
+		// the meaningful failure here is msg.err, which is surfaced below, so discard
+		// the return rather than fight that modal.
+		_ = m.list.KillInstance(msg.instance)
 		m.forgetInstance(msg.instance) // the failed session is gone from the list; drop its bookkeeping
-		if restore != nil && restore != msg.instance {
-			m.list.SelectInstance(restore) // the cursor was only borrowed to aim Kill
-		}
 		// A quit deferred while this session was Loading (issue #268): the failed
 		// session is torn down and gone from the list, so resume the quit if it's now
 		// safe. Surface the start error last either way — if the quit re-defers (a
@@ -820,12 +820,19 @@ func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd
 		// The deferred quit was dropped (the user navigated into an overlay); fall
 		// through and finish this start normally.
 	}
-	m.recordRecentPath(msg.instance.Path)
-	// First successful session start retires the one-time welcome. This is the single
-	// chokepoint every start (inline `n` and the `N` form) funnels through, so the
-	// welcome re-shows on every launch until the user has actually created a session —
-	// a dismissal alone no longer burns it (see showHelpScreen). Best-effort persist.
-	m.markWelcomeSeen()
+	// The recent-path list and the one-time welcome are both about what the person at
+	// the keyboard has done, so a background create writes neither. The recent paths
+	// feed the create form's picker — an MRU a human arranged, which a CI job's repo
+	// has no business jumping to the head of — and the #381 welcome contract is that it
+	// re-shows on every launch until the user has actually created a session, which a
+	// session they did not ask for does not satisfy. All three producers funnel through
+	// here — the create form, smart auto-dispatch and the `atrium new` drain — so being
+	// the single chokepoint is what makes an explicit gate necessary rather than
+	// redundant.
+	if msg.origin != spawnBackground {
+		m.recordRecentPath(msg.instance.Path)
+		m.markWelcomeSeen() // best-effort persist; see showHelpScreen for the dismissal half
+	}
 	if m.autoYes {
 		msg.instance.AutoYes = true
 	}
@@ -836,7 +843,15 @@ func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd
 	// keystrokes in the trust dialog instead of the input box.
 	// Leave a live progress row alone: its owner clears it when the operation
 	// finishes (the ranking in ui.Menu decides which line shows meanwhile).
-	if m.menu.State() != ui.StateBusy {
+	//
+	// And leave the bar entirely alone for a background create. This is a bare SetState,
+	// so unlike Menu.SetInstance — which rewrites only StateDefault/StateEmpty, precisely
+	// so the periodic instanceChanged cannot do this — it overwrites a bar the user is
+	// mid-gesture in: StateVisual, StateFilter, StateHints and StateDiffComment all stay
+	// on screen while their mode is active, and with hint_bar off StateDefault renders as
+	// an empty row. A create nobody asked for must not reset it; instanceChanged, batched
+	// by startNewSession, moves it off StateEmpty through the protected path.
+	if msg.origin != spawnBackground && m.menu.State() != ui.StateBusy {
 		m.menu.SetState(ui.StateDefault)
 	}
 
@@ -852,5 +867,10 @@ func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd
 		return m, m.attachExec(msg.instance.Attach, msg.instance)
 	}
 
+	// No resize request for a background create, for startNewSession's reason: the
+	// WindowSizeMsg it asks for exits hint mode, and nothing about the terminal changed.
+	if msg.origin == spawnBackground {
+		return m, m.instanceChanged()
+	}
 	return m, tea.Batch(tea.RequestWindowSize, m.instanceChanged())
 }

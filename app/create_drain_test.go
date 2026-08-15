@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -11,10 +12,13 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/internal/outbox"
 	"github.com/ZviBaratz/atrium/internal/testutil"
 	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/ui"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -756,4 +760,298 @@ func TestCreateDrainHoldsWhileAQuitIsPending(t *testing.T) {
 	h.quitRequested = false
 	require.NotNil(t, h.drainCreateRequests())
 	assert.NotNil(t, titled(h, "fix-auth"))
+}
+
+// TestCreateDrainGatesOneRequestPerTick is the budget the start budget cannot supply.
+// A refusal spends no start, so a backlog refused for a full cap would run every
+// request through the gates inside one Update — and those gates are three git
+// subprocesses each (targetValidity, RepoGroupKey, the branch-slug check), executed
+// synchronously on the Bubble Tea update goroutine. Fifty of them is a frozen UI every
+// 500ms for as long as the backlog lasts.
+//
+// Asserted as receipts written, because that is what a completed gate evaluation
+// leaves behind: with the cap full, one tick may answer exactly one request.
+func TestCreateDrainGatesOneRequestPerTick(t *testing.T) {
+	h := drainHome(t)
+	limit := 1
+	h.appConfig.MaxSessions = &limit
+	addInstance(t, h, "already-here", t.TempDir())
+
+	paths := make([]string, 0, 5)
+	for i := range 5 {
+		paths = append(paths, spoolCreate(t, outbox.Request{Title: "q" + strconv.Itoa(i), Path: t.TempDir()}))
+	}
+
+	refuseDrain(t, h)
+
+	answered := 0
+	for _, p := range paths {
+		if _, ok := outbox.Rejection(p); ok {
+			answered++
+		}
+	}
+	assert.Equal(t, 1, answered, "one tick may run the gates once; the rest wait for the next")
+	assert.Equal(t, 4, createSpoolCount(t))
+
+	// The control: the backlog does drain, one per tick, rather than being stuck.
+	refuseDrain(t, h)
+	assert.Equal(t, 3, createSpoolCount(t))
+}
+
+// TestCreateDrainDiscardsExpiredRequestsInBulk is the negative control for the gate
+// budget: an expired or unreadable request costs a receipt and an unlink, no git at
+// all, so those are NOT held to one a tick. Without this the two budgets could be
+// collapsed into one and a cron backlog would clear at 2 records a second.
+func TestCreateDrainDiscardsExpiredRequestsInBulk(t *testing.T) {
+	h := drainHome(t)
+	for i := range 5 {
+		spoolCreate(t, outbox.Request{
+			Title: "old" + strconv.Itoa(i), Path: t.TempDir(),
+			CreatedAt: time.Now().Add(-2 * outbox.TTL),
+		})
+	}
+
+	refuseDrain(t, h)
+	assert.Zero(t, createSpoolCount(t), "expired requests are cheap and go in one tick")
+}
+
+// TestCreateDrainHoldsWhileAnActionIsInFlight: handleKeyPress refuses every mutating
+// key while an async action runs (beginAsyncAction), so the drain must not be held to
+// a weaker bar than pressing the new-session key. The case with teeth is the deep
+// rename: renameIOCmd does the tmux rename, the `git branch -m` and the worktree move
+// off-thread, and AdoptRename lands only afterwards — so mid-flight the instance still
+// answers with its OLD title, the title check sees no conflict for the new one, and a
+// create that wins the branch check but loses the rename adopts the branch it created.
+func TestCreateDrainHoldsWhileAnActionIsInFlight(t *testing.T) {
+	h := drainHome(t)
+	h.actionInFlight = true
+	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: t.TempDir()})
+
+	assert.Nil(t, h.drainCreateRequests(), "an in-flight action holds the drain")
+	assert.Zero(t, h.list.NumInstances())
+	assert.FileExists(t, path, "and the request waits rather than being refused")
+
+	// The control: clear the action and the same request creates.
+	h.actionInFlight = false
+	require.NotNil(t, h.drainCreateRequests())
+	assert.NotNil(t, titled(h, "fix-auth"))
+}
+
+// TestCreateDrainRejectsABlankRequest: readCreate refuses the same (title, path) pair
+// WriteCreate refuses to write, so a hand-written spool file cannot reach the gates.
+// Nothing downstream would stop it — titleConflictIn deliberately answers "no conflict"
+// for a blank title, and filepath.Abs("") is the draining TUI's own working directory
+// with a nil error, so the request would build a worktree wherever atrium was launched.
+func TestCreateDrainRejectsABlankRequest(t *testing.T) {
+	for _, tc := range []struct{ name, title, path string }{
+		// A real directory for the target, so targetValidity cannot be what refuses
+		// it — without the decoder's check, a blank title reaches the list as a row
+		// nothing can render.
+		{"blank title", "  ", "%DIR%"},
+		// And no path at all, which filepath.Abs turns into the draining TUI's own
+		// working directory with a nil error: a worktree wherever atrium was launched.
+		{"no path", "fix-auth", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := drainHome(t)
+			body, err := json.Marshal(map[string]any{
+				"version": 1, "title": tc.title,
+				"path": strings.ReplaceAll(tc.path, "%DIR%", t.TempDir()),
+				// Stamped now, or the TTL horizon refuses it before the decoder does
+				// and this proves nothing.
+				"created_at": time.Now(),
+			})
+			require.NoError(t, err)
+			dir, err := outbox.CreateDir()
+			require.NoError(t, err)
+			require.NoError(t, os.MkdirAll(dir, 0o755))
+			path := filepath.Join(dir, "1700000000000000000-abc.json")
+			require.NoError(t, os.WriteFile(path, body, 0o644))
+
+			refuseDrain(t, h)
+
+			assert.Zero(t, h.list.NumInstances(), "nothing may be created from it")
+			reason, rejected := outbox.Rejection(path)
+			require.True(t, rejected, "and it must not be left to be re-read forever")
+			assert.Contains(t, reason, "could not be read")
+		})
+	}
+}
+
+// TestHoldCreateRequestKeysOnTheInstanceItCreated: the hold is keyed by the object
+// startNewSession built, never by a (Title, Path) lookup — those are different
+// questions. titleConflictIn scopes its "already used" arm to a repo group, so a
+// stored session whose GroupKey has diverged from git.RepoGroupKey for the same
+// directory passes the conflict check and is still the FIRST identity match in the
+// list. Keyed on that older row, the settle below is a silent miss: the entry never
+// clears, createStartBudget is seeded from the map's length, and every later `atrium
+// new` on the machine is skipped with no notice, no log line and no receipt.
+func TestHoldCreateRequestKeysOnTheInstanceItCreated(t *testing.T) {
+	h := drainHome(t)
+	dir := t.TempDir()
+	decoy := addInstance(t, h, "fix-auth", dir) // same identity, added first
+	created := addInstance(t, h, "fix-auth", dir)
+	require.NotSame(t, decoy, created)
+
+	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: dir})
+	h.holdCreateRequest(path, created)
+
+	h.settleCreateRequest(created, nil)
+	assert.Empty(t, h.createsInFlight, "the session that started is the one that settles")
+	assert.NoFileExists(t, path)
+}
+
+// TestFailedBackgroundCreateKillsOnlyItself. The failure path tears the new session
+// down, and list.Kill() destroys whatever the CURSOR is on — which SelectInstance
+// cannot be trusted to aim, because it ends in clampSelectionToNavigable: a row hidden
+// inside a folded group (which a background create's row is, by design) snaps the
+// selection to the group anchor. Aiming first therefore killed a live session, with its
+// tmux pane and worktree, silently and with no confirmation — while the failed row
+// stayed Loading forever, so `q` deferred indefinitely and the drain never ran again.
+func TestFailedBackgroundCreateKillsOnlyItself(t *testing.T) {
+	h := drainHome(t)
+	dir := t.TempDir()
+	victim := addInstance(t, h, "victim", dir)
+	addInstance(t, h, "other-repo", t.TempDir()) // a second group: folding needs one
+	h.list.SelectInstance(victim)
+	require.True(t, h.list.Collapse(), "precondition: victim's group is folded")
+
+	spoolCreate(t, outbox.Request{Title: "doomed", Path: dir})
+	require.NotNil(t, h.drainCreateRequests())
+	doomed := titled(h, "doomed")
+	require.NotNil(t, doomed)
+	require.NotSame(t, doomed, h.list.GetSelectedInstance(),
+		"precondition: the new row is hidden, so the cursor is elsewhere")
+
+	h.handleInstanceStarted(instanceStartedMsg{
+		instance: doomed, err: errors.New("worktree is dirty"), origin: spawnBackground,
+	})
+
+	assert.Nil(t, titled(h, "doomed"), "the session that failed is gone")
+	assert.NotNil(t, titled(h, "victim"), "and the one that did not is still there")
+	assert.Same(t, victim, h.list.GetSelectedInstance(), "the cursor never moved")
+}
+
+// TestBackgroundCreateLeavesTheHintBarAlone: the post-start SetState is a bare write,
+// so unlike Menu.SetInstance — which rewrites only StateDefault/StateEmpty, precisely
+// so the 100ms instanceChanged cannot do this — it overwrites a bar whose mode is still
+// active. Marking sessions in visual mode and having a spooled `atrium new` land is
+// enough to lose the gesture hints, and with hint_bar off the row goes blank.
+func TestBackgroundCreateLeavesTheHintBarAlone(t *testing.T) {
+	h := drainHome(t)
+	spoolCreate(t, outbox.Request{Title: "fix-auth", Path: t.TempDir()})
+	require.NotNil(t, h.drainCreateRequests())
+	inst := titled(h, "fix-auth")
+	require.NotNil(t, inst)
+
+	h.menu.SetState(ui.StateVisual)
+	h.handleInstanceStarted(instanceStartedMsg{instance: inst, origin: spawnBackground})
+	assert.Equal(t, ui.StateVisual, h.menu.State(), "a create nobody asked for may not reset the bar")
+
+	// The control: a keypress-created session does reset it, which is what the write is
+	// there for (StateEmpty -> StateDefault on the first session).
+	h.menu.SetState(ui.StateVisual)
+	h.handleInstanceStarted(instanceStartedMsg{instance: inst, origin: spawnInteractive})
+	assert.Equal(t, ui.StateDefault, h.menu.State())
+}
+
+// TestBackgroundCreateAsksForNoResize: tea.RequestWindowSize's message reaches the
+// WindowSizeMsg handler, which exits hint mode outright — the mode's frozen geometry is
+// invalid after a resize. Nothing about the terminal changed when a list row appeared,
+// so a background create must not ask for one, from either of the two places that do.
+func TestBackgroundCreateAsksForNoResize(t *testing.T) {
+	h := drainHome(t)
+	spoolCreate(t, outbox.Request{Title: "fix-auth", Path: t.TempDir()})
+	drained := h.drainCreateRequests()
+	require.NotNil(t, drained)
+	inst := titled(h, "fix-auth")
+	require.NotNil(t, inst)
+
+	_, started := h.handleInstanceStarted(instanceStartedMsg{instance: inst, origin: spawnBackground})
+
+	for name, cmd := range map[string]tea.Cmd{"the drain": drained, "the start handler": started} {
+		assert.NotContains(t, flattenCmd(cmd), tea.RequestWindowSize(),
+			"%s asked for a resize behind a background create", name)
+	}
+
+	// The control: an interactive start does ask, so the assertion above can fail.
+	_, interactive := h.handleInstanceStarted(instanceStartedMsg{instance: inst, origin: spawnInteractive})
+	assert.Contains(t, flattenCmd(interactive), tea.RequestWindowSize())
+}
+
+// flattenCmd runs cmd and returns every message it produces, descending into batches.
+// Compared against tea.RequestWindowSize()'s own message rather than a type name, so
+// the assertion cannot go quiet if bubbletea renames the (unexported) type.
+func flattenCmd(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		var out []tea.Msg
+		for _, c := range batch {
+			out = append(out, flattenCmd(c)...)
+		}
+		return out
+	}
+	return []tea.Msg{msg}
+}
+
+// TestBackgroundCreateSpendsNoOneTimeState: the recent-path MRU feeds the create
+// form's picker and the welcome's seen-bit is #381's "until the user has actually
+// created a session". Both are about what the person at the keyboard did, so a CI job's
+// create must write neither — a fresh install whose welcome is still on screen would
+// otherwise have it burned by a session the user never asked for and never see it again.
+func TestBackgroundCreateSpendsNoOneTimeState(t *testing.T) {
+	h := drainHome(t)
+	spoolCreate(t, outbox.Request{Title: "fix-auth", Path: t.TempDir()})
+	require.NotNil(t, h.drainCreateRequests())
+	inst := titled(h, "fix-auth")
+	require.NotNil(t, inst)
+
+	h.handleInstanceStarted(instanceStartedMsg{instance: inst, origin: spawnBackground})
+	assert.Zero(t, h.appState.GetHelpScreensSeen(), "the welcome bit is the user's to spend")
+	assert.Empty(t, h.appState.GetRecentPaths(), "and so is the recent-path list")
+
+	// The control: a keypress-created session spends both, which is what they are for.
+	h.handleInstanceStarted(instanceStartedMsg{instance: inst, origin: spawnInteractive})
+	assert.NotZero(t, h.appState.GetHelpScreensSeen())
+	assert.Contains(t, h.appState.GetRecentPaths(), inst.Path)
+}
+
+// TestReconcileNamesAPersistFailureForWhatItIs: these instances reached the adopt
+// branch through Started(), so the worktree, the branch and the agent all exist and
+// what failed is the record of them. Told "the session could not be started", a
+// retrying script re-runs `atrium new` with the same title and collides with the live
+// tmux session and orphan branch the first run really did leave behind.
+func TestReconcileNamesAPersistFailureForWhatItIs(t *testing.T) {
+	testutil.RequireTmux(t)
+
+	h := drainHome(t)
+	cs := withCapturingStore(t, h)
+	cs.saveErr = errors.New("no space left on device")
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: "adopt-me", Path: t.TempDir(), Program: "sleep 300", Direct: true,
+	})
+	require.NoError(t, err)
+	inst.SetBaseContext(context.Background())
+	require.NoError(t, inst.Start(true))
+	t.Cleanup(func() {
+		inst.RebindBaseContext(context.Background())
+		_ = inst.Kill()
+	})
+	h.list.AddInstance(inst)
+	inst.SetStatus(session.Loading)
+
+	path := spoolCreate(t, outbox.Request{Title: "adopt-me", Path: inst.Path})
+	h.createsInFlight = map[*session.Instance]string{inst: path}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	h.reconcileInFlightStarts(ctx)
+
+	reason, rejected := outbox.Rejection(path)
+	require.True(t, rejected)
+	assert.Contains(t, reason, "could not record it")
+	assert.NotContains(t, reason, "could not be started", "the session did start; the record did not")
 }

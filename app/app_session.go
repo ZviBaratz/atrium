@@ -222,6 +222,12 @@ const (
 	// new` spool entry drained on a tick (#703). Neither auto-attach nor the cursor
 	// move applies: the terminal belongs to whatever the user is actually doing.
 	spawnBackground
+	// numSpawnOrigins counts the origins above and must stay last, the way numStates
+	// does for the UI states. It exists so a test can iterate every origin rather than
+	// hand-listing them: an exhaustiveness guard written as a bound on the highest
+	// value ("== spawnOrigin(2)") passes unchanged when a fourth origin is appended,
+	// which is the ordinary way an enum grows.
+	numSpawnOrigins
 )
 
 // autoAttachEligible is the pure auto-attach policy, independent of session liveness:
@@ -420,7 +426,7 @@ func (m *home) autoDispatch(res PrefillResult) (tea.Cmd, bool) {
 	// Never dependency-isolating: this is the smart-dispatch path, which has no form
 	// to ask, and shared is both the default and the answer for the read-only session
 	// an auto-dispatched one almost always is.
-	cmd, err := m.startNewSession(res.Title, res.Path, direct, false, m.program, "", res.Prompt, nil, spawnInteractive, nil)
+	_, cmd, err := m.startNewSession(res.Title, res.Path, direct, false, m.program, "", res.Prompt, nil, spawnInteractive, nil)
 	if err != nil {
 		return nil, false
 	}
@@ -1849,7 +1855,14 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 // a read of m.pendingFork, because the post-confirm resume path spawns from a captured
 // plan with no form left to consult. origin says who asked, which decides whether the
 // new row takes the cursor and whether auto-attach may fire (see spawnOrigin).
-func (m *home) startNewSession(title, path string, direct, isolateDeps bool, program, branch, prompt string, sel *overlay.AccountSelection, origin spawnOrigin, fork *session.ForkSeed) (tea.Cmd, error) {
+//
+// The instance is returned as well as the batch because a caller that has to track the
+// session it just asked for must key on the object, not look it up again: the create
+// drain does exactly that, and identity (Title, Path) is not the key any list lookup
+// uses — titleConflictIn scopes its "already used" arm to a repo group, so a stored
+// session whose GroupKey has since diverged from git.RepoGroupKey can pass the conflict
+// check and then be the row a (Title, Path) search finds first.
+func (m *home) startNewSession(title, path string, direct, isolateDeps bool, program, branch, prompt string, sel *overlay.AccountSelection, origin spawnOrigin, fork *session.ForkSeed) (*session.Instance, tea.Cmd, error) {
 	instance, err := session.NewInstance(session.InstanceOptions{
 		Title:       title,
 		Path:        path,
@@ -1858,7 +1871,7 @@ func (m *home) startNewSession(title, path string, direct, isolateDeps bool, pro
 		IsolateDeps: isolateDeps,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	instance.SetBaseContext(m.ctx)
 
@@ -1921,7 +1934,7 @@ func (m *home) startNewSession(title, path string, direct, isolateDeps bool, pro
 		// Without the same exemption, flagging a lone unpooled account would start
 		// refusing every session it routes.
 		if allLimited && len(members) > 1 {
-			return nil, fmt.Errorf(
+			return nil, nil, fmt.Errorf(
 				"every account in pool %q is rate-limited; pick a member explicitly to override", poolName)
 		}
 		// Only advance a rotation cursor for a real (multi-member) pool: a 1-member
@@ -1951,7 +1964,7 @@ func (m *home) startNewSession(title, path string, direct, isolateDeps bool, pro
 	// After rotation, not before — a pool picks its member here, and the member that
 	// will actually be injected is the only one worth checking.
 	if err := m.verifyAccountIdentity(chosenAcct); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	instance.SetClaudeAccount(accName, accDir, accIsDefault)
@@ -1980,19 +1993,15 @@ func (m *home) startNewSession(title, path string, direct, isolateDeps bool, pro
 	// Create the list row only now, on submit. AddInstance may insert it mid-list under its
 	// repo group, so select it by identity.
 	//
-	// A background create reorganises nothing a human arranged. The cursor stays put
-	// (#439), and so does the fold set: AddInstance unfolds the new row's group
-	// unconditionally — right for a keypress, where a session you just made must not
-	// land hidden — so the folds are captured across it rather than that unfold being
-	// made conditional on a caller ui.List cannot see. Both are restored here rather
-	// than in the drain because instanceChanged, batched below, is what tears down
-	// preview scroll mode and the hint overlay for the row it moves to; keeping the
-	// selection is only half the job if that still runs.
-	folds := m.list.CollapsedRepos()
-	finalizer := m.list.AddInstance(instance)
+	// A background create reorganises nothing a human arranged: the cursor stays put
+	// (#439) and so does the fold set, via AddInstanceKeepingFolds — the fold half has
+	// to be ui.List's own inverse of the unfold it does, because the caller cannot undo
+	// it without a lossy read-back (see AddInstanceKeepingFolds).
+	var finalizer func()
 	if origin == spawnBackground {
-		m.list.SetCollapsedRepos(folds)
+		finalizer = m.list.AddInstanceKeepingFolds(instance)
 	} else {
+		finalizer = m.list.AddInstance(instance)
 		m.list.SelectInstance(instance)
 	}
 	if branch != "" {
@@ -2018,14 +2027,25 @@ func (m *home) startNewSession(title, path string, direct, isolateDeps bool, pro
 		err := instance.Start(true)
 		return instanceStartedMsg{instance: instance, err: err, hadPrompt: prompt != "", origin: origin}
 	}
-	// instanceChanged repoints the preview, diff and menu at the selected row — work
-	// that only makes sense when the selection just moved. Running it for a background
-	// create is what exits the preview's scroll mode and clears the hint overlay out
-	// from under whoever is using them.
+	// tea.RequestWindowSize is deliberately NOT batched for a background create. The
+	// resize it asks for lands in the WindowSizeMsg handler, which exits hint mode
+	// outright — the mode's frozen coordinates are invalid after a resize — and drops
+	// the screensaver below the splash floor. Nothing about the terminal changed here:
+	// a new list row is not a resize, and updateHandleWindowSizeEvent reads only the
+	// width, the height and model state, so the request buys a re-layout of identical
+	// numbers at the cost of whoever was mid-hint.
+	//
+	// instanceChanged IS batched, for every origin. It repoints the preview, diff and
+	// menu at the *selected* row — which a background create did not move — and it
+	// already runs on every 100ms preview tick, so on this path it does exactly what
+	// the tick does. What it adds is the one refresh a new row genuinely needs: moving
+	// the hint bar off StateEmpty when this is the first session. That write goes
+	// through Menu.SetInstance, which rewrites only StateDefault/StateEmpty and so
+	// leaves a visual, filter, hints or diff-comment bar alone.
 	if origin == spawnBackground {
-		return tea.Batch(tea.RequestWindowSize, startCmd), nil
+		return instance, tea.Batch(m.instanceChanged(), startCmd), nil
 	}
-	return tea.Batch(tea.RequestWindowSize, m.instanceChanged(), startCmd), nil
+	return instance, tea.Batch(tea.RequestWindowSize, m.instanceChanged(), startCmd), nil
 }
 
 // defaultNewSessionPath returns the contextual target repo for a new session: the

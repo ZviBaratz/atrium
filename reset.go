@@ -116,19 +116,26 @@ func runReset(ctx context.Context, cmdExec cmd2.Executor) error {
 	// The spools last, and they are not an afterthought: a queued `atrium new` request
 	// is the one piece of state that can *create* after the wipe. Everything above is
 	// ordered so nothing survives to re-persist a deleted session, and a create request
-	// defeats that from outside the lock by design (`new` deliberately takes none) —
+	// defeats that from outside the lock by design (`new` never acquires it before it
+	// spools; it only tests it afterwards, to warn when no TUI is running) —
 	// with no session left to collide with, every gate it meets now passes, so the next
 	// launch silently builds a worktree, a branch and an agent from a request made
-	// before the reset. Queued prompts go too: they are harmless (nothing matches their
-	// target any more) but "wipes all Atrium-managed state" should not have an asterisk.
+	// before the reset. Queued prompts go with them: each one addresses a session this
+	// reset has just deleted, so the only thing left to do with it is refuse it, and
+	// doing that here means the caller hears "reset" instead of "no such session".
+	//
+	// Every record is discarded through a rejection receipt, never a bare unlink — a
+	// producer blocked in `--wait` reads the file's disappearance as success. The
+	// receipts are what a reset deliberately leaves behind; they expire on their own.
 	//
 	// Best-effort, like the undo journal above: a reset whose real work is done must not
-	// fail on a spool it could not read.
-	if cleared, err := outbox.Clear(); err != nil {
-		log.WarningLog.Printf("reset: could not clear the outbox: %v", err)
-	} else {
-		fmt.Printf("Outbox has been cleared; %d queued request%s discarded\n", cleared, plural(cleared))
+	// fail on a spool it could not read. The count is printed either way — a partial
+	// clear that dropped nine of ten records has still dropped nine.
+	cleared, err := outbox.Clear()
+	if err != nil {
+		log.WarningLog.Printf("reset: could not fully clear the outbox: %v", err)
 	}
+	fmt.Printf("Outbox has been cleared; %d queued request%s discarded\n", cleared, plural(cleared))
 
 	return nil
 }

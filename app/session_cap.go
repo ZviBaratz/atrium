@@ -347,7 +347,7 @@ func (m *home) spawnVariants(plan spawnPlan) tea.Cmd {
 	}
 	cmds := make([]tea.Cmd, 0, total)
 	for i := range plan.programs {
-		created, err := m.startNewSession(
+		_, created, err := m.startNewSession(
 			plan.titles[i], plan.path, plan.direct, plan.isolateDeps, plan.programs[i],
 			plan.branch, plan.prompt, plan.account, origin, plan.fork)
 		if err != nil {

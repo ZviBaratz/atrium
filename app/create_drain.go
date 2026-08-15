@@ -45,11 +45,30 @@ import (
 // anyway.
 const createStartBudget = 1
 
-// createDisposalBudget caps how many requests one tick may refuse or discard. Larger
-// than the start budget because a refusal is a receipt and an unlink, not a worktree —
-// but not unbounded: a two-day-old cron backlog would otherwise unlink thousands of
-// expired requests inside one Update, freezing the UI. Bounded, a backlog clears at 50
-// a tick while the loop stays responsive.
+// createGateBudget caps how many requests one tick may run through the creation gates.
+//
+// One, because those gates are git. Before executeCreateRequest can know whether a
+// request ends in a start or a refusal it runs targetValidity (git.IsGitRepo, then
+// git.CurrentBranchName), git.RepoGroupKey (rev-parse --show-toplevel) and
+// variantTitleConflictIn (git.LocalBranchExists) — several subprocess round trips,
+// synchronously, on the Bubble Tea update goroutine.
+//
+// Bounding starts alone does not bound that work: a refusal spends no start budget, so
+// a backlog refused for a full cap would gate every one of fifty requests inside a
+// single Update. At one, a tick evaluates no more of it than submitting the create form
+// does, which is the only comparable synchronous git this loop already carries.
+const createGateBudget = 1
+
+// createDisposalBudget caps how many requests one tick may discard without gating them:
+// unreadable files and expired ones, which cost a receipt and an unlink apiece. Larger
+// than the budgets above because there is no git in that path — but not unbounded: a
+// two-day-old cron backlog would otherwise unlink thousands of expired requests inside
+// one Update, freezing the UI. Bounded, a backlog clears at 50 a tick while the loop
+// stays responsive.
+//
+// A refusal that came out of the gates does not draw on it. The expensive part is
+// already paid by then, and withholding the receipt would only mean paying it again
+// next tick while the caller's --wait keeps blocking.
 const createDisposalBudget = 50
 
 // drainCreateRequests creates the sessions spooled by `atrium new` and returns a
@@ -67,12 +86,14 @@ const createDisposalBudget = 50
 // accepted dialog acts on the session it named whatever the list did. The create form
 // has live per-keystroke verdicts about a title and a cap, but re-runs both at submit
 // (createSessionFromForm), so a session appearing underneath is refused there rather
-// than let through. And startNewSession no longer moves the cursor, opens the fold set
-// or repoints the preview for a spawnBackground create, so there is nothing left for a
-// state to be surprised by.
+// than let through. And for a spawnBackground create startNewSession moves no cursor,
+// opens no fold and asks for no resize, so there is nothing left for a state to be
+// surprised by. (It does still run instanceChanged, which repoints preview, diff and
+// menu at the selection — but the selection did not move, and the 100ms preview tick
+// runs the same call regardless.)
 //
-// Two things do hold it, neither of them a state: a staged spawn plan and a pending
-// quit. See createDrainHeld.
+// Three things do hold it, none of them a state: a staged spawn plan, a pending quit
+// and an in-flight async action. See createDrainHeld.
 func (m *home) drainCreateRequests() tea.Cmd {
 	if m.createDrainHeld() {
 		return nil
@@ -88,12 +109,14 @@ func (m *home) drainCreateRequests() tea.Cmd {
 	// Seeded with the starts still running from earlier ticks: the budget is on
 	// concurrency, not on arrivals.
 	started := len(m.createsInFlight)
-	var disposed int
+	var gated, disposed int
 	var cmds []tea.Cmd
 	var refused int
 
 	for _, e := range entries {
-		if started >= createStartBudget && disposed >= createDisposalBudget {
+		// Nothing more can be gated (so nothing more can be started or refused) and
+		// nothing more can be discarded: the rest of the spool is next tick's.
+		if (started >= createStartBudget || gated >= createGateBudget) && disposed >= createDisposalBudget {
 			break
 		}
 		// An in-flight request still has its file, on purpose (see
@@ -102,11 +125,14 @@ func (m *home) drainCreateRequests() tea.Cmd {
 			continue
 		}
 
-		// Disposals and starts draw on separate budgets, so a backlog of expired
-		// requests cannot spend the one start this tick was allowed to make.
-		dispose := func(reason string) {
+		// Discards, gate evaluations and starts draw on separate budgets, so a backlog
+		// of expired requests cannot spend the one start this tick was allowed to make —
+		// and cannot buy itself unbounded git either. spend says which budget paid.
+		reject := func(reason string, spend *int) {
 			m.rejectCreateRequest(e.Path, reason)
-			disposed++
+			if spend != nil {
+				*spend++
+			}
 			refused++
 		}
 
@@ -120,7 +146,7 @@ func (m *home) drainCreateRequests() tea.Cmd {
 			// tick forever. ListCreates only ever surfaces files matching the
 			// spool's own name format, so this can only discard our own.
 			log.ErrorLog.Printf("discarding an unreadable create request: %v", e.Err)
-			dispose("the request could not be read")
+			reject("the request could not be read", &disposed)
 
 		case e.Request.Expired(now):
 			if disposed >= createDisposalBudget {
@@ -129,25 +155,26 @@ func (m *home) drainCreateRequests() tea.Cmd {
 			age := now.Sub(e.Request.CreatedAt).Round(time.Minute)
 			log.WarningLog.Printf("discarding a create request for %q: spooled %s ago, past the %s horizon",
 				e.Request.Title, age, outbox.TTL)
-			dispose(fmt.Sprintf("the request was spooled %s ago, past the %s horizon", age, outbox.TTL))
+			reject(fmt.Sprintf("the request was spooled %s ago, past the %s horizon", age, outbox.TTL), &disposed)
 
 		default:
-			if started >= createStartBudget {
+			// Both budgets, before the gates rather than after: whether this request
+			// ends in a session or a receipt, finding out costs the same git either
+			// way (see createGateBudget).
+			if started >= createStartBudget || gated >= createGateBudget {
 				continue
 			}
-			cmd, reason := m.executeCreateRequest(e.Request)
+			gated++
+			inst, cmd, reason := m.executeCreateRequest(e.Request)
 			if reason != "" {
-				if disposed >= createDisposalBudget {
-					continue
-				}
 				log.WarningLog.Printf("refusing a create request for %q: %s", e.Request.Title, reason)
-				dispose(reason)
+				reject(reason, nil)
 				continue
 			}
 			// The file deliberately stays until the start lands and the row is
 			// persisted, so `atrium new --wait` reading its absence means "created and
 			// recorded" rather than "consumed".
-			m.holdCreateRequest(e.Path, e.Request)
+			m.holdCreateRequest(e.Path, inst)
 			started++
 			cmds = append(cmds, cmd)
 		}
@@ -156,6 +183,11 @@ func (m *home) drainCreateRequests() tea.Cmd {
 	// No title in either notice: a request's title has no length ceiling this side of
 	// the wire format, and the notice row truncates its tail. Prose says why; the log
 	// (and the caller's rejection receipt) says which.
+	//
+	// One caveat this cannot fix from here: drainOutbox runs first on the same tick and
+	// may have flashed its own notice, which flashNotice — one surface at a time —
+	// overwrites. A tick that both delivered a prompt and created a session shows only
+	// the create. Both events still reach the log and the callers' receipts.
 	switch {
 	case len(cmds) > 0:
 		// A tick that both created and refused reports both: flashNotice writes one
@@ -178,11 +210,22 @@ func (m *home) drainCreateRequests() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// createDrainHeld reports whether this tick must not create. Both cases are keyed on
-// what is actually true of the model rather than on a UI state — a state gate is what
-// deadlocked this drain behind the welcome modal.
+// createDrainHeld reports whether this tick must not create. All three cases are keyed
+// on what is actually true of the model rather than on a UI state — a state gate is
+// what deadlocked this drain behind the welcome modal.
+//
+// The third, actionInFlight, holds the drain to the bar handleKeyPress already holds a
+// keypress to: while an async action runs, every mutating key is refused with a busy
+// notice, so creating from the spool meanwhile would make `atrium new` the one way to
+// mutate the list during a freeze that exists because those operations must not
+// interleave. The deep rename is the case with teeth — renameIOCmd does the tmux
+// rename, the `git branch -m` and the worktree move off-thread, and AdoptRename lands
+// only afterwards, so mid-flight the instance still answers with its OLD title,
+// variantTitleConflictIn sees no conflict for the new one, and a create that wins the
+// branch check but loses the `git branch -m` reaches Worktree.Setup's existing-branch
+// arm and adopts the branch the rename just made.
 func (m *home) createDrainHeld() bool {
-	return m.stagedSpawnPlan() || m.quitPending()
+	return m.stagedSpawnPlan() || m.quitPending() || m.actionInFlight
 }
 
 // quitPending reports whether the user has asked to quit and is waiting on a start.
@@ -201,7 +244,8 @@ func (m *home) quitPending() bool { return m.quitRequested }
 // stagedSpawnPlan reports whether a confirmation dialog is holding a spawn plan that
 // has already passed its title and cap checks.
 //
-// This is the one place a background create genuinely can corrupt another surface.
+// Of the three holds this is the one about corrupting another surface rather than about
+// interleaving with work already under way.
 // Accepting either confirm goes straight to spawnVariants, which re-validates nothing:
 // creating a session in between would let the accepted plan spawn a duplicate title —
 // and therefore a second session deriving one branch slug, which Worktree.Setup treats
@@ -221,39 +265,40 @@ func (m *home) stagedSpawnPlan() bool {
 // createSessionFromForm and autoDispatch. It is load-bearing there because
 // neither TUI accept path re-checks the other gate; it is kept here so all three
 // creation paths refuse for the same reason in the same order.
-func (m *home) executeCreateRequest(r outbox.Request) (tea.Cmd, string) {
+func (m *home) executeCreateRequest(r outbox.Request) (*session.Instance, tea.Cmd, string) {
 	if err := tmuxAvailable(); err != nil {
-		return nil, err.Error()
+		return nil, nil, err.Error()
 	}
 
 	// The CLI bounds the title too, and that is the check a caller normally meets.
-	// This one is for what the CLI cannot speak for: a hand-written spool file, or one
-	// written by a build of atrium whose limit differs from this one's. Unbounded, an
-	// over-long title reaches the list as a row nothing can render sensibly.
+	// This one is for what the CLI cannot speak for: a spool file written by a build
+	// of atrium whose limit differs from this one's. Unbounded, an over-long title
+	// reaches the list as a row nothing can render sensibly. A blank title and a blank
+	// path are refused by readCreate before they get here, mirroring WriteCreate.
 	if n := len([]rune(r.Title)); n > session.MaxTitleLen {
-		return nil, fmt.Sprintf("the title is %d characters; the limit is %d", n, session.MaxTitleLen)
+		return nil, nil, fmt.Sprintf("the title is %d characters; the limit is %d", n, session.MaxTitleLen)
 	}
 
-	// Absolute, because session.NewInstance stores the absolute path and
-	// findInstanceByIdentity below matches on it. The CLI already sends one; doing
-	// it again here means a hand-written spool file cannot desynchronise the two.
+	// Absolute, because session.NewInstance stores the absolute path. The CLI already
+	// sends one; doing it again here means a spool file written elsewhere cannot
+	// desynchronise the two.
 	path, err := filepath.Abs(r.Path)
 	if err != nil {
-		return nil, fmt.Sprintf("%q is not a usable path: %v", r.Path, err)
+		return nil, nil, fmt.Sprintf("%q is not a usable path: %v", r.Path, err)
 	}
 
 	// A non-git directory is not an error: it becomes a direct session, exactly as
 	// it does in the form. It simply has no worktree and no branch.
 	valid, direct, _ := targetValidity(m.ctx, path)
 	if !valid {
-		return nil, fmt.Sprintf("%q is not a directory", path)
+		return nil, nil, fmt.Sprintf("%q is not a directory", path)
 	}
 
 	// The group is derived here rather than read from m.newSessionGroup, which is
 	// create-form state this path must not touch — see titleConflictIn.
 	group := git.RepoGroupKey(m.ctx, path)
 	if conflict := m.variantTitleConflictIn(group, r.Title, path, direct); conflict != "" {
-		return nil, fmt.Sprintf("%s (%q in %s)", conflict, r.Title, path)
+		return nil, nil, fmt.Sprintf("%s (%q in %s)", conflict, r.Title, path)
 	}
 
 	program := r.Program
@@ -273,7 +318,7 @@ func (m *home) executeCreateRequest(r outbox.Request) (tea.Cmd, string) {
 	verdict := capVerdict(sc, count, 1)
 	if verdict == capBlock {
 		// --force is deliberately not consulted: see hardCapMessage.
-		return nil, hardCapMessage(sc.Limit)
+		return nil, nil, hardCapMessage(sc.Limit)
 	}
 
 	// All-exhausted before the soft cap, in that order and not the other way round,
@@ -289,53 +334,38 @@ func (m *home) executeCreateRequest(r outbox.Request) (tea.Cmd, string) {
 	var sel *overlay.AccountSelection
 	if pool, members, exhausted := m.allExhausted(plan); exhausted {
 		if !r.Force {
-			return nil, fmt.Sprintf(
+			return nil, nil, fmt.Sprintf(
 				"every account in pool %q is rate-limited — pass --force to create anyway", pool)
 		}
 		sel = m.pinSoonestMember(pool, members)
 	}
 
 	if verdict == capConfirm && !r.Force {
-		return nil, fmt.Sprintf("%s — pass --force to create anyway", hostCapacityLine(sc.Limit, count))
+		return nil, nil, fmt.Sprintf("%s — pass --force to create anyway", hostCapacityLine(sc.Limit, count))
 	}
 
 	// Never dependency-isolating: that is a form choice, and shared is the default the
 	// form itself starts from. sel is nil unless --force just accepted an exhausted
 	// pool, which is the only account choice this path can make.
-	cmd, err := m.startNewSession(r.Title, path, direct, false, program, r.Branch, r.Prompt, sel, spawnBackground, nil)
+	inst, cmd, err := m.startNewSession(r.Title, path, direct, false, program, r.Branch, r.Prompt, sel, spawnBackground, nil)
 	if err != nil {
-		return nil, err.Error()
+		return nil, nil, err.Error()
 	}
-	return cmd, ""
+	return inst, cmd, ""
 }
 
-// holdCreateRequest records that path's session is starting, keying it by the
-// instance startNewSession just added to the list.
+// holdCreateRequest records that path's session is starting, keying it by the very
+// instance startNewSession built.
 //
-// The instance is recovered by identity rather than returned by startNewSession
-// because (Title, Path) is unique by construction here — variantTitleConflictIn
-// has just proved no other session holds either derived name — and threading a
-// second return value through the form and smart-dispatch callers would buy
-// nothing else.
-func (m *home) holdCreateRequest(path string, r outbox.Request) {
-	abs, err := filepath.Abs(r.Path)
-	if err != nil {
-		abs = r.Path
-	}
-	inst := m.findInstanceByIdentity(r.Title, abs)
-	if inst == nil {
-		// Unreachable: startNewSession added it a moment ago. Clearing the file is
-		// still better than leaving one that no settle will ever reach, which would
-		// be re-executed on the next tick and create a duplicate session.
-		//
-		// Rejected rather than removed, like every other failure here: the session's
-		// real start outcome can no longer reach anyone, and unlinking silently would
-		// tell a waiting --wait that a create it can say nothing about succeeded.
-		log.ErrorLog.Printf("created %q but could not find it to track its request", r.Title)
-		m.rejectCreateRequest(path,
-			"the session was created but atrium lost track of it before it finished starting")
-		return
-	}
+// Keyed by the object rather than looked up by identity, because a (Title, Path)
+// search is not the same question the conflict check answered. titleConflictIn scopes
+// its "already used" arm to a repo group, so a stored session whose GroupKey has since
+// diverged from git.RepoGroupKey for the same directory passes the conflict check and
+// is still the first (Title, Path) match in the list — and a map keyed on that older
+// row never settles. That leak is not local: settle is a silent miss, the entry stays
+// forever, and createStartBudget is seeded from the map's length, so every later
+// `atrium new` on the machine is skipped with no notice, no log line and no receipt.
+func (m *home) holdCreateRequest(path string, inst *session.Instance) {
 	if m.createsInFlight == nil {
 		m.createsInFlight = make(map[*session.Instance]string)
 	}
@@ -390,9 +420,10 @@ func (m *home) failCreateRequest(inst *session.Instance, reason string) {
 	m.discardSpoolFile(path, func() error { return outbox.Reject(path, reason) })
 }
 
-// createRequestInFlight reports whether path's session is already starting. A
-// linear scan because the map is bounded by the number of creates started but not
-// yet settled, which createDrainBudget holds to one per tick.
+// createRequestInFlight reports whether path's session is already starting. A linear
+// scan because the map is bounded by the number of creates started but not yet
+// settled, which createStartBudget holds to one — that budget counts concurrency, not
+// arrivals, so the bound holds across ticks and not merely within one.
 func (m *home) createRequestInFlight(path string) bool {
 	for _, p := range m.createsInFlight {
 		if p == path {
