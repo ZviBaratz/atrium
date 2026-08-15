@@ -438,9 +438,16 @@ func isBranchBusyError(err error) (*git.BranchCheckedOutError, bool) {
 // pauseDoneMsg reports the outcome of a single off-UI-thread pause (pauseSelected)
 // back through Update so the terminal teardown, persistence, and rename-overlay
 // open all run on the main loop. err is set when Pause failed.
+//
+// worktreeGone records whether the pause actually freed the session's working
+// directory, sampled in the goroutine the instant Pause returned. It is carried
+// rather than re-derived on the update thread for the reason reapStrandedShell
+// gives, and it is separate from err because the two do not correlate in either
+// direction (see Instance.pause).
 type pauseDoneMsg struct {
-	instance *session.Instance
-	err      error
+	instance     *session.Instance
+	err          error
+	worktreeGone bool
 }
 
 // resumeDoneMsg reports the outcome of a single off-UI-thread resume
@@ -528,12 +535,18 @@ func (m *home) resumeSelected(selected *session.Instance) tea.Cmd {
 // and opens the rename overlay focused on the note field so "park this, jot why" is
 // one motion — esc / empty-enter leaves the note unchanged, the session stays paused
 // either way.
+//
+// A failed pause surfaces the error and stops there — but it still tears the terminal
+// down first when the worktree went with it, because pause() removes the worktree and
+// returns an error on several branches, all of which end Paused (#707). Reaping is
+// what the error path used to skip, not the surfacing.
 func (m *home) handlePauseDone(msg pauseDoneMsg) tea.Cmd {
 	if msg.err != nil {
+		m.reapStrandedShell(msg.instance, msg.worktreeGone)
 		return m.handleError(msg.err)
 	}
 	selected := msg.instance
-	m.tabbedWindow.CleanupTerminalForInstance(selected)
+	cleanupTerminalForInstance(m.tabbedWindow, selected)
 	if serr := m.persistInstances(); serr != nil {
 		log.WarningLog.Printf("failed to persist paused instance %s: %v", selected.Title, serr)
 	}
@@ -718,9 +731,17 @@ func plural(n int) string {
 
 // pauseFailure records one instance that could not be paused during a batch
 // "pause all", paired with the reason so the summary can name it.
+//
+// It carries the instance too, and whether the failed pause nonetheless freed its
+// working directory, because a failure is still a teardown: the handler reaps the
+// terminal shell of every entry whose worktree went (#707). title stays as its own
+// field because summary() already renders from it and sampling it beside the error
+// keeps the modal naming the session as it was when the pause ran.
 type pauseFailure struct {
-	title string
-	err   error
+	inst         *session.Instance
+	title        string
+	err          error
+	worktreeGone bool
 }
 
 // batchPauseDoneMsg reports the outcome of a "pause all" run back through Update
@@ -816,7 +837,12 @@ func (m *home) pauseInstances(insts []*session.Instance, message string) tea.Cmd
 		var res batchPauseDoneMsg
 		for _, inst := range insts {
 			if err := inst.Pause(); err != nil {
-				res.failures = append(res.failures, pauseFailure{inst.Title, err})
+				// Sampled the instant Pause returned, for the reason
+				// reapStrandedShell gives. A failure here is still a teardown: most
+				// of pause()'s failing branches removed the worktree first.
+				res.failures = append(res.failures, pauseFailure{
+					inst: inst, title: inst.Title, err: err, worktreeGone: inst.WorkingDirGone(),
+				})
 				continue
 			}
 			res.paused++
@@ -935,6 +961,34 @@ func (m *home) applyBatchKill(msg batchKillDoneMsg) batchKillDoneMsg {
 func (m *home) forgetInstance(inst *session.Instance) {
 	delete(m.notifySeen, inst)
 	delete(m.lostStrikes, inst)
+}
+
+// reapStrandedShell closes inst's cached terminal shell when the teardown that just
+// ran removed the directory the shell was started in (#707).
+//
+// The kill handlers reap first and report afterwards, so a kill covers this by
+// construction. The pause handlers report first and reap only successes, which left
+// three paths — a failed single pause, a failed batch pause, and every lost-session
+// recovery — parking a session with its worktree gone and its shell still running in
+// the deleted inode. Nothing sweeps that later: CloseTerminal has no production
+// caller, so the shell outlives the process and the next run's EnsureSession adopts
+// it, leaving `atrium reset` as the only reaper.
+//
+// worktreeGone is measured by the caller the instant the pause returns rather than
+// re-derived here, because a resume can land between the teardown and this handler
+// and re-create a directory at the same path — around a shell that still holds the
+// old inode, and so must still be reaped. It is deliberately not "the pause errored":
+// a pause whose WIP commit failed keeps the worktree on purpose, and that shell is
+// the one the user would rescue the work with.
+//
+// Routed through the cleanupTerminalForInstance seam so the batch-outcome tests can
+// pin exactly which instances each path reaps. Reaping an instance with no cached
+// shell is cheap and harmless — CloseForInstance bumps a generation and returns.
+func (m *home) reapStrandedShell(inst *session.Instance, worktreeGone bool) {
+	if inst == nil || !worktreeGone {
+		return
+	}
+	cleanupTerminalForInstance(m.tabbedWindow, inst)
 }
 
 // killInstances tears down an explicit set of sessions behind a single count

@@ -479,10 +479,23 @@ const lostSessionLaunchCrashWindow = 15 * time.Second
 // from a user pause (#270). err is non-nil when RecoverLostSession failed (the
 // instance is still parked Paused by pause()); launchCmd is set only for a
 // crash-at-launch, naming the command that likely caused it.
+//
+// instance and worktreeGone are here so the caller can reap the session's cached
+// terminal shell (#707). A recovery removes the worktree on its success path as well
+// as most of its failing ones, and unlike the two pause handlers this one had no reap
+// at all — recoverLostInstances is a free function with no m, so the reap has to
+// happen in the caller and the facts it needs have to travel.
+//
+// worktreeGone is measured, not inferred from the kind of session: a recovered direct
+// session normally reports false, because it has no worktree to free and its working
+// directory is the user's own checkout, but one whose directory the user has since
+// deleted reports true and its shell is stranded exactly like a git session's.
 type lostRecovery struct {
-	title     string
-	err       error
-	launchCmd string
+	instance     *session.Instance
+	title        string
+	err          error
+	worktreeGone bool
+	launchCmd    string
 }
 
 // recoverLostInstances moves instances whose tmux session has died (flagged
@@ -494,8 +507,12 @@ type lostRecovery struct {
 // recovery pins the strike above the threshold so it never retries in a tight loop
 // (the #270 dead-end), and pause() guarantees the instance ends Paused regardless, so
 // the next tick's Paused check clears the strike. Returns one lostRecovery per
-// instance acted on so the caller can persist and surface them. Runs on the main
+// instance acted on so the caller can persist, surface, and reap them. Runs on the main
 // thread — the only place model state may be mutated.
+//
+// The reap is the caller's because this is a free function with no m; each
+// lostRecovery therefore carries the instance and whether the recovery freed its
+// working directory (see the type).
 func recoverLostInstances(results []instanceMetaResult, strikes map[*session.Instance]int, retiring map[*session.Instance]bool) []lostRecovery {
 	var recovered []lostRecovery
 	for _, r := range results {
@@ -524,7 +541,15 @@ func recoverLostInstances(results []instanceMetaResult, strikes map[*session.Ins
 		if r.instance.DiedAtLaunch(lostSessionLaunchCrashWindow) {
 			launchCmd = r.instance.Program
 		}
-		recovered = append(recovered, lostRecovery{title: r.instance.Title, err: err, launchCmd: launchCmd})
+		recovered = append(recovered, lostRecovery{
+			instance: r.instance,
+			title:    r.instance.Title,
+			err:      err,
+			// Sampled right after the recovery, before anything else can run: this
+			// loop and the caller's reap are the same synchronous update turn.
+			worktreeGone: r.instance.WorkingDirGone(),
+			launchCmd:    launchCmd,
+		})
 	}
 	return recovered
 }

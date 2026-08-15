@@ -1022,10 +1022,15 @@ func (m *home) pauseSelected() (tea.Model, tea.Cmd) {
 	// worktree, keeping the branch to check out elsewhere. The completion handler
 	// (pauseDoneMsg) tears down the terminal, persists, and opens the rename overlay.
 	return m, m.beginAsyncAction("pausing…", func() tea.Msg {
-		if err := selected.Pause(); err != nil {
-			return pauseDoneMsg{instance: selected, err: err}
-		}
-		return pauseDoneMsg{instance: selected}
+		err := selected.Pause()
+		// Sampled here, not in the handler: the shell to reap is the one that was
+		// running in the directory this call removed, and re-deriving it later can
+		// read a directory some other action has since put back. asyncActionDoneMsg
+		// clears actionInFlight one message BEFORE pauseDoneMsg reaches the handler,
+		// and messages are processed in between — the same gap #701 needed the
+		// retiring mark for — so a resume can land in it and re-create this path
+		// around a shell that still holds the old inode (#707).
+		return pauseDoneMsg{instance: selected, err: err, worktreeGone: selected.WorkingDirGone()}
 	})
 }
 

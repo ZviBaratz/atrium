@@ -1,7 +1,9 @@
 package session
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"strings"
 	"time"
@@ -21,13 +23,46 @@ func (i *Instance) Paused() bool {
 	return i.GetStatus() == Paused
 }
 
+// WorkingDirGone reports whether the directory this session's agent and its shells
+// run in — WorkingDir(): the worktree for a git session, the user's own checkout for
+// a direct one — is no longer on disk.
+//
+// It is the discriminator a teardown's caller needs before reaping the session's
+// cached terminal shell (#707), and neither fact such a caller already holds answers
+// it. pause()'s error does not: a failed WIP commit keeps the worktree and returns
+// non-nil, while the orphaned-worktree branch below removes the directory and returns
+// tc.Err() — which is nil when its own teardown steps happen to succeed. So the two
+// do not correlate in either direction. Paused() cannot be read for it either — see
+// the Paused Status constant, which says outright that nothing may infer from it that
+// the directory is gone.
+//
+// It is a measurement rather than a report of intent because the two differ in both
+// directions: pause()'s removeWorktree local is not even in scope for the orphan
+// branch, and it stays true when the removal it authorises fails outright.
+//
+// Only fs.ErrNotExist counts. A permission or I/O error leaves the shell alone: the
+// cost of a false "gone" is killing a live shell in a directory that is still there,
+// and possibly the work the user was about to rescue with it.
+func (i *Instance) WorkingDirGone() bool {
+	dir := i.WorkingDir()
+	if dir == "" {
+		return false
+	}
+	_, err := os.Stat(dir)
+	return errors.Is(err, fs.ErrNotExist)
+}
+
 // TmuxAlive returns true if the tmux session is alive. This is a sanity check before attaching.
 func (i *Instance) TmuxAlive() bool {
 	ts := i.tmux()
 	return ts != nil && ts.DoesSessionExist()
 }
 
-// Pause stops the tmux session and removes the worktree, preserving the branch.
+// Pause stops the tmux session and removes the worktree, preserving the branch —
+// with one deliberate exception: a pause whose auto-commit of dirty work fails keeps
+// the worktree, so the WIP it could not commit is left on disk to be rescued (see
+// pause). Callers that act on the removal — the terminal-shell reap in particular —
+// must therefore ask WorkingDirGone rather than assume it from a nil error.
 //
 // A direct (non-git) session has no worktree to free and runs in the user's real
 // directory, so "pausing" it would only detach a still-running agent while the UI
@@ -44,6 +79,14 @@ func (i *Instance) Pause() error {
 // restart, agent exit, external kill) into Paused, so the metadata loop stops
 // polling it and the user can bring it back with Resume. It reuses the Pause path —
 // committing any uncommitted work and removing the worktree.
+//
+// Two of pause's branches make that last clause conditional. One is reachable only
+// from here: it does not refuse a direct session the way Pause does, and a direct
+// session has no worktree at all — that branch detaches the pane and stops the run
+// command without committing or removing anything, in what is the user's own
+// checkout. The other, the failed-WIP-commit branch that keeps the worktree on
+// purpose, it shares with Pause. Hence WorkingDirGone for anything that acts on the
+// removal.
 func (i *Instance) RecoverLostSession() error {
 	return i.pause()
 }
@@ -66,6 +109,14 @@ func isAutoPauseCommit(subject string) bool {
 }
 
 // pause stops the tmux session and removes the worktree, preserving the branch.
+//
+// "Removes the worktree" holds for every branch below except two: the direct-session
+// branch, which has no worktree at all, and the failed-WIP-commit branch, which keeps
+// one on purpose. The returned error does not distinguish them — that WIP branch
+// errors while keeping the worktree, and the orphaned-worktree branch frees the
+// directory while returning a tc.Err() that is nil whenever its own steps succeeded.
+// A caller that needs the outcome must measure it — WorkingDirGone — rather than read
+// it off err or off Paused().
 func (i *Instance) pause() error {
 	if !i.isStarted() {
 		return fmt.Errorf("cannot pause instance that has not been started")

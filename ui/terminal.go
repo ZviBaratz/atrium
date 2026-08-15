@@ -385,11 +385,15 @@ func (t *TerminalPane) EnsureSession(instance *session.Instance) (string, error)
 	// Re-read the status OUTSIDE t.mu: Paused() takes the instance's own lock, and
 	// t.mu is the lock String() holds for a whole render.
 	//
-	// It is not redundant with reapGen. handlePauseDone returns early when the
-	// pause reported an error (app/app_session.go) and never reaches its reap —
-	// while pause() has already removed the worktree and set Paused. reapGen is
-	// what covers the other direction: a kill sets no status at all, so its reap is
-	// the only signal there is.
+	// It is not redundant with reapGen, and the reason is no longer the one #701
+	// wrote here. That comment said handlePauseDone returns early on a failed pause
+	// and never reaches its reap; since #707 it reaps that path too — but only when
+	// the pause actually freed the worktree. The branch that keeps it (a failed WIP
+	// commit, session/pause.go) reaps nothing by design, so it bumps no generation
+	// while still ending Paused; the entry check above cannot see it either, because
+	// the flip lands mid-round-trip. This re-read is what stops that call caching a
+	// shell against a session already parked. reapGen covers the other direction: a
+	// kill sets no status at all, so its reap is the only signal there is.
 	pausedNow := instance.Paused()
 
 	// ts is not always a session this call started — the branch above adopts a live
@@ -471,6 +475,12 @@ func (t *TerminalPane) Close() {
 // lands; a shell whose EnsureSession is still mid-round-trip is not in the map yet,
 // so without the bump the reap would silently no-op and the install would then cache
 // a shell in a worktree that no longer exists (#701).
+//
+// Calling it for an instance with no cached shell is therefore cheap and harmless —
+// a generation bump and a map miss — which is what lets app reap defensively on every
+// teardown that freed a worktree rather than only on the ones that succeeded (#707).
+// Nothing else sweeps: Close has no production caller, so a shell missed here outlives
+// the process and the next run's EnsureSession adopts it.
 func (t *TerminalPane) CloseForInstance(inst *session.Instance) {
 	if inst == nil {
 		return
