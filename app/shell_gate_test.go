@@ -110,10 +110,6 @@ func TestBusyTerminalTabStillCapturesAnExistingShell(t *testing.T) {
 	require.NotNil(t, target.terminal, "the capture must target the live shell, not a create")
 }
 
-// "Gate the surface" is only true while the surface has one door. EnsureTerminalSession
-// is the pane's create path; armFrameCapture is the sole production caller and the one
-// place shellStartRefused is consulted, so a second call site added elsewhere would
-// bypass the gate silently — nothing else in the suite would notice.
 // moduleRoot walks up from the test's working directory to the go.mod, the same
 // idiom keys/readme_drift_test.go's moduleFile uses to read cross-package files.
 func moduleRoot(t *testing.T) string {
@@ -130,27 +126,44 @@ func moduleRoot(t *testing.T) string {
 	}
 }
 
+// "Gate the surface" is only true while the surface has one door. shellStartRefused
+// is consulted in resolveFrameTarget, which armFrameCapture consults before handing
+// EnsureTerminalSession to the capture goroutine — so a create reached any other way
+// bypasses the gate silently, and nothing else in the suite would notice.
+//
+// Both names are scanned, in every non-test file including the wrapper's own: the
+// wrapper is one line over TerminalPane.EnsureSession, so a second caller inside ui/
+// would skip the wrapper and be just as invisible as one in app/. Calls are counted
+// as SELECTOR expressions (a leading dot) with comments cut off the line first, which
+// is what lets the definitions and the prose that names them both live here without
+// being miscounted as call sites.
 func TestShellCreationHasOneProductionEntryPoint(t *testing.T) {
 	root := moduleRoot(t)
 	out, err := exec.CommandContext(t.Context(), "git", "-C", root, "ls-files", "*.go").Output()
 	require.NoError(t, err, "the guard needs the repo's Go files")
 
 	callers := map[string]int{}
-	call := regexp.MustCompile(`\bEnsureTerminalSession\b`)
+	call := regexp.MustCompile(`\.(EnsureTerminalSession|EnsureSession)\b`)
 	for _, path := range strings.Fields(string(out)) {
-		if strings.HasSuffix(path, "_test.go") || path == "ui/tabbed_window.go" {
-			continue // the definition's own file, and tests, are not production callers
+		if strings.HasSuffix(path, "_test.go") {
+			continue
 		}
 		body, readErr := os.ReadFile(filepath.Join(root, path))
 		require.NoError(t, readErr)
 		for _, line := range strings.Split(string(body), "\n") {
+			if code, _, found := strings.Cut(line, "//"); found {
+				line = code
+			}
 			if call.MatchString(line) {
 				callers[path]++
 			}
 		}
 	}
 
-	require.Equal(t, map[string]int{"app/app_frames.go": 1}, callers,
+	require.Equal(t, map[string]int{
+		"app/app_frames.go":   1, // armFrameCapture, downstream of the gate
+		"ui/tabbed_window.go": 1, // EnsureTerminalSession, the one-line wrapper
+	}, callers,
 		"the terminal shell must have exactly one production entry point, and it must be the "+
 			"gated one in armFrameCapture — a second caller would create shells behind "+
 			"shellStartRefused's back (#701, and #522's read-only condition on the same predicate)")

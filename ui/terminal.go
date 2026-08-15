@@ -47,19 +47,23 @@ type TerminalPane struct {
 	width, height int
 	sessions      map[string]*terminalSession // terminalKey (instance tmux name) → session
 	currentKey    string                      // terminalKey of the currently displayed instance
-	// reapGen counts every request to reap a cached shell — CloseForInstance and
-	// Close — whether or not one was there to reap. EnsureSession snapshots it
-	// before its tmux round trip and re-reads it at install time, which is how a
-	// shell created during a pause or kill is closed instead of installed (#701):
-	// the done-handlers' reap can only close what is already in sessions, so an
-	// install landing after it would otherwise leave a shell in a deleted worktree
-	// that nothing but `atrium reset` sweeps.
+	// reapGen counts CloseForInstance requests per terminal key, whether or not a
+	// shell was there to reap. EnsureSession snapshots the key's count before its
+	// tmux round trip and re-reads it at install time, which is how a shell created
+	// during a pause or kill is closed instead of installed (#701): the
+	// done-handlers' reap can only close what is already in sessions, so an install
+	// landing after it would otherwise leave a shell in a deleted worktree that
+	// nothing but `atrium reset` sweeps.
 	//
-	// One counter for the whole pane rather than one per key: a reap of some OTHER
-	// instance during a create costs that create one retry on the next capture
-	// tick, which is cheaper than a per-key map that Close would have to invalidate
-	// without discarding.
-	reapGen uint64
+	// Per key rather than one counter for the pane, because the abort path closes
+	// the session it was about to install and that session is not always one the
+	// call created — the branch above it adopts a live <key>_term left by a crashed
+	// run. Aborting on some other instance's reap would not cost a retry there, it
+	// would kill the user's shell and everything running in it.
+	reapGen map[string]uint64
+	// closeGen counts whole-pane teardowns. Close reaps every key at once, including
+	// keys no entry names yet, which is the one reap a per-key count cannot express.
+	closeGen uint64
 	// beforeInstall, when set, runs after EnsureSession's tmux round trip and
 	// before its install re-check. It is a test seam — the same idiom as app's
 	// cleanupTerminalForInstance and tmuxAvailable — and exists because the window
@@ -315,14 +319,13 @@ func (t *TerminalPane) EnsureSession(instance *session.Instance) (string, error)
 		return "", nil
 	}
 
-	// Check if we already have a cached session for this instance. The reap
-	// generation is snapshotted in the SAME critical section, and deliberately
-	// before the stale-entry delete below: that delete is this call's own
-	// bookkeeping, not a reap, so bumping there would make every recreate refuse
-	// its own install.
+	// Check if we already have a cached session for this instance. Both generations
+	// are snapshotted in the SAME critical section, and deliberately before the
+	// stale-entry delete below: that delete is this call's own bookkeeping, not a
+	// reap, so bumping there would make every recreate refuse its own install.
 	t.mu.Lock()
 	cached, ok := t.sessions[key]
-	gen := t.reapGen
+	gen, closeGen := t.reapGen[key], t.closeGen
 	t.mu.Unlock()
 	if ok && cached.tmuxSession != nil {
 		if cached.tmuxSession.DoesSessionExist() {
@@ -389,8 +392,13 @@ func (t *TerminalPane) EnsureSession(instance *session.Instance) (string, error)
 	// the only signal there is.
 	pausedNow := instance.Paused()
 
+	// ts is not always a session this call started — the branch above adopts a live
+	// <key>_term — so closing it has to be right for an adopted one too. All three
+	// arms are about THIS shell: its own key was reaped, the pane that would own it
+	// is gone, or its instance is Paused with the worktree it sits in removed. A
+	// per-key generation is what keeps a fourth, wrong arm out of this set.
 	t.mu.Lock()
-	if t.reapGen != gen || pausedNow {
+	if t.reapGen[key] != gen || t.closeGen != closeGen || pausedNow {
 		t.mu.Unlock()
 		if err := ts.Close(); err != nil {
 			log.InfoLog.Printf("terminal pane: failed to close a shell reaped mid-create for %s: %v", key, err)
@@ -433,7 +441,13 @@ func (t *TerminalPane) Attach() (chan struct{}, error) {
 func (t *TerminalPane) Close() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.reapGen++ // an EnsureSession still in its round trip must not install into the emptied map
+	// An EnsureSession still in its round trip must not install into the emptied map.
+	// Its key may never have been cached, so this is the epoch rather than a per-key
+	// bump; dropping the per-key counts with it keeps that map bounded by the
+	// instances live at any one time, and any create that snapshotted one is already
+	// refused by the epoch.
+	t.closeGen++
+	t.reapGen = nil
 	for title, s := range t.sessions {
 		if s.tmuxSession != nil {
 			if err := s.tmuxSession.Close(); err != nil {
@@ -451,12 +465,12 @@ func (t *TerminalPane) Close() {
 
 // CloseForInstance kills the cached terminal session for a specific instance.
 //
-// It can only close what is already cached, which is why it also bumps reapGen —
-// unconditionally, and the empty-cache case is the one that matters. The pause and
-// kill done-handlers call this the moment their teardown lands; a shell whose
-// EnsureSession is still mid-round-trip is not in the map yet, so without the bump
-// the reap would silently no-op and the install would then cache a shell in a
-// worktree that no longer exists (#701).
+// It can only close what is already cached, which is why it also bumps this key's
+// reap generation — unconditionally, and the empty-cache case is the one that
+// matters. The pause and kill done-handlers call this the moment their teardown
+// lands; a shell whose EnsureSession is still mid-round-trip is not in the map yet,
+// so without the bump the reap would silently no-op and the install would then cache
+// a shell in a worktree that no longer exists (#701).
 func (t *TerminalPane) CloseForInstance(inst *session.Instance) {
 	if inst == nil {
 		return
@@ -464,7 +478,10 @@ func (t *TerminalPane) CloseForInstance(inst *session.Instance) {
 	key := terminalKey(inst)
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.reapGen++
+	if t.reapGen == nil {
+		t.reapGen = make(map[string]uint64)
+	}
+	t.reapGen[key]++
 	if s, ok := t.sessions[key]; ok {
 		if s.tmuxSession != nil {
 			if err := s.tmuxSession.Close(); err != nil {

@@ -721,6 +721,81 @@ func TestEnsureSessionInstallsAnUnraceedShell(t *testing.T) {
 	require.True(t, shellOnSocket(t, instance), "an unraced create must leave a live shell")
 }
 
+// The generation is per key because the abort path CLOSES the session it was about
+// to install, and that session is not always one this call created: the branch above
+// the install adopts a <key>_term already alive on the socket — left by a crashed or
+// SIGKILLed run, or by a CloseForInstance whose own Close() errored and only dropped
+// the map entry. Aborting that adoption for an unrelated instance's teardown does not
+// cost a retry, it kills the user's shell and everything running in it.
+func TestEnsureSessionKeepsAnAdoptedShellWhileAnotherInstanceIsReaped(t *testing.T) {
+	testutil.RequireTmux(t)
+	t.Cleanup(log.Initialize(t.TempDir(), false))
+
+	instance := makeStartedInstance(t, "adopted")
+	defer func() { _ = instance.Kill() }()
+	bystander := makeStartedInstance(t, "adopted-bystander")
+	defer func() { _ = bystander.Kill() }()
+
+	tp := NewTerminalPane(context.Background())
+	tp.SetSize(80, 30)
+	t.Cleanup(tp.Close)
+
+	// Round one creates the shell. Dropping the cache entry without closing the
+	// session reproduces what a crashed run leaves on the socket: alive, and named
+	// by nothing in this process.
+	key, err := tp.EnsureSession(instance)
+	require.NoError(t, err)
+	require.NotEmpty(t, key)
+	tp.mu.Lock()
+	delete(tp.sessions, key)
+	tp.mu.Unlock()
+
+	// Round two adopts it, with an unrelated instance's teardown landing in the
+	// same window the guards above use.
+	tp.beforeInstall = func() { tp.CloseForInstance(bystander) }
+	key, err = tp.EnsureSession(instance)
+	require.NoError(t, err)
+
+	// The socket first: it is the assertion about the consequence.
+	assert.True(t, shellOnSocket(t, instance),
+		"a bystander's teardown destroyed this instance's shell and everything running in it")
+	assert.Equal(t, terminalKey(instance), key,
+		"a bystander's teardown must not withhold this instance's shell")
+	tp.mu.Lock()
+	_, cached := tp.sessions[terminalKey(instance)]
+	tp.mu.Unlock()
+	assert.True(t, cached, "the adopted shell must be installed, not dropped")
+}
+
+// Close is the whole-pane teardown: it reaps every key at once, including keys no
+// entry names yet. A create still in its round trip when that lands must not install
+// into the emptied map, so the pane-wide epoch is checked alongside the per-key
+// generation.
+func TestEnsureSessionDropsAShellWhoseWholePaneClosedMidCreate(t *testing.T) {
+	testutil.RequireTmux(t)
+	t.Cleanup(log.Initialize(t.TempDir(), false))
+
+	instance := makeStartedInstance(t, "pane-closed-mid-create")
+	defer func() { _ = instance.Kill() }()
+
+	tp := NewTerminalPane(context.Background())
+	tp.SetSize(80, 30)
+	t.Cleanup(tp.Close)
+
+	tp.beforeInstall = tp.Close
+
+	key, err := tp.EnsureSession(instance)
+	require.NoError(t, err)
+
+	tp.mu.Lock()
+	_, cached := tp.sessions[terminalKey(instance)]
+	tp.mu.Unlock()
+	assert.False(t, shellOnSocket(t, instance),
+		"the shell outlived the pane that owned it, with nothing left holding a handle to it")
+	assert.Empty(t, key, "a shell whose pane closed mid-create must not be reported as ready")
+	assert.False(t, cached, "the closed pane must not be repopulated by an in-flight create")
+}
+
 func TestTerminalCloseForInstance(t *testing.T) {
 	t.Cleanup(log.Initialize(t.TempDir(), false))
 
