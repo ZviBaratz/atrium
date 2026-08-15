@@ -20,11 +20,21 @@ func DerivedNamesCollide(branchPrefix, a, b string) bool {
 		git.BranchNameForSession(branchPrefix, a) == git.BranchNameForSession(branchPrefix, b)
 }
 
-// reservedTmuxSuffixes are the sibling tmux sessions Atrium derives from a session's own
-// name: the terminal tab's shell (ui/terminal.go) and the run command's host
-// (session/runcmd.go). Each is `<tmux name><suffix>`, so a session TITLE that sanitizes
-// to another session's derived name would have two owners on one socket.
-var reservedTmuxSuffixes = []string{"_term", runSessionSuffix}
+// TermSessionSuffix is what turns an agent session's tmux name into its terminal shell's,
+// the `_term` twin of runSessionSuffix. Exported because the shell is minted in ui, which
+// is a different package; reserved below so no agent session can claim it.
+//
+// It is a const rather than a literal at each site because the two production spellings
+// used to be a bare "_term" here and another in ui, coupled only by a prose
+// cross-reference — a value in two homes with nothing to fail when they diverge.
+const TermSessionSuffix = "_term"
+
+// reservedTmuxSuffixes are the sibling tmux sessions Atrium mints from a session's own
+// name: the terminal tab's shell (Instance.MintTerminalSessionName, hosted by
+// ui/terminal.go) and the run command's host (session/runcmd.go). Each is
+// `<tmux name><suffix>`, so a session TITLE that sanitizes to another session's sibling
+// name would have two owners on one socket.
+var reservedTmuxSuffixes = []string{TermSessionSuffix, runSessionSuffix}
 
 // DerivedTmuxNameCollides reports whether a candidate qualified tmux name can coexist
 // with an existing session's: they must differ, and neither may be the other's derived
@@ -45,6 +55,39 @@ func DerivedTmuxNameCollides(cand, name string) bool {
 	}
 	for _, suffix := range reservedTmuxSuffixes {
 		if cand == name+suffix || cand+suffix == name {
+			return true
+		}
+	}
+	return false
+}
+
+// OwnedSiblingCollides reports whether cand would land on a sibling session inst already
+// OWNS — its terminal shell or its run-command host.
+//
+// It is the half DerivedTmuxNameCollides structurally cannot see. That guard derives both
+// siblings from inst's CURRENT tmux name, but neither sibling's name is derived: each is
+// minted once and then owned (Instance.termName, Instance.runName), so a deep rename moves
+// the agent's name and leaves the siblings on their old ones. From that moment the old
+// title is free, and a new session claiming it mints exactly the names the renamed session
+// is still holding.
+//
+// Both directions, for the same reason DerivedTmuxNameCollides needs both. `cand == owned`
+// is a candidate whose own agent session would sit on the sibling (a title of "web.term"
+// sanitizes onto session "web"'s shell). `cand+suffix == owned` is the commoner one after a
+// rename: the candidate's own shell or server would be minted onto the sibling, so two
+// sessions would host one tmux session and either teardown would take the other's with it.
+func OwnedSiblingCollides(cand string, inst *Instance) bool {
+	if cand == "" || inst == nil {
+		return false
+	}
+	for _, sib := range []struct{ owned, suffix string }{
+		{inst.TerminalSessionName(), TermSessionSuffix},
+		{inst.RunSessionName(), runSessionSuffix},
+	} {
+		if sib.owned == "" {
+			continue
+		}
+		if cand == sib.owned || cand+sib.suffix == sib.owned {
 			return true
 		}
 	}

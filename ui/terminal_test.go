@@ -617,15 +617,28 @@ func TestEnsureSessionReapsLegacyTermSession(t *testing.T) {
 	require.False(t, legacy.DoesSessionExist(), "the orphaned legacy term_ session must be reaped")
 }
 
-// shellOnSocket reports whether the instance's <key>_term shell is alive on
-// Atrium's tmux socket, and registers a cleanup that reaps it either way. The
-// cache map cannot answer this: the whole of #701 is a shell that exists on the
-// socket while no entry names it.
-func shellOnSocket(t *testing.T, inst *session.Instance) bool {
+// shellNamed reports whether a tmux session of exactly that name is alive on Atrium's
+// socket, and registers a cleanup that reaps it either way. The cache map cannot answer
+// this: the whole of #701 is a shell that exists on the socket while no entry names it,
+// and #708 is the same shell reached by a rename.
+//
+// By name rather than by instance because the names that matter most are the ones the
+// instance no longer computes — the shell a rename left behind, probed against the key
+// captured before it.
+func shellNamed(t *testing.T, name string) bool {
 	t.Helper()
-	probe := tmux.NewSessionWithName(context.Background(), terminalKey(inst)+"_term", "probe", "/bin/sh")
+	require.NotEmpty(t, name, "a shell probe needs a name")
+	probe := tmux.NewSessionWithName(context.Background(), name, "probe", "/bin/sh")
 	t.Cleanup(func() { _ = probe.Close() })
 	return probe.DoesSessionExist()
+}
+
+// shellOnSocket is shellNamed for the shell an instance currently names. terminalKey IS
+// that name — the shell's own tmux session name, owned by the instance rather than derived
+// from its agent session's (see terminalKey).
+func shellOnSocket(t *testing.T, inst *session.Instance) bool {
+	t.Helper()
+	return shellNamed(t, terminalKey(inst))
 }
 
 // A pause or kill completing while EnsureSession is still in its tmux round trip
@@ -723,7 +736,7 @@ func TestEnsureSessionInstallsAnUnraceedShell(t *testing.T) {
 
 // The generation is per key because the abort path CLOSES the session it was about
 // to install, and that session is not always one this call created: the branch above
-// the install adopts a <key>_term already alive on the socket — left by a crashed or
+// the install adopts a shell already alive on the key — left by a crashed or
 // SIGKILLed run, or by a CloseForInstance whose own Close() errored and only dropped
 // the map entry. Aborting that adoption for an unrelated instance's teardown does not
 // cost a retry, it kills the user's shell and everything running in it.

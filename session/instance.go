@@ -428,6 +428,21 @@ type Instance struct {
 	// Guarded by mu.
 	portProblem string
 
+	// termName is the tmux name of the sibling session hosting the terminal tab's shell
+	// (ui/terminal.go). OWNED on exactly runName's terms and for the first of its two
+	// reasons: minted when the pane first creates a shell, persisted
+	// (InstanceData.TermSession), and never re-derived. Deriving it meant a deep rename
+	// moved the agent's session and left the shell where it was, so the pane's cache key
+	// moved off a live shell — the user's terminal was silently replaced by a fresh one
+	// while the old kept running, unreachable by every later reap (#708). Guarded by mu.
+	//
+	// runName's SECOND reason does not transfer, and must not be repeated here: an empty
+	// value carries no safety meaning for the shell. The pane deliberately adopts a live
+	// <name>_term it did not start, and kills one it cannot restore, because that is how a
+	// shell survives a TUI restart — so it has never treated the mint as a claim of
+	// ownership the way StartRunCommand does. What ownership buys the shell is the first
+	// half alone: a name that a rename cannot move.
+	termName string
 	// runName is the tmux name of the sibling session hosting the repo's run_command
 	// (#389). It is OWNED, not derived: minted when this session first starts one,
 	// persisted (InstanceData.RunSession), and never re-derived.
@@ -633,6 +648,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		Port:                 i.Port(),
 		RunStarted:           i.RunWanted(),
 		RunSession:           i.RunSessionName(),
+		TermSession:          i.TerminalSessionName(),
 
 		// Persist the undelivered prompt queue so it survives a restart and is re-delivered
 		// in order on reload (delivered prompts have already been popped, so this is usually
@@ -726,6 +742,7 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 		port:                 data.Port,
 		runWanted:            data.RunStarted,
 		runName:              data.RunSession,
+		termName:             data.TermSession,
 	}
 
 	// Re-reserve the port this session was running on before anything created later in
@@ -2201,6 +2218,12 @@ func (i *Instance) Rename(newTitle string) (RenamedIdentity, error) {
 // same single-writer reason as SetDiffStats: Title is read unguarded by the renderer.
 // A zero Branch is left alone — a direct session has no worktree to derive one from, so
 // overwriting would blank a field the rename never owned.
+//
+// It deliberately leaves both sibling names alone: termName and runName are owned rather
+// than derived, so the shell and the dev server keep the names they were created under and
+// stay reachable by the teardowns that must kill them (#389, #708). Their tmux sessions are
+// not renamed on the socket either — the same call hooks make for a stronger reason
+// (tmux_rename.go). Nothing here may start chasing them without also moving the sessions.
 func (i *Instance) AdoptRename(renamed RenamedIdentity) {
 	i.Title = renamed.Title
 	if renamed.Branch != "" {

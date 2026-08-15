@@ -114,10 +114,21 @@ func (m *home) pushOneContext(inst *session.Instance) {
 // The check stays on the main thread because it reads the whole instance list. It
 // rejects an empty title or one already used in the instance's repo group — comparing
 // derived names (tmux segment, branch slug), not raw titles, and also reserving the
-// qualified tmux name the rename would mint (plus its derived siblings — the "_term"
-// terminal shell and the "_run" run command, see session.DerivedTmuxNameCollides)
-// against every session. Same-titled sessions in other groups are fine: their qualified
-// tmux names differ.
+// qualified tmux name the rename would mint (plus its siblings — the "_term" terminal
+// shell and the "_run" run command) against every session. Same-titled sessions in other
+// groups are fine: their qualified tmux names differ.
+//
+// The sibling reservation takes two checks because a sibling's name has two possible
+// homes. DerivedTmuxNameCollides derives both from an instance's CURRENT tmux name, which
+// is right for a session that has not been renamed; OwnedSiblingCollides reads the names
+// an instance actually holds, which is the only way to see a sibling left behind by an
+// earlier rename — its old title is free again, so nothing else would stop this rename
+// minting straight onto a live shell or dev server.
+//
+// selected is skipped for the duplicate-title check (a session may keep its own name) but
+// NOT for the sibling checks: those are about the session's own shell and server, which a
+// rename does not move, so a title sanitizing onto one of them would leave two owners on
+// one tmux session.
 func (m *home) validateDeepRename(selected *session.Instance, value string) error {
 	if value == "" {
 		return fmt.Errorf("session name cannot be empty")
@@ -125,13 +136,22 @@ func (m *home) validateDeepRename(selected *session.Instance, value string) erro
 	group := selected.GroupKey()
 	cand := tmux.QualifiedSessionName(group, value)
 	for _, inst := range m.list.GetInstances() {
-		if inst == selected {
-			continue
+		if inst != selected {
+			if inst.GroupKey() == group && session.DerivedNamesCollide(m.appConfig.BranchPrefix, inst.Title, value) {
+				return fmt.Errorf("a session named %q already exists in %s", value, group)
+			}
+			if session.DerivedTmuxNameCollides(cand, inst.TmuxSessionName()) {
+				return fmt.Errorf("renaming to %q collides with session %q", value, inst.Title)
+			}
 		}
-		if inst.GroupKey() == group && session.DerivedNamesCollide(m.appConfig.BranchPrefix, inst.Title, value) {
-			return fmt.Errorf("a session named %q already exists in %s", value, group)
-		}
-		if session.DerivedTmuxNameCollides(cand, inst.TmuxSessionName()) {
+		if session.OwnedSiblingCollides(cand, inst) {
+			if inst == selected {
+				// Deliberately not the two-subject phrasing below: naming the session
+				// twice ("collides with session X" where X is itself) reads as a bug,
+				// and the shorter sentence keeps a refusal that carries an unbounded
+				// title closer to the peer's width rather than well past it.
+				return fmt.Errorf("%q is this session's own terminal or run-command name", value)
+			}
 			return fmt.Errorf("renaming to %q collides with session %q", value, inst.Title)
 		}
 	}
@@ -1361,6 +1381,9 @@ const (
 //     mint (a legacy unqualified name can shadow a qualified one), or either of
 //     its derived siblings — the "_term" terminal shell and the "_run" run
 //     command (session.DerivedTmuxNameCollides);
+//   - any instance already HOLDING a sibling on that name (session.OwnedSiblingCollides).
+//     Both siblings are owned rather than derived, so a renamed session keeps the ones it
+//     minted under its old title — and that title is now free for a new session to take;
 //   - the latest async verdict that the title's branch already exists in the
 //     target repo (an orphan from a killed session would make Start fail late).
 func (m *home) titleConflict(title string) string {
@@ -1375,6 +1398,9 @@ func (m *home) titleConflict(title string) string {
 			return titleErrAlreadyUsed
 		}
 		if session.DerivedTmuxNameCollides(cand, inst.TmuxSessionName()) {
+			return titleErrNameTaken
+		}
+		if session.OwnedSiblingCollides(cand, inst) {
 			return titleErrNameTaken
 		}
 	}

@@ -17,19 +17,36 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// termShellOnSocket reports whether the instance's <key>_term shell is alive on
-// Atrium's tmux socket, and registers a cleanup that reaps it either way.
+// termShellOnSocket reports whether the instance's terminal shell is alive on Atrium's
+// tmux socket, and registers a cleanup that reaps it either way.
 //
 // The cache cannot answer this, which is the whole point: HasTerminalSession asks
 // whether an entry names a shell, and #707 is about a shell that keeps running in a
-// deleted directory whatever the map says. ui/terminal_test.go has the same probe,
-// but both it and terminalKey are package-private to ui; the two ingredients are
-// exported, so app re-derives it rather than growing a production accessor for a
-// test. The "_term" suffix is spelled at ui/terminal.go:349 and reserved in
-// session/collision.go's reservedTmuxSuffixes.
+// deleted directory whatever the map says. ui/terminal_test.go has the same probe, but
+// both it and terminalKey are package-private to ui; app re-derives it from the exported
+// half rather than growing a production accessor for a test.
+//
+// It asks the instance for the name rather than appending a suffix of its own: since #708
+// the shell's name is OWNED (Instance.termName), so a session that has been renamed since
+// its shell was created no longer derives it. Falling back to the mint keeps the probe
+// honest for a session whose shell was never created — and for one whose shell was just
+// reaped, since the reap releases the name.
 func termShellOnSocket(t *testing.T, inst *session.Instance) bool {
 	t.Helper()
-	probe := tmux.NewSessionWithName(context.Background(), inst.TmuxSessionName()+"_term", "probe", "/bin/sh")
+	name := inst.TerminalSessionName()
+	if name == "" {
+		name = inst.MintTerminalSessionName()
+	}
+	return shellNameOnSocket(t, name)
+}
+
+// shellNameOnSocket is the same probe against an exact name, for the names an instance no
+// longer computes: a reap releases the owned name, so after one the instance can only
+// report what a NEW shell would be called, not what the one under test was.
+func shellNameOnSocket(t *testing.T, name string) bool {
+	t.Helper()
+	require.NotEmpty(t, name, "a shell probe needs a name")
+	probe := tmux.NewSessionWithName(context.Background(), name, "probe", "/bin/sh")
 	t.Cleanup(func() { _ = probe.Close() })
 	return probe.DoesSessionExist()
 }
@@ -157,3 +174,48 @@ func TestPauseFailure_KeepsTheShellWhenTheWorktreeSurvives(t *testing.T) {
 // reports false for both outcomes. The socket is also the observable that matters —
 // the cache is self-correcting once the session is dead, since EnsureSession drops
 // an entry whose DoesSessionExist comes back false and creates a fresh shell.
+
+// #708's own scenario, end to end on a real socket and through production entry points
+// only: rename a session with an open terminal tab, then pause it SUCCESSFULLY. No failure
+// and no race is required — the ordinary happy path was enough.
+//
+// The shell's cache key used to be the instance's tmux name, which AdoptRename rewrites, so
+// handlePauseDone's reap computed a name no entry used and closed nothing. The worktree
+// came out from under a live shell that nothing named, and since TabbedWindow.CloseTerminal
+// has no production caller it outlived the process too.
+//
+// Unlike the pause-failure tests above this one uses a real tmux rename: gitSession starts a
+// real agent session, so Instance.Rename moves it on the socket while its `_term` sibling
+// stays where it was — which is the asymmetry the whole fix is about.
+func TestRenameThenPause_ReapsTheShellUnderItsPreRenameName(t *testing.T) {
+	testutil.RequireTmux(t)
+	h, inst, _ := strandedShellHome(t)
+
+	shell := inst.TerminalSessionName()
+	require.NotEmpty(t, shell, "precondition: the shell's name is owned once it is created")
+	agentBefore := inst.TmuxSessionName()
+
+	// The production rename: the same Cmd the R key builds, then the handler that adopts
+	// the identity it earned. Nothing here touches the terminal pane, which is the point.
+	msg, ok := renameIOCmd(inst, inst.Title+"-renamed", "")().(renameDoneMsg)
+	require.True(t, ok, "precondition: renameIOCmd must report a rename outcome")
+	require.NoError(t, msg.err, "precondition: this rename must succeed")
+	h.Update(msg)
+
+	require.NotEqual(t, agentBefore, inst.TmuxSessionName(),
+		"precondition: the rename moved the agent session's name")
+	require.Equal(t, shell, inst.TerminalSessionName(),
+		"the shell keeps the name it was created under")
+
+	wt, err := inst.GetGitWorktree()
+	require.NoError(t, err)
+	worktreePath := wt.GetWorktreePath()
+
+	pressPause(t, h)
+
+	require.True(t, inst.Paused(), "precondition: the pause parked the session")
+	require.NoDirExists(t, worktreePath, "precondition: the pause removed the worktree")
+	require.False(t, shellNameOnSocket(t, shell),
+		"the renamed session's shell survived the pause under its pre-rename name, "+
+			"in a worktree that no longer exists, with `atrium reset` the only thing left to reap it")
+}

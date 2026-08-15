@@ -182,6 +182,24 @@ type InstanceData struct {
 	// command, so nothing sitting on the name it WOULD mint is ours to attach to or kill.
 	RunSession string `json:"run_session,omitempty"`
 
+	// TermSession is the tmux name of the sibling session hosting the terminal tab's
+	// shell, as this session MINTED it — not as it would be derived today.
+	//
+	// Persisted for the half of RunSession's reason that applies to a shell: a deep rename
+	// moves the agent's tmux session and leaves the `_term` sibling where it is, so a
+	// derived name stops resolving and the user's shell is orphaned — still running
+	// whatever they left in it, and reachable by no reap (#708). Nothing sweeps shells at
+	// exit; they are MEANT to outlive Atrium and be adopted by the next run
+	// (ui/terminal.go's EnsureSession), which is exactly why the name has to survive the
+	// process that minted it. Without this field a restart after a rename would mint a
+	// second shell beside the first and strand it for good.
+	//
+	// Unlike RunSession, an empty value here is not safety-critical: the pane adopts a
+	// live `<name>_term` it did not start by design. omitempty, and a state.json predating
+	// the field decodes to "" — which is right, since a pre-upgrade shell is on the name
+	// the mint would produce anyway.
+	TermSession string `json:"term_session,omitempty"`
+
 	Worktree  GitWorktreeData `json:"worktree"`
 	DiffStats DiffStatsData   `json:"diff_stats"`
 }

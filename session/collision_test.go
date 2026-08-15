@@ -53,3 +53,42 @@ func TestDerivedTmuxNameCollides(t *testing.T) {
 		}
 	}
 }
+
+// The sibling names an instance HOLDS are invisible to DerivedTmuxNameCollides, which can
+// only derive them from the instance's current tmux name. Both are owned rather than
+// derived, so a deep rename leaves them on the old name — and frees the old title for a new
+// session to claim, which would mint straight onto a live shell or dev server.
+func TestOwnedSiblingCollides(t *testing.T) {
+	// A session renamed from "foo" to "bar" that still hosts both siblings under the
+	// names it minted while it was "foo".
+	renamed := &Instance{
+		Title:    "bar",
+		tmuxName: "atrium_g_bar",
+		termName: "atrium_g_foo_term",
+		runName:  "atrium_g_foo_run",
+	}
+	cases := []struct {
+		cand string
+		inst *Instance
+		want bool
+		why  string
+	}{
+		{"atrium_g_foo", renamed, true, "a new session with the freed title would mint onto both siblings"},
+		{"atrium_g_foo_term", renamed, true, "a title sanitizing onto the held shell name itself"},
+		{"atrium_g_foo_run", renamed, true, "a title sanitizing onto the held run-session name itself"},
+		{"atrium_g_bar", renamed, false, "the instance's own current name is DerivedTmuxNameCollides' job"},
+		{"atrium_g_baz", renamed, false, "an unrelated title"},
+		{"atrium_g_foo2", renamed, false, "a prefix of the held name is not a collision"},
+		{"", renamed, false, "no candidate, nothing to collide with"},
+		{"atrium_g_foo", nil, false, "no instance, nothing held"},
+		{"atrium_g_foo", &Instance{Title: "foo", tmuxName: "atrium_g_foo"}, false,
+			"an instance holding no siblings reserves nothing here"},
+		{"atrium_g_foo", &Instance{termName: "atrium_g_foo_run"}, false,
+			"the shell suffix is not matched against a run-session name"},
+	}
+	for _, c := range cases {
+		if got := OwnedSiblingCollides(c.cand, c.inst); got != c.want {
+			t.Errorf("OwnedSiblingCollides(%q, %v) = %v, want %v (%s)", c.cand, c.inst, got, c.want, c.why)
+		}
+	}
+}

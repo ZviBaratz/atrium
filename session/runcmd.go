@@ -14,8 +14,10 @@ package session
 // session's ACTIVE pane, and paneTarget() falls back to the session name when pane-id
 // resolution fails — so a second window in the agent's session is a pane the poll can
 // read by mistake and, through the autoyes daemon, TYPE INTO by mistake. The terminal tab
-// already solved this the same way with `_term` (ui/terminal.go): same suffix convention,
-// same collision guards, same prefix sweep in CleanupSessions.
+// hosts its shell the same way with `_term`: same suffix convention (both suffixes are
+// reserved together in reservedTmuxSuffixes), and both are swept by CleanupSessions, which
+// matches on the shared session-name PREFIX (tmux.Prefix()) and knows nothing of either
+// suffix.
 //
 // The name is MINTED from that convention and then OWNED — persisted on the instance, not
 // re-derived on each use. Deriving it is wrong twice over, and both cost a running
@@ -25,6 +27,13 @@ package session
 // "something else happens to sit on the name we would mint" — a pre-existing session
 // titled "foo.run" sanitizes to exactly session "foo"'s run-session name, and a teardown
 // that trusted the derivation would kill that user's live agent.
+//
+// The terminal shell is owned on the same terms (Instance.termName), but only for the
+// first of those reasons — it derived its name until #708, where a rename cost the user
+// their shell. The second does not transfer and the parity stops there: the pane
+// deliberately ADOPTS a live `<name>_term` it did not start, and kills one it cannot
+// restore, because that is how a shell survives a TUI restart. StartRunCommand refuses
+// the equivalent.
 //
 // Three lifecycle rules, each for its own reason:
 //
