@@ -299,9 +299,13 @@ var wantRungs = map[string][]int{
 	"codex/prompt/approval": {20, 24, 28, 40, 60, 120},
 
 	// Floors at 24, and the rung below it was driven rather than left unknown: at 20 the
-	// selector rows truncate to "Trust fo…" / "Don't tr…" and the gate misses. Same floor as
-	// agy's gate directly below, and for the same mechanism — a truncating CLI, not a
-	// wrapping one. See TestGeminiTrustGateOptionRowsAreTruncatedAtWidth20.
+	// selector rows truncate to "Trust fo…" / "Don't tr…" and the gate misses. See
+	// TestGeminiTrustGateOptionRowsAreTruncatedAtWidth20.
+	//
+	// agy's gate below stops at 24 too and this used to call that the same floor "for the same
+	// mechanism". It is not the same fact: 24 is the narrowest width agy's gate has ever been
+	// DRIVEN at, while agy/busy and agy/prompt/confirmation both reach 20 — an evidence gap,
+	// not a measured cliff. Gemini's 24 is a cliff, because 20 was driven and misses.
 	"gemini/gate": {24, 40, 80},
 
 	"agy/gate":                {24, 28, 120},

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -23,10 +24,8 @@ import (
 // departure from how the codex and agy ladders were captured. #647 established that a trust
 // gate resized to 28 is byte-identical to one started at 28, and drive-agent.sh's `ladder`
 // verb rests on it. It did not hold for this dialog: all four widths were driven both ways in
-// the same run, and the resized rung differed from the native one at all four. gemini's trust
-// dialog occupies 27 non-empty lines at width 80 and 37 at width 20 against a 40-row pane, so
-// the Ink app repaints only its own region and the rows above keep torn fragments of the
-// previous, wider frame.
+// the same run, and the resized rung differed from the native one at all four — the Ink app
+// repaints its own region and the rows above keep torn fragments of the previous, wider frame.
 //
 // Those fragments are not inert. The width-40 resize rung carried a leftover
 // "Do you trust the files in this folder" on ONE line — contiguous, where the live dialog's
@@ -35,6 +34,16 @@ import (
 // falsehood. A rung whose bytes depend on the previous rung is a fixture that lies. The
 // workspace names in the option rows (fresh80, fresh40) are what record that these are not
 // resizes; at 24 and 20 the row is truncated before the name, which is why they stop there.
+//
+// WHY the resize diverges is NOT established, and an earlier draft of this comment claimed it
+// was: "the dialog occupies 27 non-empty lines at width 80 and 37 at 20 against a 40-row
+// pane", offered as the mechanism. Overflow cannot be the mechanism, because nothing
+// overflows — measured over these four captures (total rows, trailing blanks already
+// stripped): 80→33, 40→38, 24→35, 20→38, every one inside the 40-row pane, the widest rung
+// most comfortably of all. So the divergence has some other cause, and a rule of the form
+// "resize is unsafe when the dialog is taller than the pane" would have licensed exactly the
+// capture that lied here. The safe rule is the unconditional one: a resized rung is not known
+// to equal a native one for this dialog, so drive it with `fresh`.
 //
 // Two structural facts decided the fix, and neither is visible in the bundle:
 //
@@ -219,6 +228,14 @@ var geminiTrustGateLadder = []paneCapture{
 	{name: "geminiTrustGatePane24", width: 24, note: "option-row directory name elided", pane: geminiTrustGatePane24},
 }
 
+// The rung below the floor, as one shared value. It is not in the ladder — the gate misses
+// there — but three tests below feed it through the same helpers, and building it inline in
+// each let the note drift, so the same rung printed two different subtest names.
+var geminiTrustGateMissedRung = paneCapture{
+	name: "geminiTrustGatePane20", width: 20, note: "gate missed: option rows truncated",
+	pane: geminiTrustGatePane20,
+}
+
 // A ladder that can lose a rung silently is not a ladder — deleting an entry just runs fewer
 // subtests. Asserted as the exact rung list, as codex's TestCodexLaddersKeepEveryDrivenRung
 // is, so a vanished rung names itself.
@@ -286,7 +303,7 @@ func TestGeminiTrustGateHeadlineIsUnreachableOnceItWraps(t *testing.T) {
 		for _, c := range []paneCapture{
 			{name: "geminiTrustGatePane40", width: 40, pane: geminiTrustGatePane40},
 			{name: "geminiTrustGatePane24", width: 24, pane: geminiTrustGatePane24},
-			{name: "geminiTrustGatePane20", width: 20, pane: geminiTrustGatePane20},
+			geminiTrustGateMissedRung,
 		} {
 			require.False(t, fires(c.pane, window),
 				"%s: the headline must stay unreachable at GateWindow %d — the box border sits "+
@@ -298,7 +315,13 @@ func TestGeminiTrustGateHeadlineIsUnreachableOnceItWraps(t *testing.T) {
 // The disclosed floor, held as a guard rather than left in prose. The gate is NOT detected at
 // width 20, and pinning that is the point: an undisclosed miss reads as coverage, and #648's
 // whole argument is that a table which cannot report what it fails to prove is worse than no
-// table. Same failure mode as agy's gate, which also floors at 24.
+// table.
+//
+// agy's gate stops at 24 too, but that is NOT the same fact and an earlier draft here called
+// it one. paneCoverage's "agy/gate" holds 120/28/24 and nothing narrower, while "agy/busy" and
+// "agy/prompt/confirmation" both reach 20 — so 24 is simply the narrowest width agy's gate has
+// been driven at, an evidence gap. Gemini's 24 is a measured cliff: 20 WAS driven, and this
+// test is the record that it misses.
 //
 // It fails SAFE — a missed gate reads as idle, and gemini's dialog is not a composer either
 // (the sibling test below), so the #512 accident of typing a queued prompt into the menu
@@ -339,8 +362,7 @@ func TestGeminiTrustGateOptionRowsAreTruncatedAtWidth20(t *testing.T) {
 // The width-20 miss is included deliberately. That is the rung where the gate does NOT fire,
 // which makes it the only one where a composer reading would actually be dangerous.
 func TestGeminiTrustGateIsNeitherComposerNorPrompt(t *testing.T) {
-	all := append(append([]paneCapture(nil), geminiTrustGateLadder...),
-		paneCapture{name: "geminiTrustGatePane20", width: 20, note: "gate missed", pane: geminiTrustGatePane20})
+	all := append(append([]paneCapture(nil), geminiTrustGateLadder...), geminiTrustGateMissedRung)
 
 	for _, c := range all {
 		t.Run(c.label(), func(t *testing.T) {
@@ -360,10 +382,154 @@ func TestGeminiPre055TrustGateLiteralMatchesNothing(t *testing.T) {
 	probe := *gemini
 	probe.Gates = []Gate{{Contains: []string{"Do you trust this folder"}}}
 
-	for _, c := range append(append([]paneCapture(nil), geminiTrustGateLadder...),
-		paneCapture{name: "geminiTrustGatePane20", width: 20, pane: geminiTrustGatePane20}) {
+	for _, c := range append(append([]paneCapture(nil), geminiTrustGateLadder...), geminiTrustGateMissedRung) {
 		_, up := probe.GateUp(c.pane)
 		require.False(t, up,
 			"%s: the 0.27 literal is absent from every 0.55.1 pane and from the bundle", c.label())
+	}
+}
+
+// geminiProsePane is a WORKING gemini pane whose transcript tail happens to contain the
+// decline row's wording as ordinary English. Composed, not captured — it is a statement about
+// the matcher, not about what gemini renders, and every line above the spinner is text an
+// agent could plausibly emit while reviewing code.
+var geminiProsePane = strings.Join([]string{
+	"✦ Here are the review notes for the input handler:",
+	"",
+	"  1. Don't trust user input; validate every field before use.",
+	"  2. Prefer a whitelist over a blacklist for the file extensions.",
+	"  3. The parser should reject anything over 4 KiB.",
+	"",
+	"⠏ Reticulating splines... (esc to cancel, 12s)",
+	"",
+	"╭──────────────────────────────────────────╮",
+	"│ >                                        │",
+	"╰──────────────────────────────────────────╯",
+	"~/project   no sandbox   gemini-2.5-pro",
+}, "\n")
+
+// geminiPermissionsTrustPane is gemini's /permissions modify-trust dialog, composed from the
+// 0.55.1 bundle's TRUST_LEVEL_ITEMS (bundle/interactiveCli-2Z3Q3FYM.js): the labels are
+// `Trust this folder (${dirName})`, `Trust parent folder (${parentFolder})` and "Don't trust".
+// Note the FIRST one — "Trust THIS folder" — which is what separates it from the startup
+// dialog, whose label is `Trust folder (${dirName})`.
+var geminiPermissionsTrustPane = strings.Join([]string{
+	"✦ Opening permission settings.",
+	"",
+	"╭──────────────────────────────────────────────╮",
+	"│ Modify trust level                           │",
+	"│                                              │",
+	"│ ● 1. Trust this folder (project)             │",
+	"│   2. Trust parent folder (worktrees)         │",
+	"│   3. Don't trust                             │",
+	"╰──────────────────────────────────────────────╯",
+	"~/project   no sandbox   gemini-2.5-pro",
+}, "\n")
+
+// THE REGRESSION GUARD for the fix #713 shipped, and the reason the gate is a Match rather
+// than a two-entry Contains.
+//
+// A gate's Contains is an alternation, so keying on both option rows would fire on EITHER —
+// and "Don't trust" is ordinary English, not a vendor string. This test runs the counterfactual
+// first so the danger is demonstrated rather than asserted: on a pane that is visibly WORKING,
+// the alternation is true. poll.go checks GateUp before HasBusyMarker on purpose ("a false
+// gate beats positive proof of work"), so that combination is a row reporting "waiting on
+// setup screen" while its agent streams, with its queued prompt withheld — #342's direction.
+//
+// The bar it has to clear is the literal it replaced: "Do you trust this folder" could not
+// collide with prose, so an alternation would have been a REGRESSION, not merely a weak fix.
+// That comparison is asserted below too.
+func TestGeminiTrustGateIgnoresItsOwnRowsInProse(t *testing.T) {
+	require.True(t, gemini.HasBusyMarker(geminiProsePane),
+		"the pane must be visibly working, or the ordering in poll.go is not what is at stake")
+
+	alternation := *gemini
+	alternation.Gates = []Gate{{Contains: []string{"Trust folder", "Don't trust"}}}
+	_, altUp := alternation.GateUp(geminiProsePane)
+	require.True(t, altUp,
+		"the counterfactual must actually fire — if it stops, this test proves nothing and the "+
+			"conjunction in geminiTrustGateVisible needs a new justification")
+
+	rotted := *gemini
+	rotted.Gates = []Gate{{Contains: []string{"Do you trust this folder"}}}
+	_, rottedUp := rotted.GateUp(geminiProsePane)
+	require.False(t, rottedUp,
+		"the 0.27 literal did not collide with prose, which is why an alternation would have "+
+			"traded a missed gate for a false one")
+
+	_, up := gemini.GateUp(geminiProsePane)
+	require.False(t, up,
+		"the shipped gate requires BOTH option rows, so prose carrying one of them must not "+
+			"latch a working session to PaneGate")
+}
+
+// The second thing the conjunction buys. gemini's /permissions dialog reuses "Don't trust"
+// byte-identically, so an alternation reports a mid-session settings dialog as a startup gate.
+// Requiring both rows excludes it, because its first label is "Trust THIS folder".
+//
+// It also leaves that dialog matched by nothing at all, which is a real gap rather than a win,
+// and this test is where that is written down: reaching it needs an authenticated session, so
+// it sits at the same evidence tier as gemini's busy and confirmation strings. If it is ever
+// driven, it wants its own Gate — not a loosening of this one.
+func TestGeminiTrustGateIgnoresThePermissionsTrustDialog(t *testing.T) {
+	require.Contains(t, geminiPermissionsTrustPane, "Don't trust",
+		"the collision is the premise: this dialog shares the decline row verbatim")
+	require.NotContains(t, geminiPermissionsTrustPane, "Trust folder",
+		"…and is separated only by \"Trust THIS folder\" in the first row")
+
+	alternation := *gemini
+	alternation.Gates = []Gate{{Contains: []string{"Trust folder", "Don't trust"}}}
+	_, altUp := alternation.GateUp(geminiPermissionsTrustPane)
+	require.True(t, altUp, "an alternation would misreport this as the startup trust gate")
+
+	_, up := gemini.GateUp(geminiPermissionsTrustPane)
+	require.False(t, up,
+		"the folder-trust gate must not claim the /permissions dialog; that dialog is uncovered "+
+			"and disclosed, not silently folded into this gate")
+}
+
+// Both rows are load-bearing, asserted one at a time. GateUp short-circuits, so a test that
+// only ever feeds it complete dialogs cannot tell a two-literal matcher from a one-literal
+// one: either row could quietly stop appearing in every fixture and the suite would stay
+// green. This is the gate equivalent of TestUnprovenMatcherAlternativesArePinned, which
+// covers only prompt matchers (pane_width_test.go skips gates).
+//
+// It is also the cost of the conjunction, made explicit: the vendor rewording EITHER row kills
+// the gate, where an alternation would have survived on the other. That is the fail-safe
+// direction — a missed gate reads as idle and doctor's drift check is what surfaces it — but
+// it is a real trade and it should fail here loudly if anyone changes their mind about it.
+func TestGeminiTrustGateNeedsBothOptionRows(t *testing.T) {
+	full := geminiTrustGatePane80
+	require.Contains(t, full, "Trust folder")
+	require.Contains(t, full, "Don't trust")
+
+	for _, tc := range []struct{ name, drop string }{
+		{"accept row reworded", "Trust folder"},
+		{"decline row reworded", "Don't trust"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mangled := strings.ReplaceAll(full, tc.drop, "Xyzzy")
+			_, up := gemini.GateUp(mangled)
+			require.False(t, up,
+				"%q is load-bearing: with it reworded the gate must go DOWN, not ride on the "+
+					"other row", tc.drop)
+		})
+	}
+}
+
+// The plain negatives agy's gate already carries (registry_test.go pins agy false on its idle,
+// confirm and accepted-gate panes) and gemini's did not. Cheap, and the direction this PR made
+// riskier: it replaced one distinctive sentence with two short phrases.
+func TestGeminiTrustGateIsDownOnEveryNonGatePane(t *testing.T) {
+	for _, tc := range []struct{ name, pane string }{
+		{"idle composer", geminiIdlePane},
+		{"working with prose", geminiProsePane},
+		{"permissions dialog", geminiPermissionsTrustPane},
+		{"empty", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, up := gemini.GateUp(tc.pane)
+			require.False(t, up, "no gate is up on %s", tc.name)
+		})
 	}
 }

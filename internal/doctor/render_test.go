@@ -54,7 +54,10 @@ func TestRenderGatesFlipped(t *testing.T) {
 func TestRender(t *testing.T) {
 	out := Render([]Result{
 		{Key: agent.KeyClaude, Name: "Claude Code", Installed: "2.1.179", Verified: "2.1.170", Status: StatusDrifted},
-		{Key: agent.KeyGemini, Name: "Gemini CLI", Installed: "0.27.4", Verified: "0.27", Status: StatusOK},
+		// Self-contained literals, so nothing here breaks when a registry pin moves — which is
+		// exactly why they drift. This row read 0.27.4/0.27 until #713 moved gemini's pin to
+		// 0.55.1 and only check_test.go (which compares against the REAL registry) was updated.
+		{Key: agent.KeyGemini, Name: "Gemini CLI", Installed: "0.55.9", Verified: "0.55.1", Status: StatusOK},
 		{Key: agent.KeyCodex, Name: "Codex", Status: StatusNotInstalled},
 		{Key: agent.KeyAider, Name: "Aider", Installed: "0.64.1", Status: StatusUnknown},
 	})

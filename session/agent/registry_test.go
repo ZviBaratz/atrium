@@ -1823,9 +1823,15 @@ var aiderIdlePane = strings.Join([]string{
 // --- Gemini fixtures, all composed rather than captured. The busy and confirmation strings
 // come from the 0.27 package source (LoadingIndicator.js, ToolConfirmationMessage.js) and
 // are still present in the 0.55.1 bundle, but no pane has rendered either here. The trust
-// gate is the exception and no longer belongs to that tier: FolderTrustDialog.js is gone
-// from the 0.55.1 bundle along with the literal it carried, and the gate is now pinned to
-// verbatim captures in gemini_pane_test.go (#713).
+// gate is the exception and no longer belongs to that tier: it is pinned to verbatim 0.55.1
+// captures in gemini_pane_test.go (#713).
+//
+// What changed at the vendor was the gate's HEADLINE, not its component. An earlier draft
+// here said "FolderTrustDialog.js is gone from the 0.55.1 bundle along with the literal it
+// carried", which is false twice over: the component ships in four bundle/interactiveCli-*.js
+// files carrying its own source marker (packages/cli/src/ui/components/FolderTrustDialog.tsx),
+// and only the standalone .js file is gone, because 0.55.1 ships bundled at all. A reader
+// told the component was removed stops looking for it.
 
 func TestGeminiBusyMarker(t *testing.T) {
 	working := strings.Join([]string{

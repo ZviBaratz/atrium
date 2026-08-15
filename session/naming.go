@@ -152,6 +152,14 @@ func generateName(ctx context.Context, executor cmd.Executor, claudePath, workDi
 // prints the bare response text on stdout (verified against gemini-cli 0.27;
 // auth notices and workspace warnings go to stderr), so the output feeds
 // sanitizeName directly — no JSON envelope (see runGeminiHeadless).
+//
+// Still 0.27, and that is no longer backed by a runtime signal. #713 re-drove
+// gemini's folder-trust gate and moved the adapter's VerifiedVersion to 0.55.1;
+// that pin is one scalar for the whole agent, so `atrium doctor` stopped
+// reporting drift on 0.55.x and this contract — checked at 0.27 and not since —
+// lost the warning that used to cover it. A changed `-p` output shape would now
+// surface only as silently garbled session titles. See the gemini adapter header
+// in session/agent/registry.go for the full evidence split.
 func generateNameGemini(ctx context.Context, executor cmd.Executor, geminiPath, prompt string, stats *git.DiffStats) (string, error) {
 	sessionContext := buildContext(prompt, stats)
 	if sessionContext == "" {

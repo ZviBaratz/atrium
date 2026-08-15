@@ -1201,7 +1201,7 @@ VERBS
   ladder <label> [w...]    resize + capture at each width (default 120 60 40 34 28 26 24 20)
   fresh [width]            restart in a NEW workspace at <width> — for a once-per-path
                            screen (a trust gate) that a resize cannot bring back, and
-                           for any dialog TALLER than the pane (see THE JUDGEMENT)
+                           whenever a rung's exact bytes matter (see THE JUDGEMENT)
   sample <label> [s] [i]   capture a frame every i seconds for s seconds
   emit [prefix] [--join]   print Go fixtures for every capture, to stdout
   status                   run, size, capture count, live-fleet count
@@ -1260,8 +1260,9 @@ THE JUDGEMENT — what this script does NOT do for you
     headline reads "…in this │ │ folder?" and no GateWindow reassembles it (#713).
     Codex wraps the same text with no border and its widened window works. Check
     whether the region has a border before concluding a wrap is recoverable.
-  * A RESIZED rung is not always equal to a natively-narrow one — see the cost-saver
-    below for when it is, and #713 for when it is not.
+  * A RESIZED rung is not always equal to a natively-narrow one, and there is no known
+    test for which case you are in — one dialog was verified equal (#647), another
+    diverged at every width driven (#713). See the cost-saver below.
   * Pick the literal by the NARROWEST REACHABLE pane, not by your capture width. An
     agent's pane is Atrium's PREVIEW pane (app/app_layout.go GetPreviewSize →
     ui/list.go SetSessionPreviewSize → session/instance.go SetPreviewSize), the list
@@ -1287,15 +1288,24 @@ COST-SAVER, AND ITS ONE LIMIT
   API turn covers the whole ladder — that is what `ladder` is for. `sample` needs a
   turn in flight, and `fresh` needs a new workspace, so budget those separately.
 
-  It holds while the dialog FITS the pane, which is the case #647 verified it on (a trust
-  gate resized to 28, diffed byte for byte against one started at 28). Once the dialog
-  is taller than the pane it stops holding: the CLI repaints only its own region, so the
-  rows above keep torn fragments of the previous, WIDER frame. Those fragments are live
-  content to a matcher. gemini's width-40 resize rung carried a leftover headline on one
-  line, where the real dialog's headline is wrapped — enough to report the headline
-  REACHABLE at 40 when it is not (#713). A rung whose bytes depend on the previous rung
-  is a fixture that lies; drive it with `fresh <width>` instead. `up`'s own width is
-  free of this, being the first render there is.
+  It is verified for exactly ONE dialog: #647 diffed agy's trust gate resized to 28 against
+  one started at 28, byte for byte. It does NOT generalise. gemini's trust dialog was driven
+  both ways at 80/40/24/20 in a single run and the resized rung differed from the native one
+  at ALL FOUR (#713): the CLI repaints only its own region, so the rows above keep torn
+  fragments of the previous, WIDER frame, and those fragments are live content to a matcher.
+  The width-40 resize rung carried a leftover headline on ONE line where the real dialog's is
+  wrapped — enough to report the headline REACHABLE at 40 when it is not.
+
+  Do not predicate this on the dialog's height. An earlier draft of this help said the
+  equivalence "holds while the dialog FITS the pane" and told you to reach for `fresh` once it
+  is taller. That trigger is wrong: none of gemini's four rungs overflowed (33, 38, 35 and 38
+  rows in a 40-row pane) and every one of them still diverged, so the rule would have licensed
+  precisely the capture that lied. Why it diverges is not established.
+
+  So: a rung whose bytes depend on the previous rung is a fixture that lies. `ladder` is still
+  the right first move — it is what makes a width sweep affordable — but before a resized rung
+  becomes a committed fixture, either re-drive it with `fresh <width>` or diff it against one
+  that was. `up`'s own width is free of this, being the first render there is.
 EOF
 }
 
