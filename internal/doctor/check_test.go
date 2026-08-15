@@ -42,8 +42,13 @@ func TestCheckClassifies(t *testing.T) {
 	r := fakeRunner{
 		out: map[string]string{
 			"claude": "2.2.0 (Claude Code)\n", // past the pin, minor -> drifted
-			"gemini": "0.27.4\n",              // verified 0.27, minor -> ok
-			"codex":  "0.148.0\n",             // past the 0.147.0 pin, minor -> drifted
+			// gemini is the only row here testing the NOT-drifted direction, and it has to
+			// stay inside the pinned MINOR to do it. It read "0.27.4" against a 0.27 pin
+			// until #713 moved that pin to 0.55.1 — at which point the row still passed
+			// while exercising a different branch entirely (installed far OLDER than
+			// verified), and nothing said so. Keep this one patch-level above the pin.
+			"gemini": "0.55.9\n",  // patch within the pinned 0.55 minor -> ok
+			"codex":  "0.148.0\n", // past the 0.147.0 pin, minor -> drifted
 		},
 		err: map[string]error{},
 	}
