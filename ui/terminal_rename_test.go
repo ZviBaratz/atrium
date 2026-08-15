@@ -194,3 +194,28 @@ func TestReapReleasesTheNameSoTheNextShellFollowsTheRename(t *testing.T) {
 	assert.Equal(t, derivedNow, next, "the shell created after a reap must carry the new name")
 	assert.True(t, shellNamed(t, derivedNow), "and must actually be on the socket under it")
 }
+
+// The symptom as the user meets it, at the render layer rather than the socket. With the
+// key following the agent session, UpdateContent filed currentKey under the post-rename key,
+// missed the map, and painted "Opening terminal…" over a shell that was running fine — and
+// the frames still landing under the old key went into a slot nothing read. The visible
+// result was a terminal that emptied itself on rename.
+func TestDeepRenameKeepsThePaneRenderingTheShell(t *testing.T) {
+	tp, inst, key := shellPane(t, "rename-render")
+
+	// A frame has landed, so the pane is showing shell content rather than the
+	// still-opening fallback. Without this the assertion below would be vacuous.
+	showTerminal(t, tp, inst)
+	require.NotContains(t, tp.String(), "Opening terminal",
+		"precondition: the pane must be past the opening fallback before the rename")
+
+	renameAndAdopt(t, inst, inst.Title+"-renamed")
+	require.NoError(t, tp.UpdateContent(inst))
+
+	assert.NotContains(t, tp.String(), "Opening terminal",
+		"the rename blanked the terminal tab: the pane lost the shell it was already showing")
+	tp.mu.Lock()
+	current := tp.currentKey
+	tp.mu.Unlock()
+	assert.Equal(t, key, current, "the pane must still be pointed at the shell it is rendering")
+}
