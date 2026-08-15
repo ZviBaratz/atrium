@@ -47,32 +47,43 @@ func (i *Instance) MintTerminalSessionName() string {
 }
 
 // ClaimTerminalSessionName returns the owned name, minting and storing one when this session
-// does not have one yet. It is idempotent: a second claim returns the first claim's name,
-// including after a rename has moved the tmux name it was minted from.
+// does not have one yet, and reports whether THIS call is the one that minted it. It is
+// idempotent: a second claim returns the first claim's name and minted=false, including
+// after a rename has moved the tmux name it was minted from.
 //
 // The pane calls it BEFORE its tmux round trip rather than at install time, so the key it
 // files the finished shell under is the key every later lookup and every reap computes —
 // even for a rename that lands mid-create.
-func (i *Instance) ClaimTerminalSessionName() string {
+//
+// minted is what lets a create that then fails put the name back. Without it the instance
+// would own — and persist — a name no shell was ever started under, and the collision
+// guards would go on reserving that title against new sessions on behalf of nothing. It is
+// deliberately narrower than "the name is unused": a name this session already owned is
+// left alone on failure, because a shell may still be sitting on it.
+func (i *Instance) ClaimTerminalSessionName() (name string, minted bool) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if i.termName == "" {
-		if name := i.tmuxName; name != "" {
-			i.termName = name + TermSessionSuffix
+		if tmuxName := i.tmuxName; tmuxName != "" {
+			i.termName = tmuxName + TermSessionSuffix
+			minted = true
 		}
 	}
-	return i.termName
+	return i.termName, minted
 }
 
 // ReleaseTerminalSessionName forgets the owned name, so the next claim mints a fresh one
 // from whatever this session is called by then.
 //
-// Called wherever the shell is reaped, and unconditionally there — the same shape as the
-// reap generation it sits beside, and for the same reason: a reap that found nothing cached
-// still means no shell of ours is on that name. Holding a name past its shell would keep a
-// renamed session squatting on a title someone else may since have taken (see
-// OwnedSiblingCollides), and would name a resumed session's shell after the title it used
-// to have.
+// Called once the shell on that name is known to be gone — reaped, or never started.
+// Holding a name past its shell would keep a renamed session squatting on a title someone
+// else may since have taken (see OwnedSiblingCollides), and would name a resumed session's
+// shell after the title it used to have.
+//
+// The order matters and runs the other way from releaseRunTmux: kill first, forget second.
+// The owned name is the ONLY record of a shell the pane has no entry for — nothing sweeps
+// shells at exit, so one can outlive the process and be adopted by the next run — and
+// forgetting it while its shell is still up is the same permanent orphan #708 is about.
 func (i *Instance) ReleaseTerminalSessionName() {
 	i.mu.Lock()
 	defer i.mu.Unlock()

@@ -125,10 +125,14 @@ func (m *home) pushOneContext(inst *session.Instance) {
 // earlier rename — its old title is free again, so nothing else would stop this rename
 // minting straight onto a live shell or dev server.
 //
-// selected is skipped for the duplicate-title check (a session may keep its own name) but
-// NOT for the sibling checks: those are about the session's own shell and server, which a
-// rename does not move, so a title sanitizing onto one of them would leave two owners on
-// one tmux session.
+// selected is skipped for the duplicate-title check (a session may keep its own name) and
+// gets a NARROWER sibling check rather than the same one. The question against another
+// session is "would this rename put either session's shell on the other's" — but a session
+// already hosting `<g>_web_term` answers that about the candidate `<g>_web`, which is the
+// name it has right now. Asking the full check here refused a no-op rename by any session
+// with an open terminal tab, and any round trip back to a title it used to hold. What is a
+// genuine conflict with itself is landing its AGENT session on one of its own siblings, so
+// that is what OwnsSiblingNamed asks.
 func (m *home) validateDeepRename(selected *session.Instance, value string) error {
 	if value == "" {
 		return fmt.Errorf("session name cannot be empty")
@@ -136,22 +140,21 @@ func (m *home) validateDeepRename(selected *session.Instance, value string) erro
 	group := selected.GroupKey()
 	cand := tmux.QualifiedSessionName(group, value)
 	for _, inst := range m.list.GetInstances() {
-		if inst != selected {
-			if inst.GroupKey() == group && session.DerivedNamesCollide(m.appConfig.BranchPrefix, inst.Title, value) {
-				return fmt.Errorf("a session named %q already exists in %s", value, group)
-			}
-			if session.DerivedTmuxNameCollides(cand, inst.TmuxSessionName()) {
-				return fmt.Errorf("renaming to %q collides with session %q", value, inst.Title)
-			}
-		}
-		if session.OwnedSiblingCollides(cand, inst) {
-			if inst == selected {
+		if inst == selected {
+			if session.OwnsSiblingNamed(cand, inst) {
 				// Deliberately not the two-subject phrasing below: naming the session
 				// twice ("collides with session X" where X is itself) reads as a bug,
 				// and the shorter sentence keeps a refusal that carries an unbounded
 				// title closer to the peer's width rather than well past it.
 				return fmt.Errorf("%q is this session's own terminal or run-command name", value)
 			}
+			continue
+		}
+		if inst.GroupKey() == group && session.DerivedNamesCollide(m.appConfig.BranchPrefix, inst.Title, value) {
+			return fmt.Errorf("a session named %q already exists in %s", value, group)
+		}
+		if session.DerivedTmuxNameCollides(cand, inst.TmuxSessionName()) ||
+			session.OwnedSiblingCollides(cand, inst) {
 			return fmt.Errorf("renaming to %q collides with session %q", value, inst.Title)
 		}
 	}

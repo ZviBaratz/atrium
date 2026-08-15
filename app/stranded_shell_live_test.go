@@ -170,7 +170,7 @@ func TestPauseFailure_KeepsTheShellWhenTheWorktreeSurvives(t *testing.T) {
 
 // Both assertions above are about the socket rather than the cache, deliberately.
 // HasTerminalSession cannot answer "is it still cached" here: CaptureTarget refuses
-// a Paused instance before it ever looks in the map (ui/terminal.go:244), so it
+// a Paused instance in its first statement, before it ever looks in the map, so it
 // reports false for both outcomes. The socket is also the observable that matters —
 // the cache is self-correcting once the session is dead, since EnsureSession drops
 // an entry whose DoesSessionExist comes back false and creates a fresh shell.

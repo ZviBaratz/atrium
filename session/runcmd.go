@@ -30,10 +30,16 @@ package session
 //
 // The terminal shell is owned on the same terms (Instance.termName), but only for the
 // first of those reasons — it derived its name until #708, where a rename cost the user
-// their shell. The second does not transfer and the parity stops there: the pane
-// deliberately ADOPTS a live `<name>_term` it did not start, and kills one it cannot
-// restore, because that is how a shell survives a TUI restart. StartRunCommand refuses
-// the equivalent.
+// their shell. The second does not transfer: the pane deliberately ADOPTS a live
+// `<name>_term` it did not start, and kills one it cannot restore, because that is how a
+// shell survives a TUI restart. StartRunCommand refuses the equivalent.
+//
+// Nor does the parity reach the lifecycle rules below. They hold for the run session only.
+// The shell is reaped by the APP layer instead (ui.TerminalPane.CloseForInstance, called
+// from the pause and kill done-handlers), so the retire paths that end in Kill() without
+// passing through one of those — Start's own error unwind, the shutdown teardown — leave
+// it running. Ownership is what would make a Kill-time reap-by-name possible; nothing has
+// written one.
 //
 // Three lifecycle rules, each for its own reason:
 //
@@ -57,10 +63,11 @@ import (
 	"github.com/ZviBaratz/atrium/session/tmux"
 )
 
-// runSessionSuffix is what turns the agent session's name into its run session's. It is
+// RunSessionSuffix is what turns the agent session's name into its run session's. It is
 // reserved against every session title by the collision guards (see
-// session.DerivedTmuxNameCollides), so no agent session can ever mint it.
-const runSessionSuffix = "_run"
+// session.DerivedTmuxNameCollides), so no agent session can ever mint it. Exported on the
+// same terms as its `_term` twin — see TermSessionSuffix, which carries the reason for both.
+const RunSessionSuffix = "_run"
 
 // runProbeProgram is the placeholder command a run Session is built with when all that
 // is wanted from it is a has-session probe or a kill — after a restart, say, where the
@@ -104,7 +111,7 @@ func (i *Instance) mintRunSessionName() string {
 	if name == "" {
 		return ""
 	}
-	return name + runSessionSuffix
+	return name + RunSessionSuffix
 }
 
 // ownedRunTmux returns the cached Session for the run command this session owns, or nil.

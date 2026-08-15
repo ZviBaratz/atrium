@@ -195,6 +195,90 @@ func TestReapReleasesTheNameSoTheNextShellFollowsTheRename(t *testing.T) {
 	assert.True(t, shellNamed(t, derivedNow), "and must actually be on the socket under it")
 }
 
+// Ownership makes a shell reachable across a restart, and this is the bill for that: the
+// name can be the ONLY thing that names a live shell. A pane that never opened the terminal
+// tab this run has no entry for a shell the last run left, so a reap that dropped the name
+// on a cache miss would destroy the last pointer to it — the permanent orphan of #708,
+// reached by fixing #708.
+//
+// The fresh pane is the restart. session.releaseRunTmux is the shape borrowed: no cached
+// session, so probe the owned name and close what answers.
+func TestReapKillsAnOwnedShellThePaneNeverCached(t *testing.T) {
+	_, inst, key := shellPane(t, "reap-uncached")
+
+	fresh := NewTerminalPane(context.Background())
+	t.Cleanup(fresh.Close)
+	fresh.SetSize(80, 30)
+	fresh.mu.Lock()
+	_, cached := fresh.sessions[key]
+	fresh.mu.Unlock()
+	require.False(t, cached, "precondition: the fresh pane has no entry for the shell")
+
+	fresh.CloseForInstance(inst)
+
+	assert.False(t, shellNamed(t, key),
+		"the shell was left running with its owned name released — nothing names it now")
+	assert.Empty(t, inst.TerminalSessionName(), "a reap that got its shell must give the name up")
+}
+
+// A create that fails must put back the name it minted. Otherwise the instance owns — and
+// persists — a name no shell was ever started under, and OwnedSiblingCollides goes on
+// reserving that title against new sessions on behalf of nothing, for good.
+//
+// The failure is a cancelled lifecycle context, which is the pane's own ctx — a create
+// racing app shutdown. Deliberately not a missing working directory: tmux 3.6 creates the
+// session anyway and only the pane's process dies, so that fixture would assert nothing
+// here and would not even agree with itself across CI's tmux floor.
+func TestAFailedCreateReleasesTheNameItMinted(t *testing.T) {
+	testutil.RequireTmux(t)
+	t.Cleanup(log.Initialize(t.TempDir(), false))
+
+	inst := makeStartedInstance(t, "create-fails")
+	t.Cleanup(func() { _ = inst.Kill() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	tp := NewTerminalPane(ctx)
+	t.Cleanup(tp.Close)
+	tp.SetSize(80, 30)
+	minted := inst.MintTerminalSessionName()
+
+	_, err := tp.EnsureSession(inst)
+	require.Error(t, err, "precondition: the create must fail")
+
+	assert.Empty(t, inst.TerminalSessionName(),
+		"a create that started no shell must not leave its name owned")
+	assert.False(t, shellNamed(t, minted), "and must leave nothing on the socket")
+}
+
+// The other half of the same rollback: an install REFUSED after a successful create. The
+// shell exists for the length of the round trip and is closed by the abort, so the name has
+// to come back too.
+//
+// closeGen rather than a reap, deliberately. CloseForInstance releases the name itself, so
+// driving this with one would pass whether or not the abort path releases anything; a
+// whole-pane Close bumps only the epoch, leaving the abort as the only thing that could
+// have given the name up.
+func TestAnAbortedInstallReleasesTheNameItMinted(t *testing.T) {
+	testutil.RequireTmux(t)
+	t.Cleanup(log.Initialize(t.TempDir(), false))
+
+	inst := makeStartedInstance(t, "install-aborts")
+	t.Cleanup(func() { _ = inst.Kill() })
+	tp := NewTerminalPane(context.Background())
+	tp.SetSize(80, 30)
+	minted := inst.MintTerminalSessionName()
+	tp.beforeInstall = tp.Close
+
+	key, err := tp.EnsureSession(inst)
+	require.NoError(t, err)
+	require.Empty(t, key, "precondition: the install must have been refused")
+
+	assert.Empty(t, inst.TerminalSessionName(),
+		"an install that was refused must not leave the shell's name owned")
+	assert.False(t, shellNamed(t, minted), "and the shell it created must be closed")
+}
+
 // The symptom as the user meets it, at the render layer rather than the socket. With the
 // key following the agent session, UpdateContent filed currentKey under the post-rename key,
 // missed the map, and painted "Opening terminal…" over a shell that was running fine — and
