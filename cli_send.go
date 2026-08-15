@@ -147,9 +147,10 @@ type spoolWaitCopy struct {
 //
 // Shared because the ordering is the correctness, and two copies of an ordering drift.
 // What the two commands do differ about is what the disappearance *means* — for a
-// prompt, that some Atrium consumed it; for a create, that the session exists (the
-// drain holds the file until Start returns) — but that difference is in the callers'
-// wording and in what they do afterwards, not in the protocol.
+// prompt, that some Atrium consumed it; for a create, that the session exists *and is
+// recorded*, since the drain holds the file until Start has completed and the row has
+// been persisted — but that difference is in the callers' wording and in what they do
+// afterwards, not in the protocol.
 //
 // A Stat error other than "not found" is a bad data dir, not a completion: it is
 // reported rather than read as either outcome. Retrying to the deadline would turn a

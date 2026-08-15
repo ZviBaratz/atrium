@@ -97,7 +97,7 @@ func TestCreateDrainCreatesSessionAndHoldsTheFile(t *testing.T) {
 	inst := titled(h, "fix-auth")
 	require.NotNil(t, inst, "the session must be in the list")
 	assert.Equal(t, session.Loading, inst.GetStatus())
-	assert.FileExists(t, path, "the request must survive until the start lands")
+	assert.FileExists(t, path, "the request must survive until the start lands and the row is persisted")
 	_, rejected := outbox.Rejection(path)
 	assert.False(t, rejected, "a request in flight is not a rejected one")
 }

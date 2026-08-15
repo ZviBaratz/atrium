@@ -144,8 +144,9 @@ func (m *home) drainCreateRequests() tea.Cmd {
 				dispose(reason)
 				continue
 			}
-			// The file deliberately stays until the start lands, so `atrium new
-			// --wait` reading its absence means "created" rather than "consumed".
+			// The file deliberately stays until the start lands and the row is
+			// persisted, so `atrium new --wait` reading its absence means "created and
+			// recorded" rather than "consumed".
 			m.holdCreateRequest(e.Path, e.Request)
 			started++
 			cmds = append(cmds, cmd)

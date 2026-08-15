@@ -319,10 +319,12 @@ func checkTitleFree(prefix, title, path string, instances []session.InstanceData
 //
 // The protocol is awaitSpool's, shared with `send --wait`. What differs is what the
 // file's disappearance means here: the drain holds the request until Start has
-// finished, so it going away says the worktree, the branch and the agent all exist,
-// not merely that some Atrium consumed the request.
+// finished *and the row has been persisted*, so it going away says the worktree, the
+// branch and the agent all exist and are recorded — not merely that some Atrium
+// consumed the request.
 //
-// The branch is then read back out of state.json rather than derived from the
+// That second half is what makes the next line safe rather than a race. The branch is
+// read back out of state.json rather than derived from the
 // title. They would usually agree, but "usually" is not something to print: the
 // slug rules have a hash fallback for titles that sanitize to nothing, and a
 // non-git target has no branch at all.
