@@ -563,9 +563,19 @@ func (m *home) resumeSelected(selected *session.Instance) tea.Cmd {
 // down first when the worktree went with it, because pause() removes the worktree and
 // returns an error on several branches, all of which end Paused (#707). Reaping is
 // what the error path used to skip, not the surfacing.
+//
+// It persists after that reap, for the same reason the batch handler does: since #708 a reap
+// releases the shell's owned tmux name, so returning without a write would leave state.json
+// naming a shell this handler just killed. The next run would claim that dead name for a live
+// shell instead of minting one from the title the session has by then, and go on reserving
+// that title against new sessions for as long as it is held. All three reap sites now write
+// after reaping — this one, the batch pause, and the lost-session recovery.
 func (m *home) handlePauseDone(msg pauseDoneMsg) tea.Cmd {
 	if msg.err != nil {
 		m.reapStrandedShell(msg.instance, msg.worktreeGone)
+		if serr := m.persistInstances(); serr != nil {
+			log.WarningLog.Printf("failed to persist after a failed pause: %v", serr)
+		}
 		return m.handleError(msg.err)
 	}
 	selected := msg.instance
@@ -1005,8 +1015,11 @@ func (m *home) forgetInstance(inst *session.Instance) {
 // the one the user would rescue the work with.
 //
 // Routed through the cleanupTerminalForInstance seam so the batch-outcome tests can
-// pin exactly which instances each path reaps. Reaping an instance with no cached
-// shell is cheap and harmless — CloseForInstance bumps a generation and returns.
+// pin exactly which instances each path reaps. Reaping an instance that owns no shell name
+// is cheap — CloseForInstance bumps a generation and returns — which is what lets these
+// callers reap unconditionally. One that DOES own a name costs a kill-session even with
+// nothing cached, on purpose: since #708 that name is the only record of a shell this run
+// never opened, so a bump-and-return would strand it (see TerminalPane.CloseForInstance).
 func (m *home) reapStrandedShell(inst *session.Instance, worktreeGone bool) {
 	if inst == nil || !worktreeGone {
 		return

@@ -462,11 +462,6 @@ func (w *TabbedWindow) AttachTerminal() (chan struct{}, error) {
 	return w.terminal.Attach()
 }
 
-// CleanupTerminal closes the terminal session
-func (w *TabbedWindow) CleanupTerminal() {
-	w.terminal.Close()
-}
-
 // CleanupTerminalForInstance closes the cached terminal session for the given instance.
 func (w *TabbedWindow) CleanupTerminalForInstance(inst *session.Instance) {
 	w.terminal.CloseForInstance(inst)

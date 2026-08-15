@@ -122,16 +122,23 @@ func terminalKey(i *session.Instance) string {
 }
 
 // terminalShellProgram is the program a terminal-tab shell runs: the user's own login
-// shell, or /bin/sh where $SHELL is unset. One home, because the reap path builds a
-// Session for the same tmux name the create path does and tmux resolves a session by
-// name — but a Session carries its program, and two spellings of "the shell" is exactly
-// the kind of split that only shows up as a shell nobody can explain.
+// shell, or /bin/sh where $SHELL is unset. Only the create path needs it — see
+// terminalReapProgram for the path that does not.
 func terminalShellProgram() string {
 	if shell := os.Getenv("SHELL"); shell != "" {
 		return shell
 	}
 	return "/bin/sh"
 }
+
+// terminalReapProgram is the placeholder a shell Session is built with when all that is
+// wanted from it is a kill: the `_term` twin of session/runcmd.go's runProbeProgram, and
+// the same reasoning. Close addresses its session by name and never reads the program, so
+// the value is never run. Reaching for terminalShellProgram there instead would make the
+// teardown's Session depend on the environment of whoever launched this TUI, for no
+// behavioural difference — and the shell being reaped may well have been started by an
+// earlier process that saw a different $SHELL.
+const terminalReapProgram = "sh"
 
 // NewTerminalPane returns an empty TerminalPane with no shell sessions yet.
 // ctx is the app lifecycle context its shell tmux sessions derive from.
@@ -507,9 +514,13 @@ func (t *TerminalPane) Attach() (chan struct{}, error) {
 // Close kills all cached terminal tmux sessions and cleans up.
 //
 // Unlike CloseForInstance it cannot release the owned names it invalidates — it holds keys,
-// not instances. That costs nothing: a released name only changes which name the NEXT claim
-// mints, and a claim finding its owned session gone recreates it under that name (the
-// DoesSessionExist branch in EnsureSession). It has no production caller either way.
+// not instances. So every instance goes on owning a name whose shell this call just killed,
+// and that is not free: the next claim returns that same name instead of minting from the
+// title the session has by then, and session.OwnedSiblingCollides keeps reserving that title
+// against new sessions on behalf of a shell that no longer exists. The shell itself does come
+// back, under the old name — EnsureSession's DoesSessionExist finds nothing, so it falls
+// through to the !adopted Start rather than adopting. It has no production caller, which is
+// the only reason this is tolerable rather than a bug.
 func (t *TerminalPane) Close() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -519,10 +530,11 @@ func (t *TerminalPane) Close() {
 	// one is already refused by the epoch.
 	//
 	// It is the only thing that drops them, and it has no production caller, so nothing
-	// in a running TUI ever shrinks reapGen. Since #708 the keys churn — a reap releases
-	// the owned name and the next claim mints another — so the map grows by one entry per
-	// shell an instance has over the session's life rather than holding at one per live
-	// instance. Two strings and a counter each; worth knowing, not worth a sweep, and a
+	// in a running TUI ever shrinks reapGen. Since #708 a key CAN churn — a reap releases
+	// the owned name and the next claim mints another — but the mint follows the instance's
+	// tmux name, so only a rename moves it: a pause/resume cycle re-uses the same entry, and
+	// the map grows by one entry per DISTINCT name an instance has held, not one per shell
+	// it has had. Two strings and a counter each; worth knowing, not worth a sweep, and a
 	// sweep would have to prove no in-flight create had snapshotted the entry it dropped.
 	t.closeGen++
 	t.reapGen = nil
@@ -550,23 +562,35 @@ func (t *TerminalPane) Close() {
 // so without the bump the reap would silently no-op and the install would then cache
 // a shell in a worktree that no longer exists (#701).
 //
-// Calling it for an instance with no cached shell is therefore cheap and harmless — a
-// generation bump and a map miss — which is what lets app reap defensively on every
-// teardown that freed a worktree rather than only on the ones that succeeded (#707).
 // Nothing else sweeps: Close has no production caller, so a shell missed here outlives the
 // process and the next run's EnsureSession adopts it.
 //
-// That last sentence is why an uncached OWNED name is not a miss but a probe. A shell is
-// meant to outlive Atrium, so a restored instance can own one that this run's pane has
-// never opened and therefore has no entry for; the owned name is then the only record of
-// it anywhere. Reaping by name is the same shape as session.releaseRunTmux, and for the
-// same reason — dropping the name instead would strand the shell permanently, which is the
-// bug (#708), not the fix.
+// That is why an uncached OWNED name is not a miss but a kill by name. A shell is meant to
+// outlive Atrium, so a restored instance can own one that this run's pane has never opened
+// and therefore has no entry for; the owned name is then the only record of it anywhere.
+// Same shape as session.releaseRunTmux, and for the same reason — dropping the name instead
+// would strand the shell permanently, which is the bug (#708), not the fix.
 //
-// The release follows the reap and not the other way round: the name is given up only once
-// nothing of ours is left on it, so a Close that failed keeps its pointer. A held name
-// costs a stale title on the next shell and a reservation against that title; a released
-// one costs the shell.
+// A kill rather than a probe-then-kill, deliberately. DoesSessionExist folds an inconclusive
+// answer — a timed-out probe, a fork/exec failure under load — into false (see liveness in
+// session/tmux), so a wedged server would read as "nothing on this name", skip the kill, and
+// release the name anyway: #708's permanent orphan, reached through the code written to
+// prevent it. Close is the operation that classifies. It treats tmux's definitive "no such
+// session" as the teardown goal already met and returns nil, and surfaces everything else —
+// so "the name is given up only once tmux confirmed nothing of ours is left on it" is what
+// the code does rather than what it hopes, and it costs one round trip rather than two.
+//
+// So this is cheap for an instance that owns no name — a generation bump and a map miss —
+// which is what lets app reap defensively on every teardown that freed a worktree rather
+// than only on the ones that succeeded (#707). An owned name costs a kill-session whether or
+// not anything is cached, and it is spent under t.mu, the lock String() takes, exactly as the
+// cached arm's has always been. Moving that I/O out of the lock is not free: the release has
+// to be atomic with the bump against a concurrent claim (see EnsureSession), so an unlocked
+// kill would also need the install re-check to test ownership. Disclosed rather than done.
+//
+// The release follows the kill and not the other way round, so a Close that failed keeps its
+// pointer. A held name costs a stale title on the next shell and a reservation against that
+// title; a released one costs the shell.
 func (t *TerminalPane) CloseForInstance(inst *session.Instance) {
 	if inst == nil {
 		return
@@ -582,6 +606,14 @@ func (t *TerminalPane) CloseForInstance(inst *session.Instance) {
 	if key == "" {
 		key = inst.MintTerminalSessionName()
 	}
+	if key == "" {
+		// An instance with no tmux name has no shell, nothing to release, and no key —
+		// and the missing key is the part that bites. currentKey is "" in exactly the
+		// states the idle splash and every fallback live in, so falling through would
+		// match one of those and blank the pane for an unrelated selection until the
+		// next tick refilled it. EnsureSession and CaptureTarget refuse this case too.
+		return
+	}
 	if t.reapGen == nil {
 		t.reapGen = make(map[string]uint64)
 	}
@@ -596,12 +628,10 @@ func (t *TerminalPane) CloseForInstance(inst *session.Instance) {
 		}
 		delete(t.sessions, key)
 	} else if owned != "" {
-		probe := tmux.NewSessionWithName(t.baseContext(), owned, "term: "+inst.Title, terminalShellProgram())
-		if probe.DoesSessionExist() {
-			if err := probe.Close(); err != nil {
-				log.InfoLog.Printf("terminal pane: failed to close uncached session %s: %v", owned, err)
-				reaped = false
-			}
+		uncached := tmux.NewSessionWithName(t.baseContext(), owned, "term: "+inst.Title, terminalReapProgram)
+		if err := uncached.Close(); err != nil {
+			log.InfoLog.Printf("terminal pane: failed to close uncached session %s: %v", owned, err)
+			reaped = false
 		}
 	}
 	if reaped {

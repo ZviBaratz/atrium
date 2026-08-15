@@ -39,11 +39,24 @@ func (i *Instance) TerminalSessionName() string {
 // what makes "the name it was created under is the name it is reaped under" true rather
 // than usually true.
 func (i *Instance) MintTerminalSessionName() string {
-	name := i.TmuxSessionName()
-	if name == "" {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.mintTermNameLocked()
+}
+
+// mintTermNameLocked is the mint expression itself, and the only place `<tmux name><suffix>`
+// is spelled. Both public entry points go through it so they cannot drift: a claim that
+// stored one spelling while the exported mint computed another would file a shell under a
+// name terminalKey's fallback and CloseForInstance's bump do not agree with, which is #708
+// with the derivation moved one level down. Any future qualifier — sanitizing, truncating to
+// tmux's limits — lands here once.
+//
+// Caller holds i.mu in either mode.
+func (i *Instance) mintTermNameLocked() string {
+	if i.tmuxName == "" {
 		return ""
 	}
-	return name + TermSessionSuffix
+	return i.tmuxName + TermSessionSuffix
 }
 
 // ClaimTerminalSessionName returns the owned name, minting and storing one when this session
@@ -64,8 +77,8 @@ func (i *Instance) ClaimTerminalSessionName() (name string, minted bool) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if i.termName == "" {
-		if tmuxName := i.tmuxName; tmuxName != "" {
-			i.termName = tmuxName + TermSessionSuffix
+		if fresh := i.mintTermNameLocked(); fresh != "" {
+			i.termName = fresh
 			minted = true
 		}
 	}

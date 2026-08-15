@@ -13,6 +13,11 @@ import (
 
 // startedForTermName builds a started instance with a real worktree and a fake tmux
 // session, the same shape session's other rename tests use (instance_rename_test.go).
+//
+// The tmux name is built from tmux.Prefix() rather than a literal "atrium_", per CLAUDE.md's
+// rule for runtime identifiers: the prefix is config.RuntimeName()-derived and is
+// "claudesquad_" on a legacy install. Spelling it out would also make the sweep assertion in
+// TestTheMintedShellNameIsReservedAndSwept compare a literal against itself.
 func startedForTermName(t *testing.T, title string) *Instance {
 	t.Helper()
 	repoPath := renameTestRepo(t)
@@ -25,7 +30,7 @@ func startedForTermName(t *testing.T, title string) *Instance {
 		started:     true,
 		gitWorktree: wt,
 		tmuxSession: liveTmux(t, title),
-		tmuxName:    "atrium_" + title,
+		tmuxName:    tmux.Prefix() + title,
 		Branch:      wt.GetBranchName(),
 	}
 }
@@ -38,7 +43,7 @@ func TestClaimTerminalSessionNameMintsOnceAndKeepsIt(t *testing.T) {
 	inst := startedForTermName(t, "claim-once")
 
 	require.Empty(t, inst.TerminalSessionName(), "nothing claimed, nothing owned")
-	require.Equal(t, "atrium_claim-once"+TermSessionSuffix, inst.MintTerminalSessionName())
+	require.Equal(t, tmux.Prefix()+"claim-once"+TermSessionSuffix, inst.MintTerminalSessionName())
 
 	first, minted := inst.ClaimTerminalSessionName()
 	assert.Equal(t, inst.MintTerminalSessionName(), first, "a first claim takes the minted name")
@@ -57,10 +62,10 @@ func TestClaimTerminalSessionNameMintsOnceAndKeepsIt(t *testing.T) {
 // only record of that shell.
 func TestClaimReportsNoMintForANameOwnedBeforeIt(t *testing.T) {
 	inst := startedForTermName(t, "claim-restored")
-	inst.termName = "atrium_claim-restored" + TermSessionSuffix
+	inst.termName = tmux.Prefix() + "claim-restored" + TermSessionSuffix
 
 	name, minted := inst.ClaimTerminalSessionName()
-	assert.Equal(t, "atrium_claim-restored"+TermSessionSuffix, name)
+	assert.Equal(t, tmux.Prefix()+"claim-restored"+TermSessionSuffix, name)
 	assert.False(t, minted, "a name owned before the claim was not minted by it")
 }
 

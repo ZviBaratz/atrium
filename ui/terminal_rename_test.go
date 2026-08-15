@@ -202,7 +202,7 @@ func TestReapReleasesTheNameSoTheNextShellFollowsTheRename(t *testing.T) {
 // reached by fixing #708.
 //
 // The fresh pane is the restart. session.releaseRunTmux is the shape borrowed: no cached
-// session, so probe the owned name and close what answers.
+// session, so kill the owned name and forget it only once that returned clean.
 func TestReapKillsAnOwnedShellThePaneNeverCached(t *testing.T) {
 	_, inst, key := shellPane(t, "reap-uncached")
 
@@ -219,6 +219,88 @@ func TestReapKillsAnOwnedShellThePaneNeverCached(t *testing.T) {
 	assert.False(t, shellNamed(t, key),
 		"the shell was left running with its owned name released — nothing names it now")
 	assert.Empty(t, inst.TerminalSessionName(), "a reap that got its shell must give the name up")
+}
+
+// The other half, and the one that decides between a probe and a kill. A reap that never got
+// an answer out of tmux must keep the name: it is the only pointer to a shell that may still
+// be running, and giving it up is #708's permanent orphan reached through the code written to
+// prevent it.
+//
+// The fixture is a pane whose lifecycle context is already cancelled, which is what a reap
+// racing app shutdown looks like — and it is the one inconclusive outcome that is
+// deterministic rather than load-dependent. It matters because DoesSessionExist folds
+// "inconclusive" into "no" (see liveness in session/tmux): a probe-then-kill reap reads the
+// cancelled probe as an empty name, skips the kill, and releases. Close classifies instead,
+// so the failure is visible and the name stays put.
+func TestAReapThatNeverReachedTmuxKeepsTheName(t *testing.T) {
+	_, inst, key := shellPane(t, "reap-inconclusive")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	wedged := NewTerminalPane(ctx)
+	t.Cleanup(wedged.Close)
+	wedged.SetSize(80, 30)
+	wedged.mu.Lock()
+	_, cached := wedged.sessions[key]
+	wedged.mu.Unlock()
+	require.False(t, cached, "precondition: this pane must take the uncached-owned path")
+
+	wedged.CloseForInstance(inst)
+
+	assert.Equal(t, key, inst.TerminalSessionName(),
+		"a reap that could not confirm the shell was gone released the only name it had")
+	assert.True(t, shellNamed(t, key),
+		"precondition for the assertion above: the shell it named is still running")
+}
+
+// An owned name whose shell is already gone must still be given up. The kill is where that
+// is decided now that no has-session probe runs in front of it: tmux answering "no such
+// session" is the teardown goal already met (sessionAlreadyGone in session/tmux), so Close
+// returns nil and the release follows. Without this the name would be held forever, naming
+// nothing and reserving its title against every new session that wanted it.
+func TestReapReleasesAnOwnedNameWithNothingOnTheSocket(t *testing.T) {
+	testutil.RequireTmux(t)
+	t.Cleanup(log.Initialize(t.TempDir(), false))
+
+	inst := makeStartedInstance(t, "reap-already-gone")
+	t.Cleanup(func() { _ = inst.Kill() })
+	owned, minted := inst.ClaimTerminalSessionName()
+	require.True(t, minted, "precondition: this claim is the one that minted the name")
+	require.False(t, shellNamed(t, owned), "precondition: no shell is on the socket under it")
+
+	tp := NewTerminalPane(context.Background())
+	t.Cleanup(tp.Close)
+	tp.SetSize(80, 30)
+
+	tp.CloseForInstance(inst)
+
+	assert.Empty(t, inst.TerminalSessionName(),
+		"a reap that found nothing left must give the name up, not hold it on behalf of nothing")
+}
+
+// A reap for an instance with no tmux name has no key either, and the missing key is not
+// inert. currentKey is "" in exactly the states the idle splash and every fallback live in,
+// so falling through to the currentKey comparison matches one of them and blanks the pane for
+// a selection this reap is not about, until the next 100ms tick refills it.
+func TestReapForAnInstanceWithNoTmuxNameLeavesThePaneAlone(t *testing.T) {
+	t.Cleanup(log.Initialize(t.TempDir(), false))
+	tp := NewTerminalPane(context.Background())
+	tp.SetSize(80, 30)
+	require.NoError(t, tp.UpdateContent(nil))
+
+	tp.mu.Lock()
+	splashBefore := tp.splash
+	tp.mu.Unlock()
+	require.True(t, splashBefore, "precondition: a nil selection leaves the pane on the idle splash")
+
+	tp.CloseForInstance(&session.Instance{Title: "never-started"})
+
+	tp.mu.Lock()
+	splashAfter, message, gens := tp.splash, tp.fallbackMessage, len(tp.reapGen)
+	tp.mu.Unlock()
+	assert.True(t, splashAfter, "a reap with no key must not clear the pane it is not about")
+	assert.NotEmpty(t, message, "nor the message that pane is rendering")
+	assert.Zero(t, gens, "and must not file a generation under the empty key")
 }
 
 // A create that fails must put back the name it minted. Otherwise the instance owns — and

@@ -4,8 +4,11 @@ import (
 	"os"
 	"testing"
 
+	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/ui"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,6 +38,33 @@ func TestPauseDone_FailedPauseReapsTheShellStrandedInTheRemovedWorktree(t *testi
 
 	require.Equal(t, []*session.Instance{inst}, *captured,
 		"a pause that errored after removing the worktree must still reap the shell running in it")
+}
+
+// Site 1 one layer down: WHEN that failed pause writes. Since #708 the reap releases the
+// shell's owned tmux name, so a handler that reaps and then returns without persisting leaves
+// state.json naming a shell it has just killed — the next run claims that dead name for a
+// live shell instead of minting from the title the session has by then, and reserves that
+// title against new sessions for as long as it holds it. The batch path is ordered for the
+// same reason (TestBatchOutcome_PausePersistsAfterTearingDownTerminals); this is its
+// single-session twin, and the ordering is the assertion rather than the write.
+func TestPauseDone_FailedPausePersistsAfterReapingTheStrandedShell(t *testing.T) {
+	h := newCreateFormHome(t)
+	var order []string
+	st, err := session.NewStorage(recordingState{InstanceStorage: config.DefaultState(), log: &order})
+	require.NoError(t, err)
+	h.storage = st
+
+	inst := addActive(t, h, "alpha")
+	orig := cleanupTerminalForInstance
+	t.Cleanup(func() { cleanupTerminalForInstance = orig })
+	cleanupTerminalForInstance = func(_ *ui.TabbedWindow, reaped *session.Instance) {
+		order = append(order, "reap "+reaped.Title)
+	}
+
+	_, _ = h.Update(pauseDoneMsg{instance: inst, err: os.ErrClosed, worktreeGone: true})
+
+	assert.Equal(t, []string{"reap alpha", "persist"}, order,
+		"a failed pause must persist after reaping the shell whose name that reap released")
 }
 
 // The negative control for site 1, and the reason the discriminator is not the error.
