@@ -918,9 +918,13 @@ var gemini = &Adapter{
 // "Don't trust" byte-identically, but its first label is `Trust this folder (${dirName})`,
 // which does not contain "Trust folder" — so requiring both keeps a mid-session settings
 // dialog from reporting as a startup gate. It also leaves that dialog UNGATED, which is a
-// real gap and a disclosed one: reaching it needs an authenticated session, the same tier as
-// gemini's IdeIntegrationNudge ("Do you want to connect ${ideName} to Gemini CLI?"). Neither
-// is covered here.
+// real gap and a disclosed one: reaching it needs an authenticated session.
+//
+// It is not the only uncovered gemini dialog, and the other one is worse. IdeIntegrationNudge
+// ("Do you want to connect ${ideName} to Gemini CLI?") renders its headline behind a "> " Text
+// inside the same rounded box, so InputBoxVisible is TRUE on it — which makes AwaitingInput
+// true, and a queued prompt is typed into a RadioButtonSelect whose highlighted default is
+// "Yes". That is the #512 class rather than this gate's milder one, and it is #717.
 //
 // What the conjunction costs: the vendor rewording EITHER row now kills the gate, where an
 // alternation would have survived on the other. That trade is deliberate — a missed gate is
