@@ -45,7 +45,7 @@ type TerminalPane struct {
 	ctx           context.Context
 	mu            sync.Mutex
 	width, height int
-	sessions      map[string]*terminalSession // terminalKey (instance tmux name) → session
+	sessions      map[string]*terminalSession // terminalKey (the shell's own tmux name) → session
 	currentKey    string                      // terminalKey of the currently displayed instance
 	// reapGen counts CloseForInstance requests per terminal key, whether or not a
 	// shell was there to reap. EnsureSession snapshots the key's count before its
@@ -57,7 +57,7 @@ type TerminalPane struct {
 	//
 	// Per key rather than one counter for the pane, because the abort path closes
 	// the session it was about to install and that session is not always one the
-	// call created — the branch above it adopts a live <key>_term left by a crashed
+	// call created — the branch above it adopts a live shell left by a crashed
 	// run. Aborting on some other instance's reap would not cost a retry there, it
 	// would kill the user's shell and everything running in it.
 	reapGen map[string]uint64
@@ -89,18 +89,56 @@ type TerminalPane struct {
 	// not started), so a frozen capture can never pin across selection changes —
 	// the terminal-pane twin of the stuck-preview bug. This matters doubly here
 	// because String() renders the scroll viewport before the fallbacks.
-	// Keyed by terminalKey (not pointer, as PreviewPane does) to match the
-	// sessions map; the key is stable for a started instance's lifetime, so it
-	// cannot drift while the snapshot is up.
+	//
+	// Keyed by terminalKey (not pointer, as PreviewPane does) to match the sessions
+	// map. The key holds still for as long as a shell is cached under it, because it
+	// is owned rather than derived (see terminalKey); a reap releases it and the next
+	// claim mints a fresh one. Drift is survivable either way and was never the
+	// hazard here: the guard below treats a moved key exactly like a changed
+	// selection and drops the snapshot, where the sessions map instead loses a live
+	// shell (#708).
 	scrollKey string
 	viewport  viewport.Model
 }
 
-// terminalKey is the cache key for an instance's terminal shell: its persisted
-// tmux session name. Unlike Title it is unique across repo groups (same-titled
-// sessions are legal in different groups) and stable once the instance has
-// started — and the pane only creates shells for started instances.
-func terminalKey(i *session.Instance) string { return i.TmuxSessionName() }
+// terminalKey is the cache key for an instance's terminal shell, and it is the shell's own
+// tmux session name rather than anything derived from it. Unlike Title it is unique across
+// repo groups (same-titled sessions are legal in different groups), and unlike the agent's
+// tmux name it does not move: the instance mints it once and owns it from then on
+// (session/termname.go), which is what keeps every lookup, capture and reap pointed at the
+// same shell across a deep rename (#708).
+//
+// The mint is the fallback only before a shell has ever been claimed, and that case is safe
+// for the reason the claimed one is not: nothing a create depends on is filed under it. The
+// sessions map has no entry, no snapshot names it, and a create claims its own key before it
+// snapshots any generation. CloseForInstance does bump a generation under a minted key for
+// an instance with no shell, which is inert — the create that would consult it claims first,
+// and reads the count under the key it claimed.
+func terminalKey(i *session.Instance) string {
+	if name := i.TerminalSessionName(); name != "" {
+		return name
+	}
+	return i.MintTerminalSessionName()
+}
+
+// terminalShellProgram is the program a terminal-tab shell runs: the user's own login
+// shell, or /bin/sh where $SHELL is unset. Only the create path needs it — see
+// terminalReapProgram for the path that does not.
+func terminalShellProgram() string {
+	if shell := os.Getenv("SHELL"); shell != "" {
+		return shell
+	}
+	return "/bin/sh"
+}
+
+// terminalReapProgram is the placeholder a shell Session is built with when all that is
+// wanted from it is a kill: the `_term` twin of session/runcmd.go's runProbeProgram, and
+// the same reasoning. Close addresses its session by name and never reads the program, so
+// the value is never run. Reaching for terminalShellProgram there instead would make the
+// teardown's Session depend on the environment of whoever launched this TUI, for no
+// behavioural difference — and the shell being reaped may well have been started by an
+// earlier process that saw a different $SHELL.
+const terminalReapProgram = "sh"
 
 // NewTerminalPane returns an empty TerminalPane with no shell sessions yet.
 // ctx is the app lifecycle context its shell tmux sessions derive from.
@@ -312,21 +350,47 @@ func (t *TerminalPane) EnsureSession(instance *session.Instance) (string, error)
 	if cwd == "" {
 		return "", nil
 	}
-	key := terminalKey(instance)
-	if key == "" {
-		// No persisted tmux name (an instance fabricated without Start, e.g. in
-		// tests): there is no stable key to cache a shell under.
-		return "", nil
-	}
-
-	// Check if we already have a cached session for this instance. Both generations
-	// are snapshotted in the SAME critical section, and deliberately before the
-	// stale-entry delete below: that delete is this call's own bookkeeping, not a
-	// reap, so bumping there would make every recreate refuse its own install.
+	// Claim the shell's name here, before the tmux round trip below rather than at install
+	// time, and this is the only site that may claim. Claiming pins the key for the whole
+	// call: an AdoptRename landing mid-round-trip moves the agent's tmux name but not this,
+	// so the entry is filed under the key CloseForInstance and every later lookup compute.
+	// Claiming at install instead would leave the generation snapshot below reading one key
+	// and the reap bumping another, which is #701's window re-opened by a rename (#708).
+	//
+	// Under t.mu, and in the same critical section as the snapshot, because that is what
+	// makes a create and a concurrent reap agree about WHICH key they are talking about.
+	// CloseForInstance bumps and releases under the same lock, so the two possible
+	// interleavings are the two that are safe: claim first and this call reads the
+	// pre-bump count, then fails its install re-check; reap first and this call claims a
+	// fresh name whose count it snapshots from zero. Claiming outside the lock allows a
+	// third — snapshot the already-bumped count, pass the re-check, and install under a
+	// name the instance no longer owns.
+	//
+	// Both generations are snapshotted here too, and deliberately before the stale-entry
+	// delete below: that delete is this call's own bookkeeping, not a reap, so bumping
+	// there would make every recreate refuse its own install.
 	t.mu.Lock()
+	key, minted := instance.ClaimTerminalSessionName()
 	cached, ok := t.sessions[key]
 	gen, closeGen := t.reapGen[key], t.closeGen
 	t.mu.Unlock()
+	if key == "" {
+		// No persisted tmux name (an instance fabricated without Start, e.g. in
+		// tests): there is nothing to mint a shell name from.
+		return "", nil
+	}
+
+	// releaseIfMinted hands a name this call minted back when the call ends with no shell
+	// on it. Without it a create that fails, or one whose install is refused, leaves the
+	// instance owning — and persisting — a name nothing hosts, and the collision guards go
+	// on reserving that title against new sessions on behalf of a shell that never existed.
+	// A name the instance already owned is deliberately left alone: a shell may still be
+	// sitting on it, and the owned name is the only thing that names it.
+	releaseIfMinted := func() {
+		if minted {
+			instance.ReleaseTerminalSessionName()
+		}
+	}
 	if ok && cached.tmuxSession != nil {
 		if cached.tmuxSession.DoesSessionExist() {
 			return key, nil
@@ -337,16 +401,7 @@ func (t *TerminalPane) EnsureSession(instance *session.Instance) (string, error)
 		t.mu.Unlock()
 	}
 
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "/bin/sh"
-	}
-
-	// The shell session rides the instance's own (unique, repo-qualified) tmux
-	// name with a "_term" suffix — already prefix-matched by CleanupSessions, and
-	// the suffix is reserved by the new-session/rename guards so no agent session
-	// can mint it. The window name is cosmetic.
-	termName := key + "_term"
+	shell := terminalShellProgram()
 
 	// Shells were keyed term_<title> before tmux names became persisted state;
 	// that name is unreachable under the new key, so a shell left from a
@@ -354,26 +409,38 @@ func (t *TerminalPane) EnsureSession(instance *session.Instance) (string, error)
 	// create path (one has-session probe, cache misses only). For an instance
 	// literally titled "term" the two names coincide — the "legacy" session IS
 	// the one being ensured, so leave it for the restore logic below.
-	if legacy := tmux.NewSession(t.baseContext(), "term_"+instance.Title, shell); legacy.Name() != termName && legacy.DoesSessionExist() {
+	if legacy := tmux.NewSession(t.baseContext(), "term_"+instance.Title, shell); legacy.Name() != key && legacy.DoesSessionExist() {
 		if err := legacy.Close(); err != nil {
 			log.InfoLog.Printf("terminal pane: failed to reap legacy session %s: %v", legacy.Name(), err)
 		}
 	}
 
-	ts := tmux.NewSessionWithName(t.baseContext(), termName, "term: "+instance.Title, shell)
+	// key IS the shell's tmux session name — minted from the instance's own (unique,
+	// repo-qualified) tmux name plus session.TermSessionSuffix, which CleanupSessions
+	// prefix-matches and the new-session/rename guards reserve so no agent session can
+	// claim it. One name, one home: the cache key and the session name are the same fact,
+	// so neither can drift from the other. The window name is cosmetic.
+	ts := tmux.NewSessionWithName(t.baseContext(), key, "term: "+instance.Title, shell)
 
-	// Check if session already exists (e.g. from a previous run)
+	// Adopt a shell already sitting on this name — the previous run's, since a shell is
+	// meant to outlive Atrium — and recreate it when it cannot be restored.
+	adopted := false
 	if ts.DoesSessionExist() {
-		if err := ts.Restore(); err != nil {
+		if err := ts.Restore(); err == nil {
+			adopted = true
+		} else {
 			// Session exists but can't restore, kill it and start fresh
 			_ = ts.Close()
-			ts = tmux.NewSessionWithName(t.baseContext(), termName, "term: "+instance.Title, shell)
-			if err := ts.Start(cwd); err != nil {
-				return "", fmt.Errorf("terminal pane: failed to start session: %w", err)
-			}
+			ts = tmux.NewSessionWithName(t.baseContext(), key, "term: "+instance.Title, shell)
 		}
-	} else {
+	}
+	// One exit for a create that could not start, rather than one per branch. Both used to
+	// carry their own copy of this, and a mutation of either was invisible to the other's
+	// test — a name left owned on the harder-to-reach branch is the same permanent
+	// reservation against a title as one left on the easy one.
+	if !adopted {
 		if err := ts.Start(cwd); err != nil {
+			releaseIfMinted()
 			return "", fmt.Errorf("terminal pane: failed to start session: %w", err)
 		}
 	}
@@ -396,13 +463,16 @@ func (t *TerminalPane) EnsureSession(instance *session.Instance) (string, error)
 	// kill sets no status at all, so its reap is the only signal there is.
 	pausedNow := instance.Paused()
 
-	// ts is not always a session this call started — the branch above adopts a live
-	// <key>_term — so closing it has to be right for an adopted one too. All three
-	// arms are about THIS shell: its own key was reaped, the pane that would own it
-	// is gone, or its instance is Paused with the worktree it sits in removed. A
-	// per-key generation is what keeps a fourth, wrong arm out of this set.
+	// ts is not always a session this call started — the branch above adopts a live session
+	// already sitting on key — so closing it has to be right for an adopted one too. All
+	// three arms are about THIS shell: its own key was reaped, the pane that would own it
+	// is gone, or its instance is Paused with the worktree it sits in removed. A per-key
+	// generation is what keeps a fourth, wrong arm out of this set.
 	t.mu.Lock()
 	if t.reapGen[key] != gen || t.closeGen != closeGen || pausedNow {
+		// Under the lock, for the reason the claim above is: the release and the reap that
+		// refused this install must not interleave with another call's claim.
+		releaseIfMinted()
 		t.mu.Unlock()
 		if err := ts.Close(); err != nil {
 			log.InfoLog.Printf("terminal pane: failed to close a shell reaped mid-create for %s: %v", key, err)
@@ -442,14 +512,30 @@ func (t *TerminalPane) Attach() (chan struct{}, error) {
 }
 
 // Close kills all cached terminal tmux sessions and cleans up.
+//
+// Unlike CloseForInstance it cannot release the owned names it invalidates — it holds keys,
+// not instances. So every instance goes on owning a name whose shell this call just killed,
+// and that is not free: the next claim returns that same name instead of minting from the
+// title the session has by then, and session.OwnedSiblingCollides keeps reserving that title
+// against new sessions on behalf of a shell that no longer exists. The shell itself does come
+// back, under the old name — EnsureSession's DoesSessionExist finds nothing, so it falls
+// through to the !adopted Start rather than adopting. It has no production caller, which is
+// the only reason this is tolerable rather than a bug.
 func (t *TerminalPane) Close() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	// An EnsureSession still in its round trip must not install into the emptied map.
 	// Its key may never have been cached, so this is the epoch rather than a per-key
-	// bump; dropping the per-key counts with it keeps that map bounded by the
-	// instances live at any one time, and any create that snapshotted one is already
-	// refused by the epoch.
+	// bump; the per-key counts are dropped with it because any create that snapshotted
+	// one is already refused by the epoch.
+	//
+	// It is the only thing that drops them, and it has no production caller, so nothing
+	// in a running TUI ever shrinks reapGen. Since #708 a key CAN churn — a reap releases
+	// the owned name and the next claim mints another — but the mint follows the instance's
+	// tmux name, so only a rename moves it: a pause/resume cycle re-uses the same entry, and
+	// the map grows by one entry per DISTINCT name an instance has held, not one per shell
+	// it has had. Two strings and a counter each; worth knowing, not worth a sweep, and a
+	// sweep would have to prove no in-flight create had snapshotted the entry it dropped.
 	t.closeGen++
 	t.reapGen = nil
 	for title, s := range t.sessions {
@@ -476,29 +562,80 @@ func (t *TerminalPane) Close() {
 // so without the bump the reap would silently no-op and the install would then cache
 // a shell in a worktree that no longer exists (#701).
 //
-// Calling it for an instance with no cached shell is therefore cheap and harmless —
-// a generation bump and a map miss — which is what lets app reap defensively on every
-// teardown that freed a worktree rather than only on the ones that succeeded (#707).
-// Nothing else sweeps: Close has no production caller, so a shell missed here outlives
-// the process and the next run's EnsureSession adopts it.
+// Nothing else sweeps: Close has no production caller, so a shell missed here outlives the
+// process and the next run's EnsureSession adopts it.
+//
+// That is why an uncached OWNED name is not a miss but a kill by name. A shell is meant to
+// outlive Atrium, so a restored instance can own one that this run's pane has never opened
+// and therefore has no entry for; the owned name is then the only record of it anywhere.
+// Same shape as session.releaseRunTmux, and for the same reason — dropping the name instead
+// would strand the shell permanently, which is the bug (#708), not the fix.
+//
+// A kill rather than a probe-then-kill, deliberately. DoesSessionExist folds an inconclusive
+// answer — a timed-out probe, a fork/exec failure under load — into false (see liveness in
+// session/tmux), so a wedged server would read as "nothing on this name", skip the kill, and
+// release the name anyway: #708's permanent orphan, reached through the code written to
+// prevent it. Close is the operation that classifies. It treats tmux's definitive "no such
+// session" as the teardown goal already met and returns nil, and surfaces everything else —
+// so "the name is given up only once tmux confirmed nothing of ours is left on it" is what
+// the code does rather than what it hopes, and it costs one round trip rather than two.
+//
+// So this is cheap for an instance that owns no name — a generation bump and a map miss —
+// which is what lets app reap defensively on every teardown that freed a worktree rather
+// than only on the ones that succeeded (#707). An owned name costs a kill-session whether or
+// not anything is cached, and it is spent under t.mu, the lock String() takes, exactly as the
+// cached arm's has always been. Moving that I/O out of the lock is not free: the release has
+// to be atomic with the bump against a concurrent claim (see EnsureSession), so an unlocked
+// kill would also need the install re-check to test ownership. Disclosed rather than done.
+//
+// The release follows the kill and not the other way round, so a Close that failed keeps its
+// pointer. A held name costs a stale title on the next shell and a reservation against that
+// title; a released one costs the shell.
 func (t *TerminalPane) CloseForInstance(inst *session.Instance) {
 	if inst == nil {
 		return
 	}
-	key := terminalKey(inst)
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	// Owned and minted are different facts here. owned=="" means this instance has never
+	// had a shell, so there is nothing on the socket to look for; the bump still lands on
+	// the name a create WOULD claim, because an in-flight create claims that exact name
+	// and reads its count.
+	owned := inst.TerminalSessionName()
+	key := owned
+	if key == "" {
+		key = inst.MintTerminalSessionName()
+	}
+	if key == "" {
+		// An instance with no tmux name has no shell, nothing to release, and no key —
+		// and the missing key is the part that bites. currentKey is "" in exactly the
+		// states the idle splash and every fallback live in, so falling through would
+		// match one of those and blank the pane for an unrelated selection until the
+		// next tick refilled it. EnsureSession and CaptureTarget refuse this case too.
+		return
+	}
 	if t.reapGen == nil {
 		t.reapGen = make(map[string]uint64)
 	}
 	t.reapGen[key]++
+	reaped := true
 	if s, ok := t.sessions[key]; ok {
 		if s.tmuxSession != nil {
 			if err := s.tmuxSession.Close(); err != nil {
 				log.InfoLog.Printf("terminal pane: failed to close session for %s: %v", key, err)
+				reaped = false
 			}
 		}
 		delete(t.sessions, key)
+	} else if owned != "" {
+		uncached := tmux.NewSessionWithName(t.baseContext(), owned, "term: "+inst.Title, terminalReapProgram)
+		if err := uncached.Close(); err != nil {
+			log.InfoLog.Printf("terminal pane: failed to close uncached session %s: %v", owned, err)
+			reaped = false
+		}
+	}
+	if reaped {
+		inst.ReleaseTerminalSessionName()
 	}
 	if t.currentKey == key {
 		t.currentKey = ""

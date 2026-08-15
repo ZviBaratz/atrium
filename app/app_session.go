@@ -114,10 +114,25 @@ func (m *home) pushOneContext(inst *session.Instance) {
 // The check stays on the main thread because it reads the whole instance list. It
 // rejects an empty title or one already used in the instance's repo group — comparing
 // derived names (tmux segment, branch slug), not raw titles, and also reserving the
-// qualified tmux name the rename would mint (plus its derived siblings — the "_term"
-// terminal shell and the "_run" run command, see session.DerivedTmuxNameCollides)
-// against every session. Same-titled sessions in other groups are fine: their qualified
-// tmux names differ.
+// qualified tmux name the rename would mint (plus its siblings — the "_term" terminal
+// shell and the "_run" run command) against every session. Same-titled sessions in other
+// groups are fine: their qualified tmux names differ.
+//
+// The sibling reservation takes two checks because a sibling's name has two possible
+// homes. DerivedTmuxNameCollides derives both from an instance's CURRENT tmux name, which
+// is right for a session that has not been renamed; OwnedSiblingCollides reads the names
+// an instance actually holds, which is the only way to see a sibling left behind by an
+// earlier rename — its old title is free again, so nothing else would stop this rename
+// minting straight onto a live shell or dev server.
+//
+// selected is skipped for the duplicate-title check (a session may keep its own name) and
+// gets a NARROWER sibling check rather than the same one. The question against another
+// session is "would this rename put either session's shell on the other's" — but a session
+// already hosting `<g>_web_term` answers that about the candidate `<g>_web`, which is the
+// name it has right now. Asking the full check here refused a no-op rename by any session
+// with an open terminal tab, and any round trip back to a title it used to hold. What is a
+// genuine conflict with itself is landing its AGENT session on one of its own siblings, so
+// that is what OwnsSiblingNamed asks.
 func (m *home) validateDeepRename(selected *session.Instance, value string) error {
 	if value == "" {
 		return fmt.Errorf("session name cannot be empty")
@@ -126,12 +141,20 @@ func (m *home) validateDeepRename(selected *session.Instance, value string) erro
 	cand := tmux.QualifiedSessionName(group, value)
 	for _, inst := range m.list.GetInstances() {
 		if inst == selected {
+			if session.OwnsSiblingNamed(cand, inst) {
+				// Deliberately not the two-subject phrasing below: naming the session
+				// twice ("collides with session X" where X is itself) reads as a bug,
+				// and the shorter sentence keeps a refusal that carries an unbounded
+				// title closer to the peer's width rather than well past it.
+				return fmt.Errorf("%q is this session's own terminal or run-command name", value)
+			}
 			continue
 		}
 		if inst.GroupKey() == group && session.DerivedNamesCollide(m.appConfig.BranchPrefix, inst.Title, value) {
 			return fmt.Errorf("a session named %q already exists in %s", value, group)
 		}
-		if session.DerivedTmuxNameCollides(cand, inst.TmuxSessionName()) {
+		if session.DerivedTmuxNameCollides(cand, inst.TmuxSessionName()) ||
+			session.OwnedSiblingCollides(cand, inst) {
 			return fmt.Errorf("renaming to %q collides with session %q", value, inst.Title)
 		}
 	}
@@ -540,9 +563,19 @@ func (m *home) resumeSelected(selected *session.Instance) tea.Cmd {
 // down first when the worktree went with it, because pause() removes the worktree and
 // returns an error on several branches, all of which end Paused (#707). Reaping is
 // what the error path used to skip, not the surfacing.
+//
+// It persists after that reap, for the same reason the batch handler does: since #708 a reap
+// releases the shell's owned tmux name, so returning without a write would leave state.json
+// naming a shell this handler just killed. The next run would claim that dead name for a live
+// shell instead of minting one from the title the session has by then, and go on reserving
+// that title against new sessions for as long as it is held. All three reap sites now write
+// after reaping — this one, the batch pause, and the lost-session recovery.
 func (m *home) handlePauseDone(msg pauseDoneMsg) tea.Cmd {
 	if msg.err != nil {
 		m.reapStrandedShell(msg.instance, msg.worktreeGone)
+		if serr := m.persistInstances(); serr != nil {
+			log.WarningLog.Printf("failed to persist after a failed pause: %v", serr)
+		}
 		return m.handleError(msg.err)
 	}
 	selected := msg.instance
@@ -982,8 +1015,11 @@ func (m *home) forgetInstance(inst *session.Instance) {
 // the one the user would rescue the work with.
 //
 // Routed through the cleanupTerminalForInstance seam so the batch-outcome tests can
-// pin exactly which instances each path reaps. Reaping an instance with no cached
-// shell is cheap and harmless — CloseForInstance bumps a generation and returns.
+// pin exactly which instances each path reaps. Reaping an instance that owns no shell name
+// is cheap — CloseForInstance bumps a generation and returns — which is what lets these
+// callers reap unconditionally. One that DOES own a name costs a kill-session even with
+// nothing cached, on purpose: since #708 that name is the only record of a shell this run
+// never opened, so a bump-and-return would strand it (see TerminalPane.CloseForInstance).
 func (m *home) reapStrandedShell(inst *session.Instance, worktreeGone bool) {
 	if inst == nil || !worktreeGone {
 		return
@@ -1361,6 +1397,9 @@ const (
 //     mint (a legacy unqualified name can shadow a qualified one), or either of
 //     its derived siblings — the "_term" terminal shell and the "_run" run
 //     command (session.DerivedTmuxNameCollides);
+//   - any instance already HOLDING a sibling on that name (session.OwnedSiblingCollides).
+//     Both siblings are owned rather than derived, so a renamed session keeps the ones it
+//     minted under its old title — and that title is now free for a new session to take;
 //   - the latest async verdict that the title's branch already exists in the
 //     target repo (an orphan from a killed session would make Start fail late).
 func (m *home) titleConflict(title string) string {
@@ -1375,6 +1414,9 @@ func (m *home) titleConflict(title string) string {
 			return titleErrAlreadyUsed
 		}
 		if session.DerivedTmuxNameCollides(cand, inst.TmuxSessionName()) {
+			return titleErrNameTaken
+		}
+		if session.OwnedSiblingCollides(cand, inst) {
 			return titleErrNameTaken
 		}
 	}

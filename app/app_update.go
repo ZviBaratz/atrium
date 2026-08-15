@@ -510,30 +510,35 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			fmt.Sprintf("resumed %d session%s", msg.resumed, plural(msg.resumed)),
 			msg.summary())
 	case batchPauseDoneMsg:
-		// A confirmed "pause all" finished off the UI thread. Persist here on the
-		// Update loop (the action ran in a goroutine and must not read m.list), then
-		// tear down each parked session's preview terminal on the main loop (single-
-		// session pause does the same after Pause). All-success gets a transient
-		// notice; any failures go to a persistent modal naming which sessions didn't
-		// park and why. Either way, refresh the list so the now-Paused rows reflect
+		// A confirmed "pause all" finished off the UI thread. Tear down each parked
+		// session's preview terminal on the main loop, then persist here on the Update
+		// loop (the action ran in a goroutine and must not read m.list). All-success gets
+		// a transient notice; any failures go to a persistent modal naming which sessions
+		// didn't park and why. Either way, refresh the list so the now-Paused rows reflect
 		// the park.
+		//
+		// A failed pause is skipped by finishBatch — it never entered pausedInstances —
+		// yet most of pause()'s failing branches removed the worktree first, stranding the
+		// shell in it (#707). Reap those here rather than folding them into the cleanup
+		// slice: that slice also drives forgetInstance, which is a separate decision about
+		// a session that did not park cleanly.
+		for _, f := range msg.failures {
+			m.reapStrandedShell(f.inst, f.worktreeGone)
+		}
+		cmd := m.finishBatch(msg.pausedInstances, len(msg.failures) > 0,
+			fmt.Sprintf("paused %d session%s", msg.paused, plural(msg.paused)),
+			msg.summary())
+		// After both reaps, not before, which is the order single-session pause has always
+		// had (handlePauseDone). A reap releases the shell's owned tmux name (#708), so
+		// persisting first writes a term_session naming a shell this same handler goes on
+		// to kill — and the next run would claim that dead name for a live shell rather
+		// than minting one from the title the session has by then.
 		if msg.paused > 0 {
 			if err := m.persistInstances(); err != nil {
 				log.WarningLog.Printf("batch pause: failed to persist paused instances: %v", err)
 			}
 		}
-		// A failed pause is skipped by finishBatch below — it never entered
-		// pausedInstances — yet most of pause()'s failing branches removed the
-		// worktree first, stranding the shell in it (#707). Reap those here rather
-		// than folding them into the cleanup slice: that slice also drives
-		// forgetInstance, which is a separate decision about a session that did not
-		// park cleanly.
-		for _, f := range msg.failures {
-			m.reapStrandedShell(f.inst, f.worktreeGone)
-		}
-		return m, m.finishBatch(msg.pausedInstances, len(msg.failures) > 0,
-			fmt.Sprintf("paused %d session%s", msg.paused, plural(msg.paused)),
-			msg.summary())
+		return m, cmd
 	case runCommandDoneMsg:
 		// A dev command started or stopped (#389); persist the flag and report.
 		return m, m.applyRunCommandDone(msg)
