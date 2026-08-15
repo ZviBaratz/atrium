@@ -245,6 +245,14 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.attachGen == m.attachGen {
 			recoveries := recoverLostInstances(msg.results, m.lostStrikes, m.retiring)
 			if len(recoveries) > 0 {
+				// A recovery runs the same pause(), so it removes the worktree on its
+				// success path as well as most of its failing ones — and it was the one
+				// teardown with no reap at all, leaving the session's shell running in
+				// the deleted directory (#707). Reap before persisting: the reap is the
+				// part that must not be skipped by an early return added later.
+				for _, rec := range recoveries {
+					m.reapStrandedShell(rec.instance, rec.worktreeGone)
+				}
 				// Every recovery ends the instance Paused (even a failed one), so its
 				// status genuinely changed — persist. Then make the transition visible
 				// rather than a silent Running→Paused (#270).
@@ -513,6 +521,15 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if err := m.persistInstances(); err != nil {
 				log.WarningLog.Printf("batch pause: failed to persist paused instances: %v", err)
 			}
+		}
+		// A failed pause is skipped by finishBatch below — it never entered
+		// pausedInstances — yet most of pause()'s failing branches removed the
+		// worktree first, stranding the shell in it (#707). Reap those here rather
+		// than folding them into the cleanup slice: that slice also drives
+		// forgetInstance, which is a separate decision about a session that did not
+		// park cleanly.
+		for _, f := range msg.failures {
+			m.reapStrandedShell(f.inst, f.worktreeGone)
 		}
 		return m, m.finishBatch(msg.pausedInstances, len(msg.failures) > 0,
 			fmt.Sprintf("paused %d session%s", msg.paused, plural(msg.paused)),
