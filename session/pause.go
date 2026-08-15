@@ -62,7 +62,7 @@ func (i *Instance) TmuxAlive() bool {
 // removal is not a postcondition. One branch skips it deliberately — a pause whose
 // auto-commit of dirty work fails keeps the worktree, so the WIP it could not commit
 // is left on disk to be rescued — and the removal is best-effort besides, so it can
-// simply fail with the directory still there (see pause for the full set). Callers
+// simply fail with the directory still there (see pause). Callers
 // that act on the removal — the terminal-shell reap in particular — must therefore
 // ask WorkingDirGone rather than assume it from a nil error.
 //
@@ -82,7 +82,7 @@ func (i *Instance) Pause() error {
 // polling it and the user can bring it back with Resume. It reuses the Pause path —
 // committing any uncommitted work and removing the worktree.
 //
-// That last clause is conditional here for everything listed on pause, plus one case
+// That last clause is conditional here for the same reasons it is on Pause, plus one
 // reachable only from this entry point: it does not refuse a direct session the way
 // Pause does, and a direct session has no worktree at all — that branch detaches the
 // pane and stops the run command without committing or removing anything, in what is
