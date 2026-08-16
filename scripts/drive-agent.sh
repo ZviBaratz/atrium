@@ -1298,14 +1298,21 @@ COST-SAVER, AND ITS ONE LIMIT
 
   Do not predicate this on the dialog's height. An earlier draft of this help said the
   equivalence "holds while the dialog FITS the pane" and told you to reach for `fresh` once it
-  is taller. That trigger is wrong: none of gemini's four rungs overflowed the 40-row pane and
-  every one of them still diverged, so the rule would have licensed precisely the capture that
-  lied. Why it diverges is not established.
+  is taller. That trigger is wrong: gemini's dialog BOX fits the 40-row pane at all four rungs
+  with room to spare, and every one of them still diverged, so the rule would have licensed
+  precisely the capture that lied. Why it diverges is not established.
 
-  The per-rung row counts are session/agent/gemini_pane_test.go's geminiCaptureRows, recomputed
-  from the captures by TestGeminiCapturesAllFitTheDrivenPaneHeight. They were repeated here as
-  "33, 38, 35 and 38" and the 35 was wrong — the sibling file had already corrected it to 37,
-  and nothing compares prose in a shell script to a Go fixture. One file owns the numbers.
+  That draft also said "none of gemini's four rungs overflowed the 40-row pane", which is a
+  different and false claim: the SESSION's output overflowed at three of the four — the logo is
+  cut at width 40 and gone at 24, and the width-20 capture opens mid-sentence. The box fitting
+  is what the argument needs; the session's scrollback is not it.
+
+  Two per-rung tables in session/agent/gemini_pane_test.go own these numbers, and they are
+  different measurements: geminiCaptureRows (the capture's height) and geminiDialogRows (the box
+  alone), recomputed by TestGeminiCapturesAllFitTheDrivenPaneHeight and
+  TestGeminiDialogBoxIsFullyOnScreen. The capture heights were repeated here as "33, 38, 35 and
+  38" and the 35 was wrong — the sibling file had already corrected it to 37, and nothing
+  compares prose in a shell script to a Go fixture. One file owns the numbers.
 
   So: a rung whose bytes depend on the previous rung is a fixture that lies. `ladder` is still
   the right first move — it is what makes a width sweep affordable — but before a resized rung

@@ -943,7 +943,12 @@ var gemini = &Adapter{
 //     of work"), so the row reported needs-input while the agent streamed and its queued
 //     prompt was withheld. That is #342's direction, and it is strictly worse than the
 //     rotted literal #713 replaced, which was FALSE on that pane.
-//     TestGeminiTrustGateIgnoresItsOwnRowsInProse.
+//     TestGeminiTrustGateIgnoresItsOwnRowsInProse. This class is NARROWED, not closed: prose
+//     cannot reach the block, but quoted BOX ART carries walls and a corner border like any
+//     real box, so a transcript that quotes a dialog and ends at the quoted border does gate.
+//     Measured, and pinned as behaviour rather than left in a sentence —
+//     TestGeminiTrustGateFiresOnQuotedBoxArtEndingThePane. The residue is transient (one more
+//     rendered line drops it) where the window form was persistent.
 //   - WRAP SYNTHESIS. flattenChrome joins lines with a space, so a transcript reading
 //     "Never Trust" / "folder contents from an untrusted source" flattens to a string
 //     containing "Trust folder" and fired the gate — on a pane where no line renders the
@@ -973,8 +978,9 @@ var gemini = &Adapter{
 // this fix got it wrong in both directions at once: it scanned upward for a matching top
 // border. That demands the WHOLE dialog be on screen, and the agent's pane is the preview
 // pane rather than the terminal (session/instance.go SetPreviewSize), so on a pane shorter
-// than the dialog — 37 rows at width 24 — the top border has scrolled off and the gate went
-// down. #713's own symptom on the height axis, at ordinary terminal sizes. It was also
+// than the dialog BOX — 28 rows at width 24, 33 at width 20 (geminiDialogRows; this sentence
+// used to give 37, which is the width-24 capture's height and overstates the threshold by nine
+// rows) — the top border has scrolled off and the gate went down. #713's own symptom on the height axis, at ordinary terminal sizes. It was also
 // unbounded the other way: any two rules with transcript between them made that span
 // "interior". bottomBoxBlock now takes the run of side-walled rows above the border instead,
 // which is height-independent and self-bounding; see its doc for the measurements, and
@@ -1005,15 +1011,29 @@ var gemini = &Adapter{
 // have taken the gate away from installs older than the pin while doctor stayed silent about
 // it (driftExceeds only reports installed > verified).
 //
-// That argument is about the LITERAL only, and the older-install case is not thereby covered
-// — an earlier draft of this paragraph closed by claiming one literal plus a structural
+// That artifact is geminiPre055TrustGatePane, and it is named here because for one round it
+// was not in the tree at all: #713 replaced the fixture these two paragraphs cite with a
+// 0.55.1-shaped boxed pane, leaving the reasoning pointing at nothing. What it is worth is
+// bounded — it is hand-composed, 0.27 has never been driven, and it is evidence of what this
+// repo once claimed the dialog looked like, not of what gemini rendered.
+//
+// The argument above is about the LITERAL only, and the older-install case is not thereby
+// covered — an earlier draft of this paragraph closed by claiming one literal plus a structural
 // anchor "makes the gate work on both dialog shapes at once", which nothing here establishes.
-// The anchor is a second requirement, and whether 0.27 met it is unknown: 0.27 was never
-// driven, the tree's only 0.27-shaped artifact was hand-composed and unboxed, and fed to this
-// matcher it returns FALSE. So what dropping the second literal buys is the removal of one of
-// two ways to miss on an older install, not coverage of it. If a pre-0.55 user reports the
-// #713 symptom, that is the thing to drive, and doctor will not have said a word (same
-// direction: installed < verified is not drift).
+// The anchor is a second requirement, and whether 0.27 met it is unknown: fed to this matcher
+// the recorded shape returns FALSE. So what dropping the second literal buys is the removal of
+// one of two ways to miss on an older install, not coverage of it. If a pre-0.55 user reports
+// the #713 symptom, that is the thing to drive, and doctor will not have said a word (same
+// direction: installed < verified is not drift, and no adapter carries a version FLOOR the way
+// internal/doctor's dependency specs do — #722).
+//
+// Keeping the 0.27 headline as a SECOND Gate is the obvious mitigation and it does not work.
+// Anchored, it is redundant: if 0.27 drew a box then "Trust folder" is already inside it and
+// the shipped matcher covers that install unaided; if it did not, no anchored literal reaches
+// it either — both miss for the same reason. So the second Gate helps only UNANCHORED, which
+// reopens the PROSE class above for every 0.55+ user, on a literal whose likeliest source of
+// quoted text is this repo's own issue tracker. Measured both ways in
+// TestGeminiPre055ShapeIsUncoveredAndTheSecondLiteralWouldNotCoverIt.
 //
 // Still uncovered, and disclosed: /permissions' modify-trust dialog (reaching it needs an
 // authenticated session) and IdeIntegrationNudge, which is worse — it renders its headline
