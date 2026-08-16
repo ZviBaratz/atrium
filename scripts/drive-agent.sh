@@ -1309,7 +1309,7 @@ COST-SAVER, AND ITS ONE LIMIT
 
   Two per-rung tables in session/agent/gemini_pane_test.go own these numbers, and they are
   different measurements: geminiCaptureRows (the capture's height) and geminiDialogRows (the box
-  alone), recomputed by TestGeminiCapturesAllFitTheDrivenPaneHeight and
+  alone), recomputed by TestGeminiCaptureRowsMatchTheCaptures and
   TestGeminiDialogBoxIsFullyOnScreen. The capture heights were repeated here as "33, 38, 35 and
   38" and the 35 was wrong — the sibling file had already corrected it to 37, and nothing
   compares prose in a shell script to a Go fixture. One file owns the numbers.

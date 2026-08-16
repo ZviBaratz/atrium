@@ -294,7 +294,7 @@ var geminiDialogRows = map[string]int{
 // that it recomputed the four numbers; it did not, so any of them could be edited to any value
 // under 40 and stay green. That is the #648/#665 failure in the guard written to prevent it,
 // and it is exactly how 35 survived: nothing ever compared it to a capture.
-func TestGeminiCapturesAllFitTheDrivenPaneHeight(t *testing.T) {
+func TestGeminiCaptureRowsMatchTheCaptures(t *testing.T) {
 	require.Len(t, geminiCaptureRows, len(geminiAllCaptures()),
 		"every capture needs a row count and vice versa, or the table stops covering the set")
 
