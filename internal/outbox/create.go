@@ -33,10 +33,11 @@ package outbox
 // writeRecord's naming, isMessageFile's screening, and the receipt trio, whose
 // write-before-unlink ordering is the kind of invariant a second copy would rot.
 //
-// The claim half of this file (Claim/Requeue/ListClaims) is atrium#716: a create
-// is not consumed when it is read, it is *claimed* for the whole of the session
-// build, and the claim is a file rather than a map entry so the link between a
-// request and the session it produced outlives the process that made it.
+// The claim half of this file is atrium#716: a create is not consumed when it is
+// read, it is *claimed* for the whole of the session build, and the claim is a file
+// rather than a map entry so the link between a request and the session it produced
+// outlives the process that made it. Everything named Claim, plus Requeue,
+// DiscardCreate and ListClaims, belongs to it.
 
 import (
 	"encoding/json"

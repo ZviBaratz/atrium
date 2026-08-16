@@ -78,11 +78,12 @@ const createStartBudget = 1
 // instead of through the helpers the create form uses — a fourth hand-copied
 // pre-flight, which is the more expensive mistake.
 //
-// Two more round trips follow on the ACCEPT path, and only there: startNewSession
-// resolves GetRemoteURL a second time (app_session.go:1892), and holdCreateRequest runs
-// git.LocalBranchExists again to record what was true of the session branch at the
-// instant it claimed the request (#716). Neither is in the counts above, which are what
-// reaching a verdict costs; a refusal pays for neither.
+// The ACCEPT path adds more, and only there. startNewSession resolves GetRemoteURL a
+// second time, always; and holdCreateRequest runs git.LocalBranchExists again to record
+// what was true of the session branch at the instant it claimed the request (#716) —
+// which a direct target skips, having no branch. So two more for a git target and one
+// for a direct one. Neither is in the counts above, which are what reaching a VERDICT
+// costs; a refusal pays for neither.
 //
 // Bounding starts alone does not bound that work: a refusal spends no start budget, so
 // a backlog refused for a full cap would gate every one of fifty requests inside a
@@ -601,11 +602,16 @@ func (m *home) holdCreateRequest(path string, r outbox.Request, inst *session.In
 
 	meta := outbox.ClaimMeta{At: time.Now()}
 	if !inst.IsDirect() {
-		// The same expression branchSlugConflict and git.newSessionWorktree both
-		// evaluate, recorded rather than left to be recomputed later: BranchPrefix is
-		// a config value, and one edited between a crash and the next launch would
-		// have the reconcile probe for a branch nobody made, read the orphan as
-		// "nothing was built", and create a second session beside it.
+		// The same expression branchSlugConflict evaluates, against the same config
+		// this model holds — so the branch recorded here is the one the gate a few
+		// lines ago tested, exactly as right and exactly as wrong. (git's own
+		// newSessionWorktree derives it identically but from a freshly loaded config,
+		// which is the pre-existing seam, not one this adds.)
+		//
+		// Recorded rather than left to be recomputed later, because BranchPrefix is a
+		// config value: one edited between a crash and the next launch would have the
+		// reconcile probe for a branch nobody made, read the orphan as "nothing was
+		// built", and create a second session beside it.
 		meta.SessionBranch = git.BranchNameForSession(m.appConfig.BranchPrefix, inst.Title)
 		// Measured here rather than inferred from the gate that ran a moment ago. For
 		// an ordinary request the gate has just proved this false and the probe agrees;
@@ -640,14 +646,17 @@ func (m *home) holdCreateRequest(path string, r outbox.Request, inst *session.In
 //
 // The remaining window is a crash between the two, and holdCreateRequest's claim is
 // what makes it survivable (#716). The next launch finds a claim rather than a
-// re-drainable request, and reconcileCreateClaims reads it into one of three verdicts:
-// the row is there and stamped with this record, so the request SUCCEEDED and its
-// caller is told so rather than "already used"; nothing was built, so it is re-queued;
-// or Worktree.Setup got as far as creating the branch and persistInstances never ran,
-// leaving a branch no row owns — which is re-queued to adopt that branch rather than
-// refused for it. Before the claim existed the third case was a permanent refusal
-// ("branch already exists") plus an orphan branch and worktree belonging to no row
-// `atrium ls` could show, removable only by hand.
+// re-drainable request, and reconcileCreateClaims judges it on evidence instead of
+// re-running the gates. Three of its verdicts answer the three states an interrupted
+// build can leave: the row is there and stamped with this record, so the request
+// SUCCEEDED and its caller is told so rather than "already used"; nothing was built, so
+// it is re-queued; or Worktree.Setup got as far as creating the branch and
+// persistInstances never ran, leaving a branch no row owns — which is re-queued to
+// adopt that branch rather than refused for it. (A fourth, refusal, covers what none of
+// those describe: an expired or unreadable claim, or a branch that is somebody else's.)
+// Before the claim existed the third state was a permanent refusal ("branch already
+// exists") plus an orphan branch and worktree belonging to no row `atrium ls` could
+// show, removable only by hand.
 //
 // An orderly shutdown does not go through here at all, which is why
 // reconcileInFlightStarts settles what it adopts.
