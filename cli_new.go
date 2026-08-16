@@ -334,10 +334,18 @@ func checkTitleFree(prefix, title, path string, instances []session.InstanceData
 // reports the session that came of it.
 //
 // The protocol is awaitSpool's, shared with `send --wait`. What differs is what the
-// file's disappearance means here: the drain holds the request until Start has
-// finished *and the row has been persisted*, so it going away says the worktree, the
-// branch and the agent all exist and are recorded — not merely that some Atrium
-// consumed the request.
+// record settling means here: the drain holds the request until Start has finished
+// *and the row has been persisted*, so it going away says the worktree, the branch and
+// the agent all exist and are recorded — not merely that some Atrium consumed the
+// request.
+//
+// "Settling" is two files, which is why the claim path is passed in. The drain renames
+// an accepted request to outbox.ClaimPath for the whole of the build (#716), so the
+// record alone going away means only "some atrium has taken this" — the state the wait
+// is precisely meant to sit through. It is also what makes an interrupted build
+// legible: a claim outlives the process that made it, so a caller still blocked here
+// keeps waiting rather than being told a half-built session was created, and the next
+// atrium's reconcile settles the claim one way or the other.
 //
 // That second half is what makes the next line safe rather than a race. The branch is
 // read back out of state.json rather than derived from the
@@ -345,7 +353,7 @@ func checkTitleFree(prefix, title, path string, instances []session.InstanceData
 // slug rules have a hash fallback for titles that sanitize to nothing, and a
 // non-git target has no branch at all.
 func waitForCreate(out io.Writer, path, title, repo string, timeout time.Duration) error {
-	if err := awaitSpool(path, timeout, spoolWaitCopy{
+	if err := awaitSpool(path, outbox.ClaimPath(path), timeout, spoolWaitCopy{
 		refused: "atrium did not create the session",
 		// Neither half of the obvious wording is knowable from here. "No TUI created it"
 		// is wrong while one is mid-create — the record is deliberately held for the whole

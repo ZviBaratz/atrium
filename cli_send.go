@@ -132,7 +132,9 @@ func runSend(out, errOut io.Writer, selector, path, text string, wait time.Durat
 // leaves a receipt naming the reason; awaitSpool owns the order the two are
 // sampled in, which is what keeps a discard from reading as a delivery.
 func waitForDrain(path string, timeout time.Duration) error {
-	return awaitSpool(path, timeout, spoolWaitCopy{
+	// No in-flight companion: the prompt spool has no claim step, because queuing a
+	// prompt IS the whole job and the drain unlinks as soon as it has done it.
+	return awaitSpool(path, "", timeout, spoolWaitCopy{
 		refused: "atrium did not deliver the prompt",
 		timedOut: fmt.Sprintf("waited %s and no atrium TUI picked the prompt up; it is still queued "+
 			"in the outbox and will be delivered the next time one runs", timeout),
@@ -146,6 +148,52 @@ func waitForDrain(path string, timeout time.Duration) error {
 // only sets up the resulting state proves nothing about which sample sees it first.
 var betweenSpoolSamples = func() {}
 
+// betweenSpoolStats is betweenSpoolSamples for the other ordering spoolSettled owns:
+// the window between the record stat and the in-flight stat, where a drain claiming a
+// request lands. Same reason for existing — the interleaving is microseconds wide, and
+// a test that only arranges the end state cannot tell a correct implementation from one
+// that reads the two files the other way round.
+var betweenSpoolStats = func() {}
+
+// spoolSettled reports whether a spooled record has reached a terminal state: the record
+// itself gone, and — for a create, whose drain renames the record to a claim for the
+// whole of the session build — its in-flight companion gone too. inFlight is "" for a
+// spool that has no such step.
+//
+// The stat order is the correctness, and it is the record FIRST. Once the record is
+// absent the request is either claimed or finished, and the companion stat separates
+// those two; whichever way that second stat then races the drain, the answer is right.
+// Reversed, the race is lost outright: the companion is read absent (not claimed yet),
+// the drain claims, the record is then read absent too, both look gone, and a build that
+// has not begun is reported to `atrium new --wait` as a created session, exit 0.
+//
+// That window is real rather than theoretical because outbox.Claim commits the rename
+// atomically within one directory — there is no instant where both paths are absent
+// mid-claim, so record-first cannot see a false gap, and companion-first sees the only
+// gap there is.
+//
+// A stat that could not answer is returned rather than folded into either verdict; the
+// caller carries it to its deadline for awaitSpool's reason.
+func spoolSettled(record, inFlight string) (bool, error) {
+	switch _, err := os.Stat(record); {
+	case err == nil:
+		return false, nil // still queued
+	case !errors.Is(err, fs.ErrNotExist):
+		return false, err
+	}
+	if inFlight == "" {
+		return true, nil
+	}
+	betweenSpoolStats()
+	switch _, err := os.Stat(inFlight); {
+	case err == nil:
+		return false, nil // claimed: being built right now
+	case !errors.Is(err, fs.ErrNotExist):
+		return false, err
+	}
+	return true, nil
+}
+
 // spoolWaitCopy is the wording awaitSpool cannot supply: what a refusal and a timeout
 // are called for this particular command. Both are finished strings — the caller knows
 // its own timeout, so nothing here has to be a format.
@@ -155,8 +203,8 @@ type spoolWaitCopy struct {
 }
 
 // awaitSpool implements the completion protocol both `send --wait` and `new --wait`
-// use: a rejection receipt means refused, the record's disappearance means done, and
-// the deadline means still queued.
+// use: a rejection receipt means refused, the record settling (see spoolSettled) means
+// done, and the deadline means still queued.
 //
 // The sampling order is the correctness. Reject writes the receipt and then unlinks
 // the record, which guarantees only "if the record is gone, the receipt is already
@@ -165,20 +213,22 @@ type spoolWaitCopy struct {
 // receipt absent, then the drain completes both the write and the unlink, then Stat
 // returns ENOENT and a refusal for a taken title or a full cap is reported as a created
 // session, exit 0. The leading check below is only a fast path; the one that closes the
-// window is the re-read inside the ENOENT arm.
+// window is the re-read inside the settled arm. spoolSettled owns the second ordering,
+// between the record and its in-flight companion.
 //
 // Shared because two copies of an ordering drift. What the two commands differ about is
-// what the disappearance *means* — for a prompt, that some Atrium consumed it; for a
-// create, that the session exists *and is recorded*, since the drain holds the file
-// until Start has completed and the row has been persisted — but that difference is in
-// the callers' wording and in what they do afterwards, not in the protocol.
+// what settling *means* — for a prompt, that some Atrium consumed it; for a create,
+// that the session exists *and is recorded*, since the drain holds the request as a
+// claim until Start has completed and the row has been persisted — but that difference
+// is in the callers' wording, in the inFlight path they pass, and in what they do
+// afterwards, not in the protocol.
 //
 // A Stat error other than "not found" is never read as either outcome. It is also not
 // returned on the spot: persistence is the only thing that separates a bad data dir
 // from a network mount's one-off ESTALE, and persistence is what the deadline already
 // measures. So it is carried, and reported at the deadline in place of
 // wording.timedOut — which would otherwise blame a TUI that was never the problem.
-func awaitSpool(path string, timeout time.Duration, wording spoolWaitCopy) error {
+func awaitSpool(path, inFlight string, timeout time.Duration, wording spoolWaitCopy) error {
 	refused := func() error {
 		reason, ok := outbox.Rejection(path)
 		if !ok {
@@ -197,18 +247,19 @@ func awaitSpool(path string, timeout time.Duration, wording spoolWaitCopy) error
 			return err
 		}
 		betweenSpoolSamples()
-		_, err := os.Stat(path)
+		settled, err := spoolSettled(path, inFlight)
 		switch {
-		case errors.Is(err, fs.ErrNotExist):
-			// The record went away between the two samples; the receipt for it, if
-			// there is one, is on disk by now.
+		case settled:
+			// The record went away between the two samples, and nothing is holding it
+			// in flight; the receipt for it, if there is one, is on disk by now.
 			if err := refused(); err != nil {
 				return err
 			}
 			return nil
 		default:
-			// Either nil — the record is still there — or a Stat that could not answer,
-			// which is carried to the deadline rather than returned from this sample.
+			// Either nil — the record is still there, or is claimed and being built —
+			// or a Stat that could not answer, which is carried to the deadline rather
+			// than returned from this sample.
 			//
 			// The two cannot be told apart at one sample, and only one of them should end
 			// the wait. A data dir on NFS, sshfs or a container bind mount answers a

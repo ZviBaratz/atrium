@@ -333,6 +333,11 @@ const clearReason = "atrium reset discarded every queued request"
 // For `atrium reset`, which wipes Atrium's state and must not leave behind a create
 // request that would rebuild some of it on the next launch.
 //
+// "Queued" includes a create some earlier atrium claimed and died building (#716).
+// That is the case with teeth for reset in particular: a claim left on disk is what
+// the next launch's reconcile reads as work to finish, so skipping it would have
+// `atrium reset` wipe state.json and then watch a session reappear.
+//
 // It goes through Reject rather than unlinking, for the reason Reject exists: a
 // producer blocked in `--wait` cannot tell a discard from a delivery except by the
 // receipt, so a bare os.Remove here would have `atrium reset` report itself to a
@@ -370,13 +375,32 @@ func Clear() (int, error) {
 		}
 		for _, de := range entries {
 			name := de.Name()
+			// A claimed create is discarded too, and through the same receipt: `atrium
+			// reset` must not leave behind a request that the next launch's reconcile
+			// would rebuild half of Atrium's state from, and a producer blocked in
+			// --wait is watching the claim as well as the record (see ClaimPath), so
+			// unlinking one in silence is the same false success a bare os.Remove would
+			// be. The receipt goes to the record path because that is the path the
+			// producer knows; ReleaseClaim then takes the file.
+			if record, claimed := claimedRecordName(de); claimed {
+				path := filepath.Join(dir, record)
+				err := errors.Join(Reject(path, clearReason), DiscardCreate(path))
+				if err != nil {
+					if firstErr == nil {
+						firstErr = fmt.Errorf("outbox: discard %s: %w", name, err)
+					}
+					continue
+				}
+				removed++
+				continue
+			}
 			// Both guards, as in listFiles, and most of all here: this is the walk that
 			// destroys what it matches. The name check alone already rejects the nested
 			// create/ entry, so IsDir is redundant today — which is exactly the claim
 			// listFiles makes about the pair, and a claim the package should be able to
 			// make about every walk rather than about one of three.
 			if de.IsDir() || !isMessageFile(name) {
-				continue // a receipt, a nested spool dir, or not ours at all
+				continue // a receipt, a claim, a nested spool dir, or not ours at all
 			}
 			if err := Reject(filepath.Join(dir, name), clearReason); err != nil {
 				if firstErr == nil {

@@ -871,6 +871,18 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 		return nil, fmt.Errorf("failed to load instances: %w", err)
 	}
 
+	// Finish what a dead process left mid-build, before the event loop and so before
+	// the first drain tick can judge one of those requests by the ordinary gates and
+	// get the orphan case wrong (#716). It reads the instances just loaded, which is
+	// why it is here rather than in an Init command: the model's list is the update
+	// goroutine's, and a tea.Cmd reading it would race that loop.
+	//
+	// A no-op for every launch that finds no claim, which is all of them but the one
+	// after a crash — one os.ReadDir of a directory the drain polls anyway.
+	if n := reconcileCreateClaims(ctx, instances, appConfig.BranchPrefix, time.Now()); n > 0 {
+		log.InfoLog.Printf("reconciled %d interrupted create request%s left by an earlier atrium", n, plural(n))
+	}
+
 	h := assembleHome(ctx, program, autoYes, version, binName, appConfig, appState, storage, instances)
 	// Buffered rather than surfaced here: newHome runs before the program starts, so
 	// there is no frame to toast on yet. The preview tick flushes it, in the shape

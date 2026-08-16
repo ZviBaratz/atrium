@@ -659,10 +659,102 @@ func TestNewWaitDoesNotReadARefusalAsSuccess(t *testing.T) {
 	}
 	t.Cleanup(func() { betweenSpoolSamples = func() {} })
 
-	err = awaitSpool(path, 5*time.Second, spoolWaitCopy{refused: "refused", timedOut: "timed out"})
+	err = awaitSpool(path, outbox.ClaimPath(path), 5*time.Second,
+		spoolWaitCopy{refused: "refused", timedOut: "timed out"})
 	require.True(t, fired, "precondition: the window was reproduced")
 	require.Error(t, err, "a refusal read as a success is the whole failure mode")
 	assert.Contains(t, err.Error(), "already exists here")
+}
+
+// TestNewWaitKeepsWaitingWhileTheRequestIsClaimed is the completion protocol's #716
+// half. The drain renames the record to a claim for the whole of the session build, so
+// the record's absence alone no longer means "created" — it means "some atrium has
+// taken this", which is precisely the state --wait exists to sit through. Reading it as
+// success would print `created` and exit 0 while the worktree is still going up, and a
+// script would move on to a session with no branch.
+func TestNewWaitKeepsWaitingWhileTheRequestIsClaimed(t *testing.T) {
+	sandboxDataDir(t)
+	path, err := outbox.WriteCreate(outbox.Request{Title: "fix-auth", Path: tempRepo(t)})
+	require.NoError(t, err)
+	require.NoError(t, outbox.Claim(path, outbox.ClaimMeta{At: time.Now(), SessionBranch: "zvi/fix-auth"}))
+	require.NoFileExists(t, path, "precondition: the record itself is gone")
+
+	err = awaitSpool(path, outbox.ClaimPath(path), 20*time.Millisecond,
+		spoolWaitCopy{refused: "refused", timedOut: "still queued"})
+	require.Error(t, err, "a claimed request has not completed")
+	assert.Contains(t, err.Error(), "still queued")
+}
+
+// TestSpoolSettledReadsTheRecordBeforeTheClaim pins the stat ORDER, which is the whole
+// correctness of the two-file wait.
+//
+// Record first: once it is absent the request is either claimed or finished, and the
+// claim stat separates those two whichever way it then races the drain. Claim first
+// loses outright — the claim reads absent (not taken yet), the drain claims, the record
+// then reads absent too, both look gone, and a build that has not begun is reported to
+// `atrium new --wait` as a created session, exit 0.
+//
+// betweenSpoolStats reproduces exactly that window; arranging the end state cannot,
+// because both orders agree about every state that holds still.
+func TestSpoolSettledReadsTheRecordBeforeTheClaim(t *testing.T) {
+	sandboxDataDir(t)
+	path, err := outbox.WriteCreate(outbox.Request{Title: "fix-auth", Path: tempRepo(t)})
+	require.NoError(t, err)
+
+	// The drain claims in the window between the two stats. A record-first reader has
+	// already seen the record present and reports "not settled"; a claim-first reader
+	// would have seen no claim, then find the record gone, and call it done.
+	fired := false
+	betweenSpoolStats = func() {
+		if fired {
+			return
+		}
+		fired = true
+		require.NoError(t, outbox.Claim(path, outbox.ClaimMeta{At: time.Now()}))
+	}
+	t.Cleanup(func() { betweenSpoolStats = func() {} })
+
+	settled, statErr := spoolSettled(path, outbox.ClaimPath(path))
+	require.NoError(t, statErr)
+	assert.False(t, settled, "a request claimed mid-sample has not settled")
+	assert.False(t, fired, "record-first never reaches the second stat while the record is present")
+}
+
+// TestSpoolSettledIsTerminalOnlyWhenBothAreGone is the positive half — without it the
+// test above passes against a spoolSettled that never returns true at all.
+func TestSpoolSettledIsTerminalOnlyWhenBothAreGone(t *testing.T) {
+	sandboxDataDir(t)
+	path, err := outbox.WriteCreate(outbox.Request{Title: "fix-auth", Path: tempRepo(t)})
+	require.NoError(t, err)
+
+	settled, statErr := spoolSettled(path, outbox.ClaimPath(path))
+	require.NoError(t, statErr)
+	require.False(t, settled, "queued")
+
+	require.NoError(t, outbox.Claim(path, outbox.ClaimMeta{At: time.Now()}))
+	settled, statErr = spoolSettled(path, outbox.ClaimPath(path))
+	require.NoError(t, statErr)
+	require.False(t, settled, "claimed")
+
+	require.NoError(t, outbox.DiscardCreate(path))
+	settled, statErr = spoolSettled(path, outbox.ClaimPath(path))
+	require.NoError(t, statErr)
+	assert.True(t, settled, "settled")
+}
+
+// TestSpoolSettledIgnoresAClaimForASpoolWithoutOne is the prompt spool's side. `send`
+// has no claim step — queuing a prompt IS the whole job — so passing "" must leave its
+// protocol exactly as it was, and must not make it stat a path that will never exist.
+func TestSpoolSettledIgnoresAClaimForASpoolWithoutOne(t *testing.T) {
+	sandboxDataDir(t)
+	path, err := outbox.WriteCreate(outbox.Request{Title: "fix-auth", Path: tempRepo(t)})
+	require.NoError(t, err)
+	// A claim beside it, which a spool with no claim step must not consult.
+	require.NoError(t, outbox.Claim(path, outbox.ClaimMeta{At: time.Now()}))
+
+	settled, statErr := spoolSettled(path, "")
+	require.NoError(t, statErr)
+	assert.True(t, settled, "with no companion, the record's absence is the whole answer")
 }
 
 // TestNewProfileResolvesWithNoConfigFile is the headless-bootstrap case --profile
@@ -809,7 +901,7 @@ func TestAwaitSpoolRetriesAStatItCouldNotAnswer(t *testing.T) {
 	}
 	t.Cleanup(func() { betweenSpoolSamples = func() {} })
 
-	err = awaitSpool(record, 10*time.Second, spoolWaitCopy{refused: "refused", timedOut: "timed out"})
+	err = awaitSpool(record, "", 10*time.Second, spoolWaitCopy{refused: "refused", timedOut: "timed out"})
 	require.GreaterOrEqual(t, samples, 2, "precondition: the window was reproduced")
 	assert.NoError(t, err, "a transient Stat error must not end the wait")
 }
@@ -823,7 +915,7 @@ func TestAwaitSpoolReportsAStatErrorThatNeverClears(t *testing.T) {
 	blocker := filepath.Join(dir, "blocker")
 	require.NoError(t, os.WriteFile(blocker, []byte("not a directory"), 0o600))
 
-	err := awaitSpool(filepath.Join(blocker, "record.json"), 10*time.Millisecond,
+	err := awaitSpool(filepath.Join(blocker, "record.json"), "", 10*time.Millisecond,
 		spoolWaitCopy{refused: "refused", timedOut: "no atrium picked it up"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to read the outbox")
