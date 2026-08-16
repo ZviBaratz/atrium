@@ -735,21 +735,35 @@ func (m *home) resumeAfterSuspendedLoop(extra ...tea.Cmd) tea.Cmd {
 
 func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd) {
 	// Normally re-select the just-started instance: it corrects a possibly-stale
-	// selection index, the failure path's teardown (m.list.Kill below) targets the
-	// selected row, and an auto-open attach drops into it. The exception is #439: on
+	// selection index, and an auto-open attach drops into it. The exception is #439: on
 	// a successful start with no auto-open, if the user navigated to another session
 	// during the slow async Start(), preserve their cursor instead of snapping it
 	// back to the new session.
-	if msg.err != nil || m.shouldAutoOpen(msg.instance, msg.hadPrompt, msg.fromBatch) ||
+	//
+	// A failure does NOT select it. The teardown below names its target, so nothing
+	// here has to aim the cursor at a row that is about to be destroyed.
+	if m.shouldAutoOpen(msg.instance, msg.hadPrompt, msg.origin) ||
 		m.list.GetSelectedInstance() == msg.instance {
 		m.list.SelectInstance(msg.instance)
 	}
 
 	if msg.err != nil {
-		// Tear down the session that failed to start. Any teardown error is already
-		// logged inside KillInstance; the meaningful failure here is msg.err, which
-		// is surfaced below, so discard Kill's return rather than fight that modal.
-		_ = m.list.Kill()
+		// Close out an `atrium new` request before the teardown below: the outcome
+		// this message carries is the only thing that tells a waiting `--wait` whether
+		// the session it asked for exists (#703). A session that came from the form or
+		// smart-dispatch is a map miss. Rejecting first also means forgetInstance's
+		// own settle (a removal with no start outcome) finds nothing left to do.
+		m.settleCreateRequest(msg.instance, msg.err)
+		// Tear down the session that failed to start, by name. KillInstance exists for
+		// exactly this — a target that need not be the selected row — where list.Kill
+		// destroys whatever the cursor is on: SelectInstance ends in
+		// clampSelectionToNavigable, which for a row hidden inside a folded group or
+		// filtered out by an active query snaps to the group anchor or the nearest
+		// visible row, so aiming the cursor first could have killed a live session the
+		// user was working in. Any teardown error is already logged inside KillInstance;
+		// the meaningful failure here is msg.err, which is surfaced below, so discard
+		// the return rather than fight that modal.
+		_ = m.list.KillInstance(msg.instance)
 		m.forgetInstance(msg.instance) // the failed session is gone from the list; drop its bookkeeping
 		// A quit deferred while this session was Loading (issue #268): the failed
 		// session is torn down and gone from the list, so resume the quit if it's now
@@ -777,6 +791,12 @@ func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd
 	// failure a deferred+safe quit still gets its escape-hatch modal (via
 	// resumeQuitAfterStart → handleQuit) rather than a dead-end error toast.
 	if err := m.persistInstances(); err != nil {
+		// The session is live but unrecorded, so an `atrium new` caller must hear the
+		// failure rather than read the unlink as success and go looking in state.json
+		// for a branch that is not there. Its own wording, because the session did
+		// start — what failed is the record of it.
+		m.failCreateRequest(msg.instance,
+			fmt.Sprintf("the session was created but atrium could not record it: %v", err))
 		if m.quitRequested {
 			if cmd, done := m.resumeQuitAfterStart(); done {
 				return m, cmd
@@ -784,6 +804,10 @@ func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd
 		}
 		return m, m.handleError(err)
 	}
+
+	// Only now: the row is durable, so the request file going away means the session
+	// exists *and* --wait can read its branch back. See settleCreateRequest.
+	m.settleCreateRequest(msg.instance, nil)
 
 	// A quit deferred while this session was Loading (issue #268) takes precedence
 	// over the rest of the post-start handling (welcome, auto-open): now that this
@@ -796,12 +820,27 @@ func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd
 		// The deferred quit was dropped (the user navigated into an overlay); fall
 		// through and finish this start normally.
 	}
-	m.recordRecentPath(msg.instance.Path)
-	// First successful session start retires the one-time welcome. This is the single
-	// chokepoint every start (inline `n` and the `N` form) funnels through, so the
-	// welcome re-shows on every launch until the user has actually created a session —
-	// a dismissal alone no longer burns it (see showHelpScreen). Best-effort persist.
-	m.markWelcomeSeen()
+	// The recent-path list and the one-time welcome are both about what the person at
+	// the keyboard has done, so a background create writes neither. The recent paths
+	// feed the create form's picker — an MRU a human arranged, which a CI job's repo has
+	// no business jumping to the head of.
+	//
+	// The welcome's seen-bit is the sharper case, because this drain runs *under* the
+	// welcome modal on purpose (see drainCreateRequests: a fresh install sits in
+	// stateWelcome until someone answers it, and refusing to create there is the deadlock
+	// #703 exists to remove). Answering it is what retires it — overlay confirm and skip
+	// alike, app_welcome.go — and this chokepoint is the backstop for a user who reaches
+	// a first session without ever meeting the overlay. A request drained out of the
+	// spool while the modal is still on screen is neither, so without this gate
+	// `atrium new` would burn an unanswered welcome the user is still looking at.
+	//
+	// All three producers funnel through here — the create form, smart auto-dispatch and
+	// the `atrium new` drain — so being the single chokepoint is what makes an explicit
+	// gate necessary rather than redundant.
+	if msg.origin != spawnBackground {
+		m.recordRecentPath(msg.instance.Path)
+		m.markWelcomeSeen() // best-effort persist; markWelcomeSeen names the other callers
+	}
 	if m.autoYes {
 		msg.instance.AutoYes = true
 	}
@@ -812,11 +851,23 @@ func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd
 	// keystrokes in the trust dialog instead of the input box.
 	// Leave a live progress row alone: its owner clears it when the operation
 	// finishes (the ranking in ui.Menu decides which line shows meanwhile).
-	if m.menu.State() != ui.StateBusy {
+	//
+	// And leave the bar's STATE alone for a background create. This is a bare SetState,
+	// so unlike Menu.SetInstance — which rewrites only StateDefault/StateEmpty, precisely
+	// so the periodic instanceChanged cannot do this — it would permanently drop a mode
+	// the user is mid-gesture in: StateVisual, StateFilter, StateHints and StateDiffComment
+	// each own the bar while their mode is active, and with hint_bar off StateDefault
+	// renders as an empty row. A create nobody asked for must not end one; instanceChanged,
+	// batched by startNewSession, moves it off StateEmpty through the protected path.
+	//
+	// The state, not the row: the drain's own notice still rides that row for a few
+	// seconds via Menu.SetNotice, which is independent of Menu.State. What this prevents
+	// is the mode being ended, not the bar being borrowed.
+	if msg.origin != spawnBackground && m.menu.State() != ui.StateBusy {
 		m.menu.SetState(ui.StateDefault)
 	}
 
-	if m.shouldAutoOpen(msg.instance, msg.hadPrompt, msg.fromBatch) {
+	if m.shouldAutoOpen(msg.instance, msg.hadPrompt, msg.origin) {
 		// Drop straight into the new session, mirroring the KeyEnter attach path.
 		// Attach msg.instance directly rather than via m.list.Attach(): a background
 		// instanceStartedMsg from another freshly-created session could have moved
@@ -828,5 +879,39 @@ func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd
 		return m, m.attachExec(msg.instance.Attach, msg.instance)
 	}
 
+	// A background create asks for no global resize — the WindowSizeMsg it would send
+	// exits hint mode (see the tea.WindowSizeMsg arm in Update) and reflows a frame
+	// nothing about the terminal changed. But one half of that resize IS load-bearing
+	// here, and only here: updateHandleWindowSizeEvent ends in SetSessionPreviewSize,
+	// the sole production caller that gives a session's detached tmux pane the
+	// preview's geometry, and it skips any instance that is not yet Started — which this
+	// one already is on arrival, Instance.Start having set the flag on the goroutine
+	// before this message was ever constructed. Left unsized the pane keeps its
+	// new-session -d default: measured at 80 columns against a 116-column preview, so
+	// the preview renders it wrapped at the wrong width and every width-sensitive
+	// classifier in session/agent reads a capture taken at a width the pane never had.
+	// So size just the row this message is about.
+	if msg.origin == spawnBackground {
+		w, h := m.tabbedWindow.GetPreviewSize()
+		if err := sizeStartedPane(msg.instance, w, h); err != nil {
+			log.ErrorLog.Printf("could not size the pane for a background create: %v", err)
+		}
+		return m, m.instanceChanged()
+	}
 	return m, tea.Batch(tea.RequestWindowSize, m.instanceChanged())
+}
+
+// sizeStartedPane is Instance.SetPreviewSize, as a seam — config.detectAgentCommand's
+// precedent, and betweenSpoolSamples' in this same change.
+//
+// A var rather than a direct call because the effect is a pty ioctl whose visibility
+// belongs to tmux, not to Atrium: SetPreviewSize resizes the pty and tmux reacts to the
+// SIGWINCH on its own schedule and by its own client-size reconciliation rules, which
+// differ by version. A test that reads the width back through `display-message` was
+// green on one machine and red on CI for both reasons — it raced the propagation, and
+// where it did not race it measured tmux's policy rather than this branch. What has to
+// be pinned here is only that the call is made, with the preview's geometry, on exactly
+// the origin that no longer asks for a resize.
+var sizeStartedPane = func(inst *session.Instance, width, height int) error {
+	return inst.SetPreviewSize(width, height)
 }

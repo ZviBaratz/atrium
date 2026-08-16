@@ -381,6 +381,17 @@ type home struct {
 	// Deliberately in-memory only: the next launch should re-try the file rather
 	// than inherit a verdict from a transient failure.
 	outboxPoisoned map[string]bool
+	// createsInFlight maps a session started from an `atrium new` request to the
+	// spool file that asked for it, so settleCreateRequest can remove that file on
+	// a successful start or reject it with the failure (#703). The entry is what
+	// keeps the drain from re-executing a request whose file it deliberately left
+	// in place; in-memory only, for outboxPoisoned's reason.
+	createsInFlight map[*session.Instance]string
+	// createTmuxHeld records that the create drain is currently holding its requests
+	// because tmux is not usable, so the hold is logged once when it starts and once
+	// when it lifts rather than twice a second for as long as it lasts. State about
+	// the log line only — the hold itself is decided fresh each tick by probing.
+	createTmuxHeld bool
 	// notifier emits the terminal bell / desktop notification when a background
 	// session finishes a turn or blocks on a prompt (see app_notify.go, config
 	// Notifications). nil disables notification (hand-built test homes).
@@ -793,6 +804,11 @@ type home struct {
 	// re-poll when the selection actually changes (or when a detach resets this to nil),
 	// not 10×/s — which would also perturb the tick-based idle hysteresis.
 	lastStatusPollSelection *session.Instance
+
+	// lastRejectionSweep is when the outbox receipt GC last walked the two spools. It
+	// enforces a 24h horizon, so it does not need the ~500ms metadata tick's cadence —
+	// see sweepRejectionsOccasionally. Zero means "never this run", which sweeps.
+	lastRejectionSweep time.Time
 
 	// selectedSince records when the current selection was last changed. The
 	// read-dwell (markSeenAfterDwell) requires the row to have been selected this

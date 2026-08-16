@@ -21,11 +21,22 @@ import (
 type capturingStore struct {
 	saves int
 	last  json.RawMessage
+	// saveErr, when set, makes every SaveInstances fail — the "session is live but
+	// unrecorded" case an `atrium new --wait` must be told about rather than left to
+	// read the request's disappearance as success.
+	saveErr error
 }
 
-func (c *capturingStore) SaveInstances(d json.RawMessage) error { c.saves++; c.last = d; return nil }
-func (c *capturingStore) GetInstances() json.RawMessage         { return c.last }
-func (c *capturingStore) DeleteAllInstances() error             { c.last = nil; return nil }
+func (c *capturingStore) SaveInstances(d json.RawMessage) error {
+	c.saves++
+	if c.saveErr != nil {
+		return c.saveErr
+	}
+	c.last = d
+	return nil
+}
+func (c *capturingStore) GetInstances() json.RawMessage { return c.last }
+func (c *capturingStore) DeleteAllInstances() error     { c.last = nil; return nil }
 
 // withCapturingStore swaps h's storage for a capturingStore and returns it.
 func withCapturingStore(t *testing.T, h *home) *capturingStore {

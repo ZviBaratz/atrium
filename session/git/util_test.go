@@ -122,3 +122,37 @@ func TestGetRemoteURL(t *testing.T) {
 		t.Fatalf("GetRemoteURL() non-repo = %q, want empty", got)
 	}
 }
+
+// ProbeGitRepo splits IsGitRepo's single bool into a verdict and whether there was one.
+// The distinction is load-bearing for `atrium new`: `direct` (no worktree, no branch —
+// the agent runs in the target itself) is derived from this answer, so a probe that
+// could not run must not read as "not a repo".
+func TestProbeGitRepo(t *testing.T) {
+	repo := newTestRepo(t)
+
+	if isRepo, known := ProbeGitRepo(context.Background(), repo); !isRepo || !known {
+		t.Fatalf("ProbeGitRepo(repo) = (%v, %v), want (true, true)", isRepo, known)
+	}
+
+	// git ran and said no. A verdict, not a silence — the caller may act on it.
+	if isRepo, known := ProbeGitRepo(context.Background(), t.TempDir()); isRepo || !known {
+		t.Fatalf("ProbeGitRepo(plain dir) = (%v, %v), want (false, true)", isRepo, known)
+	}
+
+	// git could not answer. A cancelled context is the member of that class a hermetic
+	// test can produce on demand; git off PATH and a fork failure under memory pressure
+	// reach the same arm, since neither yields an *exec.ExitError with a real status.
+	// The repo is the same one that answered true above, so the only variable is the
+	// probe's ability to run.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if isRepo, known := ProbeGitRepo(ctx, repo); isRepo || known {
+		t.Fatalf("ProbeGitRepo(cancelled) = (%v, %v), want (false, false)", isRepo, known)
+	}
+
+	// And the fold IsGitRepo keeps: it still reports a plain false for that case, which
+	// is why it is the wrong predicate for a headless create and stays right for a form.
+	if IsGitRepo(ctx, repo) {
+		t.Fatal("IsGitRepo(cancelled) = true, want false — it folds 'could not answer' into 'no'")
+	}
+}

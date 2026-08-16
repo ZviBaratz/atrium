@@ -383,12 +383,16 @@ func (h helpTypeGeneral) mask() uint32 { return 1 }
 func (h helpTypeWelcome) mask() uint32 { return 1 << 4 }
 
 // showHelpScreen displays a help overlay. The cheatsheet (helpTypeGeneral) always
-// shows on demand; one-time screens (welcome) show until their seen bit is set.
-// Crucially, the bit is NOT set here on render — the welcome's bit is set only on
-// the first successful session start (see the instanceStartedMsg handler), so a
-// stray keypress that dismisses the welcome no longer burns it for good; it
-// re-shows each launch until the user has actually created a session. onDismiss is
-// retained for compatibility but is now always nil.
+// shows on demand; one-time screens show until their seen bit is set, and the bit is
+// never set here on render. onDismiss is retained for compatibility but is now always
+// nil.
+//
+// The welcome is no longer one of the screens this opens — maybeShowWelcome stages
+// overlay.WelcomeOverlay instead, and only helpTypeWelcome's seen-bit survives here
+// (see its mask). That bit is set when the user answers the overlay, on skip as well
+// as on confirm (app_welcome.go), and again at the first session start as a backstop
+// for a user who reaches one without meeting the overlay — which is why the
+// instanceStartedMsg handler gates it to a foreground origin.
 func (m *home) showHelpScreen(helpType helpText, onDismiss func()) (tea.Model, tea.Cmd) {
 	var alwaysShow bool
 	switch helpType.(type) {

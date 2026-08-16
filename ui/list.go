@@ -626,19 +626,16 @@ func (l *List) rowNeedsUser(idx int, member func(*session.Instance) bool, groupC
 	return member(l.items[idx])
 }
 
-// Kill tears down the selected instance and removes it from the list, returning
-// any teardown failure so the caller can surface what leaked.
-func (l *List) Kill() error {
-	if len(l.items) == 0 {
-		return nil
-	}
-	return l.KillInstance(l.items[l.selectedIdx])
-}
-
 // KillInstance tears down target and removes it from the list, keeping the
-// selection pointing at the same logical instance where possible. Unlike Kill,
-// target need not be the selected item — the in-session kill path (Ctrl+X) and
-// the auto-open path target a specific instance regardless of current selection.
+// selection pointing at the same logical instance where possible.
+//
+// It names its target because the alternative could not. A cursor-targeting Kill()
+// used to sit beside this one, and the failed-create path reached for it after a
+// SelectInstance that ends in clampSelectionToNavigable — which, for a row hidden
+// inside a folded group or filtered out by an active query, snaps to the group anchor
+// instead. The teardown then destroyed a live session the user was working in (#703).
+// A destructive call gets an argument, so aiming it is never a side effect of
+// something else.
 func (l *List) KillInstance(target *session.Instance) error {
 	killErr := target.Kill()
 	if killErr != nil {

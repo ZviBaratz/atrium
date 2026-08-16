@@ -4,6 +4,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -236,10 +237,14 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// PanePrompt would tap whatever dialog is up now. The post-detach sweep
 		// re-polls everything, so nothing is lost — but the tick must still re-arm.
 		var cmds []tea.Cmd
-		// Deliver anything `atrium send` spooled since the last tick. Outside the
-		// attachGen guard on purpose: a spooled prompt is not a pane observation,
-		// so an attach having happened gives no reason to drop it.
+		// Deliver anything `atrium send` spooled since the last tick, and create
+		// anything `atrium new` asked for. Outside the attachGen guard on purpose:
+		// neither is a pane observation, so an attach having happened gives no
+		// reason to drop them.
 		if cmd := m.drainOutbox(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		if cmd := m.drainCreateRequests(); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 		if msg.attachGen == m.attachGen {
@@ -784,8 +789,9 @@ func (m *home) resumeQuitAfterStart() (tea.Cmd, bool) {
 
 // anyLoading reports whether any session is still in its Start phase. Such a
 // session is on the list but not yet persisted, so quitting must wait for it (see
-// handleQuit). session.Loading has a single producer (createSessionFromForm) and
-// a single completion signal (instanceStartedMsg), so this covers the whole set.
+// handleQuit). Every producer of session.Loading goes through startNewSession — the
+// create form, smart auto-dispatch and the `atrium new` drain — and all of them
+// complete through the one signal (instanceStartedMsg), so this covers the whole set.
 func (m *home) anyLoading() bool {
 	for _, inst := range m.list.GetInstances() {
 		if inst.GetStatus() == session.Loading {
@@ -882,7 +888,19 @@ func (m *home) reconcileInFlightStarts(ctx context.Context) {
 	}
 
 	signalShutdown := ctx.Err() != nil
-	adopted := false
+	// This loop is the other completion path for a session an `atrium new` request is
+	// still holding open, and an ordinary SIGTERM reaches it whenever the Start
+	// goroutines join inside drainTimeout. Every branch below therefore settles:
+	// unsettled, the request file survives, the next launch re-reads it, and the
+	// caller is handed "already used" for a session that exists and is running.
+	//
+	// The drain-timeout return above is the exception, and it cannot settle: a Start is
+	// still running, so its outcome is not known and touching the instance would race
+	// the goroutine. That leaves the same self-correcting window handleInstanceStarted
+	// leaves between its persist and its unlink — the next launch re-reads the file and
+	// either the session persisted, so the title collides and the request is refused, or
+	// it did not, and re-creating it is right.
+	var adopted []*session.Instance
 	for _, inst := range m.list.GetInstances() {
 		if inst.GetStatus() != session.Loading {
 			continue
@@ -895,7 +913,9 @@ func (m *home) reconcileInFlightStarts(ctx context.Context) {
 			if m.autoYes {
 				inst.AutoYes = true
 			}
-			adopted = true
+			// Settled below, after the persist, for handleInstanceStarted's reason:
+			// the row must be durable before the file that asked for it goes away.
+			adopted = append(adopted, inst)
 		case signalShutdown:
 			// Partial/failed under the cancelled ctx: its own deferred Kill ran on
 			// the dead ctx and couldn't clean up. Rebind to a live ctx and retry.
@@ -903,18 +923,34 @@ func (m *home) reconcileInFlightStarts(ctx context.Context) {
 			if err := inst.Kill(); err != nil {
 				log.WarningLog.Printf("shutdown: teardown of in-flight session %q: %v", inst.Title, err)
 			}
+			m.settleCreateRequest(inst, errors.New("atrium exited before it finished starting"))
 		default:
 			// Ctx still live: the force-quit abandon, or a rare non-signal event-loop
 			// error from p.Run(). Kill's teardown works as-is, no rebind needed.
 			if err := inst.Kill(); err != nil {
 				log.WarningLog.Printf("exit: teardown of in-flight session %q: %v", inst.Title, err)
 			}
+			m.settleCreateRequest(inst, errors.New("atrium exited before it finished starting"))
 		}
 	}
 
-	if adopted {
+	if len(adopted) > 0 {
 		if err := m.persistInstances(); err != nil {
 			log.WarningLog.Printf("shutdown: failed to persist adopted session(s): %v", err)
+			for _, inst := range adopted {
+				// Not "could not be started": these reached `adopted` through
+				// inst.Started(), so the worktree, the branch and the agent all exist
+				// and what failed is the record of them. Telling a waiting --wait the
+				// session was never started is what sends a retrying script back to
+				// `atrium new` with the same title, to collide with the live tmux
+				// session and orphan branch the first run really did leave.
+				m.failCreateRequest(inst,
+					fmt.Sprintf("the session was created but atrium could not record it: %v", err))
+			}
+			return
+		}
+		for _, inst := range adopted {
+			m.settleCreateRequest(inst, nil)
 		}
 	}
 }
