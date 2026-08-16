@@ -1030,10 +1030,12 @@ var gemini = &Adapter{
 // Keeping the 0.27 headline as a SECOND Gate is the obvious mitigation and it does not work.
 // Anchored, it is redundant: if 0.27 drew a box then "Trust folder" is already inside it and
 // the shipped matcher covers that install unaided; if it did not, no anchored literal reaches
-// it either — both miss for the same reason. So the second Gate helps only UNANCHORED, which
-// reopens the PROSE class above for every 0.55+ user, on a literal whose likeliest source of
-// quoted text is this repo's own issue tracker. Measured both ways in
-// TestGeminiPre055ShapeIsUncoveredAndTheSecondLiteralWouldNotCoverIt.
+// it either — both miss for the same reason. So the second Gate helps only UNANCHORED, and
+// unanchored it reopens the PROSE class above for every 0.55+ user. Both halves are measured
+// in TestGeminiPre055ShapeIsUncoveredAndTheSecondLiteralWouldNotCoverIt, the second on a
+// working pane (busy marker present) that merely quotes #713's own text — which is the
+// literal's likeliest appearance on a current user's screen, an agent reading this tracker.
+// geminiProsePane could not have shown it: that fixture quotes the option ROWS.
 //
 // Still uncovered, and disclosed: /permissions' modify-trust dialog (reaching it needs an
 // authenticated session) and IdeIntegrationNudge, which is worse — it renders its headline

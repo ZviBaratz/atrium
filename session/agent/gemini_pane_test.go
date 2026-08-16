@@ -585,7 +585,7 @@ func TestGeminiPre055ShapeIsUncoveredAndTheSecondLiteralWouldNotCoverIt(t *testi
 			"uncovered, doctor is silent about it (installed < verified is not drift), and that "+
 			"is disclosed in registry.go rather than mitigated")
 
-	// The mitigation, measured: anchored, the headline adds nothing the shipped literal does
+	// The mitigation, measured. Anchored, the headline adds nothing the shipped literal does
 	// not already have — both miss for the same reason, the absent box.
 	anchored := *gemini
 	anchored.Gates = []Gate{{Match: func(c string) bool {
@@ -599,6 +599,35 @@ func TestGeminiPre055ShapeIsUncoveredAndTheSecondLiteralWouldNotCoverIt(t *testi
 	require.False(t, up,
 		"a box-anchored second literal misses the 0.27 shape too, so it buys no coverage; only "+
 			"an UNANCHORED one reaches it, and that is the trade this gate declines")
+
+	// Unanchored it does reach the 0.27 shape — and that is the whole of what it buys, because
+	// it reaches this too. The pane below is a WORKING session quoting #713's own text, which
+	// is not a hypothetical source: the literal's likeliest appearance on a 0.55+ user's screen
+	// is an agent reading this repo's issue tracker. geminiProsePane cannot show this — it
+	// quotes the option ROWS, so it says nothing about the headline literal, and without this
+	// case the cost of the mitigation would be reasoned rather than measured.
+	unanchored := *gemini
+	unanchored.Gates = []Gate{{Contains: []string{"Do you trust this folder"}}}
+
+	quotingTheIssue := strings.Join([]string{
+		"✦ Reading atrium#713. The rotted literal is \"Do you trust this folder\", which",
+		"  returns zero hits anywhere in the 0.55.1 bundle — the dialog was reworded to",
+		"  \"Do you trust the files in this folder?\" and the gate went quiet.",
+		"",
+		"⠋ Searching the registry (esc to cancel, 12s)",
+	}, "\n")
+
+	_, up = unanchored.GateUp(quotingTheIssue)
+	require.True(t, up,
+		"the unanchored second Gate fires on a WORKING pane that merely quotes the issue — "+
+			"gate before busy marker in poll.go, so the row reports needs-input while the agent "+
+			"streams and its queued prompt is withheld (#342). That is what covering the 0.27 "+
+			"shape would cost every 0.55+ user")
+	require.True(t, gemini.HasBusyMarker(quotingTheIssue),
+		"…and the pane really is working, or the false gate above would be no worse than idle")
+
+	_, up = gemini.GateUp(quotingTheIssue)
+	require.False(t, up, "the shipped gate is false on it, which is the point of declining")
 }
 
 // A ladder that can lose a rung silently is not a ladder — deleting an entry just runs fewer
