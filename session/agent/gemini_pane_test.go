@@ -38,11 +38,12 @@ import (
 // WHY the resize diverges is NOT established, and an earlier draft of this comment claimed it
 // was: "the dialog occupies 27 non-empty lines at width 80 and 37 at 20 against a 40-row
 // pane", offered as the mechanism. Overflow cannot be the mechanism, because nothing
-// overflows — measured over these four captures (total rows, trailing blanks already
-// stripped): 80→33, 40→38, 24→37, 20→38, every one inside the 40-row pane, the widest rung
-// most comfortably of all. TestGeminiCapturesAllFitTheDrivenPaneHeight recomputes those
-// counts rather than trusting this sentence, which had 24 wrong (35) until #715 round 3
-// counted them. So the divergence has some other cause, and a rule of the form
+// overflows — every capture is inside the 40-row pane, the widest rung most comfortably of
+// all. The per-rung heights live in geminiCaptureRows below, which
+// TestGeminiCapturesAllFitTheDrivenPaneHeight recomputes from the captures; they are not
+// restated here, because when they were, the 24 rung read 35 in this sentence and 37 in the
+// table and every check stayed green. So the divergence has some other cause, and a rule of
+// the form
 // "resize is unsafe when the dialog is taller than the pane" would have licensed exactly the
 // capture that lied here. The safe rule is the unconditional one: a resized rung is not known
 // to equal a native one for this dialog, so drive it with `fresh`.
@@ -255,14 +256,35 @@ const geminiDrivenPaneHeight = 40
 // value, not the mechanism's threshold.
 const geminiHeadlineFitsAtWidth = 80
 
-// The counts the header cites, recomputed. The header's argument is that overflow cannot be why
-// a resized rung diverges from a native one, because no capture fills its pane — and an
-// argument resting on four numbers in a comment is exactly what #648/#665 says to put somewhere
-// a test can read. It is not idle: the 24 rung was cited as 35 rows until this was written.
+// geminiCaptureRows is how tall each capture is, as DATA — the one place in the tree that owns
+// these four numbers. The header's argument that overflow cannot explain the resize divergence
+// rests on them, and so does drive-agent.sh's warning not to predicate the resize rule on
+// height; both now cite this table instead of restating it, because restating it is how the
+// 24 rung came to read 35 rows in one file and 37 in the other while every check stayed green.
+var geminiCaptureRows = map[string]int{
+	"geminiTrustGatePane80": 33,
+	"geminiTrustGatePane40": 38,
+	"geminiTrustGatePane24": 37,
+	"geminiTrustGatePane20": 38,
+}
+
+// The counts above, recomputed from the captures — EXACTLY, not as an upper bound. An earlier
+// draft asserted only rows <= geminiDrivenPaneHeight and told the reader in its own docstring
+// that it recomputed the four numbers; it did not, so any of them could be edited to any value
+// under 40 and stay green. That is the #648/#665 failure in the guard written to prevent it,
+// and it is exactly how 35 survived: nothing ever compared it to a capture.
 func TestGeminiCapturesAllFitTheDrivenPaneHeight(t *testing.T) {
+	require.Len(t, geminiCaptureRows, len(geminiAllCaptures()),
+		"every capture needs a row count and vice versa, or the table stops covering the set")
+
 	for _, c := range geminiAllCaptures() {
 		t.Run(c.label(), func(t *testing.T) {
 			rows := len(strings.Split(strings.TrimPrefix(c.pane, "\n"), "\n"))
+			want, ok := geminiCaptureRows[c.name]
+			require.True(t, ok, "%s has no entry in geminiCaptureRows", c.name)
+			require.Equal(t, want, rows,
+				"%s is %d rows, not the %d geminiCaptureRows publishes — correct the table and "+
+					"anything citing it", c.name, rows, want)
 			require.LessOrEqual(t, rows, geminiDrivenPaneHeight,
 				"%s is %d rows in a %d-row pane; if a capture ever overflows, the header's "+
 					"\"nothing overflows\" reasoning about the resize divergence is void",
@@ -284,6 +306,73 @@ func TestGeminiCapturesEndAtTheDialogBorder(t *testing.T) {
 				"%s must end with the dialog's bottom border; the gate's liveness anchor is "+
 					"exactly that and nothing else re-measures it", c.name)
 		})
+	}
+}
+
+// #713 on the height axis, which is the failure the first draft of this fix shipped. The
+// dialog is taller than the pane it renders in far more often than not: the agent's tmux
+// session is sized to the PREVIEW pane (session/instance.go SetPreviewSize ←
+// ui/tabbed_window.go SetSize), which is a few rows shorter than the terminal and about half
+// as wide — and this dialog is 37 rows at width 24. When the top border has scrolled off, an
+// anchor that scans upward for a matching border finds none and takes the gate down: missed
+// gate → PaneIdle → Ready → the false completion ding #713 is about. Measured on the earlier
+// form, the width-24 rung went false at pane height 25 (an ordinary 30-row terminal) and the
+// width-40 rung at 15.
+//
+// So the block is bounded by the run of side-walled rows above the border instead, and this
+// sweeps every rung down to a pane holding only the option rows. The floor is the ding's
+// cause, so it is asserted at heights nobody would call exotic.
+func TestGeminiTrustGateSurvivesADialogTallerThanThePane(t *testing.T) {
+	tail := func(pane string, rows int) string {
+		lines := strings.Split(strings.TrimPrefix(pane, "\n"), "\n")
+		if len(lines) <= rows {
+			return pane
+		}
+		return strings.Join(lines[len(lines)-rows:], "\n")
+	}
+
+	for _, c := range geminiTrustGateLadder {
+		t.Run(c.label(), func(t *testing.T) {
+			require.Greater(t, geminiCaptureRows[c.name], 8,
+				"the sweep below only means something while the capture is taller than the "+
+					"shortest pane it is truncated to")
+
+			for _, height := range []int{30, 25, 20, 15, 10, 8} {
+				_, up := gemini.GateUp(tail(c.pane, height))
+				require.Truef(t, up,
+					"%s must still gate in a %d-row pane: the dialog is %d rows, so its top "+
+						"border has scrolled off and only the walls above the bottom border "+
+						"are left to bound the block", c.label(), height, geminiCaptureRows[c.name])
+			}
+		})
+	}
+}
+
+// The other direction the block has to be bounded in. A pane whose last non-empty line is a
+// rule the agent printed itself — a markdown horizontal rule, a table edge — with any earlier
+// rule above it used to hand back everything in between as "box interior", uncapped. Measured
+// on the earlier form: 60 lines of transcript bracketed by two plain rules, with the option
+// row quoted at the top of the span, raised the gate. poll.go ranks the gate above the busy
+// marker, so that is a streaming agent reported as waiting on a setup screen with its queued
+// prompt withheld — #342's direction.
+//
+// The wall run needs no gateRegionCap/aboveBoxBlockCap equivalent to stop this: it ends at the
+// first line that is not box interior, and transcript never is. The distance is swept so a
+// future change that reintroduces an upward SCAN cannot pass by being narrowly capped.
+func TestGeminiTrustGateIgnoresTranscriptBetweenTwoRules(t *testing.T) {
+	const rule = "────────────────────────────────"
+
+	for _, gap := range []int{1, 5, 39, 60} {
+		lines := []string{rule, "  reviewing the gate: \"● 1. Trust folder (atrium)\" is the accept row."}
+		for i := len(lines); i < gap; i++ {
+			lines = append(lines, "  ✦ …and the decline row below it.")
+		}
+		lines = append(lines, rule)
+
+		_, up := gemini.GateUp(strings.Join(lines, "\n"))
+		require.Falsef(t, up,
+			"a quoted option row %d lines above a rule the agent printed is transcript, not a "+
+				"live dialog; nothing between two rules is box interior unless it is walled", gap)
 	}
 }
 
@@ -364,12 +453,34 @@ func TestGeminiTrustGateHeadlineIsUnreachableOnceItWraps(t *testing.T) {
 		"at 80 the headline fits one line, which is exactly why a single wide fixture would "+
 			"have shipped this literal")
 
-	// Every budget from the default up to more lines than any of these panes has, over every
-	// rung DERIVED from the ladder rather than rebuilt here. An earlier draft hand-listed the
-	// 40 and 24 rungs without their notes, so the same capture printed one subtest name here
+	// Two budgets, not a sample of seven, and the claim "at EVERY GateWindow" is derived rather
+	// than asserted rung by rung. liveChromeLines(content, n) returns the last n non-empty
+	// lines, so its result at n is a suffix of its result at n+1 and strings.Contains is
+	// monotone in n: a match at some window implies a match at every larger one, and a miss at
+	// the largest implies a miss at every smaller one. So the saturating window — one that
+	// exceeds every capture's non-empty line count, making it the whole pane — settles the
+	// range, and WindowPrompt is kept because it is the budget gemini actually ships.
+	//
+	// An earlier draft swept {WindowPrompt, 20, 24, 30, 40, 60, 200} and read as exhaustive
+	// while proving six redundant points and no more of the range than 200 alone does.
+	const saturating = 200
+	for _, c := range geminiAllCaptures() {
+		nonEmpty := 0
+		for _, line := range strings.Split(c.pane, "\n") {
+			if strings.TrimSpace(line) != "" {
+				nonEmpty++
+			}
+		}
+		require.Greaterf(t, saturating, nonEmpty,
+			"%s has %d non-empty lines, so GateWindow %d is no longer the whole pane and the "+
+				"monotonicity argument stops covering every larger window", c.label(), nonEmpty, saturating)
+	}
+
+	// Every rung DERIVED from the ladder rather than rebuilt here. An earlier draft hand-listed
+	// the 40 and 24 rungs without their notes, so the same capture printed one subtest name here
 	// and a different one in the ladder test — and a rung driven later would not have been
 	// swept at all, because a copy cannot grow.
-	for _, window := range []int{WindowPrompt, 20, 24, 30, 40, 60, 200} {
+	for _, window := range []int{WindowPrompt, saturating} {
 		for _, c := range geminiAllCaptures() {
 			if c.width >= geminiHeadlineFitsAtWidth {
 				continue // where it fits on one line the headline IS reachable — asserted above
@@ -432,15 +543,50 @@ func TestGeminiTrustGateOptionRowsAreTruncatedAtWidth20(t *testing.T) {
 // The width-20 miss is included deliberately. That is the rung where the gate does NOT fire,
 // which makes it the only one where a composer reading would actually be dangerous.
 func TestGeminiTrustGateIsNeitherComposerNorPrompt(t *testing.T) {
-	all := append(append([]paneCapture(nil), geminiTrustGateLadder...), geminiTrustGateMissedRung)
-
-	for _, c := range all {
+	for _, c := range geminiAllCaptures() {
 		t.Run(c.label(), func(t *testing.T) {
 			require.False(t, gemini.InputBoxVisible(c.pane),
 				"the trust dialog must not read as a composer, or a queued prompt would be "+
 					"typed into it (#512)")
 			_, ok := gemini.DetectPrompt(c.pane)
 			require.False(t, ok, "the trust dialog is a gate, not a prompt")
+		})
+	}
+}
+
+// The composer veto's premise, over the WHOLE block rather than a window of it. The gate
+// rejects any bottom box holding a composer glyph, so it is only correct if the real dialog
+// never renders one — and the sibling test above cannot say that: InputBoxVisible reads the
+// last WindowPrompt (15) non-empty lines, while the block it would have to speak for is deeper
+// than that on the narrow rungs. How much deeper is measured below rather than stated here. A
+// glyph above that window leaves it green and takes the gate down. The registry comment cited
+// it for this property until #715 round 4; this is the guard that actually holds it.
+func TestGeminiCapturesRenderNoComposerGlyphInsideTheDialog(t *testing.T) {
+	deepest, deepestName := 0, ""
+	for _, c := range geminiAllCaptures() {
+		if block, ok := bottomBoxBlock(c.pane); ok && len(block) > deepest {
+			deepest, deepestName = len(block), c.name
+		}
+	}
+	// Asserted over the SET, not per capture: at width 80 the dialog's interior is 13 lines and
+	// InputBoxVisible would in fact reach all of it. What makes this guard non-redundant is that
+	// the narrow rungs are deeper than the window, and those are the rungs the veto has to be
+	// right about.
+	require.Greater(t, deepest, WindowPrompt,
+		"the deepest block is %s at %d lines; once no capture is deeper than the %d-line window "+
+			"InputBoxVisible reads, this test says nothing the sibling test does not",
+		deepestName, deepest, WindowPrompt)
+
+	for _, c := range geminiAllCaptures() {
+		t.Run(c.label(), func(t *testing.T) {
+			block, ok := bottomBoxBlock(c.pane)
+			require.True(t, ok, "%s must present a bottom box at all", c.name)
+
+			for i, line := range block {
+				require.Falsef(t, isInputBoxLine(line, defaultPrompts),
+					"%s line %d (%q) reads as a composer, so geminiTrustGateVisible's veto "+
+						"would reject the real dialog", c.name, i, line)
+			}
 		})
 	}
 }
@@ -452,7 +598,7 @@ func TestGeminiPre055TrustGateLiteralMatchesNothing(t *testing.T) {
 	probe := *gemini
 	probe.Gates = []Gate{{Contains: []string{"Do you trust this folder"}}}
 
-	for _, c := range append(append([]paneCapture(nil), geminiTrustGateLadder...), geminiTrustGateMissedRung) {
+	for _, c := range geminiAllCaptures() {
 		_, up := probe.GateUp(c.pane)
 		require.False(t, up,
 			"%s: the 0.27 literal is absent from every 0.55.1 pane and from the bundle", c.label())

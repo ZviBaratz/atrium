@@ -965,6 +965,27 @@ var gemini = &Adapter{
 // direction — a missed gate is #713, a false gate is #342 — and it is the direction doctor's
 // drift check exists to surface.
 //
+// What the block is bounded BY matters as much as what anchors it, and the first draft of
+// this fix got it wrong in both directions at once: it scanned upward for a matching top
+// border. That demands the WHOLE dialog be on screen, and the agent's pane is the preview
+// pane rather than the terminal (session/instance.go SetPreviewSize), so on a pane shorter
+// than the dialog — 37 rows at width 24 — the top border has scrolled off and the gate went
+// down. #713's own symptom on the height axis, at ordinary terminal sizes. It was also
+// unbounded the other way: any two rules with transcript between them made that span
+// "interior". bottomBoxBlock now takes the run of side-walled rows above the border instead,
+// which is height-independent and self-bounding; see its doc for the measurements, and
+// TestGeminiTrustGateSurvivesADialogTallerThanThePane /
+// TestGeminiTrustGateIgnoresTranscriptBetweenTwoRules for the guards.
+//
+// Capture form is a live exposure here, and it is not the fixtures' form. The panes below were
+// taken with `capture-pane -p`; production reads `-p -e -J` (session/tmux/tmux.go) and strips
+// CSI with ansiRegex (session/tmux/poll.go), which does not strip OSC. isHorizontalRule
+// rejects a line holding any character outside the box set, so one surviving escape ON THE
+// BORDER takes the whole gate down, where the old literal-in-a-window form would at worst have
+// lost the lines it landed on. Nothing establishes that gemini emits OSC anywhere near this
+// dialog — this is a disclosed hazard, not a measured one — and closing it means committing a
+// prod-form capture beside each rung, which drive-agent.sh can write and this PR did not do.
+//
 // What was tried in between, recorded because the trade is not obvious. Round 1 of #713 keyed
 // on Contains{"Trust folder", "Don't trust"}; Contains is an ALTERNATION, and "Don't trust" is
 // ordinary English, so it fired on prose containing only the second. Round 2 made it a Match
@@ -974,8 +995,17 @@ var gemini = &Adapter{
 // also cost coverage no one asked for: the dialog gemini shipped at 0.27 had "Trust folder"
 // but the tree's only fixture of it carried no "Don't trust" row, so requiring both would
 // have taken the gate away from installs older than the pin while doctor stayed silent about
-// it (driftExceeds only reports installed > verified). Dropping back to one literal plus a
-// structural anchor is what makes the gate work on both dialog shapes at once.
+// it (driftExceeds only reports installed > verified).
+//
+// That argument is about the LITERAL only, and the older-install case is not thereby covered
+// — an earlier draft of this paragraph closed by claiming one literal plus a structural
+// anchor "makes the gate work on both dialog shapes at once", which nothing here establishes.
+// The anchor is a second requirement, and whether 0.27 met it is unknown: 0.27 was never
+// driven, the tree's only 0.27-shaped artifact was hand-composed and unboxed, and fed to this
+// matcher it returns FALSE. So what dropping the second literal buys is the removal of one of
+// two ways to miss on an older install, not coverage of it. If a pre-0.55 user reports the
+// #713 symptom, that is the thing to drive, and doctor will not have said a word (same
+// direction: installed < verified is not drift).
 //
 // Still uncovered, and disclosed: /permissions' modify-trust dialog (reaching it needs an
 // authenticated session) and IdeIntegrationNudge, which is worse — it renders its headline
@@ -1008,8 +1038,13 @@ var gemini = &Adapter{
 // trigger. gemini's real render puts a footer line below the composer (geminiIdlePane), which
 // is why this is narrow rather than routine, but a footer is not a thing to rely on. So a
 // block that reads as a composer is rejected: the trust dialog is a MENU, its rows open with
-// "●" and a number, and no rung renders a composer glyph inside the dialog
-// (TestGeminiTrustGateIsNeitherComposerNorPrompt).
+// "●" and a number, and no rung renders a composer glyph anywhere inside the dialog —
+// TestGeminiCapturesRenderNoComposerGlyphInsideTheDialog, which scans the whole block. It
+// cannot be TestGeminiTrustGateIsNeitherComposerNorPrompt, which this comment used to cite:
+// that one calls InputBoxVisible, and InputBoxVisible reads the last WindowPrompt (15)
+// non-empty lines, while the block it must speak for is deeper than that on the narrow rungs
+// — the guard measures how much deeper rather than saying so here. It would stay green with a
+// glyph in the upper half of the dialog while the gate went down.
 //
 // defaultPrompts rather than the adapter's own set, because gemini declares no InputBoxPrompts
 // and a package-level func cannot reference `gemini` without an initialization cycle. That
@@ -1024,12 +1059,16 @@ func geminiTrustGateVisible(content string) bool {
 	if !ok {
 		return false
 	}
-	for _, line := range strings.Split(block, "\n") {
+	found := false
+	for _, line := range block {
 		if isInputBoxLine(line, defaultPrompts) {
 			return false // a composer, not the dialog
 		}
+		if strings.Contains(line, "Trust folder") {
+			found = true
+		}
 	}
-	return strings.Contains(block, "Trust folder")
+	return found
 }
 
 // aiderConfirmVisible backs the aider "confirm" matcher. Every confirm_ask

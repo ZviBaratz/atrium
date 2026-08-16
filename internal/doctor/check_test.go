@@ -38,16 +38,64 @@ func statusFor(results []Result, k agent.Key) Status {
 	return StatusNotInstalled
 }
 
+// geminiWithinPin is the installed version TestCheckClassifies feeds for gemini: newer than
+// the registry's pin, but inside the same minor, so Check's not-drifted branch is the one that
+// runs. requireWithinPin holds it there.
+const geminiWithinPin = "0.55.9"
+
+// requireWithinPin fails unless installed is at-or-above the adapter's pin AND in the same
+// minor — the only shape that exercises "newer, but not by enough to be drift".
+//
+// It exists because StatusOK is not evidence of that branch. driftExceeds returns
+// Compare(...) > 0, so installed OLDER than verified is also not drift, also StatusOK, and
+// also green. That is not hypothetical: this row read "0.27.4" against a 0.27 pin until #713
+// moved the pin to 0.55.1, at which point it kept passing while testing the older-than branch
+// instead — silently, because the fixture is a literal and Check runs against the LIVE
+// registry. Any pin bump does it again, so the fixture is checked against the pin rather than
+// against a memory of it. When this fails, move geminiWithinPin into the new minor.
+func requireWithinPin(t *testing.T, key agent.Key, installed string) {
+	t.Helper()
+
+	var a *agent.Adapter
+	for _, cand := range agent.Adapters() {
+		if cand.Key == key {
+			a = cand
+		}
+	}
+	if a == nil {
+		t.Fatalf("no %s adapter in the registry", key)
+	}
+
+	drifted, err := driftExceeds(installed, a.VerifiedVersion, a.DriftGranularity)
+	if err != nil {
+		t.Fatalf("driftExceeds(%q, %q): %v", installed, a.VerifiedVersion, err)
+	}
+	if drifted {
+		t.Fatalf("%s fixture %q is drift against pin %q; it must be inside the pinned %v",
+			key, installed, a.VerifiedVersion, a.DriftGranularity)
+	}
+
+	older, err := belowFloor(installed, a.VerifiedVersion)
+	if err != nil {
+		t.Fatalf("belowFloor(%q, %q): %v", installed, a.VerifiedVersion, err)
+	}
+	if older {
+		t.Fatalf("%s fixture %q is OLDER than pin %q, so StatusOK here means "+
+			"\"installed < verified\", not \"newer within the granularity\" — the branch this "+
+			"row exists to cover is no longer being run", key, installed, a.VerifiedVersion)
+	}
+}
+
 func TestCheckClassifies(t *testing.T) {
+	requireWithinPin(t, agent.KeyGemini, geminiWithinPin)
+
 	r := fakeRunner{
 		out: map[string]string{
 			"claude": "2.2.0 (Claude Code)\n", // past the pin, minor -> drifted
 			// gemini is the only row here testing the NOT-drifted direction, and it has to
-			// stay inside the pinned MINOR to do it. It read "0.27.4" against a 0.27 pin
-			// until #713 moved that pin to 0.55.1 — at which point the row still passed
-			// while exercising a different branch entirely (installed far OLDER than
-			// verified), and nothing said so. Keep this one patch-level above the pin.
-			"gemini": "0.55.9\n",  // patch within the pinned 0.55 minor -> ok
+			// stay inside the pinned MINOR to do it — see requireWithinPin, which is what
+			// actually holds that rather than this sentence.
+			"gemini": geminiWithinPin + "\n",
 			"codex":  "0.148.0\n", // past the 0.147.0 pin, minor -> drifted
 		},
 		err: map[string]error{},

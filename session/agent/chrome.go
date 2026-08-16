@@ -102,31 +102,73 @@ func footerBelowBox(content string) (string, bool) {
 	return strings.Join(lines[lastRule+1:], "\n"), true
 }
 
-// bottomBoxBlock returns the interior of the pane's bottom-most box, and true only when
-// that box's bottom border is the LAST non-empty line on screen. It is the liveness anchor
-// for a modal dialog the way footerBelowBox is for claude's footer, and the two conditions
-// do different jobs:
+// isBoxWallLine reports whether the cleaned line is the INTERIOR of a box: a line carrying
+// the box's own left and right side walls. It is what bounds bottomBoxBlock, and it is a
+// deliberately different question from isHorizontalRule (a horizontal EDGE) and from
+// isBoxBorderLine (either edge, tolerating an embedded label).
 //
-//   - "inside a box" separates a live dialog from the transcript. A phrase quoted in the
-//     conversation body is not boxed, so it cannot reach the returned block — which a
-//     bottom-N window (liveChromeLines) cannot promise, because the transcript scrolls
-//     through it.
+// A blank interior row still carries its walls in every pane this repo has captured — see
+// gemini_pane_test.go, where the padding rows inside the trust dialog render as "│      │"
+// at all four widths — so requiring them costs nothing there. An agent that pads a box with
+// genuinely empty lines would truncate the block at that row rather than overrun it, which
+// is the fail-safe direction: a short block can only fail to match.
+func isBoxWallLine(line string) bool {
+	r := []rune(strings.TrimSpace(line))
+	if len(r) < 2 {
+		return false
+	}
+	wall := func(c rune) bool { return c == '│' || c == '┃' }
+	return wall(r[0]) && wall(r[len(r)-1])
+}
+
+// bottomBoxBlock returns the interior lines of the pane's bottom-most box, and true only when
+// that box's bottom border is the LAST non-empty line on screen. It is the liveness anchor
+// for a modal dialog the way footerBelowBox is for claude's footer, and the two halves do
+// different jobs:
+//
 //   - "the border ends the pane" separates an OPEN dialog from a dismissed one. An agent
 //     that answers a modal draws its composer below where the modal was; the moment
 //     anything renders under the box, this returns false. Without it a dialog left in
 //     scrollback keeps matching forever, which for a startup gate means the queued first
 //     prompt is never delivered (registry_test.go's TestAgyTrustGate pins the same
 //     property for agy, which earns it by REPLACING the screen instead).
+//   - "walled above it" separates a live dialog from the transcript. A phrase quoted in the
+//     conversation body carries no side walls, so it cannot reach the returned block — which
+//     a bottom-N window (liveChromeLines) cannot promise, because the transcript scrolls
+//     through it.
 //
-// Interior lines are returned joined by "\n", deliberately unflattened: a caller matching a
-// literal gets no cross-line synthesis, so two adjacent wrapped lines cannot manufacture a
-// phrase neither of them renders. A caller that needs wrap repair should flatten the result
-// itself and accept that cost knowingly.
+// The block is the contiguous run of isBoxWallLine rows immediately above that border, and
+// NOT everything back to a matching top border. Both alternatives were measured against the
+// captured dialogs, and the top-border scan loses twice:
+//
+//   - HEIGHT. The agent's tmux pane is sized to the preview pane, not to the terminal
+//     (session/instance.go SetPreviewSize ← ui/tabbed_window.go SetSize), so it is a few rows
+//     shorter than the terminal and about half as wide. gemini's trust dialog is 37 rows at
+//     width 24, and a pane shorter than that has scrolled its own top border off — leaving a
+//     scan that demands one to find nothing and take the gate down. Measured on the committed
+//     capture: the top-border form went false at pane height 25 for the width-24 rung and 15
+//     for the width-40 rung. That is #713's exact symptom (missed gate → Ready → false
+//     completion ding) reintroduced on the other axis, at ordinary terminal sizes.
+//     TestGeminiTrustGateSurvivesADialogTallerThanThePane.
+//   - BOUNDS. Two rules with anything at all between them made that span "box interior".
+//     Measured: 60 transcript lines bracketed by a pair of plain "────" rules returned the
+//     whole span, so a quoted row 60 lines up fired the gate. The wall run needs no
+//     gateRegionCap/aboveBoxBlockCap equivalent because it terminates itself at the first
+//     line that is not box interior. TestGeminiTrustGateIgnoresTranscriptBetweenTwoRules.
+//
+// Interior lines are returned as lines, deliberately unjoined and unflattened: a caller
+// matching a literal gets no cross-line synthesis, so two adjacent wrapped lines cannot
+// manufacture a phrase neither of them renders. A caller that needs wrap repair should join
+// and flatten the result itself, and accept that cost knowingly.
 //
 // Input must already be cleaned for detection (ANSI stripped), like every other predicate
-// here — an ANSI-prefixed border is not a border to isHorizontalRule. Returns ("", false)
-// when the last line is not a border, or when no border sits above it to close the box.
-func bottomBoxBlock(content string) (string, bool) {
+// here. The bottom border is matched with the strict isHorizontalRule, so a border carrying
+// an embedded title ("──── name ──", which claude renders and aboveBoxBlock uses the loose
+// isBoxBorderLine for) is not an anchor: this returns false rather than reading past it.
+// gemini's dialog draws an untitled border at every captured width; an adapter whose dialog
+// is titled needs the loose predicate and its own guard. Returns (nil, false) when the last
+// non-empty line is not a border, or when nothing walled sits above it.
+func bottomBoxBlock(content string) ([]string, bool) {
 	lines := strings.Split(content, "\n")
 
 	last := -1
@@ -137,14 +179,16 @@ func bottomBoxBlock(content string) (string, bool) {
 		}
 	}
 	if last < 0 || !isHorizontalRule(lines[last]) {
-		return "", false
+		return nil, false
 	}
-	for i := last - 1; i >= 0; i-- {
-		if isHorizontalRule(lines[i]) {
-			return strings.Join(lines[i+1:last], "\n"), true
-		}
+	start := last
+	for start > 0 && isBoxWallLine(lines[start-1]) {
+		start--
 	}
-	return "", false
+	if start == last {
+		return nil, false
+	}
+	return lines[start:last], true
 }
 
 // footerRegion returns the live footer of the pane: the lines below the input box's bottom

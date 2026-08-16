@@ -1298,9 +1298,14 @@ COST-SAVER, AND ITS ONE LIMIT
 
   Do not predicate this on the dialog's height. An earlier draft of this help said the
   equivalence "holds while the dialog FITS the pane" and told you to reach for `fresh` once it
-  is taller. That trigger is wrong: none of gemini's four rungs overflowed (33, 38, 35 and 38
-  rows in a 40-row pane) and every one of them still diverged, so the rule would have licensed
-  precisely the capture that lied. Why it diverges is not established.
+  is taller. That trigger is wrong: none of gemini's four rungs overflowed the 40-row pane and
+  every one of them still diverged, so the rule would have licensed precisely the capture that
+  lied. Why it diverges is not established.
+
+  The per-rung row counts are session/agent/gemini_pane_test.go's geminiCaptureRows, recomputed
+  from the captures by TestGeminiCapturesAllFitTheDrivenPaneHeight. They were repeated here as
+  "33, 38, 35 and 38" and the 35 was wrong — the sibling file had already corrected it to 37,
+  and nothing compares prose in a shell script to a Go fixture. One file owns the numbers.
 
   So: a rung whose bytes depend on the previous rung is a fixture that lies. `ladder` is still
   the right first move — it is what makes a width sweep affordable — but before a resized rung
