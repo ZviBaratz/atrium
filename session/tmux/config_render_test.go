@@ -91,7 +91,7 @@ func TestRenderManagedConfig_ConfiguredThemeBeforeInit(t *testing.T) {
 	out, err := renderManagedConfig(true)
 	require.NoError(t, err)
 
-	dayBg     := theme.Hex(theme.Get("tokyo-night-day").Palette.BarBg)
+	dayBg := theme.Hex(theme.Get("tokyo-night-day").Palette.BarBg)
 	defaultBg := theme.Hex(theme.Get("tokyo-night").Palette.BarBg)
 	require.NotEqual(t, dayBg, defaultBg, "test setup: configured and default themes must differ")
 
