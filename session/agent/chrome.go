@@ -108,9 +108,14 @@ func footerBelowBox(content string) (string, bool) {
 // deliberately different question from isHorizontalRule (a horizontal EDGE) and from
 // isBoxBorderLine (either edge, tolerating an embedded label).
 //
-// A blank interior row still carries its walls in every pane this repo has captured — see
-// gemini_pane_test.go, where the padding rows inside the trust dialog render as "│      │"
-// at all four widths — so requiring them costs nothing there. An agent that pads a box with
+// A blank interior row still carries its walls in every GEMINI pane this repo has captured —
+// see gemini_pane_test.go, where the padding rows inside the trust dialog render as "│      │"
+// at every driven width — so requiring them costs nothing there. That scope is the claim; an
+// earlier draft said "every pane this repo has captured", which claude's disprove: claude draws
+// a BORDERLESS interior bracketed by "─" rules (inputBoxText's doc below, and claudeTrustPane
+// in registry_test.go), so no row of it is walled, blank or otherwise. bottomBoxBlock therefore
+// cannot anchor a claude-shaped box at all — this predicate is gemini-shaped, and an adapter
+// author reading it as general would find nothing. An agent that pads a box with
 // genuinely empty lines loses the rows above that padding, and when the padding sits directly
 // above the border it loses the block entirely: bottomBoxBlock returns (nil, false) and the
 // gate goes DOWN, not short. Both are the fail-safe direction — a missed gate is #713, a false
@@ -152,17 +157,46 @@ func isBoxBottomBorder(line string) bool {
 	return first == '╰' || first == '└'
 }
 
+// trailingBelowBoxCap is how many rendered lines may sit BELOW a box's bottom border while
+// that box still counts as the pane's live bottom-most element.
+//
+// It is 1 because a dialog that overflows its pane draws exactly one line under itself, and
+// because 0 shipped #713 a second time. gemini's FolderTrustDialog wraps its blurb in a
+// MaxSizedBox capped at max(4, terminalHeight-12) and renders a sibling <ShowMoreLines> when
+// that overflows; the component is a single <Text wrap="truncate"> — one line, never wrapped,
+// truncated instead ("Press Ctrl+O to s…" at width 24). So the overflow hint cannot be two
+// lines, and a cap of 1 admits it exactly. Its two sibling notices (isRestarting, exiting) can
+// wrap and are NOT admitted, which is correct: both render only after the dialog is answered
+// or escaped, where the gate going down is the right answer.
+//
+// The zero-line form was measured against 12 natively-driven gemini 0.55.1 panes and missed
+// the gate on 7 — every geometry where the dialog overflows, including the 45x19 agent pane a
+// plain 70x24 terminal produces at the default split, and the 28x19 an 80-column terminal
+// produces with the list dragged wide. Miss → PaneIdle → Ready → the false completion ding
+// #713 is about. geminiTrustGateOverflowLadder holds two of those panes verbatim.
+//
+// The cost is one line of transcript tolerance in the other direction: quoted box art followed
+// by a single rendered line now gates where it previously did not. That exposure is the same
+// one bottomBoxBlock already discloses below, one line wider, and it is asserted rather than
+// described — TestGeminiTrustGateFiresOnQuotedBoxArtEndingThePane. Raising this cap widens it
+// proportionally, so a future adapter needing more should carry its own driven capture.
+const trailingBelowBoxCap = 1
+
 // bottomBoxBlock returns the interior lines of the pane's bottom-most box, and true only when
-// that box's bottom border is the LAST non-empty line on screen. It is the liveness anchor
+// that box's bottom border is the last non-empty line on screen or sits trailingBelowBoxCap
+// lines above it. It is the liveness anchor
 // for a modal dialog the way footerBelowBox is for claude's footer, and the two halves do
 // different jobs:
 //
-//   - "the border ends the pane" separates an OPEN dialog from a dismissed one. An agent
-//     that answers a modal draws its composer below where the modal was; the moment
-//     anything renders under the box, this returns false. Without it a dialog left in
-//     scrollback keeps matching forever, which for a startup gate means the queued first
-//     prompt is never delivered (registry_test.go's TestAgyTrustGate pins the same
-//     property for agy, which earns it by REPLACING the screen instead).
+//   - "the border all but ends the pane" separates an OPEN dialog from a dismissed one. An
+//     agent that answers a modal draws its composer below where the modal was, and a composer
+//     is a box — more than trailingBelowBoxCap lines — so this returns false once it appears.
+//     Without the half a dialog left in scrollback keeps matching forever, which for a startup
+//     gate means the queued first prompt is never delivered (registry_test.go's TestAgyTrustGate
+//     pins the same property for agy, which earns it by REPLACING the screen instead). The cap
+//     is what keeps this from also rejecting a dialog that is still open and merely overflowing;
+//     it costs the tolerance of one trailing line, which is why it is a named constant with its
+//     evidence attached rather than a bare "last non-empty line".
 //   - "walled above it" separates a live dialog from ordinary transcript. A quoted phrase in
 //     the conversation body carries no side walls, so it cannot reach the returned block —
 //     which a bottom-N window (liveChromeLines) cannot promise, because the transcript scrolls
@@ -175,7 +209,8 @@ func isBoxBottomBorder(line string) bool {
 // border does yield its interior, and gemini's gate fires on it. Measured, not reasoned:
 // TestGeminiTrustGateFiresOnQuotedBoxArtEndingThePane. What the anchor buys is the size of the
 // target: not "the phrase appears in the last N lines" but "the phrase is inside a box whose
-// bottom border is the last non-empty line on screen", which no line of prose satisfies and a
+// bottom border is the last non-empty line on screen, or one line above it", which no line of
+// prose satisfies and a
 // quoted frame satisfies only while it is the final thing rendered. It is transient where the
 // window form was persistent, but it is not zero, and a liveness anchor built out of pane text
 // cannot make it zero.
@@ -216,9 +251,17 @@ func isBoxBottomBorder(line string) bool {
 // divider anchors this, and a border carrying an embedded title ("──── name ──", which claude
 // renders and aboveBoxBlock uses the loose isBoxBorderLine for) does not either: this returns
 // false rather than reading past it. gemini's dialog draws an untitled, corner-terminated
-// border at every captured width; an adapter whose dialog is titled needs the loose predicate
-// and its own guard. Returns (nil, false) when the last non-empty line is not a bottom border,
-// or when nothing walled sits above it.
+// border at every captured width IN THE DEFAULT RENDER, which is the qualifier this sentence
+// used to omit. 0.55.1 ships a second FolderTrustDialog layout behind the useAlternateBuffer
+// setting (shouldEnterAlternateScreen(useAlternateBuffer, isScreenReader), defined in
+// bundle/chunk-TBDX7VEE.js): there the title sits in its own bordered header, the body box
+// carries borderTop/borderBottom false — walls only — and the bottom edge is a separate
+// {height: 0, borderBottom: true, borderStyle: "round"} box. That shape still ends in a round
+// bottom border above walled rows, so this anchor plausibly holds for it; plausibly is the
+// whole claim, because all 12 driven captures came back in the default shape and the alternate
+// one has never been driven. An adapter whose dialog is titled needs the loose predicate and
+// its own guard. Returns (nil, false) when no bottom border sits within trailingBelowBoxCap
+// lines of the last non-empty line, or when nothing walled sits above that border.
 func bottomBoxBlock(content string) ([]string, bool) {
 	lines := strings.Split(content, "\n")
 
@@ -229,17 +272,28 @@ func bottomBoxBlock(content string) ([]string, bool) {
 			break
 		}
 	}
-	if last < 0 || !isBoxBottomBorder(lines[last]) {
+	if last < 0 {
 		return nil, false
 	}
-	start := last
+
+	border := -1
+	for i := last; i >= 0 && last-i <= trailingBelowBoxCap; i-- {
+		if isBoxBottomBorder(lines[i]) {
+			border = i
+			break
+		}
+	}
+	if border < 0 {
+		return nil, false
+	}
+	start := border
 	for start > 0 && isBoxWallLine(lines[start-1]) {
 		start--
 	}
-	if start == last {
+	if start == border {
 		return nil, false
 	}
-	return lines[start:last], true
+	return lines[start:border], true
 }
 
 // footerRegion returns the live footer of the pane: the lines below the input box's bottom

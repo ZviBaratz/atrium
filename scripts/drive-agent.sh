@@ -730,37 +730,52 @@ EOF
 # still carry the evidence, agyTrustGatePane taken in ".../repo" and
 # agyTrustGateNarrowPane in ".../fresh28".
 cmd_fresh() {
-	local width="${1:-$DEFAULT_WIDTH}"
+	local width="${1:-$DEFAULT_WIDTH}" height="${2:-$HEIGHT}"
 	# Validated BEFORE anything is destroyed, and for two separate reasons.
 	#
 	# The width is interpolated into a path that is then `rm -rf`'d, so a value
 	# carrying ".." walks out of the run root: `fresh /../../../x` would build
 	# $RUN/fresh/../../../x and delete somebody else's directory. Digits cannot.
+	# The height is interpolated into the same path and is checked the same way.
 	#
 	# And this verb reaps the live session before it hands the width to tmux, so
 	# without a check here a typo is answered by tmux's bare "width invalid" AFTER
 	# the session is gone — throwing away a dialog that cost an API turn to reach.
-	[[ "$width" =~ ^[0-9]+$ ]] || die "width must be a number, got: $width"
-	((width > 0)) || die "width must be greater than zero"
+	local dim
+	for dim in "$width" "$height"; do
+		[[ "$dim" =~ ^[0-9]+$ ]] || die "width and height must be numbers, got: $width $height"
+		((dim > 0)) || die "width and height must be greater than zero, got: $width $height"
+	done
 	load_run
+	# The workdir keeps its bare-width name at the run's own height, so an existing
+	# ladder's capture paths and workspace names do not move; a height that differs
+	# from the run's gets its own directory, because the two are different renders.
 	local workdir="$RUN/fresh$width"
+	((height == HEIGHT)) || workdir="$RUN/fresh${width}x${height}"
 	# Belt as well as braces: the regex above already makes an escape impossible, so
 	# this asserts the property rather than trusting the derivation to preserve it.
 	assert_under_run_root "$workdir"
 	reap "$SOCK"
 	[[ -e "$workdir" ]] && rm -rf "$workdir"
 	new_workspace "$workdir"
-	start_session "$workdir" "$width" "$HEIGHT" "$PROGRAM"
+	start_session "$workdir" "$width" "$height" "$PROGRAM"
 	# The ids change with the session; meta.env must follow or every later verb
 	# targets a pane that no longer exists.
 	#
 	# Rewritten through a sibling file rather than with `sed -i`: GNU takes a bare -i,
 	# BSD requires a backup-suffix argument after it, and the spelling that satisfies
 	# both does not exist. The sibling lives in $RUN, so `down` reaps it either way.
+	#
+	# HEIGHT is rewritten with them, and that is not cosmetic: `ladder` re-asserts -y
+	# "$HEIGHT" on every rung, so a stale value here would silently resize a session
+	# started at 19 rows back to 40 and hand back captures labelled with a geometry
+	# they were not taken at — the one failure this script exists to prevent.
 	sed -e "s|^PANE=.*|PANE=$PANE|" -e "s|^WINDOW=.*|WINDOW=$WINDOW|" \
+		-e "s|^HEIGHT=.*|HEIGHT=$height|" \
 		"$RUN/meta.env" >"$RUN/meta.env.new"
 	mv "$RUN/meta.env.new" "$RUN/meta.env"
-	note "fresh session at width $width in $workdir (pane $PANE)"
+	HEIGHT=$height
+	note "fresh session at ${width}x${height} in $workdir (pane $PANE)"
 }
 
 # sends_enter reports whether a list of tmux key names contains one that submits.
@@ -1199,9 +1214,11 @@ VERBS
                            (mirrors SendPasted — what Atrium really does for a prompt)
   wait <regex> [secs]      poll until the pane matches; dumps the pane on timeout
   ladder <label> [w...]    resize + capture at each width (default 120 60 40 34 28 26 24 20)
-  fresh [width]            restart in a NEW workspace at <width> — for a once-per-path
-                           screen (a trust gate) that a resize cannot bring back, and
-                           whenever a rung's exact bytes matter (see THE JUDGEMENT)
+  fresh [width] [height]   restart in a NEW workspace at <width>x<height> — for a
+                           once-per-path screen (a trust gate) that a resize cannot bring
+                           back, and whenever a rung's exact bytes matter (see THE
+                           JUDGEMENT). height defaults to the run's; give it to sweep the
+                           HEIGHT axis, which `ladder` cannot (see THE HEIGHT AXIS)
   sample <label> [s] [i]   capture a frame every i seconds for s seconds
   emit [prefix] [--join]   print Go fixtures for every capture, to stdout
   status                   run, size, capture count, live-fleet count
@@ -1318,6 +1335,26 @@ COST-SAVER, AND ITS ONE LIMIT
   the right first move — it is what makes a width sweep affordable — but before a resized rung
   becomes a committed fixture, either re-drive it with `fresh <width>` or diff it against one
   that was. `up`'s own width is free of this, being the first render there is.
+
+THE HEIGHT AXIS
+  Everything above is about width, and for a long time so was this whole script: `ladder`
+  re-asserts -y "\$HEIGHT" on every rung and `fresh` took no height at all, so every rung of
+  every ladder ever driven here was 40 rows. That is not a small gap. A CLI lays its dialogs
+  out against the pane HEIGHT as well as its width, and a matcher keyed on what sits at the
+  bottom of the pane is a height-sensitive claim being validated on a single height.
+
+  It cost #713 a second round. gemini's trust gate was re-anchored on "the box's bottom border
+  ends the pane", swept across four widths, and shipped green — while gemini 0.55.1 draws a
+  "Press Ctrl+O to show more lines" hint BELOW that border whenever the dialog overflows its
+  pane. Driven at twelve geometries the anchor missed seven, including the 45x19 pane a plain
+  70x24 terminal produces. No width sweep could have found it.
+
+  `fresh <width> <height>` is the lever: a native session at that geometry, the same way
+  `fresh <width>` is native for width. There is deliberately NO resize-based height ladder —
+  the divergence above is not width-specific, so a height sweep by resize would manufacture
+  exactly the fixtures this section warns about. Sweep heights with repeated `fresh`, and
+  record the height beside the capture: session/agent/gemini_pane_test.go's
+  geminiOverflowPaneHeights exists because paneCapture carries a width and nothing else.
 EOF
 }
 

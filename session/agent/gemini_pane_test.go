@@ -253,8 +253,109 @@ func geminiAllCaptures() []paneCapture {
 	return append(append([]paneCapture(nil), geminiTrustGateLadder...), geminiTrustGateMissedRung)
 }
 
-// geminiDrivenPaneHeight is the pane height every rung was driven at: drive-agent.sh's default
-// geometry is 120x40 and the ladder overrode only the width.
+// The HEIGHT rungs, driven natively at gemini-cli 0.55.1 on 2026-08-16 with
+// `drive-agent.sh up gemini <width> <height>` — a real session started at that geometry, not a
+// resize and not a truncated taller capture. They exist because the width ladder above could
+// not see #713's second form.
+//
+// When the dialog overflows its pane, gemini renders a sibling <ShowMoreLines> BELOW the box's
+// bottom border, so the border stops being the last non-empty line and the first form of the
+// liveness anchor took the gate down on a live, open dialog: GateUp false → no PaneGate → no
+// busy marker, no prompt, no input box → PaneIdle → Ready → the false completion ding. That is
+// #713 verbatim, on the height axis, and the width ladder is structurally blind to it because
+// every one of its rungs was driven at height 40, where the dialog fits and no hint renders.
+//
+// Twelve geometries were driven; seven missed. These two are committed:
+//
+//	45x19  the agent pane a plain 70x24 terminal produces at the DEFAULT split — measured by
+//	       driving the real layout (app: TabbedWindow SetSize → GetPreviewSize), not derived
+//	24x24  the narrow end, where the hint itself truncates to "Press Ctrl+O to s…"
+//
+// The second is why the fix is structural and not a match on the hint's text: the literal is
+// not present at narrow widths. gemini truncates it (wrap: "truncate") exactly as it truncates
+// the option rows, so a matcher keyed on "Press Ctrl+O to show more lines" would have re-shipped
+// the same bug at the same widths #713 was about.
+//
+// Both panes open on a WALL row, not on "╭": the box is taller than the pane here, so its top
+// border has genuinely scrolled off. That is the case the wall-run bound exists for, and it is
+// the reason these are not in geminiTrustGateLadder — geminiAllCaptures feeds
+// TestGeminiDialogBoxIsFullyOnScreen, whose whole claim is that the box FITS, which for these
+// rungs is false by construction. The workspace names differ from the width ladder's
+// (fresh45/fresh24) because `fresh` cannot change height; these were driven with `up` into a
+// run directory named for the geometry, which is what "g45x19" in the parent-folder row records.
+const geminiTrustGateOverflowPane45 = `
+ │                                         │
+ │ Do you trust the files in this folder?  │
+ │                                         │
+ │ Trusting a folder allows Gemini CLI to  │
+ │ load its local configurations,          │
+ │ including custom commands, hooks, MCP   │
+ │ servers, agent skills, and settings.    │
+ │ These configurations could execute code │
+ │ on your behalf or change the behavior   │
+ │ ... last 2 lines hidden (Ctrl+O to sho… │
+ │                                         │
+ │ ● 1. Trust folder (repo)                │
+ │   2. Trust parent folder (g45x19)       │
+ │   3. Don't trust                        │
+ │                                         │
+ ╰─────────────────────────────────────────╯
+   Press Ctrl+O to show more lines
+`
+
+const geminiTrustGateOverflowPane24 = `
+ │ files in this      │
+ │ folder?            │
+ │                    │
+ │ Trusting a folder  │
+ │ allows Gemini CLI  │
+ │ to load its local  │
+ │ configurations,    │
+ │ including custom   │
+ │ commands, hooks,   │
+ │ MCP servers, agent │
+ │ skills, and        │
+ │ settings. These    │
+ │ configurations     │
+ │ could execute code │
+ │ ... last 5 lines … │
+ │                    │
+ │ ● 1. Trust folder… │
+ │   2. Trust parent… │
+ │   3. Don't trust   │
+ │                    │
+ ╰────────────────────╯
+   Press Ctrl+O to s…
+`
+
+// The height rungs as captures. They join paneCoverage["gemini/gate"] alongside the width
+// ladder, so the width machinery sweeps them too and deleting one is loud; they stay out of
+// geminiAllCaptures for the box-fits reason above.
+var geminiTrustGateOverflowLadder = []paneCapture{
+	{
+		name: "geminiTrustGateOverflowPane45", width: 45,
+		note: "dialog overflows a 19-row pane; Ctrl+O hint below the border",
+		pane: geminiTrustGateOverflowPane45,
+	},
+	{
+		name: "geminiTrustGateOverflowPane24", width: 24,
+		note: "dialog overflows a 24-row pane; the hint itself truncates",
+		pane: geminiTrustGateOverflowPane24,
+	},
+}
+
+// geminiOverflowPaneHeights is the pane HEIGHT each overflow rung was driven at, as data. The
+// width is already carried by paneCapture; the height is the axis these rungs exist for, and
+// nothing else in the tree records it.
+var geminiOverflowPaneHeights = map[string]int{
+	"geminiTrustGateOverflowPane45": 19,
+	"geminiTrustGateOverflowPane24": 24,
+}
+
+// geminiDrivenPaneHeight is the pane height every rung of the WIDTH ladder was driven at:
+// drive-agent.sh's default geometry is 120x40 and `ladder` overrides only the width. It is not
+// the height of every gemini capture in this file — geminiTrustGateOverflowLadder above is
+// driven at 19 and 24 precisely because this one value hid a whole failure mode.
 const geminiDrivenPaneHeight = 40
 
 // geminiHeadlineFitsAtWidth is the narrowest DRIVEN width at which the dialog's headline still
@@ -282,6 +383,14 @@ var geminiCaptureRows = map[string]int{
 // rung's capture height; the box is 28, so the threshold at which the top border scrolls off
 // was overstated by nine rows in the direction that makes the anchor look safer than it is.
 // Recomputed by TestGeminiDialogBoxIsFullyOnScreen.
+//
+// THESE ARE HEIGHT-40 MEASUREMENTS, and the box height is a function of BOTH axes, not of width
+// alone. The dialog's body is a MaxSizedBox capped at max(4, terminalHeight-12), so it shrinks
+// with the pane: driven natively at 24x24 the same width-24 dialog does not render 28 rows, it
+// collapses the blurb to "... last 5 lines …" (geminiTrustGateOverflowPane24). Read each entry
+// as "this width, at geminiDrivenPaneHeight" — the correction that produced this table fixed
+// which CONTAINER was being measured and left the second variable unrecorded, which is the same
+// defect one level up.
 var geminiDialogRows = map[string]int{
 	"geminiTrustGatePane80": 15,
 	"geminiTrustGatePane40": 20,
@@ -324,15 +433,28 @@ func TestGeminiDialogBoxIsFullyOnScreen(t *testing.T) {
 	for _, c := range geminiAllCaptures() {
 		t.Run(c.label(), func(t *testing.T) {
 			lines := strings.Split(strings.TrimPrefix(c.pane, "\n"), "\n")
+
+			// Find the LAST bottom border, then the last top border above it — so the two are
+			// bounds of one box. An earlier form took the last "╭" and the last "╰" anywhere in
+			// the capture without pairing them, which happens to be right while each capture
+			// holds exactly one box and starts measuring across two the moment one does not:
+			// a composer, a quoted frame, or the auth dialog gemini draws next would have
+			// published a fabricated height into geminiDialogRows, which chrome.go and
+			// registry.go then cite as a threshold.
 			top, bottom := -1, -1
 			for i, line := range lines {
-				if strings.Contains(line, "╭") {
-					top = i
-				}
 				if strings.Contains(line, "╰") {
 					bottom = i
 				}
 			}
+			for i := 0; i < bottom; i++ {
+				if strings.Contains(lines[i], "╭") {
+					top = i
+				}
+			}
+			require.Equal(t, 1, strings.Count(c.pane, "╰"),
+				"%s must hold exactly one box: the pairing below assumes it, and a second box is "+
+					"how this guard starts inventing heights", c.name)
 			// This is the load-bearing assertion, not the equality below it: a box whose top
 			// border had scrolled away would have no measurable height at all, and that — not
 			// any arithmetic on the capture's own row count — is what "the box fits" means.
@@ -351,18 +473,110 @@ func TestGeminiDialogBoxIsFullyOnScreen(t *testing.T) {
 	}
 }
 
-// Every rung ends at the dialog's own box border, which is the fact the gate's liveness anchor
-// rests on (geminiTrustGateVisible: the border must be the last non-empty line). It holds at the
-// width-20 miss too — that rung misses on the truncated literal, not on the anchor — so a future
-// gemini that renders a footer beneath the dialog fails here, naming the cause, rather than
-// silently taking every rung's gate down.
+// #713 on the height axis, against panes gemini actually rendered. Each overflow rung must
+// gate, and the assertions below say why each half of the anchor is needed:
+//
+//   - the gate fires at all — the end-to-end claim, and the one that was false when this PR
+//     first went green;
+//   - the pane does NOT end at the border, so the rung really is the overflow shape and would
+//     still be exercising something if gemini stopped rendering the hint;
+//   - the top border really has scrolled off, so the wall run is doing the bounding rather
+//     than a top-border scan that would also have worked.
+//
+// The control is the whole point: the same panes with the hint line removed gate under BOTH
+// forms of the anchor, so a guard that only asserted "these gate" would have passed against the
+// code that shipped the bug.
+func TestGeminiTrustGateSurvivesTheOverflowHint(t *testing.T) {
+	require.Len(t, geminiOverflowPaneHeights, len(geminiTrustGateOverflowLadder),
+		"every overflow rung needs its driven height recorded and vice versa")
+
+	for _, c := range geminiTrustGateOverflowLadder {
+		t.Run(c.label(), func(t *testing.T) {
+			height, ok := geminiOverflowPaneHeights[c.name]
+			require.True(t, ok, "%s has no entry in geminiOverflowPaneHeights", c.name)
+
+			lines := strings.Split(strings.TrimRight(strings.TrimPrefix(c.pane, "\n"), "\n"), "\n")
+			require.NotContains(t, lines[0], "╭",
+				"%s must open on a wall row: these rungs exist because the box is TALLER than the "+
+					"%d-row pane, so a capture still holding its top border is the wrong shape",
+				c.name, height)
+
+			last := lines[len(lines)-1]
+			require.False(t, isBoxBottomBorder(last),
+				"%s must NOT end at the border — the line below it is what gemini renders when the "+
+					"dialog overflows, and it is the entire reason this rung exists", c.name)
+			require.Contains(t, last, "Press Ctrl+O",
+				"%s's trailing line must be the overflow hint", c.name)
+
+			_, up := gemini.GateUp(c.pane)
+			require.Truef(t, up,
+				"%s is a live, unanswered trust dialog in a %d-row pane; a missed gate here is "+
+					"PaneIdle → Ready → the false completion ding #713 is about", c.name, height)
+
+			// The control. Drop the hint and the pane ends at the border, which is the only shape
+			// the pre-fix anchor accepted — so it gates either way and proves nothing on its own.
+			withoutHint := strings.Join(lines[:len(lines)-1], "\n")
+			require.True(t, isBoxBottomBorder(lines[len(lines)-2]),
+				"%s: removing the hint must leave the border as the last line, or this control is "+
+					"not the shape it claims to be", c.name)
+			_, up = gemini.GateUp(withoutHint)
+			require.Truef(t, up,
+				"%s without its hint must still gate: if this fails the rung above proves nothing "+
+					"about the trailing allowance, because both forms would be failing", c.name)
+		})
+	}
+}
+
+// The trailing allowance is bounded, and this is the bound. One line below the border is the
+// dialog overflowing; two is something else having been drawn, and the gate must drop so the
+// queued first prompt is delivered. trailingBelowBoxCap owns the number — this recomputes the
+// behaviour from it rather than hard-coding 1, so raising the cap without re-reading this
+// test's premise is not possible.
+func TestGeminiTrustGateDropsBeyondTheTrailingAllowance(t *testing.T) {
+	for _, c := range geminiTrustGateOverflowLadder {
+		t.Run(c.label(), func(t *testing.T) {
+			pane := c.pane
+			for extra := 1; extra <= trailingBelowBoxCap; extra++ {
+				_, up := gemini.GateUp(pane)
+				require.Truef(t, up, "%s must still gate with %d line(s) below the border",
+					c.name, extra)
+				pane += "\n  ✦ …and then the agent said something."
+			}
+			_, up := gemini.GateUp(pane)
+			require.Falsef(t, up,
+				"%s must stop gating once more than trailingBelowBoxCap (%d) lines sit below the "+
+					"border: past that the dialog is not the bottom-most live element and holding "+
+					"the gate withholds the queued prompt", c.name, trailingBelowBoxCap)
+		})
+	}
+}
+
+// Every WIDTH rung ends at the dialog's own box border. That is not the anchor's contract — the
+// anchor tolerates trailingBelowBoxCap lines below the border, which is what the overflow rungs
+// above are for — but it is a true property of these four captures and worth pinning, because it
+// is what makes them a poor test of the anchor and therefore why the overflow ladder had to be
+// driven at all. It holds at the width-20 miss too: that rung misses on the truncated literal,
+// not on the anchor.
+//
+// What this CANNOT do is notice a vendor change. It calls bottomBoxBlock on four frozen strings,
+// so a new gemini render alters nothing here; an earlier draft claimed the opposite ("a future
+// gemini that renders a footer beneath the dialog fails here, naming the cause"), and gemini
+// 0.55.1 was already rendering exactly such a footer while this test was green. Only re-driving
+// the harness can see that, which is the standing cost of fixture-based coverage and the reason
+// VerifiedVersion exists.
 func TestGeminiCapturesEndAtTheDialogBorder(t *testing.T) {
 	for _, c := range geminiAllCaptures() {
 		t.Run(c.label(), func(t *testing.T) {
+			lines := strings.Split(strings.TrimRight(strings.TrimPrefix(c.pane, "\n"), "\n \t"), "\n")
+			require.True(t, isBoxBottomBorder(lines[len(lines)-1]),
+				"%s's last non-empty line must be the dialog's bottom border — the width ladder is "+
+					"the fits-the-pane shape, and a rung that stopped being it would silently become "+
+					"a second copy of the overflow ladder", c.name)
+
 			_, ok := bottomBoxBlock(c.pane)
 			require.True(t, ok,
-				"%s must end with the dialog's bottom border; the gate's liveness anchor is "+
-					"exactly that and nothing else re-measures it", c.name)
+				"%s must yield a bottom-box block; the gate's liveness anchor is exactly that",
+				c.name)
 		})
 	}
 }
@@ -379,8 +593,20 @@ func TestGeminiCapturesEndAtTheDialogBorder(t *testing.T) {
 // width-40 rung at 15.
 //
 // So the block is bounded by the run of side-walled rows above the border instead, and this
-// sweeps every rung down to a pane holding only the option rows. The floor is the ding's
-// cause, so it is asserted at heights nobody would call exotic.
+// sweeps every rung down to a pane holding only the option rows.
+//
+// WHAT THIS IS NOT. The short panes below are SYNTHETIC: a height-40 capture with its top rows
+// chopped off. gemini never rendered them. Driven natively at these heights it re-lays out —
+// the blurb collapses to "... last N lines …" and, once the box overflows, a Ctrl+O hint
+// appears BELOW the bottom border — so a truncated tail is exactly the "a resized rung is not a
+// natively-driven one" fallacy this file's header spends four paragraphs rejecting for width.
+// An earlier draft of this comment claimed the sweep secured the ding's cause "at heights
+// nobody would call exotic"; it did not, and the thing it could not see shipped: gemini 0.55.1
+// missed the gate at 45x19 and six other driven geometries while every height here was green.
+//
+// It is kept, narrowed to what a chopped pane can honestly show — that the wall run bounds the
+// block wherever the top border went, at any block height, with no lower cliff. The claim about
+// what gemini does at a short height belongs to geminiTrustGateOverflowLadder, which was driven.
 func TestGeminiTrustGateSurvivesADialogTallerThanThePane(t *testing.T) {
 	tail := func(pane string, rows int) string {
 		lines := strings.Split(strings.TrimPrefix(pane, "\n"), "\n")
@@ -476,11 +702,18 @@ func TestGeminiTrustGateFiresOnQuotedBoxArtEndingThePane(t *testing.T) {
 		"quoted box art that ends the pane DOES gate — the anchor narrows this exposure, it "+
 			"does not remove it; chrome.go's bottomBoxBlock says so and this is the measurement")
 
-	// …and the narrowing is real: one more line of transcript below the quote takes it down.
-	_, up = gemini.GateUp(quoted + "\n\n  …which is why the option row is the anchor.")
+	// …and the narrowing is real, but it is exactly trailingBelowBoxCap lines wider than it was.
+	// One line below the quote no longer drops the gate: that is the price of admitting gemini's
+	// own overflow hint, paid here in the #342 direction and measured rather than described.
+	_, up = gemini.GateUp(quoted + "\n  …which is why the option row is the anchor.")
+	require.True(t, up,
+		"one line below quoted art still gates — trailingBelowBoxCap admits it, and the cost of "+
+			"the height fix is exactly this line")
+
+	_, up = gemini.GateUp(quoted + "\n  …which is why the option row is the anchor.\n  ✦ Done.")
 	require.False(t, up,
-		"the quote only gates while it is the last thing on screen; anything rendered below "+
-			"the quoted border drops it")
+		"past trailingBelowBoxCap the quote is no longer the bottom-most element and the gate "+
+			"must drop; this is what bounds the exposure above")
 }
 
 // isBoxBottomBorder, from the file of its only consumer. Three shapes isHorizontalRule accepts
@@ -658,9 +891,15 @@ func TestGeminiTrustGateLadderKeepsEveryDrivenRung(t *testing.T) {
 // generic loop proves the predicate fires on whatever paneCoverage holds, and cannot notice
 // if that entry stops being this ladder.
 func TestGeminiTrustGateDetectedAtEveryDrivenWidth(t *testing.T) {
-	require.Equal(t, ladderRungs(geminiTrustGateLadder), ladderRungs(paneCoverage["gemini/gate"]),
-		"paneCoverage must publish this exact ladder, or the width table is describing a "+
-			"different set of panes than this file drove")
+	// BOTH ladders, because paneCoverage carries both: the width rungs and the height rungs.
+	// Asserting only the width ladder here would let the overflow captures be dropped from
+	// coverage silently, which is the exact bookkeeping that let the height axis go unmeasured.
+	require.Equal(t,
+		ladderRungs(append(append([]paneCapture(nil), geminiTrustGateLadder...),
+			geminiTrustGateOverflowLadder...)),
+		ladderRungs(paneCoverage["gemini/gate"]),
+		"paneCoverage must publish exactly the driven ladders, or the width table is describing "+
+			"a different set of panes than this file drove")
 
 	for _, c := range geminiTrustGateLadder {
 		t.Run(c.label(), func(t *testing.T) {
@@ -1019,19 +1258,43 @@ func TestGeminiTrustGateIsNotSynthesizedAcrossAWrap(t *testing.T) {
 // What gemini actually leaves on screen after the dialog is answered has NOT been driven — that
 // costs an Enter at a dialog whose acceptance writes ~/.gemini/trustedFolders.json, and the
 // capture harness deliberately does not isolate the agent's config dir. So this asserts only
-// what it can: the matcher stops matching the moment something is drawn beneath the box. If the
-// post-acceptance pane is ever captured, it belongs here as a verbatim fixture.
+// what it can: the matcher stops matching once more than trailingBelowBoxCap lines are drawn
+// beneath the box. If the post-acceptance pane is ever captured, it belongs here as a verbatim
+// fixture.
+//
+// The cap is why the single-line cases below are split out rather than asserted false. They
+// were false, and making them true is the deliberate cost of the height fix — one trailing line
+// is how gemini renders an OPEN dialog that overflows (geminiTrustGateOverflowLadder), so
+// nothing that reads a trailing line can distinguish the two. What makes the trade safe is that
+// every post-acceptance shape is bigger than the allowance: gemini's composer is a box, and its
+// two post-answer notices ("Gemini CLI is restarting…", the escape notice) render only once the
+// dialog — and with it the literal this gate matches — is gone from the pane entirely.
 func TestGeminiTrustGateDropsOnceSomethingRendersBelowIt(t *testing.T) {
 	for _, tc := range []struct{ name, below string }{
 		{"composer drawn below", "╭────────────────────╮\n│ >                  │\n╰────────────────────╯"},
-		{"bare footer line", "~/project   no sandbox   gemini-2.5-pro"},
-		{"a single character", "x"},
+		{"footer plus one more row", "~/project   no sandbox   gemini-2.5-pro\n✦ ready"},
+		{"two bare lines", "x\ny"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, up := gemini.GateUp(geminiTrustGatePane80 + "\n" + tc.below)
 			require.False(t, up,
 				"with %s the dialog is no longer the bottom-most live element, so the gate must "+
 					"drop rather than hold the queued first prompt", tc.name)
+		})
+	}
+
+	// The allowance itself, asserted so its cost is visible here and not only in chrome.go: a
+	// SINGLE line below the box holds the gate, because that is what an overflowing open dialog
+	// looks like. Both of these used to be false.
+	for _, tc := range []struct{ name, below string }{
+		{"bare footer line", "~/project   no sandbox   gemini-2.5-pro"},
+		{"a single character", "x"},
+	} {
+		t.Run(tc.name+" (within the allowance)", func(t *testing.T) {
+			_, up := gemini.GateUp(geminiTrustGatePane80 + "\n" + tc.below)
+			require.True(t, up,
+				"one line below the box is within trailingBelowBoxCap and must hold the gate: "+
+					"gemini draws exactly one there when the dialog overflows its pane")
 		})
 	}
 
@@ -1052,9 +1315,16 @@ func TestGeminiTrustGateDropsOnceSomethingRendersBelowIt(t *testing.T) {
 // keystrokes as the trigger: AwaitingInput goes false and the queued prompt is withheld while
 // they are looking at an active composer.
 //
-// gemini's real render puts a footer line below the composer, which is why this is narrow — the
-// first case below is what actually ships and it was already safe. The second is the one that
-// was not, and a footer is not a thing to rely on.
+// What closes it is the composer-glyph rejection in geminiTrustGateVisible, and ONLY that. An
+// earlier draft of this comment offered a second reason — "gemini's real render puts a footer
+// line below the composer" — which was wrong twice over. It cited geminiIdlePane, whose own doc
+// says it is composed from 0.27 package source and is "deliberately not the basis for any new
+// matcher", so it was never evidence about a render. And a single footer line now sits INSIDE
+// trailingBelowBoxCap, so even a real one would not push the composer out of reach.
+//
+// That makes both cases below stronger than they were: the first used to pass vacuously, since
+// bottomBoxBlock stopped at the footer and never looked in the box. Now both reach the block
+// and both are rejected on the glyph, which is the property this test is named for.
 func TestGeminiTrustGateIgnoresTypingInTheComposer(t *testing.T) {
 	const typed = "│ > Trust folder is the anchor │"
 	box := func(tail string) string {

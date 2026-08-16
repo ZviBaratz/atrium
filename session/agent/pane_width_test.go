@@ -191,7 +191,12 @@ var paneCoverage = map[string][]paneCapture{
 	// on purpose: 20 was driven too and is a MISS, held as negative evidence in
 	// gemini_pane_test.go rather than dropped, because a table that silently omits the rung
 	// it fails at is the #648 defect one level up.
-	"gemini/gate": geminiTrustGateLadder,
+	// Both ladders: the width rungs (height 40) and the height rungs (19 and 24), which are
+	// separate captures rather than a second table because #713 shipped twice — once on each
+	// axis — and a coverage map that held only one of them called the gate covered while it
+	// missed on seven driven geometries.
+	"gemini/gate": append(append([]paneCapture(nil), geminiTrustGateLadder...),
+		geminiTrustGateOverflowLadder...),
 
 	"agy/gate": {
 		{name: "agyTrustGatePane", width: 120, note: "", pane: agyTrustGatePane},
@@ -306,7 +311,13 @@ var wantRungs = map[string][]int{
 	// mechanism". It is not the same fact: 24 is the narrowest width agy's gate has ever been
 	// DRIVEN at, while agy/busy and agy/prompt/confirmation both reach 20 — an evidence gap,
 	// not a measured cliff. Gemini's 24 is a cliff, because 20 was driven and misses.
-	"gemini/gate": {24, 40, 80},
+	//
+	// Five entries for four widths: the second 24 and the 45 are the HEIGHT rungs
+	// (geminiTrustGateOverflowLadder), driven at pane heights 24 and 19 where the dialog
+	// overflows and gemini draws a hint below its bottom border. They are listed here because
+	// they are width-bearing captures like any other, but the axis they were driven for is not
+	// one this table can express — geminiOverflowPaneHeights records it.
+	"gemini/gate": {24, 24, 40, 45, 80},
 
 	"agy/gate":                {24, 28, 120},
 	"agy/busy":                {20, 24, 28, 40, 120, 120},

@@ -902,9 +902,10 @@ var gemini = &Adapter{
 	HeadlessNamer: true, // `gemini -p` prints bare text (session/naming.go)
 }
 
-// geminiTrustGateVisible reports gemini's folder-trust dialog. It requires the accept row
-// to appear inside a box whose bottom border ENDS the pane, and both halves of that are
-// load-bearing: the literal says which dialog, the box says it is live.
+// geminiTrustGateVisible reports gemini's folder-trust dialog. It requires the accept row to
+// appear inside a box whose bottom border ends the pane or sits within trailingBelowBoxCap
+// lines of the end, and both halves of that are load-bearing: the literal says which dialog,
+// the box says it is live.
 //
 // What the dialog renders, read off the bundle that draws it (bundle/interactiveCli-*.js at
 // 0.55.1): a title Text of "Do you trust the files in this folder?", the discovery blurb,
@@ -923,14 +924,25 @@ var gemini = &Adapter{
 // vendor splits its bundle into says nothing about Atrium. Presence is the claim; the version
 // it was checked at is the datum, and that is VerifiedVersion.
 //
-// Why "Trust folder" alone identifies the dialog. Every `Trust `-prefixed label anywhere in
-// the 0.55.1 package is one of `Trust folder (${dirName})`, `Trust parent folder
-// (${parentFolder})`, `Trust this folder (${dirName})`, "Trust the current workspace for this
-// session.", "Trust and Safety", "Trust Guard", "Trust Pilot" — and "Trust folder" is a
-// substring of exactly the first. In particular it does NOT match `Trust this folder`, which
-// is /permissions' modify-trust dialog: a mid-session settings screen that must not report as
-// a startup gate. So the literal needs no second literal to disambiguate it, and asking for
-// one costs more than it buys (below).
+// Why "Trust folder" alone identifies the dialog. The claim is a NEGATIVE, and stated as one
+// so it can be rechecked with a single grep: no other string the 0.55.1 TUI renders as a label
+// contains "Trust folder". In particular it does NOT match `Trust this folder (${dirName})`,
+// which is /permissions' modify-trust dialog — a mid-session settings screen that must not
+// report as a startup gate — because "this " sits between the two words.
+//
+// An earlier draft made that point by ENUMERATING every `Trust `-prefixed label in the package
+// and asserting the list was complete. It was not: the package also ships "Trust the server
+// (bypass all tool call confirmation prompts)", "Trust all provided hooks for a project",
+// "Trust Level", "Trust Services", "Trust Tokens", "Trust CMP" and more. None of them changes
+// the conclusion, which is the point — the enumeration was doing no work and could only rot,
+// exactly like the bundle-file counts removed two paragraphs above.
+//
+// The one true exception is worth naming because it looks like a counter-example and is not:
+// bundle/docs/cli/trusted-folders.md documents the option as `- **Trust folder**: Grants full
+// trust to the current folder`. It is shipped documentation, never drawn in the TUI, and it
+// could only reach this matcher by an agent printing the file into its own pane — the quoted-
+// prose class the box requirement exists for. So the literal needs no second literal to
+// disambiguate it, and asking for one costs more than it buys (below).
 //
 // Why the box, and why the box must END the pane. A literal alone cannot say the dialog is
 // on screen, and this gate has three distinct ways to be wrong about that. All three were
@@ -957,8 +969,9 @@ var gemini = &Adapter{
 //   - THE DISMISSED DIALOG. A window-only gate keeps matching a dialog that is still on
 //     screen but no longer live, and while a gate is up AwaitingInput (tmux.go) is false, so
 //     the queued FIRST prompt — the moment a queued prompt is most likely to exist — is never
-//     delivered. Requiring the border to be the last non-empty line drops the gate the instant
-//     anything renders beneath it. TestGeminiTrustGateDropsOnceSomethingRendersBelowIt. Note
+//     delivered. Requiring the border to be at the bottom drops the gate once anything taller
+//     than trailingBelowBoxCap renders beneath it — a composer, being a box, always is.
+//     TestGeminiTrustGateDropsOnceSomethingRendersBelowIt. Note
 //     what is and is not established here: that gemini LEAVES the answered dialog on screen is
 //     NOT verified — driving it costs an Enter at a dialog whose acceptance writes
 //     ~/.gemini/trustedFolders.json, and the capture harness deliberately does not isolate the
@@ -966,13 +979,21 @@ var gemini = &Adapter{
 //     does not depend on the answer; agy pins the same property with agyAcceptedGatePane and
 //     earns it from a captured post-acceptance pane, which is the stronger evidence tier.
 //
-// The bottom border really is the last non-empty line while the dialog is open — verified on
-// all four driven rungs, including the width-20 miss (each ends "╰──…──╯"), and re-checked by
-// TestGeminiCapturesEndAtTheDialogBorder rather than by this sentence. That is the fact the
-// anchor rests on, and it is the one to re-measure if this ever goes quiet: a future gemini
-// that renders a footer beneath the dialog takes the gate down with it. That is the fail-safe
-// direction — a missed gate is #713, a false gate is #342 — and it is the direction doctor's
-// drift check exists to surface.
+// The bottom border is the last non-empty line on all four WIDTH rungs (each ends "╰──…──╯"),
+// including the width-20 miss — but that is a property of those captures, not of the dialog,
+// and an earlier draft of this paragraph mistook the one for the other. It said the fact to
+// re-measure "if this ever goes quiet" was "a future gemini that renders a footer beneath the
+// dialog", and offered the resulting missed gate as the fail-safe direction.
+//
+// Both halves were wrong. gemini 0.55.1 ALREADY renders a footer beneath the dialog: whenever
+// the box overflows its pane it draws a one-line <ShowMoreLines> hint under the bottom border.
+// And a missed gate is not the fail-safe direction here — it is #713 itself, the bug this
+// matcher exists for. Driven at twelve geometries, the border-must-end-the-pane form missed
+// seven, including the 45x19 pane a plain 70x24 terminal produces at the default split. So the
+// anchor allows trailingBelowBoxCap trailing lines, and the rungs that prove it are
+// geminiTrustGateOverflowLadder. What no fixture can re-measure is the vendor: these are frozen
+// strings, so only re-driving the harness sees the next render change, which is what
+// VerifiedVersion and doctor's drift check are for.
 //
 // What the block is bounded BY matters as much as what anchors it, and the first draft of
 // this fix got it wrong in both directions at once: it scanned upward for a matching top
@@ -980,7 +1001,9 @@ var gemini = &Adapter{
 // pane rather than the terminal (session/instance.go SetPreviewSize), so on a pane shorter
 // than the dialog BOX — 28 rows at width 24, 33 at width 20 (geminiDialogRows; this sentence
 // used to give 37, which is the width-24 capture's height and overstates the threshold by nine
-// rows) — the top border has scrolled off and the gate went down. #713's own symptom on the height axis, at ordinary terminal sizes. It was also
+// rows, and those figures are themselves height-40 measurements, since the box shrinks with the
+// pane) — the top border has scrolled off and the gate went down. #713's own symptom on the
+// height axis, at ordinary terminal sizes. It was also
 // unbounded the other way: any two rules with transcript between them made that span
 // "interior". bottomBoxBlock now takes the run of side-walled rows above the border instead,
 // which is height-independent and self-bounding; see its doc for the measurements, and
@@ -1037,11 +1060,24 @@ var gemini = &Adapter{
 // literal's likeliest appearance on a current user's screen, an agent reading this tracker.
 // geminiProsePane could not have shown it: that fixture quotes the option ROWS.
 //
-// Still uncovered, and disclosed: /permissions' modify-trust dialog (reaching it needs an
-// authenticated session) and IdeIntegrationNudge, which is worse — it renders its headline
-// behind a "> " Text inside the same rounded box, so InputBoxVisible is TRUE on it, making
-// AwaitingInput true and typing a queued prompt into a RadioButtonSelect whose highlighted
-// default is "Yes". That is the #512 class rather than this gate's milder one, and it is #717.
+// Still uncovered, and disclosed:
+//
+//   - The startup AUTHENTICATION dialog. gemini ships an AuthDialog asking "How would you like
+//     to authenticate for this project?" and a "Do you want to continue?" confirmation, both
+//     boxed RadioButtonSelects like the trust dialog. Gates holds exactly one matcher, keyed on
+//     the trust dialog's accept row, and no Prompt matches these — so nothing here covers a
+//     second keystroke-consuming startup screen. Whether it lands on Ready (the #713 chain) is
+//     NOT established: it turns on the busy marker, and "esc to cancel" is matched
+//     case-sensitively while the bundle ships both that spelling and "Esc to cancel". Unlike
+//     /permissions below, this one is cheap to settle — it IS the auth screen, so reaching it
+//     needs no authenticated session, only a driven run whose HOME is isolated (answering the
+//     trust dialog to get past it writes ~/.gemini/trustedFolders.json, which is why
+//     drive-agent.sh, which does not isolate the agent's config dir, has not been pointed at it).
+//   - /permissions' modify-trust dialog, which does need an authenticated session.
+//   - IdeIntegrationNudge, which is worse — it renders its headline behind a "> " Text inside
+//     the same rounded box, so InputBoxVisible is TRUE on it, making AwaitingInput true and
+//     typing a queued prompt into a RadioButtonSelect whose highlighted default is "Yes". That
+//     is the #512 class rather than this gate's milder one, and it is #717.
 //
 // Width. The headline is UNREPAIRABLE as an anchor once it wraps: gemini draws the dialog in
 // a rounded box, so a wrapped headline has the box's own "│" between its halves, and
@@ -1065,8 +1101,12 @@ var gemini = &Adapter{
 // own. Measured: a pane ending at a composer border whose typed text reads "Trust folder"
 // raises the gate — and InputBoxVisible is true on it, so the effect is the #342 direction
 // again (AwaitingInput false, queued prompt withheld) with the user's own keystrokes as the
-// trigger. gemini's real render puts a footer line below the composer (geminiIdlePane), which
-// is why this is narrow rather than routine, but a footer is not a thing to rely on. So a
+// trigger. This paragraph used to add that "gemini's real render puts a footer line below the
+// composer (geminiIdlePane), which is why this is narrow rather than routine" — retracted on
+// both counts. geminiIdlePane is hand-composed from 0.27 package source and its own doc says it
+// is not evidence for a matcher, so it never established what gemini renders; and a lone footer
+// line is inside trailingBelowBoxCap now, so it would not put the composer out of reach even if
+// it were real. The hole is closed by the glyph check below and nothing else. So a
 // block that reads as a composer is rejected: the trust dialog is a MENU, its rows open with
 // "●" and a number, and no rung renders a composer glyph anywhere inside the dialog —
 // TestGeminiCapturesRenderNoComposerGlyphInsideTheDialog, which scans the whole block. It
