@@ -156,6 +156,79 @@ func TestStartupGates(t *testing.T) {
 	}
 }
 
+// geminiTrustGateProdCapture is gemini 0.55.1's folder-trust dialog in PRODUCTION capture
+// form: `tmux capture-pane -p -e -J`, the form tmux.go actually reads, escapes and all.
+// Driven 2026-08-16 by scripts/drive-agent.sh at 40x40 on an isolated socket, verbatim but
+// for trailing all-blank rows; written as one quoted line per row because a Go raw string
+// cannot hold an ESC byte.
+//
+// It exists because every other gemini fixture in this repo is `capture-pane -p`, which
+// tmux strips the escapes out of, and the gate's anchor is far more sensitive to them than
+// the literal window it replaced (#713 round 4 review). isHorizontalRule rejects a line
+// holding any character outside the box set, so a single escape surviving cleanForDetection
+// ON THE BORDER would take the whole gate down rather than cost it a line — and the two
+// load-bearing rows here, the bottom border and the accept row, both carry SGR mid-line.
+//
+// Measured on this capture: 152 escape sequences, every one CSI SGR, and zero OSC. OSC is
+// the class ansiRegex does not match, so the hazard is real in principle and absent in fact
+// at 0.55.1. The assertion below is what re-measures that, and it checks BOTH directions —
+// uncleaned the pane must NOT gate, or the fixture has quietly lost its escapes and proves
+// nothing.
+var geminiTrustGateProdCapture = strings.Join([]string{
+	"",
+	" \x1b[38;2;71;150;228m▝\x1b[38;2;102;136;217m▜\x1b[38;2;132;122;206m▄\x1b[38;2;164;113;167m \x1b[38;2;195;103;127m ",
+	"\x1b[39m \x1b[38;2;71;150;228m \x1b[38;2;102;136;217m \x1b[38;2;132;122;206m▝\x1b[38;2;164;113;167m▜\x1b[38;2;195;103;127m▄",
+	"\x1b[39m \x1b[38;2;71;150;228m \x1b[38;2;102;136;217m▗\x1b[38;2;132;122;206m▟\x1b[38;2;164;113;167m▀\x1b[38;2;195;103;127m ",
+	"\x1b[39m \x1b[38;2;71;150;228m▝\x1b[38;2;102;136;217m▀\x1b[38;2;132;122;206m \x1b[38;2;153;116;180m \x1b[38;2;174;109;153m \x1b[38;2;195;103;127m ",
+	"",
+	"\x1b[39m \x1b[1m\x1b[38;2;255;255;255mGemini CLI\x1b[0m\x1b[38;2;175;175;175m v0.55.1",
+	"",
+	"",
+	"",
+	"\x1b[38;2;255;255;175mℹ Skipping project agents due to",
+	"\x1b[39m  \x1b[38;2;255;255;175muntrusted folder. To enable, ensure",
+	"\x1b[39m  \x1b[38;2;255;255;175mthat the project root is trusted.",
+	"",
+	"\x1b[39m \x1b[38;2;255;255;175m╭────────────────────────────────────╮",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m                                    \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[1m\x1b[38;2;255;255;255mDo you trust the files in this\x1b[0m     \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[1m\x1b[38;2;255;255;255mfolder?\x1b[0m                            \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m                                    \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255mTrusting a folder allows Gemini\x1b[39m    \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255mCLI to load its local\x1b[39m              \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255mconfigurations, including custom\x1b[39m   \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255mcommands, hooks, MCP servers,\x1b[39m      \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255magent skills, and settings. These\x1b[39m  \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255mconfigurations could execute code\x1b[39m  \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255mon your behalf or change the\x1b[39m       \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255mbehavior of the CLI.\x1b[39m               \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m                                    \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m                                    \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;215;255;215m\x1b[48;2;0;95;0m●\x1b[39m \x1b[38;2;215;255;215m1.\x1b[39m \x1b[38;2;215;255;215mTrust folder (repo)\x1b[39m          \x1b[49m \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255m \x1b[39m \x1b[38;2;255;255;255m2.\x1b[39m \x1b[38;2;255;255;255mTrust parent folder (gemini7…\x1b[39m \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255m \x1b[39m \x1b[38;2;255;255;255m3.\x1b[39m \x1b[38;2;255;255;255mDon't trust\x1b[39m                   \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m                                    \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m╰────────────────────────────────────╯",
+}, "\n")
+
+// The capture-form seam, which neither package can test alone: the fixtures live in
+// session/agent and cleanForDetection lives here, so this is the only place the pane
+// production reads meets the matcher production runs.
+func TestGeminiTrustGateSurvivesProductionCaptureForm(t *testing.T) {
+	s := NewSessionWithDeps(context.Background(), "gate-test", "gemini", NewMockPtyFactory(t), cmd_test.MockCmdExec{})
+
+	_, raw := s.adapter.GateUp(geminiTrustGateProdCapture)
+	require.False(t, raw,
+		"the raw -e capture must NOT gate: its border carries SGR, so if this passes the "+
+			"fixture has lost the escapes that make the cleaned assertion below mean anything")
+
+	_, cleaned := s.adapter.GateUp(cleanForDetection(geminiTrustGateProdCapture))
+	require.True(t, cleaned,
+		"gemini's trust gate must fire on the pane PRODUCTION captures once it is cleaned the "+
+			"way production cleans it; the fixtures in session/agent are the -p form, which "+
+			"never carried an escape for the anchor to trip over")
+}
+
 // A pane sitting on a startup/trust gate must classify as PaneGate, not PaneIdle.
 // Regression for #266: gates carry no busy marker and match no prompt matcher, so
 // without the gate branch they fall through to idle and the row lies as Ready while

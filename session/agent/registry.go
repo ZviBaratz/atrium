@@ -977,14 +977,18 @@ var gemini = &Adapter{
 // TestGeminiTrustGateSurvivesADialogTallerThanThePane /
 // TestGeminiTrustGateIgnoresTranscriptBetweenTwoRules for the guards.
 //
-// Capture form is a live exposure here, and it is not the fixtures' form. The panes below were
-// taken with `capture-pane -p`; production reads `-p -e -J` (session/tmux/tmux.go) and strips
-// CSI with ansiRegex (session/tmux/poll.go), which does not strip OSC. isHorizontalRule
+// Capture form is a real exposure here, and it is not the form the panes below are in. They
+// were taken with `capture-pane -p`; production reads `-p -e -J` (session/tmux/tmux.go) and
+// strips CSI with ansiRegex (session/tmux/poll.go), which does not strip OSC. isHorizontalRule
 // rejects a line holding any character outside the box set, so one surviving escape ON THE
 // BORDER takes the whole gate down, where the old literal-in-a-window form would at worst have
-// lost the lines it landed on. Nothing establishes that gemini emits OSC anywhere near this
-// dialog — this is a disclosed hazard, not a measured one — and closing it means committing a
-// prod-form capture beside each rung, which drive-agent.sh can write and this PR did not do.
+// lost the lines it landed on. That is a sharper failure than the anchor it replaced, so it
+// was measured rather than assumed: a prod-form pane driven at 0.55.1 carries 152 escape
+// sequences, every one CSI SGR and none OSC, with SGR mid-line on both load-bearing rows —
+// and cleanForDetection hands the matcher something it gates on.
+// session/tmux's TestGeminiTrustGateSurvivesProductionCaptureForm holds the capture and
+// asserts both directions, because the two halves live in different packages: the fixture
+// production reads here, the cleaner that feeds it there.
 //
 // What was tried in between, recorded because the trade is not obvious. Round 1 of #713 keyed
 // on Contains{"Trust folder", "Don't trust"}; Contains is an ALTERNATION, and "Don't trust" is
