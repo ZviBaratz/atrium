@@ -62,19 +62,44 @@ func TestRender(t *testing.T) {
 		{Key: agent.KeyAider, Name: "Aider", Installed: "0.64.1", Status: StatusUnknown},
 	})
 
-	for _, want := range []string{
-		"Claude Code", "2.1.179", "2.1.170", "drifted",
-		// Both version strings asserted, not just the row label: until #715 round 3 this row
-		// checked only "Gemini CLI" and "ok", so the literals it renders could be edited to
-		// anything and the test would still pass — which is how it sat at 0.27.4/0.27 long
-		// after the registry pin moved. The claude row above already did this; this one now
-		// matches it.
-		"Gemini CLI", "0.55.9", "0.55.1", "ok",
-		"Codex", "not installed",
-		"Aider", "unknown",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("Render() output missing %q\n--- got ---\n%s", want, out)
+	// Asserted PER ROW, not against the whole table. Round 3 of #715 added gemini's two version
+	// strings here to close the hole that let this row sit at 0.27.4/0.27 long after the pin
+	// moved, but added them to a flat Contains sweep over the entire output — which cannot tell
+	// which row rendered them. A Render that printed gemini's versions in the codex row, or that
+	// swapped the Installed and Verified columns, left both literals somewhere in `out` and the
+	// test green. Finding the row first is what the round-3 comment described.
+	rows := map[string][]string{
+		"Claude Code": {"2.1.179", "2.1.170", "drifted"},
+		"Gemini CLI":  {"0.55.9", "0.55.1", "ok"},
+		"Codex":       {"not installed"},
+		"Aider":       {"0.64.1", "unknown"},
+	}
+	for label, wants := range rows {
+		row := ""
+		for _, line := range strings.Split(out, "\n") {
+			if strings.Contains(line, label) {
+				row = line
+				break
+			}
+		}
+		if row == "" {
+			t.Errorf("Render() rendered no row for %q\n--- got ---\n%s", label, out)
+			continue
+		}
+		for _, want := range wants {
+			if !strings.Contains(row, want) {
+				t.Errorf("Render() row %q missing %q\n--- row ---\n%s\n--- got ---\n%s", label, want, row, out)
+			}
+		}
+	}
+
+	// The columns are ordered, so Installed must precede Verified on the drifted row: a swap
+	// leaves both literals present and reverses what the row tells the user.
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "Claude Code") {
+			if strings.Index(line, "2.1.179") > strings.Index(line, "2.1.170") {
+				t.Errorf("Render() put Verified before Installed\n--- row ---\n%s", line)
+			}
 		}
 	}
 }

@@ -171,9 +171,13 @@ func TestStartupGates(t *testing.T) {
 //
 // Measured on this capture: 152 escape sequences, every one CSI SGR, and zero OSC. OSC is
 // the class ansiRegex does not match, so the hazard is real in principle and absent in fact
-// at 0.55.1. The assertion below is what re-measures that, and it checks BOTH directions —
-// uncleaned the pane must NOT gate, or the fixture has quietly lost its escapes and proves
-// nothing.
+// at 0.55.1. Those three numbers are RECOMPUTED by the test below, which an earlier draft of
+// this comment claimed of an assertion that did no such thing — it checked only that the raw
+// pane does not gate and the cleaned one does, which stays true at any escape count and with
+// an OSC sequence added anywhere off the two load-bearing rows.
+//
+// The gating assertions are still there and check BOTH directions: uncleaned the pane must NOT
+// gate, or the fixture has quietly lost its escapes and proves nothing.
 var geminiTrustGateProdCapture = strings.Join([]string{
 	"",
 	" \x1b[38;2;71;150;228m▝\x1b[38;2;102;136;217m▜\x1b[38;2;132;122;206m▄\x1b[38;2;164;113;167m \x1b[38;2;195;103;127m ",
@@ -215,6 +219,23 @@ var geminiTrustGateProdCapture = strings.Join([]string{
 // session/agent and cleanForDetection lives here, so this is the only place the pane
 // production reads meets the matcher production runs.
 func TestGeminiTrustGateSurvivesProductionCaptureForm(t *testing.T) {
+	// The escape census, recomputed rather than asserted in prose. ansiRegex is production's
+	// own CSI matcher (poll.go); anything it does not match is what survives cleanForDetection
+	// and can land on the border.
+	csi := ansiRegex.FindAllString(geminiTrustGateProdCapture, -1)
+	require.Len(t, csi, 152,
+		"the fixture is a frozen capture; a different escape count means it was edited, and the "+
+			"claim that every escape here is one ansiRegex strips no longer rests on anything")
+	for _, seq := range csi {
+		require.True(t, strings.HasSuffix(seq, "m"),
+			"%q is a CSI sequence that is not SGR; the comment above claims all 152 are SGR", seq)
+	}
+	require.Equal(t, 152, strings.Count(geminiTrustGateProdCapture, "\x1b"),
+		"every ESC in the capture must be one ansiRegex matched — a leftover is by definition "+
+			"an escape production does not strip, and OSC is the class that reaches the border")
+	require.NotContains(t, geminiTrustGateProdCapture, "\x1b]",
+		"no OSC at 0.55.1: that is the measurement, and it is what makes the hazard theoretical")
+
 	s := NewSessionWithDeps(context.Background(), "gate-test", "gemini", NewMockPtyFactory(t), cmd_test.MockCmdExec{})
 
 	_, raw := s.adapter.GateUp(geminiTrustGateProdCapture)
