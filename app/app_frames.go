@@ -44,6 +44,10 @@ const paneFrameInterval = 100 * time.Millisecond
 // on one at all — armFrameCapture declines to arm and the loop ends, to be
 // revived by the 100ms preview tick as soon as there is something to capture
 // again.
+//
+// It is compared with == (handlePaneFrame's re-arm decision, and framegate's quietRun),
+// so every field is part of the target's identity and adding one narrows what counts as
+// "the same target". See termTitle for what that cost on the field added for #718.
 type frameTarget struct {
 	// instance is the session whose agent pane to capture (preview tab).
 	instance *session.Instance
@@ -66,6 +70,14 @@ type frameTarget struct {
 	// name, use the OLD title. TerminalPane.EnsureSession's doc decides that per use — for
 	// the legacy reap the older title is the more correct one, and the window name is
 	// frozen at creation anyway.
+	//
+	// Because frameTarget is compared by value, this field also joins the target's
+	// identity, which has one deliberate consequence: a rename landing while a terminal
+	// capture is in flight now makes handlePaneFrame's re-arm see a changed target and
+	// re-capture with no delay. That is one capture ~100ms early, once per rename — the
+	// next round's own target carries the new title and matches again. The quiet-run
+	// comparisons in framegate.go are unaffected: both writers build preview-tab targets
+	// (frameTarget{instance: …}), where termTitle is always "".
 	termTitle string
 }
 
@@ -230,6 +242,12 @@ func captureTerminalFrame(target frameTarget, ensure terminalEnsurer) paneFrameM
 		// TerminalPane.UpdateContent reads as "a frame has arrived", painting an
 		// empty pane instead of the fallback. The next round captures it — the
 		// target has changed, so it is armed with no delay.
+		//
+		// termTitle rides along for faithfulness only: it is the snapshot this call was
+		// given, carried forward rather than re-read (this runs on the capture goroutine,
+		// where reading it would be the #718 defect), and nothing downstream consumes it.
+		// The handler applies nothing on this target — instance is nil and termKey empty —
+		// and the re-arm comparison is already unequal on termKey alone.
 		return paneFrameMsg{
 			target: frameTarget{termInstance: target.termInstance, termTitle: target.termTitle},
 			at:     time.Now(),

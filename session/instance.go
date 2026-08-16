@@ -2174,10 +2174,15 @@ type RenamedIdentity struct {
 // its own fields.
 //
 // The renderer is not the only reader, and moving the write to the update thread is not on
-// its own enough to make either field safe: what makes it enough is that every OTHER reader
-// either runs on that thread too or is handed a value snapshotted there. The one that was
-// not — EnsureSession, on the capture goroutine — now takes the title as a parameter
-// (frameTarget.termTitle, #718). See AdoptRename for the readers still outside that rule.
+// its own enough to make either field safe — the readers on other goroutines have to be
+// accounted for one at a time, and are (see AdoptRename). One of them is this function:
+// `oldTitle := i.Title` below is an off-thread read of the field AdoptRename writes. It is
+// safe for a reason particular to it and not general — the only AdoptRename that can carry
+// this instance's title is the one applying THIS call's own result, which by construction
+// cannot run until this returns, and the rename dialog's in-flight gate stops a second
+// rename overlapping. The reader that had no such reason was TerminalPane.EnsureSession on
+// the capture goroutine, which now takes the title as a parameter (frameTarget.termTitle,
+// #718).
 func (i *Instance) Rename(newTitle string) (RenamedIdentity, error) {
 	newTitle = strings.TrimSpace(newTitle)
 	if newTitle == "" {
@@ -2234,14 +2239,17 @@ func (i *Instance) Rename(newTitle string) (RenamedIdentity, error) {
 // capture goroutine, took the title off the instance until #718 and now receives
 // frameTarget.termTitle; app's customCommandSpec carries strings for the same reason.
 //
-// Not every reader is inside that rule yet, and #718's census named the rest rather than
-// converting them: journalKill (via ToInstanceData), runcmd's DisplayName log lines,
-// repoScriptCtx and sessionBrief, plus sendPromptCmd. What keeps each of them narrow
-// differs — a teardown and a run-command are dispatched behind beginAsyncAction's
-// actionInFlight gate, which a rename's own I/O also sits behind; a Start goroutine cannot
-// overlap a rename of the same instance because Rename refuses an instance that has not
-// finished starting. sendPromptCmd has neither and is simply improbable. None of that is a
-// rule a NEW off-thread reader may lean on: snapshot on this thread instead.
+// Not every reader is inside that rule yet, and #718 named the rest rather than converting
+// them — the census lives in #719, not here, because it is long, it spans packages, and an
+// enumeration in a comment is a claim nothing can hold to the tree. Take it fresh instead:
+// `grep -rn 'i\.Title\|\.DisplayName()' session/ app/ --include='*.go'`, then ask of each
+// hit which goroutine it is on. The answer is a per-reader argument, never a general one:
+// a teardown and a run-command sit behind beginAsyncAction's actionInFlight gate, which a
+// rename's own I/O sits behind too; a Start goroutine cannot overlap a rename of the same
+// instance because Rename refuses one that has not finished starting; Rename's own
+// `oldTitle := i.Title` is safe only because the AdoptRename that could race it is the one
+// applying that very call's result. Some have no such argument and are merely improbable.
+// None of it is a rule a NEW off-thread reader may lean on: snapshot on this thread instead.
 //
 // It deliberately leaves both sibling names alone: termName and runName are owned rather
 // than derived, so the shell and the dev server keep the names they were created under and

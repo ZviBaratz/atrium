@@ -185,14 +185,22 @@ func requireSubstr(t *testing.T, ran []string, substrs ...string) {
 //
 // The failure this prevents is a data race, which no assertion can observe directly:
 // what is observable is that the I/O alone changes nothing the renderer reads, so this
-// goroutine cannot be the second party to a torn read.
+// goroutine cannot be the WRITER half of one.
 //
-// Not "the window does not exist", which is what this comment used to claim and which was
-// false when written: a second reader was already there — TerminalPane.EnsureSession, on
-// the capture goroutine, racing AdoptRename rather than Rename (#718). Closing this half
-// never closed that one. The guard that does is ui's
-// TestEnsureSessionDoesNotReadTitleWhileAdoptRenameWritesIt, and unlike this test it fails
-// only under -race.
+// Only that half. Two earlier drafts of this comment overreached, and both overreached the
+// same way — by promoting one closed window into a claim about all of them:
+//
+//   - "the window in which a torn read could happen does not exist" was false when
+//     written. A second window was already open: TerminalPane.EnsureSession read Title on
+//     the capture goroutine against AdoptRename's write, not against this function's
+//     (#718). Closing this half never closed that one, and the guard that does is ui's
+//     TestEnsureSessionDoesNotReadTitleWhileAdoptRenameWritesIt — which, unlike this test,
+//     fails only under -race.
+//   - "this goroutine cannot be the second party to a torn read" is false too, because
+//     being a reader is also being a party. Rename reads i.Title itself (`oldTitle`), on
+//     this very goroutine. That read is safe, but for its own narrow reason — the only
+//     AdoptRename carrying this instance's title is the one applying this call's result —
+//     not because the goroutine touches nothing.
 func TestInstanceRename_IOHalfLeavesTheIdentityAlone(t *testing.T) {
 	repoPath := renameTestRepo(t)
 	wt, _, err := git.NewWorktree(context.Background(), repoPath, "before")

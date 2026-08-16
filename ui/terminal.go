@@ -140,6 +140,18 @@ func terminalShellProgram() string {
 // earlier process that saw a different $SHELL.
 const terminalReapProgram = "sh"
 
+// termWindowName is the only place the shell's tmux WINDOW name is spelled, in the shape
+// session/termname.go's mintTermNameLocked owns the SESSION name: three call sites built
+// it inline before, and the string is cosmetic in a way that hides drift — a window named
+// wrong looks like a window, and nothing fails.
+//
+// Which title to pass is not the same answer at every site, which is the second reason
+// this is one function. On the capture goroutine (EnsureSession) it must be the snapshot
+// taken on the update thread, never instance.Title — that read is #718. On the update
+// thread (CloseForInstance) reading the live field is fine, and better, since the window
+// it names is only ever built there to be killed. The rule lives with the string.
+func termWindowName(title string) string { return "term: " + title }
+
 // NewTerminalPane returns an empty TerminalPane with no shell sessions yet.
 // ctx is the app lifecycle context its shell tmux sessions derive from.
 func NewTerminalPane(ctx context.Context) *TerminalPane {
@@ -353,7 +365,7 @@ func (t *TerminalPane) ApplyFrame(key, content string, err error, at time.Time) 
 //     shell was created, so an older value is closer to the name actually on the socket,
 //     never further. And Close/DoesSessionExist address it with tmux's "-t=" exact match,
 //     so a name that matches nothing reaps nothing rather than reaping a stranger.
-//   - The tmux WINDOW name "term: "+title, on both the create and the recreate. Stale is
+//   - The tmux WINDOW name termWindowName(title), on both the create and the recreate. Stale is
 //     inside a tolerance that already exists by design: AdoptRename deliberately does not
 //     rename the shell's tmux session or window (see its doc), so the window name a shell
 //     is created with is the one it keeps for the rest of its life. One frame of lag is a
@@ -444,7 +456,7 @@ func (t *TerminalPane) EnsureSession(instance *session.Instance, title string) (
 	// prefix-matches and the new-session/rename guards reserve so no agent session can
 	// claim it. One name, one home: the cache key and the session name are the same fact,
 	// so neither can drift from the other. The window name is cosmetic.
-	ts := tmux.NewSessionWithName(t.baseContext(), key, "term: "+title, shell)
+	ts := tmux.NewSessionWithName(t.baseContext(), key, termWindowName(title), shell)
 
 	// Adopt a shell already sitting on this name — the previous run's, since a shell is
 	// meant to outlive Atrium — and recreate it when it cannot be restored.
@@ -455,7 +467,7 @@ func (t *TerminalPane) EnsureSession(instance *session.Instance, title string) (
 		} else {
 			// Session exists but can't restore, kill it and start fresh
 			_ = ts.Close()
-			ts = tmux.NewSessionWithName(t.baseContext(), key, "term: "+title, shell)
+			ts = tmux.NewSessionWithName(t.baseContext(), key, termWindowName(title), shell)
 		}
 	}
 	// One exit for a create that could not start, rather than one per branch. Both used to
@@ -652,7 +664,7 @@ func (t *TerminalPane) CloseForInstance(inst *session.Instance) {
 		}
 		delete(t.sessions, key)
 	} else if owned != "" {
-		uncached := tmux.NewSessionWithName(t.baseContext(), owned, "term: "+inst.Title, terminalReapProgram)
+		uncached := tmux.NewSessionWithName(t.baseContext(), owned, termWindowName(inst.Title), terminalReapProgram)
 		if err := uncached.Close(); err != nil {
 			log.InfoLog.Printf("terminal pane: failed to close uncached session %s: %v", owned, err)
 			reaped = false

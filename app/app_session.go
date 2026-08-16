@@ -181,8 +181,10 @@ type renameDoneMsg struct {
 //
 // The I/O half writes no model state at all: Instance.Rename returns the new
 // identity rather than assigning Title/Branch, because those are plain fields with no
-// mutex — read unguarded by the renderer on every frame, and by goroutines that are
-// handed a snapshot taken on the update thread (#718). The handler adopts it.
+// mutex, read unguarded by the renderer on every frame. The handler adopts it. Keeping the
+// write off this goroutine is necessary but not by itself sufficient — what the readers on
+// OTHER goroutines are owed is a value snapshotted on the update thread; see AdoptRename
+// for the per-reader argument (#718).
 func renameIOCmd(inst *session.Instance, value, note string) tea.Cmd {
 	return func() tea.Msg {
 		renamed, err := inst.Rename(value)

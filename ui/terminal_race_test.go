@@ -65,11 +65,15 @@ func raceEnsurePane(t *testing.T) *TerminalPane {
 // THE DETECTOR IS THE ASSERTION, AND ONLY UNDER -race. This test passes vacuously under
 // `just test`, `just ci`, and both non-race CI test jobs; the only gate that can fail it
 // is `just test-race` and CI's "Race detector" job. Its sibling
-// TestEnsureSessionReadsNoInstanceTitle is what the normal gate can see.
+// TestCaptureGoroutineReadsNoUnguardedInstanceField is what the normal gate can see.
 //
-// Observed on the unfixed tree at e43de60: WARNING: DATA RACE, write at
-// session/instance.go:2228 by AdoptRename against read at ui/terminal.go:412 in
-// EnsureSession.
+// To watch it fail, put the reads back: replace `title` with `instance.Title` at the two
+// EnsureSession sites (the legacy probe and the create) and keep the two-argument
+// signature — this file cannot compile against the pre-fix one-argument version, so
+// checking out e43de60 wholesale is not the reproduction. Doing that yields, reliably:
+// "WARNING: DATA RACE — Write by goroutine N: session.(*Instance).AdoptRename
+// (session/instance.go:2252); Previous read: ui.(*TerminalPane).EnsureSession
+// (ui/terminal.go:436)", the legacy-probe read.
 func TestEnsureSessionDoesNotReadTitleWhileAdoptRenameWritesIt(t *testing.T) {
 	inst := makeStartedInstance(t, "race")
 	t.Cleanup(func() { _ = inst.Kill() })
@@ -125,56 +129,73 @@ func TestEnsureSessionDoesNotReadTitleWhileAdoptRenameWritesIt(t *testing.T) {
 	wg.Wait()
 }
 
-// TestEnsureSessionReadsNoInstanceTitle is the half of #718's guard that the normal gate
-// can fail on.
+// captureGoroutineFuncs is every ui function that runs on the app's capture goroutine and
+// is handed an *Instance — the whole production path from app's captureTerminalFrame down.
+//
+// Both entries, not just the one that does the work: EnsureTerminalSession is a one-line
+// wrapper, and "return t.terminal.EnsureSession(instance, instance.Title)" is the natural
+// edit for anyone who wants "the current title". That reintroduces #718 one hop higher,
+// where a guard reading only terminal.go cannot see it.
+var captureGoroutineFuncs = []struct{ file, fn string }{
+	{"terminal.go", "EnsureSession"},
+	{"tabbed_window.go", "EnsureTerminalSession"},
+}
+
+// TestCaptureGoroutineReadsNoUnguardedInstanceField is the half of #718's guard that the
+// normal gate can fail on.
 //
 // The -race test above cannot: a data race is invisible to `go build`, `go vet`,
 // golangci-lint and an untagged `go test`, so on every gate except `just test-race` it
 // reports success whether or not the fix is present. This one asserts the shape of the
-// fix instead of its effect — EnsureSession reads no unguarded Instance field, because
-// the title it needs is snapshotted on the update thread and passed in.
+// fix instead of its effect — nothing on the capture path reads an unguarded Instance
+// field, because the title it needs is snapshotted on the update thread and passed in.
 //
-// Title and Branch by name rather than "any instance.X": the guarded accessors
-// (Started, Paused, WorkingDir, ClaimTerminalSessionName) are reads on the same receiver
-// and must stay allowed.
-func TestEnsureSessionReadsNoInstanceTitle(t *testing.T) {
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "terminal.go", nil, parser.SkipObjectResolution)
-	require.NoError(t, err)
-
-	// Branch is in the set although EnsureSession has never read it: AdoptRename writes
+// Title and Branch by name rather than "any X.field": the guarded accessors (Started,
+// Paused, WorkingDir, ClaimTerminalSessionName) are reads on the same receiver and must
+// stay allowed. But ANY receiver, not just one spelled "instance" — pinning the
+// parameter's name would let a rename to `inst`, which is what every other site in this
+// package calls it, turn the guard into a no-op that reports success.
+//
+// What it cannot see is the read moved one call deeper: a helper invoked from these
+// bodies runs on the same goroutine and is outside the inspected block. That is the limit
+// of a shape guard, and the reason the -race test is the primary one.
+func TestCaptureGoroutineReadsNoUnguardedInstanceField(t *testing.T) {
+	// Branch is in the set although neither function has ever read it: AdoptRename writes
 	// both fields on the same two lines, so a future read of either is the same defect.
 	unguarded := map[string]bool{"Title": true, "Branch": true}
 
-	ast.Inspect(ensureSessionBody(t, file), func(n ast.Node) bool {
-		sel, ok := n.(*ast.SelectorExpr)
-		if !ok || !unguarded[sel.Sel.Name] {
+	for _, target := range captureGoroutineFuncs {
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, target.file, nil, parser.SkipObjectResolution)
+		require.NoError(t, err)
+
+		ast.Inspect(methodBody(t, file, target.file, target.fn), func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok || !unguarded[sel.Sel.Name] {
+				return true
+			}
+			t.Errorf("%s reads .%s at %s — Title and Branch are unguarded fields written "+
+				"by AdoptRename on the update thread, so reading them on the capture "+
+				"goroutine is a data race (#718). Snapshot the value into "+
+				"frameTarget.termTitle and pass it in instead.",
+				target.fn, sel.Sel.Name, fset.Position(sel.Pos()))
 			return true
-		}
-		if ident, ok := sel.X.(*ast.Ident); !ok || ident.Name != "instance" {
-			return true
-		}
-		t.Errorf("EnsureSession reads instance.%s at %s — Title and Branch are unguarded "+
-			"fields written by AdoptRename on the update thread, so reading them on the "+
-			"capture goroutine is a data race (#718). Snapshot the value into "+
-			"frameTarget.termTitle and pass it in instead.",
-			sel.Sel.Name, fset.Position(sel.Pos()))
-		return true
-	})
+		})
+	}
 }
 
-// ensureSessionBody returns the body of TerminalPane.EnsureSession, failing the test when
-// it cannot be found — a rename must not turn the guard above into a no-op that passes.
-func ensureSessionBody(t *testing.T, file *ast.File) *ast.BlockStmt {
+// methodBody returns the body of the named method, failing the test when it cannot be
+// found — a rename must not turn the guard above into a no-op that passes.
+func methodBody(t *testing.T, file *ast.File, filename, name string) *ast.BlockStmt {
 	t.Helper()
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Name.Name != "EnsureSession" || fn.Recv == nil {
+		if !ok || fn.Name.Name != name || fn.Recv == nil {
 			continue
 		}
-		require.NotNil(t, fn.Body, "EnsureSession must have a body")
+		require.NotNil(t, fn.Body, name+" must have a body")
 		return fn.Body
 	}
-	t.Fatal("no method named EnsureSession in ui/terminal.go — if it was renamed, re-point this guard")
+	t.Fatalf("no method named %s in ui/%s — if it was renamed, re-point this guard", name, filename)
 	return nil
 }
