@@ -2241,9 +2241,14 @@ func (i *Instance) Rename(newTitle string) (RenamedIdentity, error) {
 //
 // Not every reader is inside that rule yet, and #718 named the rest rather than converting
 // them — the census lives in #719, not here, because it is long, it spans packages, and an
-// enumeration in a comment is a claim nothing can hold to the tree. Take it fresh instead:
-// `grep -rn 'i\.Title\|\.DisplayName()' session/ app/ --include='*.go'`, then ask of each
-// hit which goroutine it is on. The answer is a per-reader argument, never a general one:
+// enumeration in a comment is a claim nothing can hold to the tree. Take it fresh instead —
+// receiver-agnostic, or it misses every app-side reader, which spells these `inst.Title` and
+// `msg.instance.Title` rather than `i.Title`:
+//
+//	grep -rn '\.Title\b\|\.Branch\b\|\.DisplayName()' session/ app/ --include='*.go' | grep -v _test
+//
+// It is deliberately noisy (200 hits, most of them on the update thread and fine). Ask of
+// each which goroutine it is on: the answer is a per-reader argument, never a general one —
 // a teardown and a run-command sit behind beginAsyncAction's actionInFlight gate, which a
 // rename's own I/O sits behind too; a Start goroutine cannot overlap a rename of the same
 // instance because Rename refuses one that has not finished starting; Rename's own
