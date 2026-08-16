@@ -709,11 +709,14 @@ func TestFrameTargetSnapshotsTheTitleForTheCaptureGoroutine(t *testing.T) {
 	// A nil terminal is the create path — the only round that calls the ensurer.
 	captureTerminalFrame(frameTarget{termInstance: inst, termTitle: before}, ensure)
 	require.True(t, called, "control: the create path must reach the ensurer")
+	// One assertion, not two: `got != renamedTo` would be entailed by this one and could
+	// never fail on its own, since require.Equal halts the test first and renamedTo is
+	// before+"-renamed" by construction. What it would have claimed is said here instead —
+	// passing means the create ran on the PRE-rename title, which is the staleness
+	// EnsureSession's doc prices in.
 	require.Equal(t, before, got,
-		"the capture goroutine must be handed the snapshot, not re-derive the title")
-	require.NotEqual(t, renamedTo, got,
-		"and that means the create runs on the PRE-rename title — the staleness "+
-			"EnsureSession's doc prices in, asserted rather than assumed")
+		"the capture goroutine must be handed the snapshot (%q), not re-derive the title "+
+			"from the instance, which now reads %q", before, renamedTo)
 
 	// The next round resolves fresh, so the new title is picked up one frame later.
 	require.Equal(t, renamedTo, h.resolveFrameTarget().termTitle,

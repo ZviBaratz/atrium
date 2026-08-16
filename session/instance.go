@@ -2241,14 +2241,19 @@ func (i *Instance) Rename(newTitle string) (RenamedIdentity, error) {
 //
 // Not every reader is inside that rule yet, and #718 named the rest rather than converting
 // them — the census lives in #719, not here, because it is long, it spans packages, and an
-// enumeration in a comment is a claim nothing can hold to the tree. Take it fresh instead —
-// receiver-agnostic, or it misses every app-side reader, which spells these `inst.Title` and
-// `msg.instance.Title` rather than `i.Title`:
+// enumeration in a comment is a claim nothing can hold to the tree. Take it fresh instead:
 //
-//	grep -rn '\.Title\b\|\.Branch\b\|\.DisplayName()' session/ app/ --include='*.go' | grep -v _test
+//	grep -rn '\.Title\b\|\.Branch\b\|\.DisplayName()' session/ app/ ui/ --include='*.go' | grep -v _test
 //
-// It is deliberately noisy (200 hits, most of them on the update thread and fine). Ask of
-// each which goroutine it is on: the answer is a per-reader argument, never a general one —
+// Both breadths in that line were bought by getting it wrong. Receiver-agnostic, because
+// `i\.Title` finds nothing in app/ or ui/, which spell it `inst.Title` and
+// `msg.instance.Title`. And ui/ in the path list, because the reader this whole issue is
+// about LIVED there — a recipe scoped to session/ and app/ would have the next maintainer
+// audit everything except the package that produced the bug.
+//
+// It is deliberately noisy, and most of what it returns is on the update thread and fine.
+// Ask of each hit which goroutine it is on: the answer is a per-reader argument, never a
+// general one —
 // a teardown and a run-command sit behind beginAsyncAction's actionInFlight gate, which a
 // rename's own I/O sits behind too; a Start goroutine cannot overlap a rename of the same
 // instance because Rename refuses one that has not finished starting; Rename's own

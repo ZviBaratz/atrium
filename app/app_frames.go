@@ -243,11 +243,13 @@ func captureTerminalFrame(target frameTarget, ensure terminalEnsurer) paneFrameM
 		// empty pane instead of the fallback. The next round captures it — the
 		// target has changed, so it is armed with no delay.
 		//
-		// termTitle rides along for faithfulness only: it is the snapshot this call was
-		// given, carried forward rather than re-read (this runs on the capture goroutine,
-		// where reading it would be the #718 defect), and nothing downstream consumes it.
-		// The handler applies nothing on this target — instance is nil and termKey empty —
-		// and the re-arm comparison is already unequal on termKey alone.
+		// termTitle rides along because this target is still the target: it is the snapshot
+		// this call was given, carried forward rather than re-read (this runs on the capture
+		// goroutine, where reading it would be the #718 defect). Nothing reads the VALUE —
+		// the handler applies nothing on this target, since instance is nil and termKey is
+		// empty. It does take part in the struct comparison there, like every other field,
+		// but cannot change its outcome: an empty termKey already makes this target unequal
+		// to any freshly resolved one.
 		return paneFrameMsg{
 			target: frameTarget{termInstance: target.termInstance, termTitle: target.termTitle},
 			at:     time.Now(),

@@ -596,7 +596,7 @@ func TestEnsureSessionReapsLegacyTermSession(t *testing.T) {
 	defer func() { _ = instance.Kill() }()
 
 	// The shell session exactly as the pre-upgrade code minted it.
-	legacy := tmux.NewSession(context.Background(), "term_"+instance.Title, "sleep 300")
+	legacy := tmux.NewSession(context.Background(), termLegacyName(instance.Title), "sleep 300")
 	require.NoError(t, legacy.Start(t.TempDir()))
 	t.Cleanup(func() { _ = legacy.Close() })
 
