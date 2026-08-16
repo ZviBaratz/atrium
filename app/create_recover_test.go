@@ -3,12 +3,15 @@ package app
 import (
 	"context"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/internal/outbox"
 	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
 	"github.com/stretchr/testify/assert"
@@ -192,6 +195,70 @@ func TestReconcileAdoptsAnOrphanBranch(t *testing.T) {
 	assert.NoFileExists(t, outbox.ClaimPath(record))
 	_, rejected := outbox.Rejection(record)
 	assert.False(t, rejected)
+}
+
+// worktreeOn checks branch out at a worktree under path, standing in for what
+// `git worktree add` leaves when the process building a session is killed after it.
+func worktreeOn(t *testing.T, repo, branch, at string) string {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "git", "-C", repo, "worktree", "add", at, branch)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git worktree add: %s", out)
+	return at
+}
+
+// TestReconcileFreesTheOrphanWorktreeBeforeRequeueing is the half a branch check cannot
+// see, and only a live kill surfaced: an interrupted build leaves a registered WORKTREE
+// as well as a branch, and that registration is what actually blocks the retry.
+// resolveWorktreePaths stamps every worktree path with the current nanosecond, so the
+// second attempt asks for a different directory, its clearStaleWorktree clears a path
+// that never existed, and `git worktree add` fails with "already used by worktree"
+// against the first attempt's. Adoption without this is a re-queue straight into a
+// refusal.
+//
+// Before the re-queue, not after: the drain can pick the request up on its next tick.
+func TestReconcileFreesTheOrphanWorktreeBeforeRequeueing(t *testing.T) {
+	sandboxSpool(t)
+	root, err := config.WorktreesDir()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(root, 0o755))
+
+	branch := strandPrefix + "fix-auth"
+	repo := gitRepoWithBranch(t, branch)
+	stale := worktreeOn(t, repo, branch, filepath.Join(root, "fix-auth_deadbeef"))
+	strandedIn(t, "fix-auth", repo)
+
+	require.Equal(t, 1, reconcile(t))
+
+	require.True(t, recovered(t).Adopt)
+	assert.NoDirExists(t, stale, "the stale worktree must be gone by the time the drain runs")
+	held, _ := git.StrandedWorktreeFor(context.Background(), repo, branch)
+	assert.Empty(t, held, "and git must no longer report the branch as checked out")
+	assert.True(t, git.LocalBranchExists(context.Background(), repo, branch),
+		"while the branch itself — the interrupted build's actual work — survives")
+}
+
+// TestReconcileRefusesAnOrphanHeldByAHandMadeWorktree is that release's negative
+// control, and the one that keeps it from being a recursive delete of somebody's work.
+//
+// A worktree under the data dir's worktrees/ tree carries a name only Atrium mints. A
+// checkout a person made holds the branch just as firmly and is not ours to remove — so
+// the claim is refused with a reason naming it, rather than adopted into a Setup that
+// would fail with git's own wording anyway.
+func TestReconcileRefusesAnOrphanHeldByAHandMadeWorktree(t *testing.T) {
+	sandboxSpool(t)
+	branch := strandPrefix + "fix-auth"
+	repo := gitRepoWithBranch(t, branch)
+	mine := worktreeOn(t, repo, branch, filepath.Join(t.TempDir(), "my-own-checkout"))
+	record := strandedIn(t, "fix-auth", repo)
+
+	require.Equal(t, 1, reconcile(t))
+
+	reason, rejected := outbox.Rejection(record)
+	require.True(t, rejected, "the caller is owed the reason rather than a late Setup failure")
+	assert.Contains(t, reason, mine, "which names the checkout in the way")
+	assert.DirExists(t, mine, "and the person's checkout is untouched")
+	assertCreateSettled(t, record)
 }
 
 // TestReconcileRefusesABranchALiveSessionOwns is the adopt arm's first negative

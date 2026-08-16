@@ -96,7 +96,7 @@ func reconcileCreateClaims(ctx context.Context, instances []*session.Instance, b
 	var acted int
 	for _, e := range claims {
 		verdict, reason := classifyCreateClaim(ctx, e, instances, branchPrefix, now)
-		if applyCreateClaim(e, verdict, reason) {
+		if applyCreateClaim(ctx, e, verdict, reason) {
 			acted++
 		}
 	}
@@ -178,13 +178,32 @@ func classifyCreateClaim(ctx context.Context, e outbox.CreateEntry, instances []
 			"session, and branch %q already existed before it started, so it is not this "+
 			"session's to take; delete it or pick another title", branch)
 	}
+
+	// The branch is not the only thing an interrupted build leaves. `git worktree add`
+	// registers a directory too, and that registration is what actually blocks the
+	// retry: resolveWorktreePaths stamps every worktree path with the current nanosecond,
+	// so the second attempt asks for a DIFFERENT directory, its clearStaleWorktree clears
+	// a path that never existed, and `git worktree add` fails with "already used by
+	// worktree" against the first attempt's. Found by driving a real kill; no unit test
+	// saw it, because the branch check alone reads as sufficient.
+	//
+	// Whether it can be cleared is part of the verdict rather than of applying one. A
+	// worktree under the data dir's worktrees/ tree carries a name only Atrium mints and
+	// is this build's own leavings; anywhere else it is a checkout somebody made on
+	// purpose, and adopting past it would only fail later with git's own wording.
+	if wt, managed := git.StrandedWorktreeFor(ctx, e.Request.Path, branch); wt != "" && !managed {
+		return claimRefused, fmt.Sprintf("a previous atrium was interrupted while creating this "+
+			"session, and branch %q is checked out at %s, which is not a worktree Atrium "+
+			"manages; free the branch or pick another title", branch, wt)
+	}
 	return claimAdopt, ""
 }
 
 // applyCreateClaim carries out a verdict and reports whether it was applied. A failure
 // is logged and left alone: the claim survives, and the next launch reaches the same
-// verdict from the same evidence.
-func applyCreateClaim(e outbox.CreateEntry, verdict claimVerdict, reason string) bool {
+// verdict from the same evidence — which is what makes leaving it the safe response to
+// a git or filesystem problem rather than a leak.
+func applyCreateClaim(ctx context.Context, e outbox.CreateEntry, verdict claimVerdict, reason string) bool {
 	name := e.Request.Title
 	switch verdict {
 	case claimSucceeded:
@@ -199,6 +218,23 @@ func applyCreateClaim(e outbox.CreateEntry, verdict claimVerdict, reason string)
 			"its session is recorded", name)
 	case claimRequeue, claimAdopt:
 		adopt := verdict == claimAdopt
+		if adopt {
+			// Before the re-queue, not after: the drain can pick the request up on its
+			// very next tick, and a Setup that runs while the stale worktree still holds
+			// the branch fails with git's "already used by worktree" — the same dead end
+			// the adoption exists to avoid. classifyCreateClaim has already established
+			// that any holder is one Atrium minted.
+			if wt, managed := git.StrandedWorktreeFor(ctx, e.Request.Path,
+				e.Request.Claim.SessionBranch); managed {
+				if err := git.ReleaseManagedWorktree(ctx, e.Request.Path, wt); err != nil {
+					log.ErrorLog.Printf("failed to free branch %q from the interrupted build's "+
+						"worktree %s: %v", e.Request.Claim.SessionBranch, wt, err)
+					return false
+				}
+				log.InfoLog.Printf("freed branch %q from the interrupted build's worktree %s",
+					e.Request.Claim.SessionBranch, wt)
+			}
+		}
 		if err := outbox.Requeue(e.Path, adopt); err != nil {
 			log.ErrorLog.Printf("failed to re-queue the interrupted create request for %q: %v", name, err)
 			return false

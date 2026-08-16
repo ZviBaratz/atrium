@@ -297,24 +297,111 @@ func (g *Worktree) clearStaleWorktree() {
 // this as a fallback when git can no longer manage the worktree, and we never want
 // an unexpected path to turn into a recursive delete of something important.
 func removeOrphanedWorktreeDir(worktreePath string) error {
-	root, err := getWorktreeDirectory()
+	absPath, managed, err := underManagedWorktrees(worktreePath)
 	if err != nil {
-		return fmt.Errorf("failed to resolve worktrees directory: %w", err)
+		return err
 	}
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return fmt.Errorf("failed to resolve worktrees directory: %w", err)
-	}
-	absPath, err := filepath.Abs(worktreePath)
-	if err != nil {
-		return fmt.Errorf("failed to resolve worktree path: %w", err)
-	}
-	rel, err := filepath.Rel(absRoot, absPath)
-	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if !managed {
 		return fmt.Errorf("refusing to remove worktree path outside managed tree: %s", absPath)
 	}
 	if err := os.RemoveAll(absPath); err != nil {
 		return fmt.Errorf("failed to remove orphaned worktree directory %s: %w", absPath, err)
+	}
+	return nil
+}
+
+// underManagedWorktrees reports whether worktreePath lives inside the data dir's
+// worktrees/ tree, alongside its absolutized form. One definition, because two callers
+// now turn on it and they must agree: removeOrphanedWorktreeDir uses it to refuse a
+// recursive delete outside the managed tree, and StrandedWorktreeFor uses it to tell a
+// worktree Atrium minted from one a person checked out by hand.
+func underManagedWorktrees(worktreePath string) (abs string, managed bool, err error) {
+	root, err := getWorktreeDirectory()
+	if err != nil {
+		return "", false, fmt.Errorf("failed to resolve worktrees directory: %w", err)
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", false, fmt.Errorf("failed to resolve worktrees directory: %w", err)
+	}
+	abs, err = filepath.Abs(worktreePath)
+	if err != nil {
+		return "", false, fmt.Errorf("failed to resolve worktree path: %w", err)
+	}
+	// Symlink-resolved on both sides, for resolvePath's reason: git reports the path it
+	// registered, which on macOS routinely reaches us as /private/var where
+	// getWorktreeDirectory returns /var. Unresolved, every comparison there misses —
+	// and a miss here reads as "not ours", which is the safe direction for the delete
+	// but the wrong one for recognising our own stranded worktree.
+	rel, relErr := filepath.Rel(resolvePath(absRoot), resolvePath(abs))
+	if relErr != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return abs, false, nil
+	}
+	return abs, true, nil
+}
+
+// StrandedWorktreeFor returns the worktree currently holding branch in the repository
+// at repoPath, and whether it is one Atrium minted (inside the data dir's worktrees/
+// tree). An empty path means no worktree holds the branch.
+//
+// It exists for the create-recovery path (#716). A build interrupted between
+// `git worktree add` and persistInstances leaves both a branch and a worktree, and the
+// worktree is the half that blocks a second attempt: resolveWorktreePaths stamps every
+// worktree directory with time.Now().UnixNano(), so the retry mints a DIFFERENT path,
+// its clearStaleWorktree clears a path that never existed, and `git worktree add` then
+// fails with "already used by worktree" against the first attempt's directory. Adopting
+// the branch alone therefore does not finish the session; the stale registration has to
+// go first.
+//
+// The managed flag is the caller's licence to remove it. A path under worktrees/ is a
+// name only Atrium mints; anything else is a checkout somebody made deliberately, and
+// no recovery should delete one of those.
+func StrandedWorktreeFor(ctx context.Context, repoPath, branch string) (path string, managed bool) {
+	out, err := localGit(ctx, repoPath, "worktree", "list", "--porcelain")
+	if err != nil {
+		return "", false
+	}
+	for wt, held := range parseWorktreeList(out) {
+		if held != branch {
+			continue
+		}
+		abs, ok, err := underManagedWorktrees(wt)
+		if err != nil {
+			return wt, false
+		}
+		return abs, ok
+	}
+	return "", false
+}
+
+// ReleaseManagedWorktree detaches a stranded worktree from its branch: git's
+// registration first, then the directory, then a prune so git forgets a registration
+// whose directory was already gone.
+//
+// It refuses any path outside the managed worktrees/ tree, through the same check
+// StrandedWorktreeFor reports — the caller is expected to have consulted that, and this
+// re-checks rather than trusting it, because the argument is a path and the failure mode
+// is a recursive delete.
+//
+// The branch itself is untouched. That is the whole point: the branch holds whatever the
+// interrupted build committed, and the caller is removing the worktree precisely so a
+// second attempt can check that branch out again.
+func ReleaseManagedWorktree(ctx context.Context, repoPath, worktreePath string) error {
+	abs, managed, err := underManagedWorktrees(worktreePath)
+	if err != nil {
+		return err
+	}
+	if !managed {
+		return fmt.Errorf("refusing to release worktree outside the managed tree: %s", abs)
+	}
+	// Best-effort: a registration whose directory a person already deleted makes this
+	// fail, and the prune below is what finishes the job in that case.
+	_, _ = localGit(ctx, repoPath, "worktree", "remove", "-f", abs)
+	if err := removeOrphanedWorktreeDir(abs); err != nil {
+		return err
+	}
+	if _, err := localGit(ctx, repoPath, "worktree", "prune"); err != nil {
+		return fmt.Errorf("failed to prune worktrees in %s: %w", repoPath, err)
 	}
 	return nil
 }

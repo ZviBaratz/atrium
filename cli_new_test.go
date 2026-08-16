@@ -685,6 +685,31 @@ func TestNewWaitKeepsWaitingWhileTheRequestIsClaimed(t *testing.T) {
 	assert.Contains(t, err.Error(), "still queued")
 }
 
+// TestWaitForCreateWatchesTheClaimToo is the wiring, and a mutation battery is what
+// found it missing: every other test here drives awaitSpool directly and passes the
+// claim path itself, so all of them stay green against a waitForCreate that passes "".
+//
+// What that mutant produces is not a hang but a WRONG ANSWER, which is why the assertion
+// is on the wording. With the claim unwatched the record's absence ends the wait, the
+// state.json read-back finds no row, and the caller is told its outcome "was lost" and
+// sent to check the log — for a session whose worktree is at that moment still going up.
+func TestWaitForCreateWatchesTheClaimToo(t *testing.T) {
+	sandboxDataDir(t)
+	repo := tempRepo(t)
+	path, err := outbox.WriteCreate(outbox.Request{Title: "fix-auth", Path: repo})
+	require.NoError(t, err)
+	require.NoError(t, outbox.Claim(path, outbox.ClaimMeta{At: time.Now(), SessionBranch: "zvi/fix-auth"}))
+
+	var out bytes.Buffer
+	err = waitForCreate(&out, path, "fix-auth", repo, 20*time.Millisecond)
+
+	require.Error(t, err, "a session that is still being built has not been created")
+	assert.Contains(t, err.Error(), "being built right now",
+		"a claimed request is in flight, not an outcome that was lost")
+	assert.NotContains(t, err.Error(), "outcome was lost")
+	assert.Empty(t, out.String(), "and nothing may be reported as created")
+}
+
 // TestSpoolSettledReadsTheRecordBeforeTheClaim pins the stat ORDER, which is the whole
 // correctness of the two-file wait.
 //
