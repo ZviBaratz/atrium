@@ -2172,6 +2172,12 @@ type RenamedIdentity struct {
 // would be a data race — the reason the returned identity is applied by AdoptRename on the
 // update thread instead. Everything this function does touch (the git/tmux structs) guards
 // its own fields.
+//
+// The renderer is not the only reader, and moving the write to the update thread is not on
+// its own enough to make either field safe: what makes it enough is that every OTHER reader
+// either runs on that thread too or is handed a value snapshotted there. The one that was
+// not — EnsureSession, on the capture goroutine — now takes the title as a parameter
+// (frameTarget.termTitle, #718). See AdoptRename for the readers still outside that rule.
 func (i *Instance) Rename(newTitle string) (RenamedIdentity, error) {
 	newTitle = strings.TrimSpace(newTitle)
 	if newTitle == "" {
@@ -2215,9 +2221,27 @@ func (i *Instance) Rename(newTitle string) (RenamedIdentity, error) {
 }
 
 // AdoptRename writes the identity a successful Rename earned. Main-loop only, for the
-// same single-writer reason as SetDiffStats: Title is read unguarded by the renderer.
+// same single-writer reason as SetDiffStats: Title and Branch are plain fields with no
+// mutex, so a second writer would be a data race with no lock to serialise it.
 // A zero Branch is left alone — a direct session has no worktree to derive one from, so
 // overwriting would blank a field the rename never owned.
+//
+// This comment used to justify "main-loop only" with "Title is read unguarded by the
+// renderer", which is true of the renderer and was never the whole reader set — the
+// renderer runs on this same loop, so it is the one reader that cannot race. What makes
+// main-loop-only sufficient is that the readers on OTHER goroutines are handed values
+// snapshotted here rather than reading the fields: TerminalPane.EnsureSession, on the
+// capture goroutine, took the title off the instance until #718 and now receives
+// frameTarget.termTitle; app's customCommandSpec carries strings for the same reason.
+//
+// Not every reader is inside that rule yet, and #718's census named the rest rather than
+// converting them: journalKill (via ToInstanceData), runcmd's DisplayName log lines,
+// repoScriptCtx and sessionBrief, plus sendPromptCmd. What keeps each of them narrow
+// differs — a teardown and a run-command are dispatched behind beginAsyncAction's
+// actionInFlight gate, which a rename's own I/O also sits behind; a Start goroutine cannot
+// overlap a rename of the same instance because Rename refuses an instance that has not
+// finished starting. sendPromptCmd has neither and is simply improbable. None of that is a
+// rule a NEW off-thread reader may lean on: snapshot on this thread instead.
 //
 // It deliberately leaves both sibling names alone: termName and runName are owned rather
 // than derived, so the shell and the dev server keep the names they were created under and

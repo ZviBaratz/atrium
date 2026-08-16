@@ -318,8 +318,12 @@ func (w *TabbedWindow) TerminalCaptureTarget(instance *session.Instance) (*tmux.
 // EnsureTerminalSession creates the instance's shell session. Runs on the capture
 // goroutine: it starts a tmux session, which is exactly the work that must not
 // happen inside Update.
-func (w *TabbedWindow) EnsureTerminalSession(instance *session.Instance) (string, error) {
-	return w.terminal.EnsureSession(instance)
+//
+// title rides along rather than being read off the instance down there, because Title is
+// unguarded and AdoptRename writes it on the update thread (#718). See EnsureSession for
+// what the resulting staleness costs at each use.
+func (w *TabbedWindow) EnsureTerminalSession(instance *session.Instance, title string) (string, error) {
+	return w.terminal.EnsureSession(instance, title)
 }
 
 // HasTerminalSession reports whether a shell session has been created for

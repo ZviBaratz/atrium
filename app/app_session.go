@@ -180,8 +180,9 @@ type renameDoneMsg struct {
 // Validation stays on the main thread (it reads m.list); only the I/O moves.
 //
 // The I/O half writes no model state at all: Instance.Rename returns the new
-// identity rather than assigning Title/Branch, because those are read unguarded
-// by the renderer on every frame. The handler adopts it.
+// identity rather than assigning Title/Branch, because those are plain fields with no
+// mutex — read unguarded by the renderer on every frame, and by goroutines that are
+// handed a snapshot taken on the update thread (#718). The handler adopts it.
 func renameIOCmd(inst *session.Instance, value, note string) tea.Cmd {
 	return func() tea.Msg {
 		renamed, err := inst.Rename(value)

@@ -31,7 +31,7 @@ func shellPane(t *testing.T, title string) (*TerminalPane, *session.Instance, st
 	tp.SetSize(80, 30)
 	t.Cleanup(tp.Close)
 
-	key, err := tp.EnsureSession(inst)
+	key, err := tp.EnsureSession(inst, inst.Title)
 	require.NoError(t, err)
 	require.NotEmpty(t, key)
 	require.True(t, shellNamed(t, key), "precondition: the shell is alive on the socket")
@@ -91,7 +91,7 @@ func TestDeepRenameDoesNotMintASecondShell(t *testing.T) {
 	require.NotEqual(t, key, derivedNow, "precondition: the rename moved the derived name")
 
 	require.NoError(t, tp.UpdateContent(inst))
-	again, err := tp.EnsureSession(inst)
+	again, err := tp.EnsureSession(inst, inst.Title)
 	require.NoError(t, err)
 
 	assert.Equal(t, key, again, "EnsureSession must return the owned key, not a re-derived one")
@@ -164,7 +164,7 @@ func TestAFreshPaneAdoptsTheOwnedShellAfterARename(t *testing.T) {
 	t.Cleanup(fresh.Close)
 	fresh.SetSize(80, 30)
 
-	adopted, err := fresh.EnsureSession(inst)
+	adopted, err := fresh.EnsureSession(inst, inst.Title)
 	require.NoError(t, err)
 
 	assert.Equal(t, key, adopted, "the next run must adopt the shell it left running")
@@ -189,7 +189,7 @@ func TestReapReleasesTheNameSoTheNextShellFollowsTheRename(t *testing.T) {
 	require.Empty(t, inst.TerminalSessionName(), "a reap must give the shell's name up")
 	assert.Equal(t, derivedNow, terminalKey(inst), "the key must follow the current title again")
 
-	next, err := tp.EnsureSession(inst)
+	next, err := tp.EnsureSession(inst, inst.Title)
 	require.NoError(t, err)
 	assert.Equal(t, derivedNow, next, "the shell created after a reap must carry the new name")
 	assert.True(t, shellNamed(t, derivedNow), "and must actually be on the socket under it")
@@ -325,7 +325,7 @@ func TestAFailedCreateReleasesTheNameItMinted(t *testing.T) {
 	tp.SetSize(80, 30)
 	minted := inst.MintTerminalSessionName()
 
-	_, err := tp.EnsureSession(inst)
+	_, err := tp.EnsureSession(inst, inst.Title)
 	require.Error(t, err, "precondition: the create must fail")
 
 	assert.Empty(t, inst.TerminalSessionName(),
@@ -352,7 +352,7 @@ func TestAnAbortedInstallReleasesTheNameItMinted(t *testing.T) {
 	minted := inst.MintTerminalSessionName()
 	tp.beforeInstall = tp.Close
 
-	key, err := tp.EnsureSession(inst)
+	key, err := tp.EnsureSession(inst, inst.Title)
 	require.NoError(t, err)
 	require.Empty(t, key, "precondition: the install must have been refused")
 

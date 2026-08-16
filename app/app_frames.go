@@ -55,6 +55,18 @@ type frameTarget struct {
 	termKey  string
 	// termInstance is the instance the shell belongs to, needed to create it.
 	termInstance *session.Instance
+	// termTitle is termInstance's Title, snapshotted HERE on the update thread for the
+	// same reason termKey is computed here: Instance.Title is a plain exported field with
+	// no mutex, AdoptRename writes it on this thread, and EnsureSession reads it on the
+	// capture goroutine — an unsynchronised pair, and a torn string header rather than
+	// merely a stale value (#718).
+	//
+	// It buys correctness at the cost of freshness: a rename landing between this
+	// resolution and the create makes the shell's tmux window name, and the legacy reap
+	// name, use the OLD title. TerminalPane.EnsureSession's doc decides that per use — for
+	// the legacy reap the older title is the more correct one, and the window name is
+	// frozen at creation anyway.
+	termTitle string
 }
 
 // empty reports a target with nothing to capture.
@@ -126,7 +138,7 @@ func (m *home) resolveFrameTarget() frameTarget {
 		if sess == nil && m.shellStartRefused(selected) {
 			return frameTarget{}
 		}
-		return frameTarget{terminal: sess, termKey: key, termInstance: selected}
+		return frameTarget{terminal: sess, termKey: key, termInstance: selected, termTitle: selected.Title}
 	default:
 		// The diff tab renders from cached git metadata and captures nothing.
 		return frameTarget{}
@@ -204,7 +216,7 @@ func captureFrameCmd(ctx context.Context, target frameTarget, delay time.Duratio
 func captureTerminalFrame(target frameTarget, ensure terminalEnsurer) paneFrameMsg {
 	sess := target.terminal
 	if sess == nil {
-		created, err := ensure(target.termInstance)
+		created, err := ensure(target.termInstance, target.termTitle)
 		if err != nil {
 			return paneFrameMsg{target: target, err: err, at: time.Now()}
 		}
@@ -218,7 +230,10 @@ func captureTerminalFrame(target frameTarget, ensure terminalEnsurer) paneFrameM
 		// TerminalPane.UpdateContent reads as "a frame has arrived", painting an
 		// empty pane instead of the fallback. The next round captures it — the
 		// target has changed, so it is armed with no delay.
-		return paneFrameMsg{target: frameTarget{termInstance: target.termInstance}, at: time.Now()}
+		return paneFrameMsg{
+			target: frameTarget{termInstance: target.termInstance, termTitle: target.termTitle},
+			at:     time.Now(),
+		}
 	}
 	text, err := sess.CapturePaneContent()
 	return paneFrameMsg{
@@ -232,7 +247,11 @@ func captureTerminalFrame(target frameTarget, ensure terminalEnsurer) paneFrameM
 // terminalEnsurer creates the shell session for an instance and returns its cache
 // key. It is a function rather than a direct call so captureFrameCmd stays free of
 // the ui type — and so a test can drive the create path without a pane.
-type terminalEnsurer func(*session.Instance) (string, error)
+//
+// The title is a parameter rather than something the implementation reads off the
+// instance, because it runs on the capture goroutine and Title is unguarded (#718). See
+// frameTarget.termTitle.
+type terminalEnsurer func(inst *session.Instance, title string) (string, error)
 
 // armFrameCapture dispatches the next capture, or lets the chain end when there
 // is nothing to capture.

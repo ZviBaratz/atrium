@@ -338,7 +338,31 @@ func (t *TerminalPane) ApplyFrame(key, content string, err error, at time.Time) 
 // just created rather than caching one in a deleted worktree (#701). The other
 // half of that fix is app's shellStartRefused, which stops this being reached
 // during a teardown in the first place.
-func (t *TerminalPane) EnsureSession(instance *session.Instance) (string, error) {
+//
+// title is the instance's Title, SNAPSHOTTED on the update thread when the frame target
+// was resolved (frameTarget.termTitle, app/app_frames.go) — not read off the instance
+// here, which would be a data race: Title is a plain exported field with no mutex, and
+// AdoptRename writes it on the update thread while this runs on the capture goroutine
+// (#718). Same reason frameTarget.termKey is computed there rather than derived here.
+//
+// The snapshot is up to one paneFrameInterval plus a capture round trip STALER than the
+// racy read it replaces, so each use had to be worth that:
+//
+//   - The legacy reap name "term_"+title. Stale is if anything MORE correct: the
+//     pre-#708 shell this reaps was named under the title the instance had when that
+//     shell was created, so an older value is closer to the name actually on the socket,
+//     never further. And Close/DoesSessionExist address it with tmux's "-t=" exact match,
+//     so a name that matches nothing reaps nothing rather than reaping a stranger.
+//   - The tmux WINDOW name "term: "+title, on both the create and the recreate. Stale is
+//     inside a tolerance that already exists by design: AdoptRename deliberately does not
+//     rename the shell's tmux session or window (see its doc), so the window name a shell
+//     is created with is the one it keeps for the rest of its life. One frame of lag is a
+//     rounding error against a value that is permanently frozen on purpose.
+//
+// What title must NEVER be used for is anything that names the shell's tmux SESSION.
+// That is key, minted and owned under the instance's own lock precisely so a rename
+// cannot move it (#708, session/termname.go).
+func (t *TerminalPane) EnsureSession(instance *session.Instance, title string) (string, error) {
 	if instance == nil || !instance.Started() || instance.Paused() {
 		return "", nil
 	}
@@ -409,7 +433,7 @@ func (t *TerminalPane) EnsureSession(instance *session.Instance) (string, error)
 	// create path (one has-session probe, cache misses only). For an instance
 	// literally titled "term" the two names coincide — the "legacy" session IS
 	// the one being ensured, so leave it for the restore logic below.
-	if legacy := tmux.NewSession(t.baseContext(), "term_"+instance.Title, shell); legacy.Name() != key && legacy.DoesSessionExist() {
+	if legacy := tmux.NewSession(t.baseContext(), "term_"+title, shell); legacy.Name() != key && legacy.DoesSessionExist() {
 		if err := legacy.Close(); err != nil {
 			log.InfoLog.Printf("terminal pane: failed to reap legacy session %s: %v", legacy.Name(), err)
 		}
@@ -420,7 +444,7 @@ func (t *TerminalPane) EnsureSession(instance *session.Instance) (string, error)
 	// prefix-matches and the new-session/rename guards reserve so no agent session can
 	// claim it. One name, one home: the cache key and the session name are the same fact,
 	// so neither can drift from the other. The window name is cosmetic.
-	ts := tmux.NewSessionWithName(t.baseContext(), key, "term: "+instance.Title, shell)
+	ts := tmux.NewSessionWithName(t.baseContext(), key, "term: "+title, shell)
 
 	// Adopt a shell already sitting on this name — the previous run's, since a shell is
 	// meant to outlive Atrium — and recreate it when it cannot be restored.
@@ -431,7 +455,7 @@ func (t *TerminalPane) EnsureSession(instance *session.Instance) (string, error)
 		} else {
 			// Session exists but can't restore, kill it and start fresh
 			_ = ts.Close()
-			ts = tmux.NewSessionWithName(t.baseContext(), key, "term: "+instance.Title, shell)
+			ts = tmux.NewSessionWithName(t.baseContext(), key, "term: "+title, shell)
 		}
 	}
 	// One exit for a create that could not start, rather than one per branch. Both used to

@@ -605,7 +605,9 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.handleError(msg.err)
 		}
 		// Adopt the identity the I/O earned. This is the only writer of Title and
-		// Branch, and it is on the update thread — the renderer reads Title unguarded.
+		// Branch, and it is on the update thread — both are plain fields with no mutex,
+		// and the readers on other goroutines are handed a snapshot taken here rather
+		// than reading them (see AdoptRename, #718).
 		msg.instance.AdoptRename(msg.renamed)
 		// The deep rename replaced the real title, so the cosmetic label must go or
 		// it would keep shadowing it.

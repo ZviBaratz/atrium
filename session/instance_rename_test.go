@@ -184,8 +184,15 @@ func requireSubstr(t *testing.T, ran []string, substrs ...string) {
 // adopts it.
 //
 // The failure this prevents is a data race, which no assertion can observe directly:
-// what is observable is that the I/O alone changes nothing the renderer reads, so the
-// window in which a torn read could happen does not exist.
+// what is observable is that the I/O alone changes nothing the renderer reads, so this
+// goroutine cannot be the second party to a torn read.
+//
+// Not "the window does not exist", which is what this comment used to claim and which was
+// false when written: a second reader was already there — TerminalPane.EnsureSession, on
+// the capture goroutine, racing AdoptRename rather than Rename (#718). Closing this half
+// never closed that one. The guard that does is ui's
+// TestEnsureSessionDoesNotReadTitleWhileAdoptRenameWritesIt, and unlike this test it fails
+// only under -race.
 func TestInstanceRename_IOHalfLeavesTheIdentityAlone(t *testing.T) {
 	repoPath := renameTestRepo(t)
 	wt, _, err := git.NewWorktree(context.Background(), repoPath, "before")
