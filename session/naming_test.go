@@ -185,7 +185,7 @@ func TestSlugTitle(t *testing.T) {
 
 	t.Run("truncates to the 32-char title cap on a word boundary", func(t *testing.T) {
 		got := SlugTitle("The hub is failing with a migration error somewhere")
-		require.LessOrEqual(t, len([]rune(got)), maxNameLen)
+		require.LessOrEqual(t, len([]rune(got)), MaxTitleLen)
 		require.Equal(t, "The hub is failing with a", got)
 	})
 }
@@ -401,7 +401,7 @@ func TestGenerateNameIntegration(t *testing.T) {
 	elapsed := time.Since(start)
 	require.NoError(t, err)
 	require.NotEmpty(t, name)
-	require.LessOrEqual(t, len(name), maxNameLen)
+	require.LessOrEqual(t, len(name), MaxTitleLen)
 	t.Logf("generated %q in %s", name, elapsed.Round(100*time.Millisecond))
 }
 

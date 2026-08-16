@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 
 	cmd2 "github.com/ZviBaratz/atrium/cmd"
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/daemon"
+	"github.com/ZviBaratz/atrium/internal/outbox"
 	"github.com/ZviBaratz/atrium/internal/undo"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
@@ -77,6 +79,56 @@ func runReset(ctx context.Context, cmdExec cmd2.Executor) error {
 		return fmt.Errorf("failed to reset storage: %w", err)
 	}
 	fmt.Println("Storage has been reset successfully")
+
+	// Immediately after the wipe, and above everything that can still return early: a
+	// queued `atrium new` request is the one piece of state that can *create* after the
+	// reset. Everything here is ordered so nothing survives to re-persist a deleted
+	// session, and a create request defeats that from outside the lock by design (`new`
+	// never acquires it before it spools; it only tests it afterwards, to warn when no
+	// TUI is running) — with no session left to collide with, every gate it meets now
+	// passes, so the next launch silently builds a worktree, a branch and an agent from
+	// a request made before the reset.
+	//
+	// Left until after the tmux and worktree cleanups, that protection would be
+	// conditional on both succeeding: an uninstalled tmux or a repo that has since moved
+	// aborts the reset with state.json already empty, and the request outlives it. So it
+	// runs here — past the point of no return, where discarding a queued request is
+	// unambiguously right, and before any step that can still fail.
+	//
+	// Queued prompts go with them: each one addresses a session this reset has just
+	// deleted, so the only thing left to do with it is refuse it, and doing that here
+	// means the caller hears "reset" instead of "no such session".
+	//
+	// Every record is discarded through a rejection receipt, never a bare unlink — a
+	// producer blocked in `--wait` reads the file's disappearance as success. The
+	// receipts are what a reset deliberately leaves behind; they expire on their own.
+	//
+	// One window this cannot close: `new` takes no lock, so a request spooled after the
+	// ReadDir below survives. That is a race with a concurrent `atrium new`, not a
+	// failure mode of the reset itself.
+	//
+	// Best-effort: a reset whose real work is done must not fail on a spool it could not
+	// read. The count is printed either way — a partial clear that dropped nine of ten
+	// records has still dropped nine — and it counts records in both spools, prompts and
+	// create requests alike.
+	//
+	// What is NOT printed either way is the completion. A record the reset could not
+	// unlink is a queued create that outlives it, which is the exact outcome the comment
+	// above says this step exists to prevent, so saying "cleared" on that path would tell
+	// the operator the opposite of what happened — and the log line alone does not reach
+	// them. The failure goes to stderr beside the count, and the exit code stays 0
+	// because the reset itself did succeed; what failed is a spool the operator can now
+	// go and look at.
+	cleared, err := outbox.Clear()
+	if err != nil {
+		log.WarningLog.Printf("reset: could not fully clear the outbox: %v", err)
+		fmt.Printf("Outbox could NOT be fully cleared; %d spooled record%s discarded\n",
+			cleared, plural(cleared))
+		fmt.Fprintf(os.Stderr, "warning: %v — a queued request left behind will be acted on by the "+
+			"next atrium, which has no session left for its title to collide with\n", err)
+	} else {
+		fmt.Printf("Outbox has been cleared; %d spooled record%s discarded\n", cleared, plural(cleared))
+	}
 
 	if err := tmux.CleanupSessions(ctx, cmdExec); err != nil {
 		return fmt.Errorf("failed to cleanup tmux sessions: %w", err)
