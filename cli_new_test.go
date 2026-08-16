@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -549,7 +551,7 @@ func TestNewCreatesNoConfigFile(t *testing.T) {
 	_, _, err := newSession(t, newRequest{title: "fix-auth", path: tempRepo(t)})
 	require.NoError(t, err)
 
-	assert.NoFileExists(t, cfg, "a pure producer creates nothing in the data dir but its request")
+	assert.NoFileExists(t, cfg, "a pure producer seeds no config.json, however it reads one")
 }
 
 // TestNewCommandFlagsAreAllWired executes the cobra command itself, which nothing else
@@ -714,4 +716,117 @@ func TestNewWaitRefusesToClaimASessionThatWasNeverRecorded(t *testing.T) {
 	require.Error(t, err, "a vanished record with nothing behind it is not a creation")
 	assert.Contains(t, err.Error(), "recorded no session")
 	assert.NotContains(t, stdout, "created", "and nothing may be printed as if it were")
+}
+
+// TestNewRefusesAControlCharacterInTheTitle: `atrium new` is the first producer that can
+// put one into a Title, and a Title is the one field that reaches the renderer
+// unsanitized — session.NewInstance stores it verbatim, and only the derived branch and
+// tmux names are slugged. The create form cannot: its field is a bubbles textinput,
+// which collapses newlines and tabs to spaces on the way in.
+//
+// The trigger is ordinary rather than adversarial. `atrium new "$(gh issue view 42 --json
+// title -q .title)"` and a title taken from `git log --format=%B` both carry a trailing
+// newline, and the "agent working through a queue of issues" the help text pitches is
+// exactly who writes that. One embedded newline splits the session row across two lines:
+// the second gets no selection indicator and no status glyph, and every mouse zone below
+// it shifts by a line.
+//
+// Refused rather than stripped, for the same reason titles are not slugged — the branch
+// name derives from the title, so rewriting one picks a branch the caller did not ask
+// for. A trailing newline is the exception and is trimmed, because TrimSpace runs first
+// and that is unambiguous.
+func TestNewRefusesAControlCharacterInTheTitle(t *testing.T) {
+	for name, title := range map[string]string{
+		"interior newline": "fix auth\nand tests",
+		"tab":              "fix\tauth",
+		"escape":           "fix\x1bauth",
+		"carriage return":  "fix\rauth",
+	} {
+		t.Run(name, func(t *testing.T) {
+			sandboxDataDir(t)
+			_, _, err := newSession(t, newRequest{title: title, path: tempRepo(t)})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "control characters")
+			assert.Empty(t, spooledCreates(t), "and nothing is spooled")
+		})
+	}
+
+	// The controls. A trailing newline is trimmed rather than refused — TrimSpace has
+	// already run by then, so the caller's intent is unambiguous — and an ordinary title
+	// with punctuation and non-ASCII is untouched. Without these, refusing every title
+	// would score the same.
+	t.Run("a trailing newline is trimmed", func(t *testing.T) {
+		sandboxDataDir(t)
+		_, _, err := newSession(t, newRequest{title: "fix-auth\n", path: tempRepo(t)})
+		require.NoError(t, err)
+		entries := spooledCreates(t)
+		require.Len(t, entries, 1)
+		assert.Equal(t, "fix-auth", entries[0].Request.Title)
+	})
+	t.Run("an ordinary title is untouched", func(t *testing.T) {
+		sandboxDataDir(t)
+		const title = "fix auth (#42) — café"
+		_, _, err := newSession(t, newRequest{title: title, path: tempRepo(t)})
+		require.NoError(t, err)
+		entries := spooledCreates(t)
+		require.Len(t, entries, 1)
+		assert.Equal(t, title, entries[0].Request.Title)
+	})
+}
+
+// TestAwaitSpoolRetriesAStatItCouldNotAnswer: a Stat error other than "not found" is
+// carried to the deadline rather than returned from the sample that saw it.
+//
+// The two cases it could be cannot be told apart at one sample. A data dir on NFS,
+// sshfs or a container bind mount answers a single Stat with ESTALE or EIO and the next
+// one fine; a permissions problem does not clear. Persistence is the only discriminator,
+// and the deadline is already measuring it — so returning on the first error would fail
+// a CI job for a record the TUI drains half a second later.
+//
+// Staged with a path whose parent is a regular file (ENOTDIR), swapped for a real
+// directory between samples. betweenSpoolSamples is the only place that window is
+// reachable.
+func TestAwaitSpoolRetriesAStatItCouldNotAnswer(t *testing.T) {
+	sandboxDataDir(t)
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, "blocker")
+	require.NoError(t, os.WriteFile(blocker, []byte("not a directory"), 0o600))
+	record := filepath.Join(blocker, "record.json")
+
+	_, err := os.Stat(record)
+	require.Error(t, err, "precondition: the path errors")
+	require.False(t, errors.Is(err, fs.ErrNotExist), "and not with ENOENT: %v", err)
+
+	samples := 0
+	betweenSpoolSamples = func() {
+		samples++
+		if samples == 2 {
+			// The mount comes back: the record is genuinely gone, which is the drain's
+			// success signal.
+			require.NoError(t, os.Remove(blocker))
+			require.NoError(t, os.Mkdir(blocker, 0o700))
+		}
+	}
+	t.Cleanup(func() { betweenSpoolSamples = func() {} })
+
+	err = awaitSpool(record, 10*time.Second, spoolWaitCopy{refused: "refused", timedOut: "timed out"})
+	require.GreaterOrEqual(t, samples, 2, "precondition: the window was reproduced")
+	assert.NoError(t, err, "a transient Stat error must not end the wait")
+}
+
+// The other half: an error that never clears is reported at the deadline, and reported
+// as ITSELF rather than as the timeout wording — which would blame a TUI that was never
+// the problem and send the caller looking in the wrong place.
+func TestAwaitSpoolReportsAStatErrorThatNeverClears(t *testing.T) {
+	sandboxDataDir(t)
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, "blocker")
+	require.NoError(t, os.WriteFile(blocker, []byte("not a directory"), 0o600))
+
+	err := awaitSpool(filepath.Join(blocker, "record.json"), 10*time.Millisecond,
+		spoolWaitCopy{refused: "refused", timedOut: "no atrium picked it up"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to read the outbox")
+	assert.NotContains(t, err.Error(), "no atrium picked it up",
+		"a bad data dir must not be reported as a TUI that did not answer")
 }

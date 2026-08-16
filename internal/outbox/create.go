@@ -41,6 +41,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 )
 
 const (
@@ -117,11 +118,39 @@ func CreateDir() (string, error) {
 	return filepath.Join(dir, createDirName), nil
 }
 
+// FirstControlRune returns the first control character in title and whether there was
+// one, so a caller can name the offending character rather than say "invalid".
+//
+// A title is rendered as one row of the session list and stored verbatim
+// (session.NewInstance keeps it as given), and until `atrium new` no producer could
+// put a control character in one: the create form's field is a bubbles textinput,
+// which collapses newlines and tabs to spaces on the way in, and the derived branch
+// and tmux names are sanitized separately, so Title is the single unsanitized sink. A
+// raw argv string is the first path that reaches it — and `atrium new "$(gh issue view
+// N --json title -q .title)"`, or a title taken from a commit body, is exactly how a
+// newline arrives. One embedded newline splits the row across two lines, leaving the
+// second without the selection indicator or status glyph and shifting every mouse zone
+// below it.
+//
+// unicode.IsControl covers C0 and C1, so tab, carriage return and the escape that
+// would let a title write its own ANSI are all caught by the one test.
+func FirstControlRune(title string) (rune, bool) {
+	for _, r := range title {
+		if unicode.IsControl(r) {
+			return r, true
+		}
+	}
+	return 0, false
+}
+
 // WriteCreate commits r to the create spool and returns the path it was written
 // to. It stamps Version and, unless the caller supplied one, CreatedAt.
 func WriteCreate(r Request) (string, error) {
 	if strings.TrimSpace(r.Title) == "" || !filepath.IsAbs(r.Path) {
 		return "", errors.New("outbox: a create request needs a title and an absolute path")
+	}
+	if bad, ok := FirstControlRune(strings.TrimSpace(r.Title)); ok {
+		return "", fmt.Errorf("outbox: a create request title cannot contain %q", bad)
 	}
 	// Normalised on the way out, and again on the way back in: a padded title is not
 	// blank, so it passes every check and then reaches tmux.QualifiedSessionName and
@@ -203,11 +232,21 @@ func readCreate(path string) CreateEntry {
 	// would survive every TTL sweep and be built by whichever TUI started next, weeks
 	// later, against a branch point long moved on. The version gate does not stand in
 	// for this one; it screens a different version, not a missing field at this one.
+	//
+	// A control character in the title is rejected for the reason FirstControlRune
+	// gives: nothing downstream removes one, and a title is the one field that reaches
+	// the renderer unsanitized. TrimSpace does not stand in for it — it takes the
+	// leading and trailing whitespace and leaves an interior newline exactly where it
+	// does the damage.
 	r.Title = strings.TrimSpace(r.Title) // see WriteCreate: padding survives into the branch name
+	badRune, hasControl := FirstControlRune(r.Title)
 	switch {
 	case r.Title == "":
 		return CreateEntry{Path: path, Err: fmt.Errorf(
 			"create request %s has no title", filepath.Base(path))}
+	case hasControl:
+		return CreateEntry{Path: path, Err: fmt.Errorf(
+			"create request %s has %q in its title", filepath.Base(path), badRune)}
 	case !filepath.IsAbs(r.Path):
 		return CreateEntry{Path: path, Err: fmt.Errorf(
 			"create request %s has no absolute path (%q)", filepath.Base(path), r.Path)}

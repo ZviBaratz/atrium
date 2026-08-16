@@ -157,7 +157,9 @@ func (m *home) drainOutbox() tea.Cmd {
 // once per launch, which is the lesser of the two.
 func (m *home) discardSpoolFile(path string, remove func() error) {
 	if err := remove(); err != nil {
-		log.ErrorLog.Printf("could not clear a drained outbox message, ignoring it for the rest of this run: %v", err)
+		// "record", not "message": both spools come through here, and a create request
+		// reported as a message sends whoever reads the log to the wrong directory.
+		log.ErrorLog.Printf("could not clear a drained outbox record, ignoring it for the rest of this run: %v", err)
 		if m.outboxPoisoned == nil {
 			m.outboxPoisoned = make(map[string]bool)
 		}

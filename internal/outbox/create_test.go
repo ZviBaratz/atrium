@@ -87,6 +87,15 @@ func TestWriteCreateRejectsIncompleteRequest(t *testing.T) {
 		"no path":          {Title: "t"},
 		"relative path":    {Title: "t", Path: "web"},
 		"neither":          {},
+		// Control characters in the title. Refused at the producer as well as at the
+		// consumer because a Title is stored verbatim and rendered as one row: an
+		// interior newline splits that row, leaving the second line without a
+		// selection indicator or status glyph and shifting every mouse zone below it.
+		// TrimSpace takes the ends and leaves precisely the one that does the damage,
+		// which is why "not blank" was never the same test as "renderable".
+		"newline in title": {Title: "fix auth\nand tests", Path: "/repo"},
+		"tab in title":     {Title: "fix\tauth", Path: "/repo"},
+		"escape in title":  {Title: "fix\x1bauth", Path: "/repo"},
 	}
 	for name, r := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -402,6 +411,16 @@ func TestReadCreateRefusesAnUnusableRecord(t *testing.T) {
 		{"relative path", `{"version":1,"title":"fix-auth","path":"web",` + stamped + `}`, "no absolute path"},
 		{"dot path", `{"version":1,"title":"fix-auth","path":".",` + stamped + `}`, "no absolute path"},
 		{"no created_at", `{"version":1,"title":"fix-auth","path":"/repo"}`, "no created_at"},
+		// A control character in the title is the one an ordinary caller produces, via
+		// `atrium new "$(gh issue view N --json title -q .title)"`. TrimSpace does not
+		// cover it: it takes the ends and leaves the interior newline exactly where it
+		// splits the rendered row.
+		{"newline in title", `{"version":1,"title":"fix auth\nand tests","path":"/repo",` + stamped + `}`,
+			`'\n' in its title`},
+		{"tab in title", `{"version":1,"title":"fix\tauth","path":"/repo",` + stamped + `}`,
+			`'\t' in its title`},
+		{"escape in title", `{"version":1,"title":"fix\u001bauth","path":"/repo",` + stamped + `}`,
+			`'\x1b' in its title`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sandbox(t)

@@ -158,15 +158,17 @@ func TestCreateDrainRejectsOnStartFailure(t *testing.T) {
 }
 
 // TestCreateDrainSkipsRequestAlreadyInFlight: the file stays put while the session
-// starts, so without the in-flight guard the very next tick re-executes the same
-// request.
+// starts, so the next tick must leave the same request alone rather than re-executing
+// it and writing an "already used" receipt over a create that is going fine.
 //
-// The damage is not a duplicate session — the title check catches that, which is
-// why "no second instance" is the wrong thing to assert here and passes without
-// the guard. It is the *receipt* that check then writes: the caller's --wait would
-// be told "already used" about the session it successfully asked for, and the file
-// would be unlinked before the real outcome ever arrived. So this asserts the file
-// is untouched.
+// This pins the OUTCOME, and the outcome has two independent causes: the in-flight
+// guard, and createStartBudget — which is seeded from len(createsInFlight), so it is
+// already spent while a start is running and the default arm continues before any gate.
+// Either alone delivers a green run here, which is why deleting the guard leaves this
+// test (and the whole package) passing. Not a defect in the assertion, but a limit on
+// what it proves: for the guard itself see
+// TestCreateDrainDoesNotExpireARequestItIsStillStarting, whose arm has its own budget
+// and so is not covered by the start budget at all.
 func TestCreateDrainSkipsRequestAlreadyInFlight(t *testing.T) {
 	h := drainHome(t)
 	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: t.TempDir()})
@@ -178,6 +180,52 @@ func TestCreateDrainSkipsRequestAlreadyInFlight(t *testing.T) {
 	assert.FileExists(t, path, "the in-flight request must survive the next tick")
 	reason, rejected := outbox.Rejection(path)
 	assert.False(t, rejected, "a request in flight must not be rejected by its own session: %s", reason)
+}
+
+// TestCreateDrainDoesNotExpireARequestItIsStillStarting is the in-flight guard's own
+// test — the one thing no other mechanism in the loop delivers.
+//
+// createStartBudget covers the default arm, because it is seeded from the in-flight map
+// and so is already spent while a start runs. The EXPIRY arm draws on
+// createDisposalBudget instead, is evaluated ahead of the default arm, and therefore
+// sees none of that: without the guard, a request whose Start crosses the 24h horizon
+// mid-flight is rejected and unlinked underneath its own running session. The caller's
+// --wait, which reads the record's disappearance as "created and recorded", is instead
+// handed a receipt saying the request expired — for a session that at that moment exists.
+//
+// Reachable without contrivance: a request spooled just under the horizon and a repo
+// whose setup script takes a minute. It is staged here by ageing the record on disk
+// between two ticks, because the drain re-decodes every file on every tick and there is
+// no clock to move.
+func TestCreateDrainDoesNotExpireARequestItIsStillStarting(t *testing.T) {
+	h := drainHome(t)
+	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: t.TempDir()})
+
+	require.NotNil(t, h.drainCreateRequests(), "the first tick starts it")
+	require.NotNil(t, titled(h, "fix-auth"))
+	require.FileExists(t, path, "and holds the record across the start")
+
+	// Age the held record past the horizon, as a slow Start would.
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var record map[string]any
+	require.NoError(t, json.Unmarshal(raw, &record))
+	record["created_at"] = time.Now().Add(-2 * outbox.TTL).Format(time.RFC3339Nano)
+	aged, err := json.Marshal(record)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, aged, 0o600))
+
+	entries, err := outbox.ListCreates()
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.True(t, entries[0].Request.Expired(time.Now()),
+		"precondition: the record now reads as expired to the arm under test")
+
+	h.drainCreateRequests()
+
+	assert.FileExists(t, path, "a request whose session is still starting must not be expired")
+	reason, rejected := outbox.Rejection(path)
+	assert.False(t, rejected, "nor handed its caller an expiry receipt: %s", reason)
 }
 
 // TestCreateDrainRunsInEveryUIState is a regression from driving a real first-run
@@ -349,22 +397,139 @@ func TestCreateDrainRejectsMissingDirectory(t *testing.T) {
 	assert.Zero(t, h.list.NumInstances())
 }
 
-// TestCreateDrainRejectsWhenTmuxUnusable: the create form refuses to open at all
-// without a usable tmux, so a headless create must not sail past that gate and
-// fail later inside Start.
-func TestCreateDrainRejectsWhenTmuxUnusable(t *testing.T) {
+// TestCreateDrainHoldsWhenTmuxUnusable: an unusable tmux must not consume the request.
+//
+// It is the one condition checked here that is about the MACHINE rather than about the
+// request, and that is what separates it from every gate in executeCreateRequest. A
+// taken title or a full cap stays true until a person changes it, so spending the record
+// on a receipt tells the caller something durable. tmux off PATH — the window of a `brew
+// upgrade tmux`, say — is true for a second and then is not, and tmux.Available re-runs
+// exec.LookPath on every call rather than caching, so the next tick can already see it
+// come back. Refusing would destroy a fire-and-forget create for a condition that
+// cleared before anyone could read the receipt.
+//
+// The recovery half is the one that makes this a hold rather than a silent drop, so it
+// is asserted rather than assumed: same home, same record, tmux back, session created.
+func TestCreateDrainHoldsWhenTmuxUnusable(t *testing.T) {
 	h := drainHome(t)
 	orig := tmuxAvailable
 	tmuxAvailable = func() error { return errors.New("tmux 2.9 is older than the 3.0 minimum") }
 	t.Cleanup(func() { tmuxAvailable = orig })
 
 	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: t.TempDir()})
+
+	assert.Nil(t, h.drainCreateRequests(), "a held tick creates nothing and says nothing")
+	assert.FileExists(t, path, "the request must survive an unusable tmux")
+	reason, rejected := outbox.Rejection(path)
+	assert.False(t, rejected, "and must not be spent on a receipt: %s", reason)
+	assert.Zero(t, h.list.NumInstances())
+
+	tmuxAvailable = orig
+	require.NotNil(t, h.drainCreateRequests(), "and is created once tmux is usable again")
+	assert.NotNil(t, titled(h, "fix-auth"))
+}
+
+// TestCreateDrainStillDisposesWhileTmuxIsUnusable: the hold covers starts, not the
+// disposal arms. An expired or undecodable record needs no tmux to discard, and its
+// caller is owed the receipt whatever the machine is doing — otherwise a --wait blocked
+// on a record that can never be built would time out instead of being told why.
+func TestCreateDrainStillDisposesWhileTmuxIsUnusable(t *testing.T) {
+	h := drainHome(t)
+	orig := tmuxAvailable
+	tmuxAvailable = func() error { return errors.New("tmux is not installed") }
+	t.Cleanup(func() { tmuxAvailable = orig })
+
+	path := spoolCreate(t, outbox.Request{
+		Title:     "stale",
+		Path:      t.TempDir(),
+		CreatedAt: time.Now().Add(-2 * outbox.TTL),
+	})
+	disposeDrain(t, h)
+
+	reason, ok := outbox.Rejection(path)
+	require.True(t, ok, "an expired record is discarded even with tmux down")
+	assert.Contains(t, reason, "horizon")
+	assert.NoFileExists(t, path)
+}
+
+// TestCreateDrainRefusesADirectTargetItCouldNotConfirm is the guard on the worst thing
+// this drain can do.
+//
+// targetValidity reads "is this a git repo" off git.IsGitRepo, which is `err == nil` and
+// so answers false for a git that could not run — off PATH mid-upgrade, a fork failure
+// under memory pressure, gitLocalTimeout on a cold repo, a cancelled context — exactly as
+// it answers false for a plain directory. That verdict is what decides `direct`, and
+// direct means NO worktree and NO branch: the agent runs in the target itself. So a git
+// hiccup during one tick would silently hand a caller who asked for an isolated session
+// an agent editing their own checkout, print `created "fix-auth"` with no branch clause
+// (byte-identical to a legitimate direct session), and leave nobody a way to notice.
+//
+// The target here is a REAL repo. That is the whole point: the request is not asking for
+// a direct session, and nothing about it is wrong — only the probe is unavailable, and
+// the drain must refuse rather than assume. A cancelled context stands in for the class,
+// being the one member of it a hermetic test can produce on demand.
+func TestCreateDrainRefusesADirectTargetItCouldNotConfirm(t *testing.T) {
+	h := drainHome(t)
+	repo := gitRepoWithBranch(t, "")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	h.ctx = ctx
+
+	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: repo})
 	refuseDrain(t, h)
 
 	reason, ok := outbox.Rejection(path)
 	require.True(t, ok)
-	assert.Contains(t, reason, "older than the 3.0 minimum")
-	assert.Zero(t, h.list.NumInstances())
+	assert.Contains(t, reason, "could not determine whether")
+	assert.Zero(t, h.list.NumInstances(),
+		"and above all: no session created loose in the caller's own repo")
+}
+
+// The control for the test above, and the one that keeps it from passing for the wrong
+// reason. A directory that genuinely is not a repo still becomes a direct session — git
+// ran and said no, which is a verdict rather than a silence. Without this, refusing every
+// direct create would score identically and would have broken the documented behaviour
+// that a non-git target is not an error.
+func TestCreateDrainStillCreatesDirectlyWhenGitAnswersNo(t *testing.T) {
+	h := drainHome(t)
+	plain := t.TempDir() // a directory, deliberately not a repo
+
+	spoolCreate(t, outbox.Request{Title: "fix-auth", Path: plain})
+	require.NotNil(t, h.drainCreateRequests())
+
+	inst := titled(h, "fix-auth")
+	require.NotNil(t, inst, "a non-git target is a direct session, not a refusal")
+	assert.Empty(t, inst.ToInstanceData().Worktree.RepoPath, "and direct means no worktree")
+}
+
+// TestCreateDrainHoldsWhileATeardownIsInFlight: actionInFlight alone does not cover a
+// kill, and this drain cannot afford the gap that leaves.
+//
+// asyncActionDoneMsg clears actionInFlight one message BEFORE killDoneMsg reaches the
+// reap in applyKillDone, and messages are processed in between (app_frames.go says so,
+// and pairs it with retiring for exactly this reason). A tick landing in that window
+// sees a list that still holds the row being torn down: a request reusing its title is
+// told "already used", and any other request is gated against a capCount that still
+// counts it. Both are REFUSALS — receipt written, record unlinked — for a condition that
+// is false one message later, which is why a key gate can be relaxed here and this one
+// cannot.
+func TestCreateDrainHoldsWhileATeardownIsInFlight(t *testing.T) {
+	h := drainHome(t)
+	dying := addInstance(t, h, "dying", t.TempDir())
+	h.retiring = map[*session.Instance]bool{dying: true}
+	require.False(t, h.actionInFlight, "the window under test is precisely the one where it is clear")
+
+	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: t.TempDir()})
+
+	assert.Nil(t, h.drainCreateRequests(), "a tick mid-teardown creates nothing")
+	assert.FileExists(t, path, "and must defer the request rather than spend it")
+	reason, rejected := outbox.Rejection(path)
+	assert.False(t, rejected, "a deferral leaves no receipt: %s", reason)
+
+	h.endTeardown([]*session.Instance{dying})
+	require.NotNil(t, h.drainCreateRequests(), "and it is created once the reap has landed")
+	assert.NotNil(t, titled(h, "fix-auth"))
 }
 
 // TestCreateDrainRejectsHardCapEvenWithForce: an explicit max_sessions is the one

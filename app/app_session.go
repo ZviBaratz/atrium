@@ -1993,10 +1993,13 @@ func (m *home) startNewSession(title, path string, direct, isolateDeps bool, pro
 	// Create the list row only now, on submit. AddInstance may insert it mid-list under its
 	// repo group, so select it by identity.
 	//
-	// A background create reorganises nothing a human arranged: the cursor stays put
-	// (#439) and so does the fold set, via AddInstanceKeepingFolds — the fold half has
-	// to be ui.List's own inverse of the unfold it does, because the caller cannot undo
-	// it without a lossy read-back (see AddInstanceKeepingFolds).
+	// A background create reorganises nothing a human arranged: the cursor stays on the
+	// row it was on (#439) and so does the fold set, via AddInstanceKeepingFolds — the
+	// fold half has to be ui.List's own inverse of the unfold it does, because the caller
+	// cannot undo it without a lossy read-back. The two are not equally absolute, and
+	// AddInstanceKeepingFolds says which yields: adding the first row of a new repo can
+	// make a stale fold effective and hide the selected row, and there it drops that one
+	// fold rather than let the clamp move the cursor to another session.
 	var finalizer func()
 	if origin == spawnBackground {
 		finalizer = m.list.AddInstanceKeepingFolds(instance)

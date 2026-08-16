@@ -71,6 +71,14 @@ func messageText(args []string, stdin io.Reader) (string, error) {
 // keeps this process a pure producer and leaves delivery to whoever legitimately
 // owns the write.
 func runSend(out, errOut io.Writer, selector, path, text string, wait time.Duration) error {
+	if wait < 0 {
+		// Cobra parses "--wait -5s" happily. Left to the wait > 0 test below it would
+		// silently mean "do not wait", so a caller that fat-fingered a sign would be told
+		// the prompt was queued and never learn what became of it — and a CI job scripted
+		// to gate on `send --wait` would pass without ever having waited. Same guard, same
+		// reason, as runNew's.
+		return fmt.Errorf("--wait %s is negative; pass a positive duration", wait)
+	}
 	instances, err := loadStoredInstances()
 	if err != nil {
 		return err
@@ -165,9 +173,11 @@ type spoolWaitCopy struct {
 // until Start has completed and the row has been persisted — but that difference is in
 // the callers' wording and in what they do afterwards, not in the protocol.
 //
-// A Stat error other than "not found" is a bad data dir, not a completion: it is
-// reported rather than read as either outcome. Retrying to the deadline would turn a
-// permissions problem into a timeout that blames the TUI.
+// A Stat error other than "not found" is never read as either outcome. It is also not
+// returned on the spot: persistence is the only thing that separates a bad data dir
+// from a network mount's one-off ESTALE, and persistence is what the deadline already
+// measures. So it is carried, and reported at the deadline in place of
+// wording.timedOut — which would otherwise blame a TUI that was never the problem.
 func awaitSpool(path string, timeout time.Duration, wording spoolWaitCopy) error {
 	refused := func() error {
 		reason, ok := outbox.Rejection(path)
@@ -181,6 +191,7 @@ func awaitSpool(path string, timeout time.Duration, wording spoolWaitCopy) error
 	}
 
 	deadline := time.Now().Add(timeout)
+	var lastStatErr error
 	for {
 		if err := refused(); err != nil {
 			return err
@@ -195,10 +206,24 @@ func awaitSpool(path string, timeout time.Duration, wording spoolWaitCopy) error
 				return err
 			}
 			return nil
-		case err != nil:
-			return fmt.Errorf("failed to read the outbox: %w", err)
+		default:
+			// Either nil — the record is still there — or a Stat that could not answer,
+			// which is carried to the deadline rather than returned from this sample.
+			//
+			// The two cannot be told apart at one sample, and only one of them should end
+			// the wait. A data dir on NFS, sshfs or a container bind mount answers a
+			// single Stat with ESTALE or EIO and the next one fine; returning on the first
+			// would fail a CI job for a record the TUI drains half a second later. A real
+			// permissions problem does not clear, so it survives to the deadline and is
+			// reported there — with its own error rather than wording.timedOut, which
+			// blames a TUI that was never the problem. Assigning nil here is what clears a
+			// transient one, so a later honest timeout is not reported as a stale EIO.
+			lastStatErr = err
 		}
 		if !time.Now().Before(deadline) {
+			if lastStatErr != nil {
+				return fmt.Errorf("failed to read the outbox: %w", lastStatErr)
+			}
 			return errors.New(wording.timedOut)
 		}
 		time.Sleep(drainPollInterval)

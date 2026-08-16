@@ -387,6 +387,11 @@ type home struct {
 	// keeps the drain from re-executing a request whose file it deliberately left
 	// in place; in-memory only, for outboxPoisoned's reason.
 	createsInFlight map[*session.Instance]string
+	// createTmuxHeld records that the create drain is currently holding its requests
+	// because tmux is not usable, so the hold is logged once when it starts and once
+	// when it lifts rather than twice a second for as long as it lasts. State about
+	// the log line only — the hold itself is decided fresh each tick by probing.
+	createTmuxHeld bool
 	// notifier emits the terminal bell / desktop notification when a background
 	// session finishes a turn or blocks on a prompt (see app_notify.go, config
 	// Notifications). nil disables notification (hand-built test homes).

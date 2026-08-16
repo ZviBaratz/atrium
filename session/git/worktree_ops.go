@@ -35,8 +35,10 @@ func (g *Worktree) Setup() error {
 	// creation paths hold up their end — the new-session form (createSessionFromForm)
 	// and the `atrium new` drain (executeCreateRequest), both via the variantTitleConflict
 	// pair in app/app_session.go, the only *creation* predicate that consults
-	// git.LocalBranchExists (app_branchsearch.go and app_checkpoints.go call it for the
-	// form's async verdict and for checkpoint restore, neither of which gates a create).
+	// git.LocalBranchExists. The other two callers do not gate anything: app_branchsearch.go
+	// computes the create form's async branch verdict, and app_checkpoints.go's is
+	// forkBaseBranch — on the fork *create* flow, choosing which base branch the fork
+	// starts from, never deciding whether it may.
 	// Smart auto-dispatch does not: it calls titleConflict, whose
 	// branch arm reads m.titleBranchExists, an async verdict only the create form ever
 	// schedules. An auto-dispatched title matching an orphan branch therefore reaches

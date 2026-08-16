@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 
 	cmd2 "github.com/ZviBaratz/atrium/cmd"
 	"github.com/ZviBaratz/atrium/config"
@@ -110,11 +111,24 @@ func runReset(ctx context.Context, cmdExec cmd2.Executor) error {
 	// read. The count is printed either way — a partial clear that dropped nine of ten
 	// records has still dropped nine — and it counts records in both spools, prompts and
 	// create requests alike.
+	//
+	// What is NOT printed either way is the completion. A record the reset could not
+	// unlink is a queued create that outlives it, which is the exact outcome the comment
+	// above says this step exists to prevent, so saying "cleared" on that path would tell
+	// the operator the opposite of what happened — and the log line alone does not reach
+	// them. The failure goes to stderr beside the count, and the exit code stays 0
+	// because the reset itself did succeed; what failed is a spool the operator can now
+	// go and look at.
 	cleared, err := outbox.Clear()
 	if err != nil {
 		log.WarningLog.Printf("reset: could not fully clear the outbox: %v", err)
+		fmt.Printf("Outbox could NOT be fully cleared; %d spooled record%s discarded\n",
+			cleared, plural(cleared))
+		fmt.Fprintf(os.Stderr, "warning: %v — a queued request left behind will be acted on by the "+
+			"next atrium, which has no session left for its title to collide with\n", err)
+	} else {
+		fmt.Printf("Outbox has been cleared; %d spooled record%s discarded\n", cleared, plural(cleared))
 	}
-	fmt.Printf("Outbox has been cleared; %d spooled record%s discarded\n", cleared, plural(cleared))
 
 	if err := tmux.CleanupSessions(ctx, cmdExec); err != nil {
 		return fmt.Errorf("failed to cleanup tmux sessions: %w", err)

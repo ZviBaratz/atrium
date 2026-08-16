@@ -822,16 +822,24 @@ func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd
 	}
 	// The recent-path list and the one-time welcome are both about what the person at
 	// the keyboard has done, so a background create writes neither. The recent paths
-	// feed the create form's picker — an MRU a human arranged, which a CI job's repo
-	// has no business jumping to the head of — and the #381 welcome contract is that it
-	// re-shows on every launch until the user has actually created a session, which a
-	// session they did not ask for does not satisfy. All three producers funnel through
-	// here — the create form, smart auto-dispatch and the `atrium new` drain — so being
-	// the single chokepoint is what makes an explicit gate necessary rather than
-	// redundant.
+	// feed the create form's picker — an MRU a human arranged, which a CI job's repo has
+	// no business jumping to the head of.
+	//
+	// The welcome's seen-bit is the sharper case, because this drain runs *under* the
+	// welcome modal on purpose (see drainCreateRequests: a fresh install sits in
+	// stateWelcome until someone answers it, and refusing to create there is the deadlock
+	// #703 exists to remove). Answering it is what retires it — overlay confirm and skip
+	// alike, app_welcome.go — and this chokepoint is the backstop for a user who reaches
+	// a first session without ever meeting the overlay. A request drained out of the
+	// spool while the modal is still on screen is neither, so without this gate
+	// `atrium new` would burn an unanswered welcome the user is still looking at.
+	//
+	// All three producers funnel through here — the create form, smart auto-dispatch and
+	// the `atrium new` drain — so being the single chokepoint is what makes an explicit
+	// gate necessary rather than redundant.
 	if msg.origin != spawnBackground {
 		m.recordRecentPath(msg.instance.Path)
-		m.markWelcomeSeen() // best-effort persist; see showHelpScreen for the dismissal half
+		m.markWelcomeSeen() // best-effort persist; markWelcomeSeen names the other callers
 	}
 	if m.autoYes {
 		msg.instance.AutoYes = true
@@ -876,8 +884,9 @@ func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd
 	// nothing about the terminal changed. But one half of that resize IS load-bearing
 	// here, and only here: updateHandleWindowSizeEvent ends in SetSessionPreviewSize,
 	// the sole production caller that gives a session's detached tmux pane the
-	// preview's geometry, and it skips any instance that is not yet Started — which
-	// this one became three statements ago. Left unsized the pane keeps its
+	// preview's geometry, and it skips any instance that is not yet Started — which this
+	// one already is on arrival, Instance.Start having set the flag on the goroutine
+	// before this message was ever constructed. Left unsized the pane keeps its
 	// new-session -d default: measured at 80 columns against a 116-column preview, so
 	// the preview renders it wrapped at the wrong width and every width-sensitive
 	// classifier in session/agent reads a capture taken at a width the pane never had.

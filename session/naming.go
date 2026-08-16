@@ -426,10 +426,14 @@ func changedFiles(content string) []string {
 // same field by construction rather than by agreement, and both `atrium new` and the
 // create drain measure against it.
 //
-// Enforcement is the whole scope of that. Three sites still spell 32 out — the two
-// naming prompts below and dispatch.go's title instruction — because they are asking a
-// model for a length rather than checking one, and a number interpolated into English
-// is not a citation. They are what a change here has to be carried to by hand.
+// Enforcement is the whole scope of that. Three sites still spell the number out to a
+// MODEL, because they are asking for a length rather than checking one, and a number
+// interpolated into English is not a citation: namingInstruction and nameSystemPrompt,
+// both near the top of this file rather than below this constant, and
+// session/dispatch.go's title instruction. Two more spell it out to a READER — SlugTitle's
+// doc just below, and app/prefill.go's word-count comment. All five are what a change
+// here has to be carried to by hand; the three prompts are the ones where getting it
+// wrong changes behaviour rather than only documentation.
 //
 // It lives here, and is exported, because it is a rule about titles rather than about
 // generated names, and `atrium new` has to enforce it too (#703): a CLI title has no

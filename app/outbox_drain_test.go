@@ -409,8 +409,8 @@ func TestDrainClearsSpoolEvenIfPersistFails(t *testing.T) {
 }
 
 // TestRejectionSweepIsThrottled: the receipt GC enforces a 24-hour horizon and used to
-// run on every ~500ms metadata tick, walking both spool directories each time — ~170k
-// directory reads a day to collect a file that can wait. It must still run once per
+// run on every ~500ms metadata tick, walking both spool directories each time — 172,800
+// ticks a day, so ~350k directory reads, to collect a file that can wait. It must still run once per
 // launch, because a receipt left by a previous run for a producer that never came back
 // is exactly what it exists to collect.
 func TestRejectionSweepIsThrottled(t *testing.T) {

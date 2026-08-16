@@ -33,9 +33,13 @@ var (
 			"working through a queue of issues.\n\n" +
 			"Creation is asynchronous. The request is spooled to the data directory and the\n" +
 			"running Atrium picks it up within about a second; with no Atrium running it\n" +
-			"stays queued and is created the next time one starts. Use --wait to block until\n" +
-			"the session actually exists and be told the branch it was given (`atrium ls`\n" +
-			"reports the same branch once it does).\n\n" +
+			"stays queued and is created the next time one starts, provided that is within 24\n" +
+			"hours — a request older than that names a branch point the tree has moved on\n" +
+			"from, so it is discarded with a receipt rather than built. An Atrium that is\n" +
+			"running but attached to a session is a third case: its poll loop is parked, so\n" +
+			"the request waits for the detach rather than for a relaunch. Use --wait to block\n" +
+			"until the session actually exists and be told the branch it was given (`atrium\n" +
+			"ls` reports the same branch once it does).\n\n" +
 			"The title is the session's name, and because the branch and tmux names derive\n" +
 			"from it, choosing a title is choosing a branch. A title whose derived names are\n" +
 			"already taken is refused rather than silently suffixed.\n\n" +
@@ -122,6 +126,16 @@ func runNew(out, errOut io.Writer, r newRequest) error {
 	if n := len([]rune(title)); n > session.MaxTitleLen {
 		return fmt.Errorf("the title is %d characters; the limit is %d, the same one the new-session field enforces",
 			n, session.MaxTitleLen)
+	}
+	// Refused rather than stripped, for the reason the title is not slugged either: the
+	// branch and tmux names derive from it, so rewriting one is choosing a name the
+	// caller did not ask for. TrimSpace above does not cover this — it takes the ends
+	// and leaves an interior newline, which is the one that breaks the row. See
+	// outbox.FirstControlRune for what a control character does to the list.
+	if bad, ok := outbox.FirstControlRune(title); ok {
+		return fmt.Errorf("the title contains %q; a session title is rendered as one row, so it "+
+			"cannot contain control characters (a title captured from an issue or a commit "+
+			"message often has a trailing newline — trim it, or quote only the first line)", bad)
 	}
 
 	if r.wait < 0 {

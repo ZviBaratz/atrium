@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -113,8 +114,36 @@ func localGit(ctx context.Context, dir string, args ...string) (string, error) {
 
 // IsGitRepo checks if the given path is within a git repository
 func IsGitRepo(ctx context.Context, path string) bool {
+	isRepo, _ := ProbeGitRepo(ctx, path)
+	return isRepo
+}
+
+// ProbeGitRepo answers IsGitRepo's question and, separately, whether git was in a
+// position to answer it: known is false when the probe could not run to a verdict.
+//
+// IsGitRepo folds the two together — every failure reads as "not a repo" — which is
+// what a live form label wants, because a human is looking at it and can cancel. A
+// headless caller cannot: for `atrium new` this verdict alone decides whether the
+// agent gets an isolated worktree or runs loose in the caller's own checkout, so it
+// needs to tell "git says no" from "git did not say".
+//
+// The discriminator is how the process ended. git exiting with a status ran and
+// answered (128 for "not a git repository"), so known is true. Anything else did
+// not: an *exec.Error for git off PATH mid-upgrade, a fork failure under memory
+// pressure, or — the case a bare errors.As would misread — a kill by
+// exec.CommandContext when gitLocalTimeout expires or ctx is cancelled, which
+// arrives as an *exec.ExitError whose ExitCode() is -1 because a signalled process
+// carries no status.
+func ProbeGitRepo(ctx context.Context, path string) (isRepo, known bool) {
 	_, err := localGit(ctx, path, "rev-parse", "--show-toplevel")
-	return err == nil
+	if err == nil {
+		return true, true
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() >= 0 {
+		return false, true
+	}
+	return false, false
 }
 
 // CurrentBranchName returns the branch HEAD points at in the repo containing path,

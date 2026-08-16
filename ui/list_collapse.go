@@ -88,17 +88,61 @@ func (l *List) HasMultipleGroups() bool {
 func (l *List) AddInstanceKeepingFolds(instance *session.Instance) (finalize func()) {
 	key := repoKey(instance)
 	wasCollapsed := l.collapsed[key]
+	// The row the human left the cursor on, captured before the add shifts indices.
+	var selected *session.Instance
+	if l.selectedIdx >= 0 && l.selectedIdx < len(l.items) {
+		selected = l.items[l.selectedIdx]
+	}
+
 	finalize = l.AddInstance(instance)
 	if wasCollapsed {
 		l.collapsed[key] = true
 	}
-	// Unconditionally, and not only when this row's own group was folded: a fold is
-	// inert below two groups (effectiveCollapsed), so adding the *first* row of a new
-	// repo can hide rows in a group this call never touched. Every other AddInstance
-	// caller reaches the clamp through the SelectInstance that follows it; this one
-	// deliberately moves no cursor, so it is the only path that has to say so.
+
+	// Keep that row visible, rather than hiding it here and letting the clamp move the
+	// cursor off it.
+	//
+	// The case is not this row's own group. It is the *first* row of a new repo, which
+	// takes distinctRepoCount from one to two and so makes every stale fold effective at
+	// once (effectiveCollapsed) — including one a user set back when two groups last
+	// existed, for a group this call never touched. Reachable: fold repo A while B
+	// exists, kill all of B (RemoveInstance never prunes l.collapsed, and at one group
+	// the fold is inert so A's rows stay visible), leave the cursor on a non-anchor row
+	// of A, then `atrium new --path <repo C>`.
+	//
+	// Both alternatives are the same hazard in different clothes: a cursor resting on an
+	// invisible row, or a cursor silently moved to a different *session.Instance that
+	// instanceChanged then repoints preview, diff and menu at. Every destructive key
+	// targets the selection, so either one means the next keypress can land somewhere the
+	// user did not put it — a background create must not be able to arrange that (#439).
+	// Dropping the one fold that would have hidden the selection is the smallest thing
+	// that removes it: every other fold survives, and so does the cursor.
+	//
+	// Not while filtering, though. isHidden gates on the filter ahead of folds and
+	// returns its answer there, so a selection hidden during a filter is hidden because
+	// it does not MATCH — dropping the fold would not reveal it, and would destroy a
+	// persisted fold the user set to buy nothing. That case belongs to the clamp below.
+	if selected != nil && !l.Filtering() {
+		if idx := l.indexOfInstance(selected); idx >= 0 && l.isHidden(idx) {
+			delete(l.collapsed, repoKey(selected))
+		}
+	}
+	// Backstop for what unfolding cannot reach: the filter just described, and a
+	// selectedIdx left out of range.
 	l.clampSelectionToNavigable()
 	return finalize
+}
+
+// indexOfInstance returns target's index in the list, or -1 when it is not present.
+// Identity, not (Title, Path): two rows can share those, and the caller is asking about
+// one specific object it already holds.
+func (l *List) indexOfInstance(target *session.Instance) int {
+	for i, inst := range l.items {
+		if inst == target {
+			return i
+		}
+	}
+	return -1
 }
 
 // CollapsedRepos returns the collapsed repo keys still present in the list, sorted for stable

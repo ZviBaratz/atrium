@@ -221,9 +221,17 @@ like any other.
 
 It is a producer on the same terms as `send`, and for the same reason: the TUI is
 the only thing that creates sessions, so `new` spools a request to
-`outbox/create/` and the running Atrium executes it through exactly the path the
-new-session key uses. Everything that path enforces still applies — the session
-cap, the tmux version floor, and above all the title check.
+`outbox/create/` and the running Atrium executes it through the same core the
+new-session key reaches — the creation itself, minus the parts that belong to
+someone at the keyboard, which is why a background create moves no cursor and
+jumps nothing to the head of the recent-paths list. Everything that core enforces
+still applies — the session cap, the tmux version floor, and above all the title
+check.
+
+Queued create requests expire on the same 24-hour horizon as queued prompts, and
+for the same reason: a day-old request names a branch point the tree has moved on
+from. An expired one is discarded with a rejection receipt rather than built, so a
+`--wait` blocked on it is told what happened.
 
 That check matters more from a script than from the keyboard. A session's branch
 and tmux names derive from its title, so choosing a title is choosing a branch; a
@@ -263,9 +271,10 @@ collide with — the next Atrium would build it. Each discarded request leaves t
 same rejection receipt any other refusal would, so a `--wait` blocked on one is
 told the reset took it rather than reading the file's disappearance as success.
 
-If a title exists in more than one repo, `ls`, `peek` and `send` will report the
-ambiguity and list the candidates; `--path <repo>` picks one. (`new` takes
-`--path` too, but to choose where the session is created, not to disambiguate.)
+If a title exists in more than one repo, `peek` and `send` will report the
+ambiguity and list the candidates; `--path <repo>` picks one. (`ls` takes no title
+at all — it lists every session, so it has nothing to disambiguate. `new` takes
+`--path`, but to choose where the session is created, not to disambiguate.)
 
 All four exit 0 on success and 1 on failure, with the reason on stderr.
 
