@@ -436,11 +436,17 @@ func TestGeminiDialogBoxIsFullyOnScreen(t *testing.T) {
 
 			// Find the LAST bottom border, then the last top border above it — so the two are
 			// bounds of one box. An earlier form took the last "╭" and the last "╰" anywhere in
-			// the capture without pairing them, which happens to be right while each capture
-			// holds exactly one box and starts measuring across two the moment one does not:
-			// a composer, a quoted frame, or the auth dialog gemini draws next would have
-			// published a fabricated height into geminiDialogRows, which chrome.go and
-			// registry.go then cite as a threshold.
+			// the capture without pairing them, which is right only while each capture holds
+			// exactly one box.
+			//
+			// What that would have cost is worth stating precisely, because the obvious version
+			// is wrong: it would NOT silently publish a fabricated height. Measured on this
+			// capture with a composer appended below it, the unpaired form returns the
+			// COMPOSER's 3 rows, and the equality against geminiDialogRows (15) fails; where the
+			// lower box has lost its bottom border the form inverts and `bottom > top` fails
+			// instead. Both are loud. The pairing is here because measuring the wrong box is a
+			// defect even when something downstream catches it, and because the premise it
+			// depends on should be asserted rather than assumed — which is the line below.
 			top, bottom := -1, -1
 			for i, line := range lines {
 				if strings.Contains(line, "╰") {
@@ -535,7 +541,11 @@ func TestGeminiTrustGateSurvivesTheOverflowHint(t *testing.T) {
 func TestGeminiTrustGateDropsBeyondTheTrailingAllowance(t *testing.T) {
 	for _, c := range geminiTrustGateOverflowLadder {
 		t.Run(c.label(), func(t *testing.T) {
-			pane := c.pane
+			// TrimRight matters: the captures end in a newline, so appending to c.pane directly
+			// inserts a BLANK line first, and blanks count against the cap the same as rendered
+			// ones. That skipped the exact-cap step — the test passed at cap 1 while never
+			// asserting the boundary, and only showed itself when the cap was mutated to 2.
+			pane := strings.TrimRight(c.pane, "\n")
 			for extra := 1; extra <= trailingBelowBoxCap; extra++ {
 				_, up := gemini.GateUp(pane)
 				require.Truef(t, up, "%s must still gate with %d line(s) below the border",
