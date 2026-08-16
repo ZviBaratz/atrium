@@ -1001,12 +1001,35 @@ var gemini = &Adapter{
 // false completion ding, which is #713 itself surviving at one width.
 // TestGeminiTrustGateOptionRowsAreTruncatedAtWidth20 holds it so it stays disclosed.
 //
+// The composer is a box too, which is the one hole "bottom-most box" does not close on its
+// own. Measured: a pane ending at a composer border whose typed text reads "Trust folder"
+// raises the gate — and InputBoxVisible is true on it, so the effect is the #342 direction
+// again (AwaitingInput false, queued prompt withheld) with the user's own keystrokes as the
+// trigger. gemini's real render puts a footer line below the composer (geminiIdlePane), which
+// is why this is narrow rather than routine, but a footer is not a thing to rely on. So a
+// block that reads as a composer is rejected: the trust dialog is a MENU, its rows open with
+// "●" and a number, and no rung renders a composer glyph inside the dialog
+// (TestGeminiTrustGateIsNeitherComposerNorPrompt).
+//
+// defaultPrompts rather than the adapter's own set, because gemini declares no InputBoxPrompts
+// and a package-level func cannot reference `gemini` without an initialization cycle. That
+// substitution is pinned by TestGeminiUsesTheDefaultComposerGlyphs, so an adapter that later
+// gains a custom glyph fails there instead of silently reopening this hole.
+//
 // No GateWindow is consulted at all: GateUp short-circuits on Match before it flattens
 // anything, so an adapter-level GateWindow would not reach this and setting one would be
 // inert. The window this gate has is the box.
 func geminiTrustGateVisible(content string) bool {
 	block, ok := bottomBoxBlock(content)
-	return ok && strings.Contains(block, "Trust folder")
+	if !ok {
+		return false
+	}
+	for _, line := range strings.Split(block, "\n") {
+		if isInputBoxLine(line, defaultPrompts) {
+			return false // a composer, not the dialog
+		}
+	}
+	return strings.Contains(block, "Trust folder")
 }
 
 // aiderConfirmVisible backs the aider "confirm" matcher. Every confirm_ask

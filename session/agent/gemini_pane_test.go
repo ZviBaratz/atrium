@@ -646,6 +646,47 @@ func TestGeminiTrustGateDropsOnceSomethingRendersBelowIt(t *testing.T) {
 	require.True(t, up, "blank padding below the box is not a render; the gate must survive it")
 }
 
+// The composer is a box too — the one hole "bottom-most box" does not close by itself. A pane
+// ending at a composer border whose typed text happens to contain the gate's literal raised it,
+// and InputBoxVisible is true there, so the result is a false gate with the user's own
+// keystrokes as the trigger: AwaitingInput goes false and the queued prompt is withheld while
+// they are looking at an active composer.
+//
+// gemini's real render puts a footer line below the composer, which is why this is narrow — the
+// first case below is what actually ships and it was already safe. The second is the one that
+// was not, and a footer is not a thing to rely on.
+func TestGeminiTrustGateIgnoresTypingInTheComposer(t *testing.T) {
+	const typed = "│ > Trust folder is the anchor │"
+	box := func(tail string) string {
+		return "✦ Done.\n\n╭──────────────────────────────╮\n" + typed +
+			"\n╰──────────────────────────────╯" + tail
+	}
+
+	for _, tc := range []struct{ name, pane string }{
+		{"composer with gemini's footer below it", box("\n~/project   no sandbox   gemini-2.5-pro")},
+		{"composer ending the pane", box("")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.True(t, gemini.InputBoxVisible(tc.pane),
+				"the premise: this pane reads as a live composer")
+			_, up := gemini.GateUp(tc.pane)
+			require.False(t, up,
+				"typing the gate's literal into the composer must not raise it — that would "+
+					"withhold the queued prompt while the user is typing")
+		})
+	}
+}
+
+// geminiTrustGateVisible substitutes defaultPrompts for the adapter's own glyph set, because a
+// package-level func cannot reference `gemini` without an initialization cycle. That is only
+// sound while gemini declares no custom set; this is the guard that notices if it gains one.
+func TestGeminiUsesTheDefaultComposerGlyphs(t *testing.T) {
+	require.Empty(t, gemini.InputBoxPrompts,
+		"gemini declares no composer glyphs, so geminiTrustGateVisible's defaultPrompts is the "+
+			"same set InputBoxVisible uses; give it a custom set and the gate must be updated too")
+	require.Equal(t, defaultPrompts, gemini.inputBoxPrompts())
+}
+
 // The /permissions dialog, which shares the decline row byte-identically and is separated by one
 // word in the accept row: its label is `Trust this folder (${dirName})`, not `Trust folder
 // (${dirName})`. Round 1's alternation reported it as the startup gate.
