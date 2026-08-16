@@ -845,7 +845,8 @@ var codex = &Adapter{
 // there, and now sees "ok". The disclosure is this comment and gemini/busy +
 // gemini/prompt/confirmation in pane_width_test.go's paneCoverageExempt. Splitting the pin
 // per-surface is the only thing that would make it a signal again, and no adapter does that
-// today.
+// today; that is #721, and it is not gemini-specific — gemini is only where a rotted literal
+// made it visible.
 //
 // The OLDER direction is silent by construction, and that is not specific to gemini: doctor
 // reports drift only when installed > verified (internal/doctor/compare.go, driftExceeds), so
