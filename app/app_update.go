@@ -609,8 +609,13 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state = stateRename
 			return m, m.handleError(msg.err)
 		}
-		// Adopt the identity the I/O earned. This is the only writer of Title and
-		// Branch, and it is on the update thread — the renderer reads Title unguarded.
+		// Adopt the identity the I/O earned, on the update thread: both fields are plain
+		// and unmutexed, so a second concurrent writer would be a data race with no lock
+		// to serialise it. This is the only writer of Title and Branch that can run
+		// against a STARTED instance — SetTitle writes Title too, but refuses one that
+		// has started, so the two cannot overlap. Keeping the write here is necessary
+		// and not sufficient; AdoptRename carries the per-reader argument for the other
+		// goroutines, and #719 the readers still outside it.
 		msg.instance.AdoptRename(msg.renamed)
 		// The deep rename replaced the real title, so the cosmetic label must go or
 		// it would keep shadowing it.

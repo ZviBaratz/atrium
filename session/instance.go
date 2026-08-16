@@ -2172,6 +2172,17 @@ type RenamedIdentity struct {
 // would be a data race — the reason the returned identity is applied by AdoptRename on the
 // update thread instead. Everything this function does touch (the git/tmux structs) guards
 // its own fields.
+//
+// The renderer is not the only reader, and moving the write to the update thread is not on
+// its own enough to make either field safe — the readers on other goroutines have to be
+// accounted for one at a time, and are (see AdoptRename). One of them is this function:
+// `oldTitle := i.Title` below is an off-thread read of the field AdoptRename writes. It is
+// safe for a reason particular to it and not general — the only AdoptRename that can carry
+// this instance's title is the one applying THIS call's own result, which by construction
+// cannot run until this returns, and the rename dialog's in-flight gate stops a second
+// rename overlapping. The reader that had no such reason was TerminalPane.EnsureSession on
+// the capture goroutine, which now takes the title as a parameter (frameTarget.termTitle,
+// #718).
 func (i *Instance) Rename(newTitle string) (RenamedIdentity, error) {
 	newTitle = strings.TrimSpace(newTitle)
 	if newTitle == "" {
@@ -2215,9 +2226,40 @@ func (i *Instance) Rename(newTitle string) (RenamedIdentity, error) {
 }
 
 // AdoptRename writes the identity a successful Rename earned. Main-loop only, for the
-// same single-writer reason as SetDiffStats: Title is read unguarded by the renderer.
+// same single-writer reason as SetDiffStats: Title and Branch are plain fields with no
+// mutex, so a second writer would be a data race with no lock to serialise it.
 // A zero Branch is left alone — a direct session has no worktree to derive one from, so
 // overwriting would blank a field the rename never owned.
+//
+// This comment used to justify "main-loop only" with "Title is read unguarded by the
+// renderer", which is true of the renderer and was never the whole reader set — the
+// renderer runs on this same loop, so it is the one reader that cannot race. What makes
+// main-loop-only sufficient is that the readers on OTHER goroutines are handed values
+// snapshotted here rather than reading the fields: TerminalPane.EnsureSession, on the
+// capture goroutine, took the title off the instance until #718 and now receives
+// frameTarget.termTitle; app's customCommandSpec carries strings for the same reason.
+//
+// Not every reader is inside that rule yet, and #718 named the rest rather than converting
+// them — the census lives in #719, not here, because it is long, it spans packages, and an
+// enumeration in a comment is a claim nothing can hold to the tree. Take it fresh instead:
+//
+//	grep -rn '\.Title\b\|\.Branch\b\|\.DisplayName()' session/ app/ ui/ --include='*.go' | grep -v _test
+//
+// Both breadths in that line were bought by getting it wrong. Receiver-agnostic, because
+// `i\.Title` finds nothing in app/ or ui/, which spell it `inst.Title` and
+// `msg.instance.Title`. And ui/ in the path list, because the reader this whole issue is
+// about LIVED there — a recipe scoped to session/ and app/ would have the next maintainer
+// audit everything except the package that produced the bug.
+//
+// It is deliberately noisy, and most of what it returns is on the update thread and fine.
+// Ask of each hit which goroutine it is on: the answer is a per-reader argument, never a
+// general one —
+// a teardown and a run-command sit behind beginAsyncAction's actionInFlight gate, which a
+// rename's own I/O sits behind too; a Start goroutine cannot overlap a rename of the same
+// instance because Rename refuses one that has not finished starting; Rename's own
+// `oldTitle := i.Title` is safe only because the AdoptRename that could race it is the one
+// applying that very call's result. Some have no such argument and are merely improbable.
+// None of it is a rule a NEW off-thread reader may lean on: snapshot on this thread instead.
 //
 // It deliberately leaves both sibling names alone: termName and runName are owned rather
 // than derived, so the shell and the dev server keep the names they were created under and

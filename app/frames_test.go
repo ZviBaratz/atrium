@@ -646,7 +646,7 @@ func TestCaptureTerminalFrame_JustCreatedShellKeepsItsFallback(t *testing.T) {
 	h, inst := newCaptureHome(t, spy)
 
 	ensured := false
-	ensure := func(*session.Instance) (string, error) {
+	ensure := func(*session.Instance, string) (string, error) {
 		ensured = true
 		return "freshly-created-key", nil
 	}
@@ -664,4 +664,61 @@ func TestCaptureTerminalFrame_JustCreatedShellKeepsItsFallback(t *testing.T) {
 	h.handlePaneFrame(msg)
 	require.Contains(t, h.tabbedWindow.String(), "Opening terminal",
 		"the pane must say it is opening, not render an empty frame")
+}
+
+// TestFrameTargetSnapshotsTheTitleForTheCaptureGoroutine is the delivery half of #718.
+//
+// ui's TestCaptureGoroutineReadsNoUnguardedInstanceField proves the shell creator does not read
+// Instance.Title; nothing there proves the title it needs actually ARRIVES. Both halves
+// are needed: pass an empty string through and the AST guard still passes while every
+// shell is created with the window name "term: " and the legacy reap probes "term_".
+//
+// The snapshot has to be taken HERE, in resolveFrameTarget, because this is the update
+// thread — the same thread AdoptRename writes Title on. Deriving it inside the ensurer is
+// the race; deriving it in captureTerminalFrame would be the same race one hop earlier.
+func TestFrameTargetSnapshotsTheTitleForTheCaptureGoroutine(t *testing.T) {
+	spy := newFrameSpy("shell prompt $")
+	h, inst := newCaptureHome(t, spy)
+	h.tabbedWindow.SetActiveTab(ui.TerminalTab)
+
+	target := h.resolveFrameTarget()
+	require.False(t, target.empty(), "control: an idle terminal tab must resolve a target")
+	require.Equal(t, inst.Title, target.termTitle,
+		"resolveFrameTarget must snapshot the title on the update thread")
+
+	// Rename AFTER the target is resolved, and then run the capture. The order is what
+	// makes the next assertion falsifiable: `target.termTitle` is a string field of a
+	// value copy, so it cannot follow inst.Title however hard the test tries — asserting
+	// that it did not is a tautology. What CAN differ is the value the ensurer receives,
+	// which is the old snapshot if the capture goroutine is handed one and the new title
+	// if it re-derives from target.termInstance. Mutate captureTerminalFrame to
+	// `ensure(target.termInstance, target.termInstance.Title)` — the #718 defect, moved
+	// one hop — and this goes red.
+	before := target.termTitle
+	renamedTo := inst.Title + "-renamed"
+	inst.AdoptRename(session.RenamedIdentity{
+		Title: renamedTo, Branch: inst.Branch, TmuxName: inst.TmuxSessionName(),
+	})
+
+	var got string
+	called := false
+	ensure := func(_ *session.Instance, title string) (string, error) {
+		called, got = true, title
+		return "created-key", nil
+	}
+	// A nil terminal is the create path — the only round that calls the ensurer.
+	captureTerminalFrame(frameTarget{termInstance: inst, termTitle: before}, ensure)
+	require.True(t, called, "control: the create path must reach the ensurer")
+	// One assertion, not two: `got != renamedTo` would be entailed by this one and could
+	// never fail on its own, since require.Equal halts the test first and renamedTo is
+	// before+"-renamed" by construction. What it would have claimed is said here instead —
+	// passing means the create ran on the PRE-rename title, which is the staleness
+	// EnsureSession's doc prices in.
+	require.Equal(t, before, got,
+		"the capture goroutine must be handed the snapshot (%q), not re-derive the title "+
+			"from the instance, which now reads %q", before, renamedTo)
+
+	// The next round resolves fresh, so the new title is picked up one frame later.
+	require.Equal(t, renamedTo, h.resolveFrameTarget().termTitle,
+		"the following round must resolve the renamed title")
 }
