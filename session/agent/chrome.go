@@ -3,6 +3,7 @@ package agent
 import (
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // Pure-text windowing over a captured pane. These moved here from session/tmux
@@ -110,15 +111,45 @@ func footerBelowBox(content string) (string, bool) {
 // A blank interior row still carries its walls in every pane this repo has captured — see
 // gemini_pane_test.go, where the padding rows inside the trust dialog render as "│      │"
 // at all four widths — so requiring them costs nothing there. An agent that pads a box with
-// genuinely empty lines would truncate the block at that row rather than overrun it, which
-// is the fail-safe direction: a short block can only fail to match.
+// genuinely empty lines loses the rows above that padding, and when the padding sits directly
+// above the border it loses the block entirely: bottomBoxBlock returns (nil, false) and the
+// gate goes DOWN, not short. Both are the fail-safe direction — a missed gate is #713, a false
+// one is #342 — but it is a total loss rather than a partial one, which an earlier draft of
+// this paragraph understated as "would truncate the block at that row".
+// TestBottomBoxBlockLosesTheBlockToAnUnwalledPaddingRow.
+//
+// Only the LIGHT wall is accepted. An earlier draft also took the heavy '┃', which was dead
+// code the compiler cannot see: isHorizontalRule accepts no heavy glyph, so '┗━━┛' is not a
+// rule, no heavy box can present a bottom border, and bottomBoxBlock could never reach a
+// heavy wall to test it. Accepting it advertised support the anchor does not deliver. An
+// adapter that draws heavy boxes needs both halves taught together, plus a driven capture.
+// TestBottomBoxBlockDoesNotAnchorAHeavyBox.
 func isBoxWallLine(line string) bool {
-	r := []rune(strings.TrimSpace(line))
-	if len(r) < 2 {
+	line = strings.TrimSpace(line)
+	first, size := utf8.DecodeRuneInString(line)
+	if size == 0 || size == len(line) {
+		return false // empty, or a single rune that would be both walls at once
+	}
+	last, _ := utf8.DecodeLastRuneInString(line)
+	return first == '│' && last == '│'
+}
+
+// isBoxBottomBorder reports whether line is a box's BOTTOM edge: a horizontal rule that opens
+// with a bottom-left corner. isHorizontalRule alone is too weak to anchor a claim that a box
+// ENDS here — it accepts a bare "────" the agent printed as a markdown rule or a table edge,
+// and it accepts a box's own interior divider "├────┤", which means the lower half of the box
+// is missing and the frame is torn or mid-repaint. Both used to anchor bottomBoxBlock.
+//
+// Only the left corner is required. All four driven rungs carry both, so the evidence cannot
+// separate the two conditions; the weaker one is chosen because everything narrow in these
+// captures is cut from the RIGHT (the option rows at width 20), so a right-truncated frame is
+// the more plausible unseen shape. TestBottomBoxBlockNeedsABottomCornerNotAnyRule.
+func isBoxBottomBorder(line string) bool {
+	if !isHorizontalRule(line) {
 		return false
 	}
-	wall := func(c rune) bool { return c == '│' || c == '┃' }
-	return wall(r[0]) && wall(r[len(r)-1])
+	first, _ := utf8.DecodeRuneInString(strings.TrimSpace(line))
+	return first == '╰' || first == '└'
 }
 
 // bottomBoxBlock returns the interior lines of the pane's bottom-most box, and true only when
@@ -132,10 +163,22 @@ func isBoxWallLine(line string) bool {
 //     scrollback keeps matching forever, which for a startup gate means the queued first
 //     prompt is never delivered (registry_test.go's TestAgyTrustGate pins the same
 //     property for agy, which earns it by REPLACING the screen instead).
-//   - "walled above it" separates a live dialog from the transcript. A phrase quoted in the
-//     conversation body carries no side walls, so it cannot reach the returned block — which
-//     a bottom-N window (liveChromeLines) cannot promise, because the transcript scrolls
+//   - "walled above it" separates a live dialog from ordinary transcript. A quoted phrase in
+//     the conversation body carries no side walls, so it cannot reach the returned block —
+//     which a bottom-N window (liveChromeLines) cannot promise, because the transcript scrolls
 //     through it.
+//
+// That second half is a narrowing, not a guarantee, and an earlier draft of this doc claimed
+// the guarantee ("it cannot reach the returned block", full stop). Quoted BOX ART carries
+// walls and a corner border like any other box, so a transcript that quotes a dialog — this
+// repo's own fixtures, a PR body, a review comment — and happens to end at the quoted bottom
+// border does yield its interior, and gemini's gate fires on it. Measured, not reasoned:
+// TestGeminiTrustGateFiresOnQuotedBoxArtEndingThePane. What the anchor buys is the size of the
+// target: not "the phrase appears in the last N lines" but "the phrase is inside a box whose
+// bottom border is the last non-empty line on screen", which no line of prose satisfies and a
+// quoted frame satisfies only while it is the final thing rendered. It is transient where the
+// window form was persistent, but it is not zero, and a liveness anchor built out of pane text
+// cannot make it zero.
 //
 // The block is the contiguous run of isBoxWallLine rows immediately above that border, and
 // NOT everything back to a matching top border. Both alternatives were measured against the
@@ -143,8 +186,11 @@ func isBoxWallLine(line string) bool {
 //
 //   - HEIGHT. The agent's tmux pane is sized to the preview pane, not to the terminal
 //     (session/instance.go SetPreviewSize ← ui/tabbed_window.go SetSize), so it is a few rows
-//     shorter than the terminal and about half as wide. gemini's trust dialog is 37 rows at
-//     width 24, and a pane shorter than that has scrolled its own top border off — leaving a
+//     shorter than the terminal and about half as wide. gemini's trust dialog BOX is 28 rows
+//     at width 24 and 33 at width 20 — geminiDialogRows in gemini_pane_test.go owns those
+//     numbers and computes them from the captures; this sentence used to give 37, which is the
+//     width-24 CAPTURE's height, a different measurement off by nine rows in the unsafe
+//     direction. A pane shorter than the box has scrolled its own top border off, leaving a
 //     scan that demands one to find nothing and take the gate down. Measured on the committed
 //     capture: the top-border form went false at pane height 25 for the width-24 rung and 15
 //     for the width-40 rung. That is #713's exact symptom (missed gate → Ready → false
@@ -154,7 +200,10 @@ func isBoxWallLine(line string) bool {
 //     Measured: 60 transcript lines bracketed by a pair of plain "────" rules returned the
 //     whole span, so a quoted row 60 lines up fired the gate. The wall run needs no
 //     gateRegionCap/aboveBoxBlockCap equivalent because it terminates itself at the first
-//     line that is not box interior. TestGeminiTrustGateIgnoresTranscriptBetweenTwoRules.
+//     line that is not box interior. TestGeminiTrustGateIgnoresTranscriptBetweenTwoRules,
+//     which closes the span with a real "╰───╯" rather than the plain rule the measurement
+//     used: since isBoxBottomBorder a plain rule fails the anchor outright, and a guard that
+//     died there would stop testing the wall run it exists for.
 //
 // Interior lines are returned as lines, deliberately unjoined and unflattened: a caller
 // matching a literal gets no cross-line synthesis, so two adjacent wrapped lines cannot
@@ -162,12 +211,14 @@ func isBoxWallLine(line string) bool {
 // and flatten the result itself, and accept that cost knowingly.
 //
 // Input must already be cleaned for detection (ANSI stripped), like every other predicate
-// here. The bottom border is matched with the strict isHorizontalRule, so a border carrying
-// an embedded title ("──── name ──", which claude renders and aboveBoxBlock uses the loose
-// isBoxBorderLine for) is not an anchor: this returns false rather than reading past it.
-// gemini's dialog draws an untitled border at every captured width; an adapter whose dialog
-// is titled needs the loose predicate and its own guard. Returns (nil, false) when the last
-// non-empty line is not a border, or when nothing walled sits above it.
+// here. The bottom border is matched with isBoxBottomBorder, which is isHorizontalRule plus a
+// bottom-left corner — so neither a bare rule the agent printed nor a box's own interior
+// divider anchors this, and a border carrying an embedded title ("──── name ──", which claude
+// renders and aboveBoxBlock uses the loose isBoxBorderLine for) does not either: this returns
+// false rather than reading past it. gemini's dialog draws an untitled, corner-terminated
+// border at every captured width; an adapter whose dialog is titled needs the loose predicate
+// and its own guard. Returns (nil, false) when the last non-empty line is not a bottom border,
+// or when nothing walled sits above it.
 func bottomBoxBlock(content string) ([]string, bool) {
 	lines := strings.Split(content, "\n")
 
@@ -178,7 +229,7 @@ func bottomBoxBlock(content string) ([]string, bool) {
 			break
 		}
 	}
-	if last < 0 || !isHorizontalRule(lines[last]) {
+	if last < 0 || !isBoxBottomBorder(lines[last]) {
 		return nil, false
 	}
 	start := last
