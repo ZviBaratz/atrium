@@ -850,10 +850,13 @@ var codex = &Adapter{
 // The OLDER direction is silent by construction, and that is not specific to gemini: doctor
 // reports drift only when installed > verified (internal/doctor/compare.go, driftExceeds), so
 // every install below the pin reads "ok" whatever its panes render. Moving a pin forward
-// therefore never warns the users it just stopped covering. What keeps that cheap here is the
-// gate's shape rather than the pin: it reads ONE literal, "Trust folder", which the 0.27
-// dialog rendered too — see geminiTrustGateVisible on why the two-literal version of this fix
-// was withdrawn for exactly that reason.
+// therefore never warns the users it just stopped covering. The gate's shape makes that
+// cheaper than it could be — it reads ONE literal, "Trust folder", which the 0.27 dialog
+// rendered too, which is why the two-literal version of this fix was withdrawn — but it does
+// NOT make an older install covered, and an earlier draft of this paragraph implied it did.
+// The gate also requires a box, and whether 0.27 drew one is unknown: it was never driven, and
+// the tree's only artifact of that shape is unboxed and does not gate. See
+// geminiTrustGateVisible.
 var gemini = &Adapter{
 	Key:         KeyGemini,
 	DisplayName: "Gemini CLI",

@@ -866,8 +866,11 @@ func TestGeminiTrustGateIgnoresThePermissionsTrustDialog(t *testing.T) {
 // gemini shipped at 0.27 had "Trust folder" but the tree's only fixture of it carried no
 // "Don't trust" row, so a conjunction would have quietly taken the gate away from every install
 // older than the pin — while doctor stayed silent, because driftExceeds only reports installed
-// > verified (internal/doctor/compare.go). One literal plus a structural anchor covers both
-// dialog shapes and survives a reword of the row it does not read.
+// > verified (internal/doctor/compare.go). So one literal removes one of two ways to miss on
+// an older install, and survives a reword of the row it does not read. It does not COVER the
+// older shape: the anchor is a second requirement, 0.27 was never driven, and the tree's only
+// artifact of that shape is unboxed and does not gate. Three files said "covers both dialog
+// shapes" until #715 round 4 grepped the claim rather than the sentence in front of it.
 //
 // GateUp short-circuits, so a test that only ever feeds it complete dialogs cannot tell which
 // literals a matcher actually reads: any of them could quietly stop appearing and the suite
