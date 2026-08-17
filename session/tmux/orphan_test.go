@@ -375,7 +375,8 @@ func exitErrorCarrying(msg string) error {
 // probes do (ambientServerPID, probeSocketOwner). A call site that captured stderr itself
 // would empty the field classifyPIDProbe reads and silently return it to treating every
 // failure as an answer — the #730 bug, restored by a refactor that looks unrelated. Both
-// directions are asserted, because only the second one fails when that refactor lands.
+// directions of that os/exec rule are pinned, so neither half of it can quietly change
+// meaning underneath the classification.
 //
 // What it does NOT prove is that either probe still leaves cmd.Stderr nil; that is a
 // property of the call sites, and only probeSocketOwner has it measured end to end
@@ -393,10 +394,13 @@ func TestOutputPopulatesExitErrorStderr(t *testing.T) {
 	require.Contains(t, string(exitErr.Stderr), msg,
 		"Output() must populate ExitError.Stderr when cmd.Stderr is nil — the classification reads nothing else")
 
-	// The half that names the regression. Asserting only the line above leaves a guard that
-	// passes whether or not the nil-Stderr precondition matters: it is this direction that
-	// goes red the day a probe starts capturing stderr for its own logging, which empties
-	// the field classifyPIDProbe reads and returns #730 without touching #730's code.
+	// The conditional half. The assertion above says the field is filled; on its own it
+	// never says the nil precondition is what fills it, so it would hold just as well if
+	// Output() ignored cmd.Stderr entirely. This says the field comes back empty when the
+	// caller takes the stream — the mechanism by which a probe that started capturing
+	// stderr for its own logging would return #730 without touching #730's code. This test
+	// cannot see such a probe; that gap is the one disclosed above. What it pins is the rule
+	// a reader of classifyPIDProbe would otherwise have to take from the os/exec docs.
 	var captured bytes.Buffer
 	withStderr := exec.CommandContext(t.Context(), "sh", "-c", script, "sh", msg)
 	withStderr.Stderr = &captured

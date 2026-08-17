@@ -415,8 +415,8 @@ func TestRenderOrphansReachableServerPrintsTheExactCommand(t *testing.T) {
 // deciding whether to reach for `reap --kill`.
 //
 // It also has to give the user something to do, which is why the path is asserted here and
-// not merely in the format string. `ls -l` is the only handle this row offers, and it is a
-// read the scan could not make — making it is exactly what failed. Since #730 this is where
+// not merely in the format string. `ls -l` is what this row offers, and it is a read the
+// scan could not make — making it is exactly what failed. Since #730 this is where
 // a live server behind an unopenable socket lands, along with the residual that fix accepted
 // — an orphan behind ENOTDIR/ELOOP, which reap can no longer take. A row that withheld the
 // path would leave the user with a verdict and no next step.
@@ -434,7 +434,7 @@ func TestRenderOrphansUnknownReachabilityPromisesNoKill(t *testing.T) {
 	require.Contains(t, out, "never kills them")
 	require.Contains(t, out, "holds nothing")
 	require.Contains(t, out, "`ls -l /tmp/tmux-1000/atrium`",
-		"the row must name the file to look at: it is the only read that narrows the causes")
+		"the row must name the file to look at: reading it is what narrows the causes")
 	require.Contains(t, out, "could not open the socket",
 		"and it must name the cause that neither a re-run nor a PATH check can clear")
 	require.NotContains(t, out, "UNREACHABLE",
