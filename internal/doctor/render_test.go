@@ -61,6 +61,10 @@ func TestRender(t *testing.T) {
 	// fix, and it left this file re-armed for the next pin bump after repairing the other file
 	// that had the same bug. This row read 0.27.4/0.27 long after gemini's pin moved.
 	geminiVerified := registryPin(t, agent.KeyGemini)
+	require.NotEqual(t, geminiWithinPin, geminiVerified,
+		"the Gemini row needs two DISTINCT versions or its column-order assertion below is "+
+			"vacuous — both indices would be the same. If a pin bump made these equal, move "+
+			"geminiWithinPin up within the minor rather than deleting the order check")
 
 	out := Render([]Result{
 		{Key: agent.KeyClaude, Name: "Claude Code", Installed: "2.1.179", Verified: "2.1.170", Status: StatusDrifted},
