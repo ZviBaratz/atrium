@@ -254,10 +254,17 @@ func TestAReapThatNeverReachedTmuxKeepsTheName(t *testing.T) {
 }
 
 // An owned name whose shell is already gone must still be given up. The kill is where that
-// is decided now that no has-session probe runs in front of it: tmux answering "no such
-// session" is the teardown goal already met (sessionAlreadyGone in session/tmux), so Close
+// is decided now that no has-session probe runs in front of it: tmux reporting no session
+// left is the teardown goal already met (sessionAlreadyGone in session/tmux), so Close
 // returns nil and the release follows. Without this the name would be held forever, naming
 // nothing and reserving its title against every new session that wanted it.
+//
+// This asserts the integration claim only. WHICH of sessionAlreadyGone's messages tmux
+// answers with here is not fixed: this pane starts no server, so an empty sandbox socket
+// yields "error connecting to … (No such file or directory)" while a server another test
+// left running yields "can't find session". The precondition above cannot tell them apart —
+// DoesSessionExist is false either way — so the deterministic, per-message guard is
+// close_test.go's table in session/tmux, not this test.
 func TestReapReleasesAnOwnedNameWithNothingOnTheSocket(t *testing.T) {
 	testutil.RequireTmux(t)
 	t.Cleanup(log.Initialize(t.TempDir(), false))
