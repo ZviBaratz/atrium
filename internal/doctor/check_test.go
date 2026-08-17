@@ -42,12 +42,13 @@ func statusFor(results []Result, k agent.Key) Status {
 // the registry's pin, but inside the same minor, so Check's not-drifted branch is the one that
 // runs. requireWithinPin holds it there.
 //
-// It is a 0.27 patch because the pin is 0.27, NOT because that is what anyone has installed —
-// the real CLI is 0.55.x, which is genuine drift and therefore useless for exercising the
-// not-drifted branch. It read 0.55.9 while #713 briefly carried the pin at 0.55.1, and
-// requireWithinPin is what failed when the pin came back; that is the guard working, not a
-// fixture to loosen.
-const geminiWithinPin = "0.27.4"
+// It is a 0.55 patch because the pin is 0.55.1, NOT because that is what anyone has installed.
+// This value has now moved three times and every move was forced by this guard rather than
+// noticed by hand: 0.27.4 originally, 0.55.9 while #713 briefly carried the pin at 0.55.1,
+// back to 0.27.4 when #713 reverted it, and 0.55.9 again now that #736 has driven all four
+// gemini surfaces and moved the pin for real. Each time the alternative was a row that stayed
+// green while silently testing the older-than branch instead.
+const geminiWithinPin = "0.55.9"
 
 // requireWithinPin fails unless installed is at-or-above the adapter's pin AND in the same
 // minor — the only shape that exercises "newer, but not by enough to be drift".

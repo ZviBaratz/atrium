@@ -692,7 +692,8 @@ start_session() {
 	#
 	# The ${arr[@]+"${arr[@]}"} spelling, not "${arr[@]}": this script runs `set -u`
 	# and supports bash 3.2, where expanding an EMPTY array as "${arr[@]}" is an
-	# unbound-variable error. justfile:97 uses the same guard for the same reason.
+	# unbound-variable error. The justfile's drive-agent recipe uses the same guard for
+	# the same reason.
 	tmux_boot new-session -d -s "$SESSION" -x "$width" -y "$height" \
 		${CAP_ENV_ARGS[@]+"${CAP_ENV_ARGS[@]}"} \
 		-c "$workdir" -n capture "$program"

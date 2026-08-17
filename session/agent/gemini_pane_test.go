@@ -1229,7 +1229,8 @@ func TestGeminiCapturesRenderNoComposerGlyphInsideTheDialog(t *testing.T) {
 // It is NOT an argument for moving the pin, and an earlier draft of this comment made it one
 // ("why the drift pin moving from 0.27 to 0.55.1 is a record of re-verification"). What this
 // proves is that ONE surface rotted and has been re-driven; the pin is a claim about four.
-// registry.go's header carries why it stays at 0.27.
+// The pin HAS since moved to 0.55.1 — #736 drove the other three — but on their evidence, not
+// on this test's, and the distinction is exactly what the sentence above is protecting.
 func TestGeminiPre055TrustGateLiteralMatchesNothing(t *testing.T) {
 	probe := *gemini
 	probe.Gates = []Gate{{Contains: []string{"Do you trust this folder"}}}

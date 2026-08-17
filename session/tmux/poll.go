@@ -380,14 +380,19 @@ func (t *Session) Poll() PaneState {
 	// discussing claude's permission dialog read as a live prompt, and this matcher is the
 	// one autoyes answers, so it tapped Enter into the composer. Claude's permission
 	// matchers are anchored structurally now (agent/registry.go claudeLiveDialogRegion);
-	// codex, gemini and agy still use the flat window, so for them the sentence remains
+	// codex and agy still use the flat window, so for them the sentence remains
 	// aspirational — they still false-fire on their own literals quoted in a transcript.
-	// What #347 removed is the second half: all three carry NoAutoTap, so such a quote
-	// surfaces as needs-input instead of Enter-approving a shell command. The remaining cost
-	// is a row parked on needs-input with its queued prompt undelivered, which is #342's
-	// direction; fixing that for codex needs its overlay captured and anchored, for gemini
-	// it is accepted (deprecated CLI — see the matcher's own comment), and for agy the
-	// dialog renders where no composer exists to anchor against (#512).
+	// gemini's confirmation joined the anchored side in #736 (geminiConfirmationVisible),
+	// which also found the cost of the flat form running the other way: the literal it
+	// matched on is truncated off any pane narrower than 34 columns, so it missed real
+	// dialogs as well as firing on quoted ones.
+	// What #347 removed is the second half: every one of them carries NoAutoTap, so such a
+	// quote surfaces as needs-input instead of Enter-approving a shell command. The remaining
+	// cost is a row parked on needs-input with its queued prompt undelivered, which is #342's
+	// direction; fixing that for codex needs its overlay captured and anchored, and for agy
+	// the dialog renders where no composer exists to anchor against (#512). For gemini it
+	// used to be "accepted (deprecated CLI)" — #736 drove the dialog instead and anchored it,
+	// so that entry is closed rather than accepted.
 	if matcher, ok := t.adapter.DetectPrompt(content); ok {
 		t.monitor.idleStreak = 0
 		state := PanePrompt

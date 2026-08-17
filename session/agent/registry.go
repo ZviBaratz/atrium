@@ -823,64 +823,48 @@ var codex = &Adapter{
 // different evidence tiers, and #713 is what the difference costs — say which is which
 // rather than let one word cover both.
 //
-// DRIVEN at 0.55.1: the folder-trust Gate, captured live on a width ladder by
-// scripts/drive-agent.sh and pinned in gemini_pane_test.go. That is the only surface here a
-// pane has actually rendered.
+// DRIVEN at 0.55.1, all four surfaces:
 //
-// BUNDLE-GREP ONLY at 0.55.1: "esc to cancel" and "No, suggest changes (esc)" are both
-// still present in @google/gemini-cli/bundle, and the pre-adapter matcher
-// "Yes, allow once" is still absent. For the busy marker the grep is a targeted one rather
-// than a presence check, because the bundle ships BOTH spellings and HasBusyMarker's
-// strings.Contains is case-sensitive (agent.go), so which one renders decides whether the
-// marker is live at all: the 20 "Esc to cancel" hits are dialog footers (DialogFooter's default
-// cancelAction, the auth-key prompt, the theme picker), while the streaming footer builds
-// `(esc to cancel, ${elapsedTime}…)` under streamingState === "responding" — lowercase, and the
-// responding footer is the surface BusyMarkers reads. That locates the render site and its
-// condition; it still does not say what a live pane puts on screen around it. Presence is
-// necessary and NOT sufficient — this file's
-// own rule — and #713 is the proof: the gate literal that rotted was verified the same way,
-// from the 0.27 package source (FolderTrustDialog.js, back when the package shipped
-// unbundled), and a grep of the shipped bundle cannot see that a live pane truncates or wraps
-// a string out of a matcher's window. Reaching either of those two needs auth and a real
-// turn, which is why they stayed ungraded when the gate was re-driven. So does the fourth
-// gemini surface, which does not live in this file at all: generateNameGemini's `gemini -p`
-// output contract (session/naming.go), still checked only at 0.27.
+//   - the folder-trust Gate — width ladder in gemini_pane_test.go (#713), re-confirmed byte
+//     for byte in #736's run;
+//   - the IDE-integration Gate — gemini_ide_nudge_pane_test.go (#717);
+//   - the tool-confirmation PromptMatcher and the busy marker — gemini_confirm_pane_test.go
+//     (#736), both from the same authenticated sessions;
+//   - generateNameGemini's `gemini -p` output contract (session/naming.go), probed in the
+//     same run: bare text on stdout, warnings on stderr, no JSON envelope.
 //
-// READ THAT AGAINST VerifiedVersion BELOW, WHICH STAYS AT 0.27 — one surface is not the whole
-// surface, exactly as it is not for claude (see VerifiedVersion above: "the pin is a claim
-// about the WHOLE surface … Bumping on a partial drive is how a pin starts lying"). #713
-// re-drove the gate and nothing else, so 0.27 is still the last version at which this adapter
-// as a whole was checked, and that is what the scalar says.
+// That is the whole adapter, which is why VerifiedVersion moved to 0.55.1 below. It is the
+// bump drift_fields_test.go's comment asked for by name — "a drive that covers all four
+// surfaces" — and it took a real turn per rung plus an isolated config dir to buy.
 //
-// It shipped bumped to 0.55.1 for six review rounds, and the argument for it was that gemini's
-// pin is 28 minors behind where claude's is nearly current, so refusing costs claude nothing
-// and costs gemini a standing warning. Both halves are true — doctor truncates to minor
-// (internal/doctor/compare.go), so claude's 2.1.170 against an installed 2.1.220 is silent
-// either way — and the conclusion still does not follow, for three reasons that only became
-// visible once the cost of each direction was measured rather than asserted:
+// WHAT THE DRIVE COST AND WHY IT HAD NOT BEEN PAID. Reaching anything past the trust dialog
+// needs an authenticated session, and drive-agent.sh drove against the real ~/.gemini, so a
+// capture run could not answer a dialog without editing the developer's config.
+// ATR_CAP_ENV (#736) is the opt-in that fixed it. Then oauth-personal turned out to be
+// unusable: at 0.55.1 it returns IneligibleTierError ("This client is no longer supported for
+// Gemini Code Assist for individuals"), so these panes were driven under gemini-api-key. An
+// individual Google account cannot reach ANY of them, which is a fact about who this adapter
+// still serves rather than about the captures.
 //
-//   - The warning is DISMISSIBLE. Drift is not a `doctor`-only line: it raises a startup hint
-//     and a persistent "⚠ stale" badge, and both are acknowledged per installed version
-//     (config.State.AckedDrift, app/app_driftcheck.go). So the price of an honest pin is one
-//     dismissable hint per new gemini release, not a permanent nag. The bump was bought
-//     against a cost that does not exist.
-//   - The silence hides #713's OWN failure class. HasBusyMarker is a case-sensitive Contains
-//     and the bundle ships both spellings; if "esc to cancel" has rotted, every streaming
-//     gemini session reads not-busy and lands on Ready with a completion ding. That is the
-//     bug this file was edited to fix, and the pin is the only runtime signal over it.
-//   - The evidence that reassures me about that marker is the tier that already failed. The
-//     render site is located above and it is lowercase — but it is a bundle grep, and this
-//     file's rule is that presence is necessary and not sufficient, with #713 as the proof:
-//     the gate literal was verified exactly that way, from package source, and had rotted.
+// WHAT THE DRIVE FOUND, since "presence is necessary and NOT sufficient" was the standing
+// worry and both halves of it landed:
 //
-// And it ratchets. At 0.56 the warning returns, the gate is the cheap surface to re-drive
-// (a startup screen, no auth, no turn), and the pin moves again — while confirmation and
-// generateNameGemini, which need auth and a paid turn, are never the reason it moves. A pin
-// bumped on whatever was cheapest to check converges on meaning nothing.
+//   - "No, suggest changes (esc)" is present in the bundle and UNREACHABLE below a 34-column
+//     pane, because the option label truncates. The old flat matcher missed real dialogs at
+//     every width Atrium's preview pane produces. See geminiConfirmationVisible.
+//   - "esc to cancel" is present in the bundle and reachable at only three of the seven
+//     driven widths — it is off the screen at 24 and 20, and outside MarkerWindow at 34 and
+//     33 because the footer wraps. The header used to reason that locating the render site in
+//     the bundle "still does not say what a live pane puts on screen around it"; this is what
+//     it puts there. geminiBusyOutOfWindowRungs holds the half a wider window would fix, and
+//     it is not fixed here: MarkerWindow is a live-detection budget for every gemini pane, and
+//     widening it on the evidence of one dialog is the move this file refuses elsewhere.
 //
-// The asymmetry is the whole argument: a wrong "drifted" is noise, dismissed in a keystroke;
-// a wrong "ok" is silent and self-concealing. Splitting the pin per-surface is what makes both
-// honest at once — that is #721, and it is not gemini-specific.
+// The asymmetry that kept the pin at 0.27 through six review rounds still holds and is worth
+// keeping written down: a wrong "drifted" is noise, dismissed in a keystroke; a wrong "ok" is
+// silent and self-concealing. What changes here is not the principle but the evidence — there
+// is no longer an ungraded surface for the pin to be lying about. Splitting it per-surface is
+// still the better shape, and still #721.
 //
 // The OLDER direction is silent by construction, and that is not specific to gemini: doctor
 // reports drift only when installed > verified (internal/doctor/compare.go, driftExceeds), so
@@ -897,13 +881,13 @@ var gemini = &Adapter{
 	DisplayName: "Gemini CLI",
 	aliases:     []string{"gemini"},
 
-	// NOT bumped for #713, nor for #717, which drove a SECOND gate at 0.55.1 — see the
-	// header. The pin is a claim about the whole adapter, and busy, confirmation and
-	// generateNameGemini are still checked at 0.27, so 0.27 is what it says. Driving one
-	// more dialog does not change which surfaces are stale; it changes how many of the
-	// fresh ones there are. Minor granularity: the confirmation wording tracks minor
+	// Moved 0.27 -> 0.55.1 by #736, which is the first change entitled to move it: the pin
+	// is a claim about the WHOLE adapter, and #736 drove the two surfaces #713 and #717 had
+	// left ungraded (confirmation, busy) plus generateNameGemini's contract, in the same
+	// authenticated sessions. Nothing here is bundle-grep only any more — see the header for
+	// each surface and its capture. Minor granularity: the confirmation wording tracks minor
 	// releases; pure patch bumps within a minor don't warrant a warning.
-	VerifiedVersion:  "0.27",
+	VerifiedVersion:  "0.55.1",
 	DriftGranularity: GranularityMinor,
 
 	BusyMarkers: []string{"esc to cancel"},
@@ -911,32 +895,39 @@ var gemini = &Adapter{
 	MarkerWindow: 8,
 
 	Prompts: []PromptMatcher{
-		// NoAutoTap, and unlike codex's this is the settled answer rather than a
-		// holding position (#347). The literal is quotable from this file exactly as
-		// codex's is, and Enter on a real confirmation runs the shell command or
-		// writes the file — but the CLI is deprecated in favour of Antigravity
-		// (docs/superpowers/specs/2026-07-23-antigravity-integration-design.md).
+		// NoAutoTap: Enter on a real confirmation runs the shell command or writes the
+		// file, and the highlighted default is "Allow once" (#347). Autoyes users who
+		// want the taps have gemini's own --yolo / --approval-mode.
 		//
-		// This used to add that anchoring it "would take a primitive nothing else
-		// needs: the confirmation renders INSIDE a rounded box with the app footer
-		// below it, so footerBelowBox hands back the footer and never the dialog, and
-		// aboveBoxBlock anchors on a composer the confirmation has replaced". The
-		// first clause stopped being true in this same change: bottomBoxBlock is that
-		// primitive, and trailingBelowBoxCap was sized to admit exactly one rendered
-		// row below a border — the app footer. So the remaining reason is evidence,
-		// not machinery. Every gemini pane this repo holds is a TRUST dialog; no
-		// confirmation has ever been driven, because reaching one needs auth and a
-		// real turn, and this file's own rule is that bundle presence is necessary
-		// and not sufficient. Anchoring an undriven surface on a box whose shape is
-		// only assumed is how #713 shipped. The exposure while it stays flat is real
-		// and is the #342 direction: a working pane that QUOTES "No, suggest changes
-		// (esc)" — quotable from this file, from #715, from any agent reading the
-		// tracker — reports needs-input and withholds its queued prompt. Closing it
-		// needs a driven capture first; that is #721's neighbour and not this change.
-		// Surfacing as needs-input costs a gemini user one keystroke; autoyes users
-		// who want the taps have gemini's own --yolo / --approval-mode.
-		{Name: "confirmation", Window: WindowPrompt, NoAutoTap: true,
-			All: []string{"No, suggest changes (esc)"}},
+		// Anchored on the dialog's box rather than on a bottom-N window (#736). This
+		// entry used to be a flat All match on "No, suggest changes (esc)", excused on
+		// the grounds that anchoring it "would take a primitive nothing else needs …
+		// the confirmation renders INSIDE a rounded box with the app footer below it".
+		// Driving it falsified the excuse in BOTH directions, which is why the fix is
+		// not the one #736 proposes:
+		//
+		//   - There is no footer below it. gemini's Composer returns null while a tool
+		//     confirmation is pending (ui.collapseDrawerDuringApproval, default true)
+		//     and the Footer renders INSIDE that Composer, so the box's bottom border
+		//     is the last non-empty line on all eight driven rungs. bottomBoxBlock
+		//     anchors it with trailingBelowBoxCap unspent. (The clause that clause
+		//     replaced — "aboveBoxBlock anchors on a composer the confirmation has
+		//     replaced" — was correct, and #715 retracted it along with the wrong half.)
+		//   - The literal is UNREACHABLE at the widths that matter. The option label
+		//     renders wrap:"truncate" behind a 5-column row prefix, inside a box costing
+		//     4 columns, at a width that is the pane's — so the label column is
+		//     paneWidth-9 and a 25-cell literal needs a 34-column pane. Driven: present
+		//     at 34, gone at 33, gone at 24 and 20. Atrium's agent pane is the PREVIEW
+		//     pane, ~45 columns at a plain 70x24 terminal and narrower when the list is
+		//     dragged wide, so keying on it misses real dialogs.
+		//
+		// That second half makes the old matcher a false NEGATIVE as well as the false
+		// positive #736 reported, and the negative is the worse one: a missed
+		// confirmation has no gate and no busy marker either — HasBusyMarker is false
+		// here because showLoadingIndicator requires !hasPendingActionRequired — so the
+		// row lands on PaneIdle → Ready → a completion ding, on a session blocked at a
+		// shell approval. geminiConfirmationVisible has the evidence and the guards.
+		{Name: "confirmation", NoAutoTap: true, Match: geminiConfirmationVisible},
 	},
 
 	Gates: []Gate{
@@ -1230,6 +1221,54 @@ func geminiTrustGateVisible(content string) bool {
 	return found
 }
 
+// geminiConfirmationVisible reports gemini's tool-confirmation dialog (#736): the first and
+// last option rows of ToolConfirmationQueue's RadioButtonSelect, both inside a box whose
+// bottom border ends the pane. Three clauses, each doing one job — the box says the dialog is
+// LIVE, the pair says WHICH dialog, and the composer veto says it is not the user's own typing.
+//
+// WHY NOT "No, suggest changes (esc)", the literal #736 proposes keeping. It is 25 cells and
+// the label column is paneWidth-9, so it needs a 34-column pane; driven, it is present at 34
+// and gone at 33, 24 and 20. "Allow once" is 10 cells and survives every driven width, and it
+// is the FIRST option in all five option-bearing branches of getOptions (edit,
+// sandbox_expansion, exec, info, mcp), appearing in the 0.55.1 bundle only there.
+// TestGeminiConfirmationCancelRowTruncatesBelowWidth34 holds the measurement so the issue's
+// proposal cannot be re-adopted by re-reading the issue.
+//
+// A CONJUNCTION, through Match rather than All. "Allow once" alone is ordinary English and
+// "No, sug" alone is a fragment; either would fire on prose. The cancel prefix is deliberately
+// shorter than the row ever renders — it needs only 7 of the label column's cells, so it
+// clears the narrowest driven rung with room, where the full literal does not clear the third
+// narrowest. Every literal this adapter has lost, it lost by being more specific than it
+// needed to be.
+//
+// The block is read LINE-WISE and unflattened, so two adjacent wrapped rows cannot synthesise
+// a phrase neither renders — the trap flattenChrome sprang on the trust gate (#713).
+//
+// NOT COVERED, and disclosed rather than quietly half-covered: the ask_user and exit_plan_mode
+// confirmation types return options: [] and render no option row at all, so no literal from
+// getOptions can reach them. Their headers are distinctive but sit at the TOP of a box that can
+// outgrow a 19-row preview pane, which is the shape this package has twice found unusable.
+// Filed rather than guessed at.
+func geminiConfirmationVisible(content string) bool {
+	block, ok := bottomBoxBlock(content)
+	if !ok {
+		return false
+	}
+	var allow, cancel bool
+	for _, line := range block {
+		if isInputBoxLine(line, defaultPrompts) {
+			return false // a composer, not the dialog
+		}
+		if strings.Contains(line, "Allow once") {
+			allow = true
+		}
+		if strings.Contains(line, "No, sug") {
+			cancel = true
+		}
+	}
+	return allow && cancel
+}
+
 // geminiIdeNudgeVisible reports gemini's IDE-integration nudge (#717): the once-per-machine
 // dialog asking whether to connect the detected editor, whose highlighted default installs an
 // extension.
@@ -1514,8 +1553,9 @@ var agy = &Adapter{
 		// execution is the only prompt observed, which is what the trust screen's own
 		// wording — "read, edit, and execute files here" — predicts.
 		//
-		// NoAutoTap, for the reason codex's approval and gemini's confirmation carry it
-		// (#347): this is a flat-window matcher, its literal lives verbatim in this file
+		// NoAutoTap, for the reason codex's approval carries it (#347) — gemini's
+		// confirmation carried it for the same reason until #736 anchored that one:
+		// this is a flat-window matcher, its literal lives verbatim in this file
 		// and is therefore quotable into an agy pane by an agent reading this repo, and
 		// option 1 is "Yes" — a false positive that autoyes ANSWERS runs a shell command.
 		// Surfacing needs-input costs one keystroke and cannot act.
