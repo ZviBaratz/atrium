@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	cmd2 "github.com/ZviBaratz/atrium/cmd"
@@ -442,23 +443,36 @@ func TestPollersSkipCaptureWhenSessionDead(t *testing.T) {
 // A dead/missing session must classify as PaneDead (distinct from the PaneUnknown a
 // transient capture failure yields), so the metadata loop can flag it lost from this one
 // has-session check instead of forking its own. Neither poller may run capture-pane.
+//
+// Driven from alreadyGoneMessages, the same table close_test.go holds the kill path to, so
+// a message added to sessionAlreadyGone is proven on BOTH sides of that shared predicate
+// rather than only on the one whose test the author happened to open. The diagnostic goes to
+// stderr and the error carries only the exit status, which is the shape real tmux has: the
+// error-string fallback that a test fake would otherwise hit proves nothing about production.
 func TestPollersReturnDeadWhenSessionDead(t *testing.T) {
-	captured := false
-	cmdExec := cmd_test.MockCmdExec{
-		RunFunc: func(cmd *exec.Cmd) error {
-			// has-session fails => the session no longer exists.
-			return fmt.Errorf("can't find session")
-		},
-		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
-			captured = true
-			return nil, fmt.Errorf("error capturing pane content: exit status 1")
-		},
-	}
-	s := NewSessionWithDeps(context.Background(), "dead", "claude", NewMockPtyFactory(t), cmdExec)
+	for _, msg := range alreadyGoneMessages {
+		t.Run(msg, func(t *testing.T) {
+			captured := false
+			cmdExec := cmd_test.MockCmdExec{
+				RunFunc: func(cmd *exec.Cmd) error {
+					// has-session fails => the session no longer exists.
+					if cmd.Stderr != nil {
+						_, _ = fmt.Fprintln(cmd.Stderr, msg)
+					}
+					return fmt.Errorf("exit status 1")
+				},
+				OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+					captured = true
+					return nil, fmt.Errorf("error capturing pane content: exit status 1")
+				},
+			}
+			s := NewSessionWithDeps(context.Background(), "dead", "claude", NewMockPtyFactory(t), cmdExec)
 
-	require.Equal(t, PaneDead, s.Poll(), "a dead session must classify as PaneDead")
-	require.Equal(t, PaneDead, s.PollNow(), "a dead session must classify as PaneDead")
-	require.False(t, captured, "capture-pane must not run when the tmux session is dead")
+			require.Equal(t, PaneDead, s.Poll(), "a dead session must classify as PaneDead")
+			require.Equal(t, PaneDead, s.PollNow(), "a dead session must classify as PaneDead")
+			require.False(t, captured, "capture-pane must not run when the tmux session is dead")
+		})
+	}
 }
 
 // An inconclusive has-session probe must NOT read as a dead session: a deadline-kill of a
@@ -467,13 +481,18 @@ func TestPollersReturnDeadWhenSessionDead(t *testing.T) {
 // so the metadata loop keeps the prior status and the lost-session strike counter never
 // advances on a transient infrastructure hiccup — the mass-pause bug in #270.
 //
-// The last two cases are the ones that pass an *exec.ExitError, which liveness otherwise
-// reads as a definitive "no" on the grounds that has-session only fails when the session is
-// absent. Both are counterexamples to that, and both are guarded ahead of it.
+// Three of these pass an *exec.ExitError — "cancelled context", "cancellation reported by
+// the executor", and every "unreachable socket" row — which liveness otherwise reads as a
+// definitive "no" on the grounds that has-session only fails when the session is absent.
+// Each is a counterexample to that premise, and each is guarded by a case ahead of the
+// ExitError branch. The rows that are NOT an ExitError ("deadline exceeded", "wrapped
+// deadline", "exec failure", "wrapped cancellation") never reach that branch at all: they
+// fall to the default, which is already indeterminate. They pin the guard's reach, not its
+// precedence.
 func TestPollersReturnUnknownOnIndeterminateProbe(t *testing.T) {
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	cases := []struct {
+	type indeterminateCase struct {
 		name string
 		err  error
 		// stderr is where real tmux puts its diagnostic; the classification reads it.
@@ -481,7 +500,8 @@ func TestPollersReturnUnknownOnIndeterminateProbe(t *testing.T) {
 		// sessionCtx is the session's base context, nil for Background. A cancelled one
 		// is how app shutdown reaches an in-flight probe.
 		sessionCtx context.Context
-	}{
+	}
+	cases := []indeterminateCase{
 		// A timeout kill: exec.CommandContext SIGKILLs the process and Run surfaces
 		// the wait error, but ctx.Err()/the error chain carries the deadline.
 		{name: "deadline exceeded", err: context.DeadlineExceeded},
@@ -495,14 +515,29 @@ func TestPollersReturnUnknownOnIndeterminateProbe(t *testing.T) {
 		// branch and reports a live session dead on the way out of the app.
 		{name: "cancelled context", err: &exec.ExitError{}, sessionCtx: cancelled},
 		{name: "wrapped cancellation", err: fmt.Errorf("signal: killed: %w", context.Canceled)},
-		// tmux ran, exited non-zero, and never reached a server: connect() failed on a
-		// socket that exists and may still be serving the session (#730). "has-session
-		// only fails when the session is absent" does not hold for this one.
+		// The guard checks the error chain as well as ctx.Err(), and this row is the only
+		// thing that can tell the difference: an executor that reports BOTH the exit and
+		// the cause, against a context of its own that this session's ctx knows nothing
+		// about (ctx.Err() is nil here, so the chain check is load-bearing). Drop
+		// `errors.Is(err, context.Canceled)` from liveness's guard and this row alone goes
+		// red — the plain "wrapped cancellation" row above cannot, because it is not an
+		// ExitError and reaches the already-indeterminate default either way.
 		{
-			name:   "unreachable socket",
-			err:    &exec.ExitError{},
-			stderr: "error connecting to /tmp/sock (Permission denied)",
+			name: "cancellation reported by the executor",
+			err:  fmt.Errorf("%w: %w", &exec.ExitError{}, context.Canceled),
 		},
+	}
+	// tmux ran, exited non-zero, and never reached a server: connect() failed on a socket
+	// that exists and may still be serving the session (#730). "has-session only fails when
+	// the session is absent" does not hold for any of these. Driven from the shared table so
+	// the poll side covers every message the Close side does — covering only the first let a
+	// socketUnreachable narrowed to "permission denied" keep the suite green.
+	for _, msg := range unreachableSocketMessages {
+		cases = append(cases, indeterminateCase{
+			name:   "unreachable socket: " + msg,
+			err:    &exec.ExitError{},
+			stderr: msg,
+		})
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -530,6 +565,47 @@ func TestPollersReturnUnknownOnIndeterminateProbe(t *testing.T) {
 			require.False(t, captured, "capture-pane must not run on an indeterminate probe")
 		})
 	}
+}
+
+// An unreachable socket is the one indeterminate case that can persist forever, and the
+// classification it gets is silent by construction: the status is left untouched and the
+// lost-session strike count is cleared, so nothing in the UI changes and no recovery runs.
+// The log line is the only evidence the user or a bug report can reach, which is why it is
+// asserted rather than left as a comment — and why it must carry tmux's own diagnostic: the
+// session name alone does not say whether the socket is missing, misowned, or not a socket.
+//
+// Throttled to one line per window, so the assertion is on the first probe only. That the
+// second is silent is the point of the throttle (a 500ms poll loop would otherwise write a
+// line per session per tick), so it is asserted too.
+func TestUnreachableSocketIsLogged(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.ErrorLog.Writer()
+	log.ErrorLog.SetOutput(&buf)
+	t.Cleanup(func() { log.ErrorLog.SetOutput(prev) })
+
+	const diagnostic = "error connecting to /tmp/sock (Permission denied)"
+	cmdExec := cmd_test.MockCmdExec{
+		RunFunc: func(cmd *exec.Cmd) error {
+			if cmd.Stderr != nil {
+				_, _ = fmt.Fprintln(cmd.Stderr, diagnostic)
+			}
+			return &exec.ExitError{}
+		},
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return nil, fmt.Errorf("should not be called") },
+	}
+	s := NewSessionWithDeps(context.Background(), "frozen", "claude", NewMockPtyFactory(t), cmdExec)
+
+	require.Equal(t, PaneUnknown, s.Poll())
+	logged := buf.String()
+	require.Contains(t, logged, "unreachable",
+		"a socket that cannot be opened must leave a trace: the classification changes nothing visible")
+	require.Contains(t, logged, diagnostic,
+		"tmux's own diagnostic must be folded in — which errno it is, is the whole diagnosis")
+	require.Contains(t, logged, "frozen", "the log line must name the session it froze")
+
+	buf.Reset()
+	require.Equal(t, PaneUnknown, s.Poll())
+	require.Empty(t, buf.String(), "the second probe in the same window must be throttled, not repeated")
 }
 
 // The happy path must keep working: an alive session still captures. For a program with
