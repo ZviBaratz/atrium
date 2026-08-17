@@ -10,6 +10,7 @@ import (
 	"github.com/ZviBaratz/atrium/ui/overlay"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -58,8 +59,8 @@ func TestResumeConfirmMessage(t *testing.T) {
 // notice. PlaceOverlay CLIPS rather than overflows, so a confirmation that outgrows the
 // terminal still renders exactly 24×80 and TestViewFitsTerminalBounds stays green while
 // the user loses the bottom border and the "Press y …" line — the only thing in the box
-// telling them how to answer it. These two messages are the longest the app ships, and
-// they are hand-written prose, so the height is whatever the last edit made it.
+// telling them how to answer it. These are the app's longest confirmations, and they are
+// hand-written prose, so the height is whatever the last edit made it.
 func TestConfirmationsFitTheSmallestSupportedTerminal(t *testing.T) {
 	// The narrowest size TestViewFitsTerminalBounds sweeps, and the smallest terminal
 	// anything here is written for.
@@ -71,14 +72,38 @@ func TestConfirmationsFitTheSmallestSupportedTerminal(t *testing.T) {
 	// hostCapacityLine it wraps) to this same box rather than opening a second one
 	// (#463), and both dialogs set a counted confirm label, which is longer than any
 	// stand-in and is itself part of what has to fit.
-	const n = 3
+	//
+	// Two fleet sizes, because every one of those parts is count-dependent and the dialog
+	// wraps: the message, the cap clause and the label all carry numbers that grow, so a
+	// single small n measures the shortest form of a box whose length is the subject. The
+	// large case is a three-digit host running a batch of the same order — the widest
+	// these numbers realistically print.
+	//
+	// Measured, both currently render 13 lines: three digits do not push this copy over a
+	// wrap boundary. The case is here so that stays a measurement rather than an
+	// assumption, since the next edit to any of the three parts can change it.
+	for _, f := range []struct {
+		name           string
+		limit, live, n int
+	}{
+		{"small fleet", 4, 2, 3},
+		{"large fleet", 128, 99, 112},
+	} {
+		t.Run(f.name, func(t *testing.T) {
+			runConfirmationHeightCase(t, minWidth, minHeight, f.limit, f.live, f.n)
+		})
+	}
+}
+
+func runConfirmationHeightCase(t *testing.T, minWidth, minHeight, limit, live, n int) {
+	t.Helper()
 	cases := map[string]struct{ msg, label string }{
 		"pause": {
 			pauseConfirmMessage("active", n),
 			fmt.Sprintf("pause %d session%s", n, plural(n)),
 		},
 		"resume": {
-			resumeConfirmMessage("paused", n) + "\n" + resumeCapClause(4, 2, n),
+			resumeConfirmMessage("paused", n) + "\n" + resumeCapClause(limit, live, n),
 			fmt.Sprintf("resume %d session%s", n, plural(n)),
 		},
 	}
@@ -101,7 +126,16 @@ func TestConfirmationsFitTheSmallestSupportedTerminal(t *testing.T) {
 			// line of the box either way, and the bottom is the end PlaceOverlay clips,
 			// so it goes before the hint does.
 			box := strings.Split(xansi.Strip(h.confirmationOverlay.Render()), "\n")
-			assert.Contains(t, xansi.Strip(h.View().Content), box[len(box)-1],
+			bottom := box[len(box)-1]
+			// Contains("") is true of every string, so a render that came back empty —
+			// a zero width reaching SetWidth, an overlay left unarmed — would satisfy
+			// both assertions below while measuring nothing at all. Pin the line to the
+			// shape of a real bottom border first, so this subtest cannot pass vacuously.
+			require.NotEmpty(t, strings.TrimSpace(bottom), "the overlay rendered no box to measure")
+			require.Greater(t, lipgloss.Width(bottom), minWidth/2,
+				"the last line is too narrow to be the box's bottom border: %q", bottom)
+
+			assert.Contains(t, xansi.Strip(h.View().Content), bottom,
 				"the bottom of the confirmation was clipped away, taking the line that says how to answer it")
 			assert.LessOrEqual(t, len(box), minHeight,
 				"the confirmation box is taller than the smallest supported terminal, so it will be clipped")

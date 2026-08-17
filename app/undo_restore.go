@@ -142,13 +142,16 @@ func (m *home) restoreOne(e undo.Entry, branchPrefix string) (*session.Instance,
 // closed.
 func (m *home) restoreBlocker(e undo.Entry, live map[string]struct{}) string {
 	// The sharp one. TmuxName is persisted and repo-qualified, and Resume acts on a
-	// session it finds under that name: since #710 the worktree path CLOSES it before
-	// relaunching, so a restore onto a name that is live again does not quietly share
-	// the other session's pane — it kills that session outright and sweeps its hook
-	// directory first. (Before #710 it called Restore() instead, and the two instances
-	// drove one pane until one of them was killed.) Either way nothing about it is
-	// visible until it is, and the kill is not undoable: `live` is only Atrium's own
-	// list, so an orphan or another data dir's session on this socket is invisible here.
+	// session it finds under that name — but WHICH way it acts depends on the entry, and
+	// this check runs before the Direct early return below, so it guards both kinds.
+	// A worktree entry takes Resume's worktree path, which since #710 CLOSES that session
+	// before relaunching: the restore kills it outright and sweeps its hook directory.
+	// A direct entry takes the wt == nil path, which still calls Restore(), so the older
+	// hazard is live for it — two instances driving one pane until one is killed.
+	// Both are bad in different ways, which is why the refusal covers both, and neither
+	// is visible until it happens. The kill is not undoable, and `live` is only Atrium's
+	// own list, so an orphan or another data dir's session on this socket is invisible
+	// here.
 	if e.TmuxName != "" {
 		if _, taken := live[e.TmuxName]; taken {
 			return fmt.Sprintf("a session named '%s' is running again%s", e.Title, recoverByHand(e))

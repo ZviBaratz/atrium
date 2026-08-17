@@ -4,9 +4,11 @@
 // The port is exported as $ATRIUM_PORT and {{.Session.Port}} through the same channel
 // session_env rides, and is held for as long as the SESSION is: allocated where the
 // worktree is materialized (create, and again on resume, both through reservePort),
-// KEPT across a pause, and released on kill — or when a config edit stops routing this
-// repo to a range at all (resolveSetupRun), which is the one release that is not a
-// teardown.
+// KEPT across a pause, and released on kill — or by a config edit that stops routing this
+// repo to a range, which is the one release that is not a teardown and is noticed at two
+// points, not one: resolveSetupRun, when nothing routes the repo any more, and reservePort
+// itself, when the entry that does route it has stopped declaring a port_range.
+// releasePort's own doc is the authority on that set.
 //
 // Keeping it across a pause is a promise, not a collision guard. A pause closes the
 // tmux session, so nothing is left exporting the old number — but the session's dev

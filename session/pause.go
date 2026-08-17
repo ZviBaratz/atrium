@@ -326,6 +326,45 @@ func (i *Instance) Resume() error {
 		return nil
 	}
 
+	// Stop the session this park left behind — BEFORE anything below materializes or
+	// rewrites the worktree. This is the branch where the worktree was removed and
+	// re-added, so a session that survived that has an agent whose cwd is the inode the
+	// removal unlinked: restoring the PTY would hand the user a pane printing the right
+	// $PWD over a directory it can neither read nor write (#710). That hazard is exactly
+	// "the worktree was removed and re-added", which is why the direct branch above still
+	// reattaches and this one never may. A live session here is one an older, detach-only
+	// pause left behind, so this is both the fix's belt-and-braces and its upgrade path;
+	// after a park this build made there is nothing left to kill, and Close reports that
+	// as the goal already met (sessionAlreadyGone).
+	//
+	// NOT gated on DoesSessionExist, and that is the substance rather than a tidy-up: it
+	// reports liveness() == sessionAlive, so every INDETERMINATE answer — a socket that
+	// cannot be opened for any reason but ENOENT, a probe the context cancelled — reads
+	// as "no session" and would skip the close for precisely the servers that cannot be
+	// killed. Close forgives an already-gone session on its own, so the guard bought
+	// nothing except that hole and a second has-session round trip.
+	//
+	// A failure ABORTS the resume rather than being logged and walked past, and it runs
+	// here so the abort has nothing to undo. Walking past it reaches recreateSession,
+	// which answers a failed launch — Start's duplicate-name guard would be the one to
+	// refuse — by tearing the worktree down through Worktree.Cleanup: `git worktree
+	// remove -f` and `git branch -D`, the KILL teardown, with no retention ref, because
+	// only Kill records one. Ordered above the block below, a park is still a park when
+	// this returns — the worktree is wherever the pause left it, the branch holds every
+	// commit, and no auto-commit has been unwound — so a retry is simply a second Resume.
+	// (An ordinary launch failure still reaches that rollback. That route pre-dates this
+	// and is filed as #741.)
+	//
+	// What returning does not undo is Close's own first half: cleanupHookSession and
+	// resetPaneID run before the kill that failed, so a session still alive here has lost
+	// its hook directory. Nothing is reading it — the instance stays Paused, which the
+	// poll loop skips — and a later successful resume re-arms one under a freshly frozen
+	// name (freezeHookName). No error is logged here: Close records its own through
+	// teardown.Errors, and the wrap below carries it to the caller.
+	if err := ts.Close(); err != nil {
+		return fmt.Errorf("failed to close the session %s was parked with: %w", i.Title, err)
+	}
+
 	// If our own worktree is still materialized on disk, something parked this session
 	// without removing it. Reuse it as-is: running Setup would clearStaleWorktree and
 	// re-add from the branch, discarding any uncommitted work — and BranchCheckoutPath
@@ -385,36 +424,8 @@ func (i *Instance) Resume() error {
 		i.RunSetupScript(wt.GetWorktreePath())
 	}
 
-	// Relaunch the agent, resuming its prior conversation rather than starting blank.
-	// Unconditionally, because this is the branch where the worktree was removed and
-	// re-added: a session that survived that has an agent whose cwd is the inode the
-	// removal unlinked, so restoring the PTY would hand the user a pane that prints
-	// the right $PWD over a directory it cannot read or write (#710). The hazard is
-	// exactly "the worktree was removed and re-added", which is why the direct branch
-	// above still reattaches and this one never may.
-	//
-	// A live session here is one an older, detach-only pause left behind, so the close
-	// is both this fix's belt-and-braces and its upgrade path.
-	//
-	// A failure ABORTS the resume rather than being logged and walked past. The relaunch
-	// below would fail on Start's duplicate-name guard — but recreateSession answers a
-	// failed launch by tearing the worktree down through Worktree.Cleanup, which is the
-	// KILL teardown: `git worktree remove -f` and `git branch -D`, with no retention ref,
-	// because only Kill records one. On this path Setup has just re-added the worktree and
-	// unwindAutoPauseCommits has just soft-reset the parked WIP back into it, so that
-	// rollback would destroy the WIP and every commit the session ever made. Returning
-	// leaves both where they are: the worktree stays materialized and the branch intact,
-	// which is a state Resume already handles (valid worktree → reuse, and its auto-commit
-	// is already unwound), so a retry is simply a second Resume.
-	//
-	// This closes the route a failed close opens, not the rollback itself: an ordinary
-	// launch failure below still reaches it, which pre-dates this and is filed as #741.
-	if ts.DoesSessionExist() {
-		if err := ts.Close(); err != nil {
-			log.ErrorLog.Print(err)
-			return fmt.Errorf("failed to close the session %s was parked with: %w", i.Title, err)
-		}
-	}
+	// Relaunch the agent, resuming its prior conversation rather than starting blank —
+	// never reattaching, for the reason the close above carries.
 	if err := i.recreateSession(materializedHere); err != nil {
 		return err
 	}

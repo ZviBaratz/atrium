@@ -107,6 +107,27 @@ func tmuxVerb(cmd *exec.Cmd, verb string) bool {
 	return slices.Contains(cmd.Args, verb)
 }
 
+// newParkedTmuxServer returns a fake whose session is already gone — the state a park
+// leaves behind, and the one every resume path starts from.
+func newParkedTmuxServer(t *testing.T) *fakeTmuxServer {
+	t.Helper()
+	s := &fakeTmuxServer{pty: newRecordingPtyFactory(t, nil)}
+	s.alive.Store(false)
+	return s
+}
+
+// parkedTmux wraps that server in the tmux.Session a parked instance holds.
+//
+// Any fixture that reaches Resume needs one. Resume closes the parked session before it
+// looks at the worktree, so a nil tmuxSession now panics where it used to be reached only
+// after several early returns — and nil is a shape production cannot produce: Start and
+// FromInstanceData both set the field, and Resume refuses an instance that is not started.
+func parkedTmux(t *testing.T) *tmux.Session {
+	t.Helper()
+	srv := newParkedTmuxServer(t)
+	return tmux.NewSessionWithDeps(context.Background(), "sess", "claude", srv, srv.exec())
+}
+
 // pausableInstance wires a Running instance around a real worktree and a fake tmux
 // server that tracks its own liveness, so Pause and Resume run their real teardown
 // and relaunch rather than talking to a mock that always says yes.
@@ -258,29 +279,42 @@ func TestUnwindAutoPauseCommits_PreservesRealCommit(t *testing.T) {
 }
 
 // TestResumeKeepsTheBranchWhenTheParkedSessionWillNotClose. Resume closes a session an
-// older, detach-only pause left behind (#710) and then relaunches. That close is the one
+// older, detach-only pause left behind (#710) before it relaunches. That close is the one
 // step whose failure must ABORT rather than be walked past, and the reason is entirely in
-// what comes next: the relaunch would fail on Start's duplicate-name guard, and
+// what would come next: the relaunch fails on Start's duplicate-name guard, and
 // recreateSession answers a failed launch by tearing the worktree down through
 // Worktree.Cleanup — `git worktree remove -f` and `git branch -D`, the KILL teardown, with
-// no retention ref because only Kill records one.
+// no retention ref because only Kill records one. Against the state a park leaves — the
+// session's whole history on a branch nothing else references — that is the loss.
 //
-// The state that reaches it is exactly the upgrade path: a park that removed the worktree,
-// so Resume materializes it here (materializedHere), re-adds it and soft-resets the parked
-// WIP back into it moments before the rollback would delete both it and every commit the
-// session ever made.
+// So the postcondition is that the park is still a park. The close is ordered above the
+// worktree block for exactly that reason, which makes this assertable as three facts
+// rather than as "the damage was smaller": the branch still holds the auto-commit pause
+// made (nothing unwound it), the worktree is still absent (nothing re-added it), and the
+// kill teardown was never reached at all.
 //
-// The branch assertion is the consequence and the seam is the mechanism, in that order.
+// The fixture carries a REAL commit under the auto-pause one so the two are distinguished:
+// unwinding is a soft reset onto the real ancestor, so a tip that is still the auto-commit
+// proves the abort landed before the unwind rather than merely leaving some branch behind.
 // Recording through the real Cleanup rather than replacing it keeps the destruction real:
 // a regression deletes the branch here, it does not merely report a call.
 func TestResumeKeepsTheBranchWhenTheParkedSessionWillNotClose(t *testing.T) {
 	wt := newTestWorktree(t)
 	repoPath := wt.GetRepoPath()
 	branch := wt.GetBranchName()
+	wtPath := wt.GetWorktreePath()
 
-	require.NoError(t, os.WriteFile(filepath.Join(wt.GetWorktreePath(), "work.txt"), []byte("hours of it\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(wtPath, "work.txt"), []byte("hours of it\n"), 0644))
 	require.NoError(t, wt.CommitChanges("feat: the session's whole history"))
-	sessionSHA := gitOutput(t, repoPath, "rev-parse", branch)
+	realSHA := gitOutput(t, repoPath, "rev-parse", branch)
+
+	// The WIP a pause folds into an auto-commit, which a resume that got as far as the
+	// worktree would soft-reset back out. Built by autoMsg so it is the subject
+	// isAutoPauseCommit actually recognizes, not a hand-typed one that could drift.
+	require.NoError(t, os.WriteFile(filepath.Join(wtPath, "wip.txt"), []byte("unfinished\n"), 0644))
+	require.NoError(t, wt.CommitChanges(autoMsg("02 Jan 06 15:04 MST")))
+	parkSHA := gitOutput(t, repoPath, "rev-parse", branch)
+	require.NotEqual(t, realSHA, parkSHA, "the fixture must have an auto-commit to unwind")
 
 	// The park: the worktree is gone, the tmux session is not.
 	require.NoError(t, wt.Remove())
@@ -316,7 +350,63 @@ func TestResumeKeepsTheBranchWhenTheParkedSessionWillNotClose(t *testing.T) {
 	// instead of saying what was lost.
 	tip, exists := git.BranchTip(context.Background(), repoPath, branch)
 	require.True(t, exists, "a failed resume deleted the session's branch, and every commit on it with it")
-	require.Equal(t, sessionSHA, tip, "the branch must come through a failed resume untouched")
+	require.Equal(t, parkSHA, tip,
+		"the branch moved: the resume got as far as unwinding the auto-commit before it gave up")
+	require.NoDirExists(t, wtPath,
+		"the resume materialized the worktree it then refused to launch into, leaving a park that is no longer a park")
 	require.False(t, rolledBack, "a failed resume must not reach the kill teardown")
 	require.ErrorContains(t, err, "parked with", "the report must name the close, not the relaunch it never tried")
+}
+
+// TestResumeClosesTheParkedSessionEvenWhenLivenessCannotAnswer pins why that close is
+// unconditional rather than gated on DoesSessionExist, which is the shape it had first.
+//
+// DoesSessionExist is `liveness() == sessionAlive`, so it returns false for two different
+// things: "no session", and "no answer" — a socket tmux cannot open for any reason but
+// ENOENT, a probe the context cancelled (socketUnreachable, session/tmux/tmux.go). Gating
+// on it therefore skips the close for precisely the servers that cannot be reached, which
+// is the same population that cannot be killed. The resume then walks on and relaunches
+// over a session that may still be running the agent inside the worktree the park deleted
+// — #710's own symptom, reached through the guard written to prevent it.
+//
+// Close is the call that can tell those apart, because it asks the server to do something
+// and classifies the refusal: sessionAlreadyGone forgives a session that is genuinely gone,
+// and anything else — including this — is a teardown that did not happen.
+func TestResumeClosesTheParkedSessionEvenWhenLivenessCannotAnswer(t *testing.T) {
+	wt := newTestWorktree(t)
+	repoPath := wt.GetRepoPath()
+	branch := wt.GetBranchName()
+
+	require.NoError(t, os.WriteFile(filepath.Join(wt.GetWorktreePath(), "work.txt"), []byte("hours of it\n"), 0644))
+	require.NoError(t, wt.CommitChanges("feat: the session's whole history"))
+	sessionSHA := gitOutput(t, repoPath, "rev-parse", branch)
+	require.NoError(t, wt.Remove())
+
+	// tmux's wording for a socket it cannot open, with an errno that is NOT ENOENT: the
+	// server may be alive and serving this very session. sessionAlreadyGone matches the
+	// connect failure only when paired with "no such file or directory", so this is a real
+	// failure to both callers — while liveness reads it as neither alive nor gone.
+	unreachable := errors.New("error connecting to /run/user/1000/atrium/default (Permission denied)")
+	pty := newRecordingPtyFactory(t, nil)
+	sealed := cmd_test.MockCmdExec{
+		RunFunc: func(cmd *exec.Cmd) error {
+			if tmuxVerb(cmd, "has-session") || tmuxVerb(cmd, "kill-session") {
+				return unreachable
+			}
+			return nil
+		},
+		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
+	}
+	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, sealed)
+	inst := &Instance{Title: "sess", status: Paused, started: true, gitWorktree: wt, tmuxSession: ts}
+
+	err := inst.Resume()
+
+	require.ErrorContains(t, err, "parked with",
+		"an unreachable socket is not an absent session: the close must be attempted, and its failure must abort")
+	require.Empty(t, pty.cmds,
+		"the resume launched a second agent over a session it never managed to close")
+	tip, exists := git.BranchTip(context.Background(), repoPath, branch)
+	require.True(t, exists, "a failed resume deleted the session's branch")
+	require.Equal(t, sessionSHA, tip, "the branch must come through untouched")
 }

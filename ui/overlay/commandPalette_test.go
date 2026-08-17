@@ -27,7 +27,7 @@ func paletteFixture() []PaletteAction {
 		{Key: "shift-tab", Label: "prev tab", Detail: "next / prev pane", Group: "Navigate"},
 		{Key: "↑/k", Label: "up", Detail: "move selection", Group: "Navigate"},
 		{Key: "r", Label: "resume", Detail: "resume a paused session", Group: "Handoff"},
-		{Key: "p", Label: "pause", Detail: "commit changes + free the worktree", Group: "Handoff"},
+		{Key: "p", Label: "pause", Detail: "pause: stop the agent, commit changes, free the worktree", Group: "Handoff"},
 		{Key: "m", Label: "merge PR", Detail: "merge the session's PR (squash)", Group: "Handoff"},
 	}
 }

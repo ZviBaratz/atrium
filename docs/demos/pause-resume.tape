@@ -1,7 +1,9 @@
-# pause-resume.tape — park a session (commit + free its worktree), then restore it.
+# pause-resume.tape — park a session (stop the agent, commit, free its worktree), then
+# restore it.
 #
-# Rendered by docs/demos/render.sh. Pause commits the session's changes and
-# removes the worktree, keeping the branch; resume recreates it. Slow-paced.
+# Rendered by docs/demos/render.sh. Pause stops the agent, commits the session's
+# changes and removes the worktree, keeping the branch; resume recreates the worktree
+# and relaunches the agent. Slow-paced.
 
 Output pause-resume.gif
 
@@ -28,7 +30,7 @@ Ctrl+S
 Wait+Screen /wip-task/
 Sleep 3s
 
-# Pause: commit changes + free the worktree. The row stays, marked paused.
+# Pause: stop the agent, commit changes, free the worktree. The row stays, marked paused.
 Type "p"
 Sleep 4s
 

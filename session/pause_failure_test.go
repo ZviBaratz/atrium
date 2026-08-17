@@ -2,37 +2,24 @@ package session
 
 import (
 	"context"
-	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/ZviBaratz/atrium/cmd/cmd_test"
 	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/session/tmux"
 	"github.com/stretchr/testify/require"
 )
 
-// resumableInstance wires a Paused instance around a real worktree and a tmux
-// session whose first two probes report "gone" (so Resume's recreate proceeds)
-// and later ones report alive, mirroring TestResume_ReusesInPlaceWorktreePreservingWIP.
+// resumableInstance wires a Paused instance around a real worktree and the tmux session
+// a park leaves behind: gone until the relaunch's new-session brings it back, classified
+// by verb rather than by how many commands have gone past (see relaunchableInstance for
+// what that cost).
 func resumableInstance(t *testing.T, wt *git.Worktree) *Instance {
 	t.Helper()
-	calls := 0
-	liveExec := cmd_test.MockCmdExec{
-		RunFunc: func(*exec.Cmd) error {
-			calls++
-			if calls <= 2 {
-				return fmt.Errorf("not yet")
-			}
-			return nil
-		},
-		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
-	}
-	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", newRecordingPtyFactory(t, nil), liveExec)
-	return &Instance{Title: "sess", status: Paused, started: true, Program: "claude", gitWorktree: wt, tmuxSession: ts}
+	return &Instance{Title: "sess", status: Paused, started: true, Program: "claude",
+		gitWorktree: wt, tmuxSession: parkedTmux(t)}
 }
 
 // TestResume_StampsStartedAtForLaunchCrashDetection guards the #270 fix that
@@ -122,25 +109,14 @@ func TestResume_ReusesInPlaceWorktreePreservingWIP(t *testing.T) {
 	wipPath := filepath.Join(wt.GetWorktreePath(), "wip.txt")
 	require.NoError(t, os.WriteFile(wipPath, []byte("uncommitted work\n"), 0o644))
 
-	pty := newRecordingPtyFactory(t, nil)
-	calls := 0
-	liveExec := cmd_test.MockCmdExec{
-		// Resume's own DoesSessionExist and the launch's duplicate-name guard must
-		// both report "gone" so the recreate proceeds; the poll after must see it alive.
-		RunFunc: func(*exec.Cmd) error {
-			calls++
-			if calls <= 2 {
-				return fmt.Errorf("not yet")
-			}
-			return nil
-		},
-		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
-	}
-	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, liveExec)
+	// The park left no session behind, so the close is a no-op and the launch's
+	// duplicate-name guard sees nothing; new-session then brings it up.
+	srv := newParkedTmuxServer(t)
+	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", srv, srv.exec())
 	inst := &Instance{Title: "sess", status: Paused, started: true, Program: "claude", gitWorktree: wt, tmuxSession: ts}
 
 	require.NoError(t, inst.Resume(), "a valid in-place worktree must be resumable")
 	require.Equal(t, Running, inst.GetStatus())
 	require.FileExists(t, wipPath, "resume must reuse the worktree in place, preserving WIP")
-	require.NotEmpty(t, pty.cmds, "the agent must be (re)launched")
+	require.NotEmpty(t, srv.pty.cmds, "the agent must be (re)launched")
 }

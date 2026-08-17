@@ -720,10 +720,15 @@ func (m *home) resumeAll() tea.Cmd {
 // are not mirror images — and a park that left the worktree materialized has one Resume
 // reuses rather than re-adding over the work it holds, which several parks do (see
 // session.Instance.Resume for which). Bringing the agent back is the half true of every
-// path, so that half carries no qualifier — by relaunch for every park this build makes,
-// and by reattach on the one legacy path left (a direct session an older, detach-only
-// pause left running), where the conversation the hedge below is about is trivially
-// still there.
+// path, so that half carries no qualifier — by relaunch wherever a worktree is involved,
+// and by reattach for a direct session that is somehow still running, where the
+// conversation the hedge below is about is trivially still there.
+//
+// That second case is not only the historical one. A direct session parked by an older,
+// detach-only pause is the obvious producer, but this build makes more: closeParkedSession
+// deliberately lets neither the detach nor the close abort a park, so a park whose
+// kill-session fails also ends Paused with its agent alive. Both land on Resume's direct
+// branch, which reattaches.
 //
 // It says *relaunches* because pause closes the tmux session, ending the agent with
 // it (session.Instance.pause), so there is no process left to reattach. It used to say
