@@ -37,9 +37,11 @@ var (
 			"It never kills anything you have not been shown first. These servers hold live\n" +
 			"agents, and an agent may hold work that was never pushed, so each server is named\n" +
 			"with every process that dies with it and confirmed one at a time (--yes skips the\n" +
-			"prompt, for scripts). A server whose reachability could not be determined — tmux\n" +
-			"missing, a probe that could not run — is never killed, with or without --all,\n" +
-			"because nothing about it has been established.\n\n" +
+			"prompt, for scripts). A server whose reachability could not be determined is never\n" +
+			"killed, with or without --all, because nothing about it has been established. That\n" +
+			"covers tmux missing or a probe that could not run, and also a socket that is there\n" +
+			"but cannot be opened: a server behind one is unreachable to Atrium and may be\n" +
+			"perfectly healthy, so it is listed and left alone rather than treated as empty.\n\n" +
 			"An unreachable server can also be a live fleet whose socket file was deleted, and\n" +
 			"the scan counts the clients connected to each one to tell those apart: once the\n" +
 			"file is gone nothing can connect, so a client still on it was there before, while\n" +
@@ -285,9 +287,13 @@ func connectedClientSummary(n int) string {
 // a file test, that default is sound.
 //
 // A server whose reachability is unknown is excluded even under --all. Nothing has
-// been established about it, and absence of an answer must never mean "safe to act":
-// when tmux cannot be run, the ambient live server cannot be excluded either, so the
-// unknown rows may be the running fleet.
+// been established about it, and absence of an answer must never mean "safe to act".
+// Both of its causes put a live server in this set: when tmux cannot be run the ambient
+// live server cannot be excluded either, so the unknown rows may be the running fleet;
+// and a socket that exists but cannot be opened is a server Atrium cannot address while
+// the agents inside it work on (#730). This one field is the whole guard for the second
+// case — nothing downstream re-checks it — which is why classifyPIDProbe has to get the
+// classification right rather than leave it to a later refusal.
 func reapTargets(servers []tmux.OrphanServer, all bool) []tmux.OrphanServer {
 	var targets []tmux.OrphanServer
 	for _, s := range servers {

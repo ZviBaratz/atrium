@@ -158,7 +158,9 @@ func renderScanGaps(b *strings.Builder, g tmux.ScanGaps) {
 //
 //   - Unknown reachability: nothing but the count. reapTargets drops the row whatever the
 //     flags, so the count is not why reap spares it, and a deleted-socket claim would rest on
-//     a probe that never ran (Reachable is meaningless without ReachableKnown).
+//     a probe that never answered (Reachable is meaningless without ReachableKnown). Since
+//     #730 that class also holds a server whose socket is present and merely unopenable,
+//     where the deleted-socket claim would be flatly false rather than just unproven.
 //   - Reachable: `--all` is the invocation the count changes, since that is what selects the
 //     row; and its socket answers probes, so nothing about it was deleted. Measured: a
 //     reachable leaked server under another TMUX_TMPDIR was told its socket file had been
@@ -170,8 +172,13 @@ func renderOrphanServer(b *strings.Builder, s tmux.OrphanServer, now time.Time, 
 	case !s.ReachableKnown:
 		fmt.Fprintf(b, "  pid %d  socket %s  up %s  reachability unknown  %s\n",
 			s.PID, s.Socket, HumanAge(now.Sub(s.Started)), childSummary(s.Children))
-		b.WriteString("      → tmux could not be run, so nothing here is proven; `atrium reap` lists\n")
-		b.WriteString("        these and never kills them\n")
+		// Two causes, worded as one sentence because this row cannot tell them apart: the
+		// scan carries no reason, only the fact that nothing was established. Naming just
+		// the first would be the wrong advice on the second — a socket that cannot be
+		// opened is a host whose tmux works fine, and "check PATH" sends that user nowhere.
+		// The same reasoning StaleGaps.Unprobed's doc gives for not naming one cause there.
+		b.WriteString("      → tmux could not be run, or could not open the socket, so nothing here\n")
+		b.WriteString("        is proven; `atrium reap` lists these and never kills them\n")
 	case s.Reachable && gaps.LiveServerUnknown:
 		// No command is printed at all here. The honest remedy is to re-run once the
 		// probe works, because the one command that would stop this server is also the
