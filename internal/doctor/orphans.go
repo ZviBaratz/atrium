@@ -308,8 +308,9 @@ func renderStaleSockets(b *strings.Builder, r OrphanResult) {
 			// one is bound — a true "none" about a directory nothing need ever have used.
 			//
 			// "no server answered", not "no server is running": the query comes back
-			// empty when tmux is off PATH or the probe's budget was spent just as it does
-			// on an empty fleet, and a server may well be running in those first two.
+			// empty when tmux is off PATH, when the probe's budget was spent, and when the
+			// socket exists and cannot be opened (#730), just as it does on an empty
+			// fleet — and a server may well be running in all three of those.
 			// That is the distinction #599 drew for the pid probe, and claiming the
 			// stronger fact here would be the same error one sentence over.
 			b.WriteString("      note: no server answered for Atrium's socket, so that is where tmux\n")

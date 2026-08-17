@@ -340,7 +340,8 @@ func probeAmbient(ctx context.Context) (pid int, known bool) {
 // known is the whole reason this is exported rather than reimplemented. "tmux ran and
 // there is no server on that socket" is a determined answer and a safe one; "tmux could
 // not be asked" — the binary absent, the probe's budget spent, a fork that failed under
-// memory pressure — establishes nothing. A caller that collapses the two reports an
+// memory pressure, or (since #730) a connect() that never opened the socket, which is
+// tmux running and still asking nobody — establishes nothing. A caller that collapses the two reports an
 // empty fleet on a host that has a live one. That was #599 here, and it was still true
 // in internal/doctor's OOM section afterwards, which ran its own copy of this probe with
 // the classification left out.
@@ -589,11 +590,13 @@ func probeSocketPath(ctx context.Context) (path string, ok bool) {
 }
 
 // liveSocketPath asks the server on Atrium's socket where that socket is. ok is false
-// when there is no server to ask and when tmux could not be run at all: both mean the
-// same thing to SocketDir, which is that there is no server's answer to use. The two
-// are worth no more than this because neither says anything about the *directory* —
-// only about whether a server was there to name it. What the *caller* may then claim is
-// narrower than "nothing is running", and renderStaleSockets says so.
+// when there is no server to ask, when tmux could not be run at all, and when it ran and
+// could not open the socket: all three mean the same thing to SocketDir, which is that
+// there is no server's answer to use. They are worth no more than this because none of
+// them says anything about the *directory* — only about whether a server was there to
+// name it. This is a plain `err != nil`, not classifyPIDProbe's split, and it stays one:
+// the caller needs "no answer", never which kind (#730). What the *caller* may then claim
+// is narrower than "nothing is running", and renderStaleSockets says so.
 func liveSocketPath(ctx context.Context) (path string, ok bool) {
 	out, err := tmuxCommand(ctx, "display-message", "-p", "#{socket_path}").Output()
 	if err != nil {

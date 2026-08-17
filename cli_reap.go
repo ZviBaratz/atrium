@@ -288,11 +288,12 @@ func connectedClientSummary(n int) string {
 //
 // A server whose reachability is unknown is excluded even under --all. Nothing has
 // been established about it, and absence of an answer must never mean "safe to act".
-// Both of its causes put a live server in this set: when tmux cannot be run the ambient
-// live server cannot be excluded either, so the unknown rows may be the running fleet;
-// and a socket that exists but cannot be opened is a server Atrium cannot address while
-// the agents inside it work on (#730). This one field is the whole guard for the second
-// case — nothing downstream re-checks it — which is why classifyPIDProbe has to get the
+// Every one of its three causes puts a live server in this set: when tmux cannot be run,
+// and when the probe's budget expires, nothing is established and the ambient live server
+// cannot be excluded either, so the unknown rows may be the running fleet; and a socket
+// that exists but cannot be opened is a server Atrium cannot address while the agents
+// inside it work on (#730). This one field is the whole guard for the third case —
+// nothing downstream re-checks it — which is why classifyPIDProbe has to get the
 // classification right rather than leave it to a later refusal.
 func reapTargets(servers []tmux.OrphanServer, all bool) []tmux.OrphanServer {
 	var targets []tmux.OrphanServer
