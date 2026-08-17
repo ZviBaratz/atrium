@@ -85,18 +85,28 @@ func TestCloseTreatsDeadSessionAsSuccess(t *testing.T) {
 // TestCloseSurfacesAnUnreachableSocket is the negative half of the case above, and it is
 // what makes that one's PAIR match load-bearing rather than decorative.
 //
-// tmux formats the message as `error connecting to %s (%s)` with strerror, so matching the
-// prefix alone would classify these as "already gone" too. They are not: the socket EXISTS
-// and hosts a server this process could not address, which may be running the very session
-// being killed. Reporting a clean kill there is the one direction Close must never take —
-// its caller then prunes state for an agent that is still alive.
+// tmux formats the message as `error connecting to %s (%s)` with strerror, so the errno
+// tail is open-ended and matching the prefix alone would classify all of these as "already
+// gone" too. None of them is: connect() never reached a server, so nothing was asked and
+// no answer came back. Reporting a clean kill there is the one direction Close must never
+// take — its caller then prunes state for an agent that may still be alive. The first case
+// is that agent: EACCES is a socket that EXISTS, hosting a server this process cannot
+// address, possibly running the very session being killed. The rest are a socket path that
+// cannot be one at all, which is a misconfigured runtime rather than a dead session.
+//
+// Every message here was captured from tmux 3.6 rather than guessed, which matters because
+// the obvious guess is wrong: ECONNREFUSED does NOT take this format. A bound-but-unlistened
+// socket, a regular file and a directory at the socket path all report "no server running
+// on …", which sessionAlreadyGone treats as gone — correctly, since tmux unlinks and moves
+// on.
 //
 // Widen sessionAlreadyGone's socket case to `strings.Contains(hay, "error connecting to")`
 // and this test is what goes red.
 func TestCloseSurfacesAnUnreachableSocket(t *testing.T) {
 	for _, msg := range []string{
 		"error connecting to /tmp/sock (Permission denied)",
-		"error connecting to /tmp/sock (Connection refused)",
+		"error connecting to /tmp/sock (Not a directory)",
+		"error connecting to /tmp/sock (File name too long)",
 	} {
 		t.Run(msg, func(t *testing.T) {
 			cmdExec := cmd_test.MockCmdExec{
@@ -117,7 +127,9 @@ func TestCloseSurfacesAnUnreachableSocket(t *testing.T) {
 			require.Error(t, err,
 				"a socket that exists but cannot be addressed is not evidence the session is gone")
 			require.Contains(t, err.Error(), "kill tmux session",
-				"the failure must be surfaced as a teardown error, with tmux's own diagnostic folded in")
+				"the failure must be surfaced as a teardown error")
+			require.Contains(t, err.Error(), msg,
+				"tmux's own diagnostic must be folded in — the bare exit status names nothing actionable")
 		})
 	}
 }
