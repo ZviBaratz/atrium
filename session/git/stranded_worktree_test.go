@@ -53,7 +53,54 @@ func TestStrandedWorktreeForFindsAManagedWorktree(t *testing.T) {
 
 	got, managed := StrandedWorktreeFor(context.Background(), repo, "zvi/fix-auth")
 	assert.True(t, managed, "a worktree under the data dir's worktrees/ tree is Atrium's own")
-	assert.Equal(t, wt, got)
+	// Compared symlink-resolved: the path comes from git, which reports the one it
+	// registered — on macOS /private/var where the test built /var. What matters is that
+	// it names the same directory, not that it spells it the same way.
+	assert.Equal(t, resolvePath(wt), resolvePath(got))
+}
+
+// TestUnderManagedWorktreesSurvivesASymlinkedDataDir is a regression test for a
+// macOS-only CI failure that also broke a pre-existing guard
+// (TestIsolatedSessionDoesNotWarnForADirOnlyIgnoreRule).
+//
+// The containment check compares the worktrees root with a candidate path. Resolving
+// symlinks on each side INDEPENDENTLY is unsound, because resolvePath falls back to
+// Clean for a path that does not exist — and the busiest caller,
+// removeOrphanedWorktreeDir, runs right after a `git worktree remove` has deleted the
+// directory. The root still resolves (/private/var) while the gone worktree does not
+// (/var), Rel answers "../..", and a worktree squarely inside the managed tree is
+// refused as outside it. On the delete path that is a warning; on the recovery path it
+// silently declines to free a branch it owns.
+//
+// Reproduced on any platform by making the data dir reachable through a symlink, which
+// is what /var is on macOS. Asserted for a path that EXISTS and one that does not,
+// because only the second distinguishes the two comparisons.
+func TestUnderManagedWorktreesSurvivesASymlinkedDataDir(t *testing.T) {
+	target := t.TempDir()
+	link := filepath.Join(t.TempDir(), "home-link")
+	require.NoError(t, os.Symlink(target, link))
+	t.Setenv("HOME", link)
+
+	root, err := config.WorktreesDir()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(root, 0o755))
+	require.NotEqual(t, resolvePath(root), filepath.Clean(root),
+		"precondition: the root is reached through a symlink, as /var is on macOS")
+
+	present := filepath.Join(root, "present_deadbeef")
+	require.NoError(t, os.MkdirAll(present, 0o755))
+	_, managed, err := underManagedWorktrees(present)
+	require.NoError(t, err)
+	assert.True(t, managed, "a worktree that exists is inside the managed tree")
+
+	_, managed, err = underManagedWorktrees(filepath.Join(root, "already-gone_deadbeef"))
+	require.NoError(t, err)
+	assert.True(t, managed,
+		"and so is one already deleted — the case a per-side resolve gets wrong")
+
+	_, managed, err = underManagedWorktrees(filepath.Join(t.TempDir(), "elsewhere"))
+	require.NoError(t, err)
+	assert.False(t, managed, "while a path outside it is still refused")
 }
 
 // TestStrandedWorktreeForRefusesToClaimAHandMadeWorktree is the licence's negative

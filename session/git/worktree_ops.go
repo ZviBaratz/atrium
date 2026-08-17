@@ -328,16 +328,28 @@ func underManagedWorktrees(worktreePath string) (abs string, managed bool, err e
 	if err != nil {
 		return "", false, fmt.Errorf("failed to resolve worktree path: %w", err)
 	}
-	// Symlink-resolved on both sides, for resolvePath's reason: git reports the path it
-	// registered, which on macOS routinely reaches us as /private/var where
-	// getWorktreeDirectory returns /var. Unresolved, every comparison there misses —
-	// and a miss here reads as "not ours", which is the safe direction for the delete
-	// but the wrong one for recognising our own stranded worktree.
-	rel, relErr := filepath.Rel(resolvePath(absRoot), resolvePath(abs))
-	if relErr != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return abs, false, nil
+	// Two comparisons, each with both sides on the SAME basis, and never one of each.
+	//
+	// The literal one first, because it is the one that always holds still. The resolved
+	// one is a fallback for the case StrandedWorktreeFor introduced: git reports the path
+	// it registered, which on macOS routinely arrives as /private/var where
+	// getWorktreeDirectory returns /var, and unresolved that comparison misses.
+	//
+	// Mixing them is what breaks, and it breaks in the direction that matters.
+	// resolvePath falls back to Clean for a path that does not EXIST — and the busiest
+	// caller here is removeOrphanedWorktreeDir, reached from clearStaleWorktree and from
+	// ReleaseManagedWorktree straight after a `git worktree remove` has already deleted
+	// the directory. So the worktree side stays /var while the still-present root side
+	// resolves to /private/var, Rel answers "../..", and a worktree squarely inside the
+	// managed tree is refused as outside it.
+	contained := func(root, path string) bool {
+		rel, err := filepath.Rel(root, path)
+		return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 	}
-	return abs, true, nil
+	if contained(absRoot, abs) || contained(resolvePath(absRoot), resolvePath(abs)) {
+		return abs, true, nil
+	}
+	return abs, false, nil
 }
 
 // StrandedWorktreeFor returns the worktree currently holding branch in the repository
