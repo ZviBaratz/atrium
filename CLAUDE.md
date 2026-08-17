@@ -118,8 +118,10 @@ what it leaves behind.
 
 ## Reviewing a change here
 
-Measured over 51 PRs (#489–#562), merged 2026-07-27..2026-08-01, the defects
-that survive into review split 29 behaviour / 21 claim / 9 test. `go vet`, lint
+Measured over 51 PRs (#489–#562), the 59 follow-up *commits* that fix a defect
+split 29 behaviour / 21 claim / 9 test — one commit routinely absorbs a whole
+round, so this is not a finding census
+(`docs/superpowers/specs/2026-08-01-review-loop-measurement.md`). `go vet`, lint
 and the suite catch none of the middle class, and a review that only hunts for
 bugs reports about half of what this repo actually ships wrong. Three rules, aimed
 at what is missed rather than at what is already caught:
@@ -149,7 +151,9 @@ at what is missed rather than at what is already caught:
   same finding; only the second gets prioritised correctly.
 
 Prefer `file:line` evidence over reasoning about what a name implies. A finding
-you cannot cite is a hypothesis.
+you cannot cite is a hypothesis. Shipped prose is the opposite case — a finding is
+read while it is still true, a comment is not — so cite the symbol, never the
+position. `TestNoProseCitesAPosition` enforces that.
 
 ## Conventions
 
@@ -245,6 +249,13 @@ the same two false things, in the file whose own fixtures disproved them, under 
 message saying "Both corrected". Cite the PR, not the *branch* commit: a squash-merged
 PR's branch SHAs never land on `main`, so a bare one strands anyone who has only `main`.
 Recovering it (`git fetch origin refs/pull/N/head`) needs the PR number anyway.
+
+**On the third attempt at one sentence, delete the claim instead of restating it.**
+#720 cited a line pair, corrected it to a *second* wrong pair — its own edits had
+moved them again — and it only stopped rotting when the third pass removed the
+numbers rather than replacing them. #675 hit the same wall with symbol names: "any
+name in that slot would have been the third wrong one". Two failed corrections say
+the mechanism does not want stating, not that the words were wrong.
 
 For the general discipline of proving a TUI change is right — why a passing Go suite
 cannot see width, reflow, colour, or a click that hit the neighbouring row — use the

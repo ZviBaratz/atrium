@@ -17,9 +17,12 @@ import (
 // context lets Close actually terminate it.
 //
 // Drives a REAL tmux server, so it self-skips when tmux is unavailable. Unlike
-// TestSessionDeathStopsProbing it runs in CI — only that one is -skip'd by name
-// (.github/workflows/build.yml:75, :125) — so RequireTmux's hard failure under
-// ATRIUM_CI_REQUIRE_TMUX=1 applies here.
+// TestSessionDeathStopsProbing it runs in CI — every `go test` in the workflows
+// passes `-skip` for that one and none names this one, which is what makes
+// RequireTmux's hard failure under ATRIUM_CI_REQUIRE_TMUX=1 reachable here.
+// TestEveryWorkflowGoTestSkipsTheRealTmuxTest holds both halves of that to the
+// workflow files, because the pair of line numbers this sentence used to carry
+// was wrong on the day it merged and short of the skip sites it pointed at.
 func TestCloseSucceedsAfterRebindFromCancelledContext(t *testing.T) {
 	testutil.RequireTmux(t)
 

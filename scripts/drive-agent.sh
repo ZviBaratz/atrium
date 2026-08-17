@@ -325,7 +325,7 @@ t() {
 # draws at all.
 #
 # `status off` is not cosmetic, but note which way the row goes. Atrium's DEFAULT is
-# the context bar ON (config.GetSessionContextBar defaults true, accessors.go:251),
+# the context bar ON (config.GetSessionContextBar defaults true),
 # and atrium.conf.tmpl then sets `status on` — so a default production session's pane
 # is its window height MINUS ONE. Off here, the pane is the full window height. The
 # rig gives up that row of fidelity on purpose: the bar's content is theme- and
