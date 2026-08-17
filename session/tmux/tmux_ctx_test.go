@@ -17,9 +17,9 @@ import (
 // context lets Close actually terminate it.
 //
 // Drives a REAL tmux server, so it self-skips when tmux is unavailable. Unlike
-// TestSessionDeathStopsProbing it runs in CI — every workflow invocation of the
-// suite passes `-skip` for that one and none names this one, which is what puts
-// this test, specifically, on a real server under ATRIUM_CI_REQUIRE_TMUX=1.
+// TestSessionDeathStopsProbing it runs in CI — every workflow command that runs
+// the suite passes `-skip` for that one and none names this one, so nothing in
+// the workflows keeps this test off a real server under ATRIUM_CI_REQUIRE_TMUX=1.
 // TestEveryWorkflowGoTestSkipsTheRealTmuxTest holds both halves of that to the
 // workflow files, because the pair of line numbers this sentence used to carry
 // was wrong on the day it merged and short of the skip sites it pointed at.
