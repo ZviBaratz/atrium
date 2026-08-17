@@ -37,8 +37,10 @@ func TestResumeAll_OverSoftCapNamesHostBudget(t *testing.T) {
 	require.Equal(t, stateConfirm, h.state, "ctrl+r must confirm before resuming")
 	require.NotNil(t, h.confirmationOverlay)
 	rendered := flattenOverlay(h.confirmationOverlay.Render())
-	assert.Contains(t, rendered,
-		"Resume 3 paused sessions? (rebuilds each removed worktree and reattaches every agent)")
+	// The literal itself is pinned once, in dialog_voice_test.go; what this test is
+	// about is that the capacity clause joins the ordinary resume question rather
+	// than replacing it or opening a dialog of its own.
+	assert.Contains(t, rendered, resumeConfirmMessage("paused", 3))
 	assert.Contains(t, rendered,
 		"Host capacity is 4, with 2 already running — 3 more will queue rather than parallelize.")
 	assert.Contains(t, rendered, "Press y to resume 3 sessions, n or esc to cancel")

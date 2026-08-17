@@ -2,13 +2,17 @@ package session
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/cmd/cmd_test"
+	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/session/tmux"
 	"github.com/stretchr/testify/require"
 )
@@ -32,6 +36,87 @@ func autoMsg(when string) string {
 	return autoPauseCommitPrefix + "'sess' on " + when + " " + autoPauseCommitSuffix
 }
 
+// fakeTmuxServer models the one fact the executor these tests used to build could
+// not: a tmux session stops existing once something kills it.
+//
+// That executor ("an executor that reports the tmux session as present") answered
+// every command with success, so has-session said "alive" forever — including after
+// a Close. It therefore mocked the answer to the exact question #710 turned on, and
+// no test built on it could observe that pause left the agent running or that a
+// resume reattached a process standing in a deleted directory. The whole pause/resume
+// suite stayed green for the life of that bug. The live guards are in
+// pause_live_test.go; this is what keeps the tmux-free tests honest about the
+// lifecycle they drive.
+//
+// It answers the three verbs the pause/resume paths turn on and passes everything
+// else. new-session is observed on the PTY side because that is where tmux.start
+// launches it (through the pty factory, not the executor), so a fake that only
+// watched the executor would never come back alive.
+type fakeTmuxServer struct {
+	alive atomic.Bool
+	pty   *recordingPtyFactory
+}
+
+// newFakeTmuxServer returns a fake whose session is already running, matching a
+// session that has been started.
+func newFakeTmuxServer(t *testing.T) *fakeTmuxServer {
+	t.Helper()
+	s := &fakeTmuxServer{pty: newRecordingPtyFactory(t, nil)}
+	s.alive.Store(true)
+	return s
+}
+
+// Start implements tmux.PtyFactory: `new-session` brings the session up, everything
+// else (the attach-session Restore opens) is recorded and ignored.
+func (s *fakeTmuxServer) Start(cmd *exec.Cmd) (*os.File, error) {
+	if tmuxVerb(cmd, "new-session") {
+		s.alive.Store(true)
+	}
+	return s.pty.Start(cmd)
+}
+
+func (s *fakeTmuxServer) Close() { s.pty.Close() }
+
+// exec implements the cmd.Executor side: kill-session takes the session down, and
+// has-session reports what is actually there.
+func (s *fakeTmuxServer) exec() cmd_test.MockCmdExec {
+	return cmd_test.MockCmdExec{
+		RunFunc: func(cmd *exec.Cmd) error {
+			switch {
+			case tmuxVerb(cmd, "kill-session"):
+				s.alive.Store(false)
+			case tmuxVerb(cmd, "has-session"):
+				if !s.alive.Load() {
+					// tmux's own wording, and it has to be: Session.Close and liveness
+					// both classify a kill/probe failure by this text
+					// (sessionAlreadyGone), so a fake that invented its own message
+					// would read as a real teardown failure rather than a dead session.
+					return errors.New("can't find session: sess")
+				}
+			}
+			return nil
+		},
+		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
+	}
+}
+
+// tmuxVerb reports whether cmd is the given tmux subcommand. tmuxCommand builds
+// `tmux -L <socket> [-f conf] <verb> …`, so the verb is one argv element among
+// flags rather than a fixed position.
+func tmuxVerb(cmd *exec.Cmd, verb string) bool {
+	return slices.Contains(cmd.Args, verb)
+}
+
+// pausableInstance wires a Running instance around a real worktree and a fake tmux
+// server that tracks its own liveness, so Pause and Resume run their real teardown
+// and relaunch rather than talking to a mock that always says yes.
+func pausableInstance(t *testing.T, wt *git.Worktree) *Instance {
+	t.Helper()
+	srv := newFakeTmuxServer(t)
+	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", srv, srv.exec())
+	return &Instance{Title: "sess", status: Running, started: true, gitWorktree: wt, tmuxSession: ts}
+}
+
 // TestPauseResume_RoundTripsWithoutHistoryArtifact is the core acceptance test
 // for #141: pausing a dirty session then resuming it must leave branch HEAD and
 // the working tree exactly as they were, with no leftover `(paused)` commit.
@@ -44,15 +129,7 @@ func TestPauseResume_RoundTripsWithoutHistoryArtifact(t *testing.T) {
 	baseSHA := gitOutput(t, wtPath, "rev-parse", "HEAD")
 	require.NoError(t, os.WriteFile(filepath.Join(wtPath, "work.txt"), []byte("in progress\n"), 0644))
 
-	// An executor that reports the tmux session as present, so Resume takes the
-	// Restore() path (a plain pty re-attach) instead of polling a real server.
-	aliveExec := cmd_test.MockCmdExec{
-		RunFunc:    func(*exec.Cmd) error { return nil },
-		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
-	}
-	pty := newRecordingPtyFactory(t, nil)
-	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, aliveExec)
-	inst := &Instance{Title: "sess", status: Running, started: true, gitWorktree: wt, tmuxSession: ts}
+	inst := pausableInstance(t, wt)
 
 	// Pause commits the WIP so it survives the worktree removal.
 	require.NoError(t, inst.Pause())
@@ -86,13 +163,7 @@ func TestPauseResume_BaseRefSession_RoundTripsWithoutDataLoss(t *testing.T) {
 	baseSHA := gitOutput(t, wtPath, "rev-parse", "HEAD")
 	require.NoError(t, os.WriteFile(filepath.Join(wtPath, "work.txt"), []byte("in progress\n"), 0644))
 
-	aliveExec := cmd_test.MockCmdExec{
-		RunFunc:    func(*exec.Cmd) error { return nil },
-		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
-	}
-	pty := newRecordingPtyFactory(t, nil)
-	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, aliveExec)
-	inst := &Instance{Title: "sess", status: Running, started: true, gitWorktree: wt, tmuxSession: ts}
+	inst := pausableInstance(t, wt)
 
 	require.NoError(t, inst.Pause())
 	require.True(t, inst.Paused())
@@ -119,13 +190,7 @@ func TestPauseResume_ReconcilesCachedCommitCount(t *testing.T) {
 	wt := newTestWorktree(t)
 	wtPath := wt.GetWorktreePath()
 
-	aliveExec := cmd_test.MockCmdExec{
-		RunFunc:    func(*exec.Cmd) error { return nil },
-		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
-	}
-	pty := newRecordingPtyFactory(t, nil)
-	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, aliveExec)
-	inst := &Instance{Title: "sess", status: Running, started: true, gitWorktree: wt, tmuxSession: ts}
+	inst := pausableInstance(t, wt)
 
 	// A never-polled (nil-stats) session with a dirty worktree.
 	require.NoError(t, os.WriteFile(filepath.Join(wtPath, "work.txt"), []byte("in progress\n"), 0644))

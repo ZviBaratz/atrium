@@ -722,14 +722,24 @@ func (m *home) resumeAll() tea.Cmd {
 // session.Instance.Resume for which). Reattaching the agent is the half true of every
 // path, so that half carries no qualifier.
 //
-// It says *reattaches* because pause detaches tmux rather than closing it
-// (session.Instance.pause), so the agent process is normally still alive and Resume
-// only restores the PTY; "restarts" would read as losing the conversation and scare
-// the user off a non-destructive action. One literal, shared by both entry points, so
-// resumeAll and resumeMarked cannot drift apart.
+// It says *relaunches* because pause closes the tmux session, ending the agent with
+// it (session.Instance.pause), so there is no process left to reattach. It used to say
+// "reattaches", on the grounds that "restarts" would read as losing the conversation —
+// but the reassurance stopped being true, and the answer to the fear is the mechanism
+// rather than a softer verb: the relaunch resumes the prior conversation
+// (Instance.startResuming).
+//
+// That half is hedged, and the hedge is load-bearing. Only claude has a transcript
+// adapter (session/transcript), so every other agent falls through to its own resume
+// probe, which answers "does the binary support the flag", not "is there a conversation
+// to come back to". noteConversationOutcome already refuses to report that guess as a
+// fact, and this dialog must not either.
+//
+// One literal, shared by both entry points, so resumeAll and resumeMarked cannot drift
+// apart.
 func resumeConfirmMessage(kind string, n int) string {
-	return fmt.Sprintf("Resume %d %s session%s? (rebuilds each removed worktree and reattaches every agent)",
-		n, kind, plural(n))
+	return fmt.Sprintf("Resume %d %s session%s? (rebuilds each removed worktree and relaunches each agent, "+
+		"resuming its conversation where the agent supports it)", n, kind, plural(n))
 }
 
 // resumeInstances resumes an explicit set of (already-paused) sessions behind a
@@ -834,8 +844,9 @@ func (msg batchPauseDoneMsg) summary() string {
 // pauseAll parks every pausable (non-paused, non-loading, non-direct) session in
 // the current view (see ActiveInstancesInView) behind a count confirmation — the
 // intentional "prepare for restart" path,
-// the inverse of resumeAll. Each Pause commits WIP, detaches tmux, and removes the
-// worktree (keeping the branch); a per-instance failure is recorded and the run
+// the inverse of resumeAll. Each Pause commits WIP, closes the tmux session (stopping
+// the agent) and removes the worktree, keeping the branch; a per-instance failure is
+// recorded and the run
 // continues, with the outcome surfaced as a summary. The run happens off the UI
 // thread; state is persisted once, on the Update loop, in the batchPauseDoneMsg
 // handler (mirroring resumeAll).
@@ -850,7 +861,15 @@ func (m *home) pauseAll() tea.Cmd {
 // pauseConfirmMessage is the batch-pause question for n sessions described by kind
 // ("active" for the whole view, "marked" for a multi-select subset), plus the
 // consequence — the confirmation-voice rule in app_feedback.go: ask with the verb,
-// then name what the user cannot see. Pause stages and commits everything git tracks
+// then name what the user cannot see.
+//
+// It leads with the agent because that is the half a paused row cannot show and the
+// half a user is most likely to be wrong about: pause closes the tmux session
+// (session.Instance.pause), so a session parked mid-turn does not finish that turn. It
+// used not to say so, because until #710 it was not true — pause detached, and the
+// agent ran on in a directory the same pause had deleted.
+//
+// Pause stages and commits everything git tracks
 // (Worktree.CommitChanges) and then removes the worktree, so the gitignored files
 // living in it — a local .env, a build cache, downloaded dependencies — go with it,
 // and resume rebuilds the worktree from the branch. The README documents only the
@@ -877,19 +896,22 @@ func (m *home) pauseAll() tea.Cmd {
 // .claude/settings.local.json (config.defaultCarryFiles), so for an unconfigured user
 // — the one this dialog is warning — .env really is gone.
 func pauseConfirmMessage(kind string, n int) string {
-	return fmt.Sprintf("Pause %d %s session%s? (commits any work in progress, then removes "+
-		"each worktree — gitignored files like .env or build caches are deleted for good)",
+	return fmt.Sprintf("Pause %d %s session%s? (stops each agent, commits any work in progress, "+
+		"then removes each worktree — gitignored files like .env or build caches are deleted for good)",
 		n, kind, plural(n))
 }
 
 // pauseInstances parks an explicit set of (pausable) sessions behind a count
 // confirmation — the shared core of pauseAll and pauseMarked. Each Pause commits
-// WIP, detaches tmux, and removes the worktree (keeping the branch); a
-// per-instance failure is recorded and the run continues, with the outcome
-// surfaced as a summary. The run happens off the UI thread (confirmAction with a label);
+// WIP, closes the tmux session (stopping the agent) and removes the worktree,
+// keeping the branch; a per-instance failure is recorded and the run continues, with
+// the outcome surfaced as a summary. The run happens off the UI thread (confirmAction with a label);
 // state is persisted once, on the Update loop, in the batchPauseDoneMsg handler.
-// Pause is non-destructive (every branch is kept), so it keeps the default accent
-// border.
+// Pause keeps the default accent border; only kill wears the danger one. It ends an
+// agent process now, which the copy owns, but nothing it ends is unrecoverable: every
+// branch is kept, the WIP is committed onto it, and the resume relaunches the agent
+// back into its conversation. The danger border is for losing work, not for stopping
+// a process.
 func (m *home) pauseInstances(insts []*session.Instance, message string) tea.Cmd {
 	action := func() tea.Msg {
 		var res batchPauseDoneMsg

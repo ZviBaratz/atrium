@@ -6,7 +6,9 @@ import (
 
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/git"
+	"github.com/ZviBaratz/atrium/ui/overlay"
 
+	tea "charm.land/bubbletea/v2"
 	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -21,28 +23,70 @@ import (
 // on the UI thread) lives on pauseConfirmMessage.
 func TestPauseConfirmMessage(t *testing.T) {
 	require.Equal(t,
-		"Pause 3 active sessions? (commits any work in progress, then removes each "+
+		"Pause 3 active sessions? (stops each agent, commits any work in progress, then removes each "+
 			"worktree — gitignored files like .env or build caches are deleted for good)",
 		pauseConfirmMessage("active", 3))
 	require.Equal(t,
-		"Pause 1 marked session? (commits any work in progress, then removes each "+
+		"Pause 1 marked session? (stops each agent, commits any work in progress, then removes each "+
 			"worktree — gitignored files like .env or build caches are deleted for good)",
 		pauseConfirmMessage("marked", 1))
 }
 
-// The batch-resume question names what resume rebuilds. It says "reattaches" because
-// pause only detaches tmux (session/pause.go): the agent process is normally still
-// alive and keeps its conversation, so "restarts" would frighten the user off a
-// non-destructive action. The worktree half is qualified ("each removed worktree") and
-// the agent half is not, because a batch can hold sessions Resume rebuilds nothing for
-// — a parked direct session, a commit-failure park — while every path reattaches.
+// The batch-resume question names what resume rebuilds. It says "relaunches" because
+// pause closes the tmux session (session/pause.go), ending the agent with it, so there
+// is nothing left to reattach — and it names the conversation because that is what the
+// old "reattaches" was really reassuring the user about.
+//
+// The worktree half is qualified ("each removed worktree") because a batch can hold
+// sessions Resume rebuilds nothing for — a parked direct session, a commit-failure
+// park. The conversation half is qualified for a different reason: only claude has a
+// transcript adapter, so for every other agent Atrium genuinely does not know, and a
+// flat promise would be a guess printed as a fact.
 func TestResumeConfirmMessage(t *testing.T) {
 	require.Equal(t,
-		"Resume 3 paused sessions? (rebuilds each removed worktree and reattaches every agent)",
+		"Resume 3 paused sessions? (rebuilds each removed worktree and relaunches each agent, "+
+			"resuming its conversation where the agent supports it)",
 		resumeConfirmMessage("paused", 3))
 	require.Equal(t,
-		"Resume 1 marked session? (rebuilds each removed worktree and reattaches every agent)",
+		"Resume 1 marked session? (rebuilds each removed worktree and relaunches each agent, "+
+			"resuming its conversation where the agent supports it)",
 		resumeConfirmMessage("marked", 1))
+}
+
+// A copy change is a height change, and this is the one box where nothing else would
+// notice. PlaceOverlay CLIPS rather than overflows, so a confirmation that outgrows the
+// terminal still renders exactly 24×80 and TestViewFitsTerminalBounds stays green while
+// the user loses the bottom border and the "Press y …" line — the only thing in the box
+// telling them how to answer it. These two messages are the longest the app ships, and
+// they are hand-written prose, so the height is whatever the last edit made it.
+func TestConfirmationsFitTheSmallestSupportedTerminal(t *testing.T) {
+	// The narrowest size TestViewFitsTerminalBounds sweeps, and the smallest terminal
+	// anything here is written for.
+	const minWidth, minHeight = 80, 24
+	cases := map[string]string{
+		"pause": pauseConfirmMessage("active", 3),
+		// The widest form the resume dialog ever takes: resumeInstances appends the
+		// capacity clause to this same box rather than opening a second one (#463).
+		"resume": resumeConfirmMessage("paused", 3) + "\n" + hostCapacityLine(4, 2),
+	}
+	for name, msg := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newCreateFormHome(t)
+			h.state = stateConfirm
+			h.confirmationOverlay = overlay.NewConfirmationOverlay(msg)
+			h.confirmationOverlay.SetConfirmLabel("go ahead")
+			h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: minWidth, Height: minHeight})
+
+			// The consequence first, then the mechanism, and neither fatal: a require
+			// on the height would abort the subtest and the failure output would never
+			// name what the user actually loses.
+			assert.Contains(t, xansi.Strip(h.View().Content), "esc to cancel",
+				"the confirm hint was clipped away, so the dialog no longer says how to answer it")
+			box := strings.Split(h.confirmationOverlay.Render(), "\n")
+			assert.LessOrEqual(t, len(box), minHeight,
+				"the confirmation box is taller than the smallest supported terminal, so it will be clipped")
+		})
+	}
 }
 
 // The host-capacity fact is one sentence shared by the create confirmation and the

@@ -32,8 +32,9 @@ func TestResumeAll_OpensCountConfirmation(t *testing.T) {
 	require.Equal(t, stateConfirm, h.state, "ctrl+r must open the confirmation overlay")
 	require.NotNil(t, h.confirmationOverlay)
 	rendered := flattenOverlay(h.confirmationOverlay.Render())
-	assert.Contains(t, rendered,
-		"Resume 2 paused sessions? (rebuilds each removed worktree and reattaches every agent)")
+	// The literal itself is pinned once, in dialog_voice_test.go; what this test is
+	// about is that ctrl+r opened the resume dialog over the right kind and count.
+	assert.Contains(t, rendered, resumeConfirmMessage("paused", 2))
 	assert.Contains(t, rendered, "Press y to resume 2 sessions, n or esc to cancel")
 }
 
@@ -45,8 +46,7 @@ func TestResumeAll_SingularMessage(t *testing.T) {
 	_, _ = h.handleKeyPress(keyMsg("ctrl+r"))
 
 	require.Equal(t, stateConfirm, h.state)
-	assert.Contains(t, flattenOverlay(h.confirmationOverlay.Render()),
-		"Resume 1 paused session? (rebuilds each removed worktree and reattaches every agent)")
+	assert.Contains(t, flattenOverlay(h.confirmationOverlay.Render()), resumeConfirmMessage("paused", 1))
 }
 
 // ctrl+r with nothing paused must not open a confirmation; it explains itself

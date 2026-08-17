@@ -25,9 +25,9 @@ import (
 // goneFor is how many leading has-session probes must report the session as gone
 // before it comes up. Each entry point asks a different number of times:
 // recoverInPlace asks once (the duplicate-name guard in Start), Resume asks twice
-// (its own "did the session survive the pause?" check, then that same guard). One
-// too few and the launch is refused as a duplicate; the probe after them all has
-// to see the session alive, or the launch is judged to have failed.
+// (its own "is there a session left over to close?" check, then that same guard).
+// One too few and the launch is refused as a duplicate; the probe after them all
+// has to see the session alive, or the launch is judged to have failed.
 func relaunchableInstance(t *testing.T, program, cfgDir string, goneFor int) *Instance {
 	t.Helper()
 	wt := newTestWorktree(t)

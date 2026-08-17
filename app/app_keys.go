@@ -991,11 +991,11 @@ func (m *home) openPRForSelected() (tea.Model, tea.Cmd) {
 		}))
 }
 
-// pauseSelected commits the selected session's changes, frees its worktree, and
-// then offers the rename overlay focused on the note field so "park this, jot why"
-// is one motion. Pause (git commit + worktree removal + tmux detach) runs off the
-// UI thread behind a "pausing…" progress row; the rename overlay opens when
-// pauseDoneMsg lands.
+// pauseSelected stops the selected session's agent, commits its changes, frees its
+// worktree, and then offers the rename overlay focused on the note field so "park
+// this, jot why" is one motion. Pause (git commit + tmux close + worktree removal)
+// runs off the UI thread behind a "pausing…" progress row; the rename overlay opens
+// when pauseDoneMsg lands.
 func (m *home) pauseSelected() (tea.Model, tea.Cmd) {
 	selected, cmd, ok := m.selectedActionable()
 	if !ok {
@@ -1003,7 +1003,7 @@ func (m *home) pauseSelected() (tea.Model, tea.Cmd) {
 	}
 
 	// A direct (non-git) session has no worktree to free and runs in the user's
-	// real directory, so pausing it would only detach a still-running agent.
+	// real directory, so pausing it would stop the agent and reclaim nothing.
 	// Warn instead of pausing. (The menu also hides this action for direct sessions.)
 	if selected.IsDirect() {
 		return m, m.handleError(fmt.Errorf("pause is not available for a direct (non-git) session; it runs in place with no worktree to free"))

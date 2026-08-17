@@ -2,16 +2,19 @@
 // repo declares, so two sessions of one repo can run the same server at once.
 //
 // The port is exported as $ATRIUM_PORT and {{.Session.Port}} through the same channel
-// session_env rides, and is held for exactly as long as the session's PANE is:
-// allocated where the worktree is materialized (create, and again on resume), KEPT
-// across a pause, and released on kill — or on a park that finds the pane already gone
-// (releasePortIfPaneGone).
+// session_env rides, and is held for as long as the SESSION is: allocated where the
+// worktree is materialized (create, and again on resume, both through reservePort),
+// KEPT across a pause, and released on kill — or when a config edit stops routing this
+// repo to a range at all (resolveSetupRun), which is the one release that is not a
+// teardown.
 //
-// The pane, not the worktree, is the thing it is tied to, and that was learned the hard
-// way. tmux fixes a session's environment at `new-session -e` and a resume only
-// re-attaches, so a parked session's shell still exports the number it was born with;
-// releasing on pause handed that number to the next create, and the parked session found
-// out on resume. The cost is that a parked session occupies a port until it is killed.
+// Keeping it across a pause is a promise, not a collision guard. A pause closes the
+// tmux session, so nothing is left exporting the old number — but the session's dev
+// server comes back on resume, and the number is what a browser tab, a bookmark or a
+// rendered template already points at. Handing it to the next create would mean the
+// resume either renumbers (breaking those) or lands on a port another session now owns.
+// The cost is that a parked session occupies a port until it is killed, so a range has
+// to be sized for the sessions parked as well as the ones running.
 
 package session
 
@@ -24,7 +27,6 @@ import (
 
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/repocfg"
-	"github.com/ZviBaratz/atrium/session/tmux"
 )
 
 // portRegistry is the set of ports Atrium's own sessions hold.
@@ -202,25 +204,8 @@ func (i *Instance) reservePort(s repocfg.Script) {
 	i.setPort(port)
 }
 
-// releasePortIfPaneGone gives up the port only when the session's tmux pane is already
-// gone — the one condition under which no frozen $ATRIUM_PORT is left to contradict.
-//
-// It is the pause-time test. A pause detaches rather than closes, so the usual answer
-// is "the pane lives, keep the port"; the exception is RecoverLostSession, which parks a
-// session precisely because tmux died under it, and whose next launch will be a
-// `new-session -e` carrying whatever it is given.
-func (i *Instance) releasePortIfPaneGone(ts *tmux.Session) {
-	if i.Port() == 0 {
-		return
-	}
-	if ts != nil && ts.DoesSessionExist() {
-		return
-	}
-	i.releasePort()
-}
-
 // releasePort gives up the session's port, and does nothing when it holds none. Called
-// where the pane goes away: kill, and a pause that finds it already gone.
+// at kill, the one place a session gives its number back.
 func (i *Instance) releasePort() {
 	i.mu.Lock()
 	port := i.port

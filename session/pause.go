@@ -13,8 +13,8 @@ import (
 	"github.com/ZviBaratz/atrium/session/git"
 )
 
-// Pause/resume lifecycle: parking a session (commit dirty work, detach tmux,
-// remove the worktree, keep the branch) and bringing it back, plus the
+// Pause/resume lifecycle: parking a session (commit dirty work, close the tmux
+// session, remove the worktree, keep the branch) and bringing it back, plus the
 // auto-commit markers Resume unwinds so a pause/resume round-trips transparently.
 
 // Paused reports whether the instance is parked: no agent process, branch preserved.
@@ -67,9 +67,10 @@ func (i *Instance) TmuxAlive() bool {
 // ask WorkingDirGone rather than assume it from a nil error.
 //
 // A direct (non-git) session has no worktree to free and runs in the user's real
-// directory, so "pausing" it would only detach a still-running agent while the UI
-// claims it is parked — misleading. Pause therefore refuses a direct session. (A
-// direct session whose pane actually dies is still parked via RecoverLostSession.)
+// directory, so pausing it would buy nothing and cost the agent: the park would stop
+// a live agent standing in the user's own checkout, with no disk or branch reclaimed
+// in exchange. Pause therefore refuses a direct session. (A direct session whose pane
+// actually dies is still parked via RecoverLostSession.)
 func (i *Instance) Pause() error {
 	if i.direct {
 		return fmt.Errorf("cannot pause a direct (non-git) session: it runs in place with no worktree to free")
@@ -84,9 +85,9 @@ func (i *Instance) Pause() error {
 //
 // That last clause is conditional here for the same reasons it is on Pause, plus one
 // reachable only from this entry point: it does not refuse a direct session the way
-// Pause does, and a direct session has no worktree at all — that branch detaches the
-// pane and stops the run command without committing or removing anything, in what is
-// the user's own checkout. Hence WorkingDirGone for anything that acts on the
+// Pause does, and a direct session has no worktree at all — that branch closes the
+// session and stops the run command without committing or removing anything, in what
+// is the user's own checkout. Hence WorkingDirGone for anything that acts on the
 // removal.
 func (i *Instance) RecoverLostSession() error {
 	return i.pause()
@@ -109,7 +110,8 @@ func isAutoPauseCommit(subject string) bool {
 	return strings.HasPrefix(s, autoPauseCommitPrefix) && strings.HasSuffix(s, autoPauseCommitSuffix)
 }
 
-// pause stops the tmux session and removes the worktree, preserving the branch.
+// pause closes the tmux session — ending the agent process with it — and removes the
+// worktree, preserving the branch.
 //
 // Read "removes the worktree" as an intent, not a postcondition: it is conditional
 // and best-effort, and paths below leave the directory standing on purpose (the
@@ -135,17 +137,17 @@ func (i *Instance) pause() error {
 	ts := i.tmux()
 	wt := i.worktree()
 
-	// The managed port (#389) survives a pause whenever the pane does — which is every
-	// path below, since all of them detach rather than close. tmux freezes
-	// $ATRIUM_PORT at `new-session -e` and a resume re-attaches (Session.Restore is
-	// attach-session and nothing more), so the shell the user types in keeps the number
-	// it was born with. Releasing it here would let the next session created be handed
-	// that number while the parked pane still exports it — the collision the port
-	// exists to prevent, arrived at by way of freeing it.
+	// The managed port (#389) is deliberately NOT released here, on any path below.
+	// Nothing exports it while the session is parked — the pane is closed with the
+	// session — so this is a promise rather than a collision guard: the session comes
+	// back on the number it left with, and the run command below restarts on it, so
+	// nothing renumbers under a browser tab or a rendered template. What does release
+	// one is Kill, and a config edit that stops routing this repo to a port range
+	// (resolveSetupRun) — neither of which is a park, which is the point.
 	//
-	// Deferred, so it covers the orphaned-worktree and direct branches below, which
-	// return early and park a session just as thoroughly.
-	defer i.releasePortIfPaneGone(ts)
+	// Resume re-reaches reservePort through applySessionEnv, and reservePort keeps a
+	// port the session already holds, so the number survives the round trip without
+	// anything here re-allocating it.
 
 	// The run command does NOT survive, and for the opposite reason to the port: the
 	// worktree below is about to be removed, and that worktree is the command's working
@@ -155,21 +157,23 @@ func (i *Instance) pause() error {
 	// directory is.
 	i.pauseRunCommand()
 
+	var tc teardown.Errors
+
 	// Direct session: no worktree to commit/remove. User-initiated Pause is refused
 	// for direct sessions (see Pause), so this branch is only reached via
 	// RecoverLostSession when the pane has died — park it so the poll loop stops and
 	// the user can Resume, without ever touching the user's real directory.
+	//
+	// The close is not redundant with the dead pane that got us here: it is what
+	// reaps the tmux session the pane left behind, and Close treats an already-gone
+	// session as the goal met rather than a failure (sessionAlreadyGone), so this
+	// branch does not start reporting an error for the ordinary case.
 	if wt == nil {
-		if err := ts.DetachSafely(); err != nil {
-			log.ErrorLog.Print(err)
-			i.SetStatus(Paused)
-			return fmt.Errorf("failed to detach tmux session: %w", err)
-		}
+		tc.Record("detach tmux session", ts.DetachSafely())
+		tc.Wrap("close tmux session", ts.Close())
 		i.SetStatus(Paused)
-		return nil
+		return tc.Err()
 	}
-
-	var tc teardown.Errors
 
 	// If the worktree is orphaned (path or .git missing), git cannot operate
 	// on it. Skip dirty check and Remove, prune any lingering metadata, then
@@ -180,6 +184,7 @@ func (i *Instance) pause() error {
 		log.WarningLog.Printf("worktree at %s is orphaned; skipping dirty check and remove",
 			wt.GetWorktreePath())
 		tc.Record("detach tmux session", ts.DetachSafely())
+		tc.Wrap("close tmux session", ts.Close())
 		// Drop any leftover directory so a future Resume's `git worktree add` won't conflict.
 		tc.Record("remove orphaned worktree directory", os.RemoveAll(wt.GetWorktreePath()))
 		tc.Record("prune git worktrees", wt.Prune())
@@ -213,9 +218,19 @@ func (i *Instance) pause() error {
 		}
 	}
 
-	// Detach from tmux session instead of closing to preserve session output.
-	// Continue with the pause process even if detach fails.
+	// Stop the agent, and do it BEFORE the worktree below goes: a process whose cwd is
+	// unlinked out from under it keeps running with a `(deleted)` working directory it
+	// can neither read nor write, which is what a paused session used to be left as
+	// (#710).
+	//
+	// Detach and THEN close, rather than swapping one for the other. Close kills the
+	// tmux session and closes ptmx, but it never clears attachCh, cancels the context
+	// or disables the stdout pump — so a pause that raced an attach would strand that
+	// attach's goroutines with no channel close to release the reader (#701). Detach
+	// owns the attach teardown; close owns the session. Continue past a failure of
+	// either: the pause must still park the session.
 	tc.Record("detach tmux session", ts.DetachSafely())
+	tc.Wrap("close tmux session", ts.Close())
 
 	if removeWorktree {
 		// Check if worktree exists before trying to remove it
@@ -256,8 +271,12 @@ func (i *Instance) Resume() error {
 	ts := i.tmux()
 	wt := i.worktree()
 
-	// Direct session: no worktree to recreate. Reattach to the still-running tmux
-	// session (or recreate it in the real directory if it died).
+	// Direct session: no worktree to recreate, so relaunch the agent in the real
+	// directory — the normal path, since a park closed the session. A live session
+	// here is one an older, detach-only pause left behind, and reattaching it is
+	// still right: a direct session's directory is the user's own checkout, which no
+	// pause ever removed, so its agent's cwd is exactly where it always was. That is
+	// the whole difference from the worktree branch below.
 	if wt == nil {
 		if ts.DoesSessionExist() {
 			if err := ts.Restore(); err != nil {
@@ -339,27 +358,25 @@ func (i *Instance) Resume() error {
 		i.RunSetupScript(wt.GetWorktreePath())
 	}
 
-	// Check if tmux session still exists from pause, otherwise create new one
+	// Relaunch the agent, resuming its prior conversation rather than starting blank.
+	// Unconditionally, because this is the branch where the worktree was removed and
+	// re-added: a session that survived that has an agent whose cwd is the inode the
+	// removal unlinked, so restoring the PTY would hand the user a pane that prints
+	// the right $PWD over a directory it cannot read or write (#710). The hazard is
+	// exactly "the worktree was removed and re-added", which is why the direct branch
+	// above still reattaches and this one never may.
+	//
+	// A live session here is one an older, detach-only pause left behind, so the close
+	// is both this fix's belt-and-braces and its upgrade path. It is logged rather than
+	// returned: if the kill really failed, the relaunch below fails on Start's
+	// duplicate-name guard and reports that instead of a guess made here.
 	if ts.DoesSessionExist() {
-		// Session exists, just restore the PTY connection to it.
-		if err := ts.Restore(); err != nil {
-			log.ErrorLog.Print(err)
-			// Restore failed — the stale session must be killed before we can
-			// recreate it (Start guards against duplicate session names).
-			if closeErr := ts.Close(); closeErr != nil {
-				log.ErrorLog.Printf("failed to close stale session %s: %v", i.Title, closeErr)
-			}
-			if err := i.recreateSession(materializedHere); err != nil {
-				return err
-			}
+		if err := ts.Close(); err != nil {
+			log.ErrorLog.Printf("failed to close the session %s was parked with: %v", i.Title, err)
 		}
-	} else {
-		// The tmux session is gone, so the agent process died with it; recreate
-		// it, resuming the prior conversation rather than starting blank. This is the
-		// path every budget-parked session takes, materializedHere false.
-		if err := i.recreateSession(materializedHere); err != nil {
-			return err
-		}
+	}
+	if err := i.recreateSession(materializedHere); err != nil {
+		return err
 	}
 
 	i.SetStatus(Running)
@@ -368,7 +385,8 @@ func (i *Instance) Resume() error {
 
 	// The worktree is back and the agent is launched, so the run command the pause
 	// stopped can have its directory again (#389). It restarts on the port the pause
-	// kept, so nothing renumbers underneath a browser tab.
+	// deliberately held rather than released (see pause), so nothing renumbers
+	// underneath a browser tab.
 	//
 	// Last, and specifically AFTER the flip out of Paused: StartRunCommand refuses a
 	// paused session — rightly, since a parked one has no worktree to run in — so a
