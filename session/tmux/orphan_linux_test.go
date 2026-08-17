@@ -644,6 +644,14 @@ func TestALiveServerBehindAnUnopenableSocketIsNotAReapTarget(t *testing.T) {
 	// The pane's own process is recorded too, not just the server's. `sleep 600` outlives a
 	// failed teardown by ten minutes, and a leaked child is what this file exists to prevent
 	// as much as a leaked server.
+	//
+	// Children are signalled BEFORE the server, for the same reason the pid layer precedes
+	// the socket one. SIGKILLing the server closes the pty master, which hands the pane's
+	// foreground group a SIGHUP and takes `sleep 600` down with it — so a loop that started
+	// at the server would reach the pane pid after the kernel had already released it, which
+	// is the window this ordering exists to close, reopened inside the layer that closes it.
+	// A leaf has no such effect on its parent: tmux tears the pane down through its event
+	// loop, several turns after the signal lands.
 	t.Cleanup(func() {
 		_ = os.Chmod(sockPath, 0o700)
 		_ = exec.CommandContext(context.Background(), "tmux", "-S", sockPath, "kill-server").Run()
@@ -652,7 +660,7 @@ func TestALiveServerBehindAnUnopenableSocketIsNotAReapTarget(t *testing.T) {
 	var serverPID int
 	var childPIDs []int
 	t.Cleanup(func() {
-		for _, pid := range append([]int{serverPID}, childPIDs...) {
+		for _, pid := range append(append([]int{}, childPIDs...), serverPID) {
 			if pid > 0 {
 				_ = syscall.Kill(pid, syscall.SIGKILL)
 			}
