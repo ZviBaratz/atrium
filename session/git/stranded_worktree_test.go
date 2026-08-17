@@ -51,7 +51,8 @@ func TestStrandedWorktreeForFindsAManagedWorktree(t *testing.T) {
 	wt := filepath.Join(root, "fix-auth_deadbeef")
 	repo := strandedRepo(t, wt, "zvi/fix-auth")
 
-	got, managed := StrandedWorktreeFor(context.Background(), repo, "zvi/fix-auth")
+	got, managed, err := StrandedWorktreeFor(context.Background(), repo, "zvi/fix-auth")
+	require.NoError(t, err)
 	assert.True(t, managed, "a worktree under the data dir's worktrees/ tree is Atrium's own")
 	// Compared symlink-resolved: the path comes from git, which reports the one it
 	// registered — on macOS /private/var where the test built /var. What matters is that
@@ -112,7 +113,8 @@ func TestStrandedWorktreeForRefusesToClaimAHandMadeWorktree(t *testing.T) {
 	wt := filepath.Join(t.TempDir(), "my-own-checkout")
 	repo := strandedRepo(t, wt, "zvi/fix-auth")
 
-	got, managed := StrandedWorktreeFor(context.Background(), repo, "zvi/fix-auth")
+	got, managed, err := StrandedWorktreeFor(context.Background(), repo, "zvi/fix-auth")
+	require.NoError(t, err)
 	require.NotEmpty(t, got, "it is still found; what differs is the licence to remove it")
 	assert.False(t, managed)
 
@@ -127,7 +129,8 @@ func TestStrandedWorktreeForReportsNothingWhenTheBranchIsFree(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	repo := strandedRepo(t, "", "")
 
-	got, managed := StrandedWorktreeFor(context.Background(), repo, "zvi/fix-auth")
+	got, managed, err := StrandedWorktreeFor(context.Background(), repo, "zvi/fix-auth")
+	require.NoError(t, err)
 	assert.Empty(t, got)
 	assert.False(t, managed)
 }
@@ -149,7 +152,8 @@ func TestReleaseManagedWorktreeFreesTheBranchAndKeepsIt(t *testing.T) {
 	assert.NoDirExists(t, wt)
 	assert.True(t, LocalBranchExists(context.Background(), repo, "zvi/fix-auth"),
 		"the branch is the work; only its checkout was in the way")
-	got, _ := StrandedWorktreeFor(context.Background(), repo, "zvi/fix-auth")
+	got, _, err := StrandedWorktreeFor(context.Background(), repo, "zvi/fix-auth")
+	require.NoError(t, err)
 	assert.Empty(t, got, "and git no longer reports it as held")
 
 	// The proof that matters: the branch can be checked out again, which is exactly what
@@ -158,4 +162,83 @@ func TestReleaseManagedWorktreeFreesTheBranchAndKeepsIt(t *testing.T) {
 	cmd := exec.CommandContext(t.Context(), "git", "-C", repo, "worktree", "add", second, "zvi/fix-auth")
 	out, err := cmd.CombinedOutput()
 	assert.NoError(t, err, "git worktree add: %s", out)
+}
+
+// TestCleanupWorktreesReportedPathsAreAlreadyResolved is the measurement that settled
+// whether CleanupWorktrees needs the containment helper its three siblings use.
+//
+// A review argued it did: its check is a hand-rolled HasPrefix over resolvePath of both
+// sides, and resolvePath falls back to Clean for a path that does not EXIST, so a
+// worktree directory a partial teardown already deleted would compare on a different
+// basis from the still-present root — the /var vs /private/var mix that broke the
+// sibling. The argument is sound and the premise is false: git NORMALISES the path it
+// reports, so a worktree added through a symlinked root comes back resolved, before and
+// after its directory is deleted. Both sides are therefore already on one basis.
+//
+// That makes this a characterisation test, not a regression test. It fails if git ever
+// starts reporting the path it was given, which is the day CleanupWorktrees does need
+// the helper — and it is the reason the code keeps a single resolved comparison instead
+// of adopting underManagedWorktrees, whose extra literal comparison would newly accept a
+// path inside the tree that resolves outside it, on a loop that runs `git branch -D`.
+func TestCleanupWorktreesReportedPathsAreAlreadyResolved(t *testing.T) {
+	target := t.TempDir()
+	link := filepath.Join(t.TempDir(), "home-link")
+	require.NoError(t, os.Symlink(target, link))
+	t.Setenv("HOME", link)
+
+	root, err := config.WorktreesDir()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(root, 0o755))
+	require.NotEqual(t, resolvePath(root), filepath.Clean(root),
+		"precondition: the root is reached through a symlink, as /var is on macOS")
+
+	wt := filepath.Join(root, "fix-auth_deadbeef")
+	repo := strandedRepo(t, wt, "zvi/fix-auth")
+
+	reported, _, err := StrandedWorktreeFor(context.Background(), repo, "zvi/fix-auth")
+	require.NoError(t, err)
+	assert.Equal(t, resolvePath(reported), reported,
+		"git reports a worktree at its resolved path even when added through a symlink")
+
+	require.NoError(t, os.RemoveAll(wt), "the directory goes; git's registration stays")
+	require.True(t, LocalBranchExists(context.Background(), repo, "zvi/fix-auth"))
+
+	require.NoError(t, CleanupWorktrees(context.Background(), []string{repo}))
+
+	assert.False(t, LocalBranchExists(context.Background(), repo, "zvi/fix-auth"),
+		"so reset collects the session branch even with the directory already gone")
+}
+
+// TestCleanupWorktreesLeavesABranchOutsideTheManagedTree is that sweep's negative
+// control, and the reason the containment check above must not be widened casually:
+// reset deletes every branch it collects, and a branch checked out in a person's own
+// worktree is not reset's to delete.
+func TestCleanupWorktreesLeavesABranchOutsideTheManagedTree(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root, err := config.WorktreesDir()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(root, 0o755))
+
+	mine := filepath.Join(t.TempDir(), "my-own-checkout")
+	repo := strandedRepo(t, mine, "feature/theirs")
+
+	require.NoError(t, CleanupWorktrees(context.Background(), []string{repo}))
+
+	assert.True(t, LocalBranchExists(context.Background(), repo, "feature/theirs"),
+		"a branch held outside the managed tree survives a reset")
+	assert.DirExists(t, mine, "and so does the checkout holding it")
+}
+
+// TestStrandedWorktreeForReportsAFailureRatherThanAbsence pins the contract the
+// create-recovery path turns on: "git could not be asked" must not arrive as "no
+// worktree holds this branch". Folded together, a failed `git worktree list` yields
+// claimAdopt with no release, and the retry dies on git's "already used by worktree" —
+// the dead end StrandedWorktreeFor exists to prevent.
+func TestStrandedWorktreeForReportsAFailureRatherThanAbsence(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	got, managed, err := StrandedWorktreeFor(context.Background(), t.TempDir(), "zvi/fix-auth")
+	require.Error(t, err, "a directory that is not a repository cannot answer this question")
+	assert.Empty(t, got)
+	assert.False(t, managed)
 }

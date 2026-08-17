@@ -35,7 +35,14 @@ func (g *Worktree) Setup() error {
 	// creation paths hold up their end — the new-session form (createSessionFromForm)
 	// and the `atrium new` drain (executeCreateRequest), both via the variantTitleConflict
 	// pair in app/app_session.go, the only *creation* predicate that consults
-	// git.LocalBranchExists. The other two callers do not gate anything: app_branchsearch.go
+	// git.LocalBranchExists. The drain has one deliberate exception: a request the
+	// startup reconcile marked Adopt skips the branch half of that gate, because the
+	// branch it is taking has already been proved to be its own interrupted build's
+	// (app/create_drain.go's createConflictIn, app/create_recover.go). That is the only
+	// sanctioned way into the resume path from a creation, and it is why the base commit
+	// seeded below exists at all.
+	//
+	// The other two callers do not gate anything: app_branchsearch.go
 	// computes the create form's async branch verdict, and app_checkpoints.go's is
 	// forkBaseBranch — on the fork *create* flow, choosing which base branch the fork
 	// starts from, never deciding whether it may.
@@ -83,6 +90,7 @@ func (g *Worktree) setupFromExistingBranch() error {
 			}
 			return fmt.Errorf("failed to create worktree from remote branch %s: %w", g.branchName, err)
 		}
+		g.seedBaseCommitFromBranch()
 		return nil
 	}
 
@@ -98,7 +106,42 @@ func (g *Worktree) setupFromExistingBranch() error {
 		return fmt.Errorf("failed to create worktree from branch %s: %w", g.branchName, err)
 	}
 
+	g.seedBaseCommitFromBranch()
 	return nil
+}
+
+// seedBaseCommitFromBranch gives a worktree that has no base commit one, reading the
+// branch it was just checked out on. A no-op when a base is already set.
+//
+// Nothing else ever fills that field on this path: setBaseCommitSHA has exactly one
+// other call site, in setupNewWorktree. Left empty it is not a cosmetic gap — diffFrom
+// returns errBaseCommitNotSet before it runs any git (diff.go), so for the whole life of
+// the session the diff tab renders "base commit SHA not set", the row's +/- chip is
+// suppressed, and RepoStats comes back through the same early return with Dirty false
+// and Unpushed 0. That last one is what killDataWarning reads, so the kill confirmation
+// would also drop its "uncommitted changes" warning.
+//
+// The branch tip is the honest base for the case that made this reachable: a create the
+// startup reconcile re-queued to adopt its own interrupted build's branch (#716). That
+// branch was cut from the start point and nothing was committed to it, so the tip IS the
+// start point and the seeded base is the same value setupNewWorktree would have written.
+// Smart auto-dispatch landing on an orphan branch (atrium#711) gets the same treatment.
+//
+// Guarded on empty because resume must keep its own: FromInstanceData restores the
+// persisted SHA before Setup runs, so a resumed session's diff still spans its whole
+// history. The one case this changes is a session persisted before base_commit_sha
+// existed, which stops erroring and starts diffing from here — under-reporting its past
+// work rather than refusing to report at all.
+func (g *Worktree) seedBaseCommitFromBranch() {
+	if g.GetBaseCommitSHA() != "" {
+		return
+	}
+	out, err := g.runGitCommand(g.repoPath, "rev-parse", g.branchName)
+	if err != nil {
+		log.WarningLog.Printf("could not resolve a base commit for branch %s; this session's diff will be unavailable: %v", g.branchName, err)
+		return
+	}
+	g.setBaseCommitSHA(strings.TrimSpace(out))
 }
 
 // busyBranchError returns a *BranchCheckedOutError when err is git's "branch
@@ -311,10 +354,14 @@ func removeOrphanedWorktreeDir(worktreePath string) error {
 }
 
 // underManagedWorktrees reports whether worktreePath lives inside the data dir's
-// worktrees/ tree, alongside its absolutized form. One definition, because two callers
-// now turn on it and they must agree: removeOrphanedWorktreeDir uses it to refuse a
-// recursive delete outside the managed tree, and StrandedWorktreeFor uses it to tell a
-// worktree Atrium minted from one a person checked out by hand.
+// worktrees/ tree, alongside its absolutized form. One definition, because three callers
+// turn on it and they must agree: removeOrphanedWorktreeDir uses it to refuse a
+// recursive delete outside the managed tree, ReleaseManagedWorktree re-checks it before
+// authorising that delete, and StrandedWorktreeFor uses it to tell a worktree Atrium
+// minted from one a person checked out by hand.
+//
+// CleanupWorktrees asks the same question and deliberately does not come here; see the
+// comment at its own check for why its input needs the resolved comparison alone.
 func underManagedWorktrees(worktreePath string) (abs string, managed bool, err error) {
 	root, err := getWorktreeDirectory()
 	if err != nil {
@@ -368,10 +415,17 @@ func underManagedWorktrees(worktreePath string) (abs string, managed bool, err e
 // The managed flag is the caller's licence to remove it. A path under worktrees/ is a
 // name only Atrium mints; anything else is a checkout somebody made deliberately, and
 // no recovery should delete one of those.
-func StrandedWorktreeFor(ctx context.Context, repoPath, branch string) (path string, managed bool) {
+//
+// The error is separate from the answer on purpose. "git could not be asked" and "no
+// worktree holds this branch" are the same two return values if a failure is folded into
+// the empty path, and the caller acts on that difference: reading a failed
+// `git worktree list` as "nothing holds it" is what would let the recovery adopt a branch
+// whose stale registration is still in place, which then fails with git's own "already
+// used by worktree" — the exact dead end this function exists to prevent.
+func StrandedWorktreeFor(ctx context.Context, repoPath, branch string) (path string, managed bool, err error) {
 	out, err := localGit(ctx, repoPath, "worktree", "list", "--porcelain")
 	if err != nil {
-		return "", false
+		return "", false, fmt.Errorf("failed to list worktrees in %s: %w", repoPath, err)
 	}
 	for wt, held := range parseWorktreeList(out) {
 		if held != branch {
@@ -379,11 +433,14 @@ func StrandedWorktreeFor(ctx context.Context, repoPath, branch string) (path str
 		}
 		abs, ok, err := underManagedWorktrees(wt)
 		if err != nil {
-			return wt, false
+			// The path is known and it could not be classified, so it is reported as
+			// unmanaged rather than as absent: a caller that may only touch what Atrium
+			// minted must read "we cannot tell" as "not yours".
+			return wt, false, nil
 		}
-		return abs, ok
+		return abs, ok, nil
 	}
-	return "", false
+	return "", false, nil
 }
 
 // ReleaseManagedWorktree detaches a stranded worktree from its branch: git's
@@ -520,6 +577,21 @@ func CleanupWorktrees(ctx context.Context, repoPaths []string) error {
 	// worktrees directory, remembering which repo owns it. Worktree directories
 	// are nested under a branch-prefix subdir, so match by path prefix rather
 	// than by top-level directory name.
+	//
+	// Deliberately NOT underManagedWorktrees, though it answers the same question for
+	// the other three callers. Its first comparison is a literal one, which this input
+	// can never need and must not have: every path here comes from
+	// `git worktree list --porcelain`, and git normalises what it reports — a worktree
+	// added through a symlinked root is reported at the resolved path, before AND after
+	// its directory is deleted (measured, not assumed). So both sides here are already on
+	// the resolved basis and the single comparison below is sound, while adding the
+	// literal one would newly accept a path that is literally inside the tree but
+	// resolves outside it — and what this loop authorises is `git branch -D`.
+	//
+	// The literal comparison earns its place in underManagedWorktrees because its other
+	// callers pass an Atrium-minted g.worktreePath, which is UNRESOLVED (/var/... on
+	// macOS) and is compared against an equally unresolved root. Different input, so a
+	// different test: one containment helper does not fit every caller here.
 	type repoBranch struct{ repo, branch string }
 	var branchesToDelete []repoBranch
 	for _, repoPath := range repos {
