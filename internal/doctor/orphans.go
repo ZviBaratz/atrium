@@ -180,12 +180,15 @@ func renderOrphanServer(b *strings.Builder, s tmux.OrphanServer, now time.Time, 
 		// fine nowhere, and a re-run never clears a mode bit. The same reasoning
 		// StaleGaps.Unprobed's doc gives for not naming one cause there.
 		//
-		// The path is printed because this is the one row with no command on it. Under the
-		// third cause the socket file is present and merely unopenable, and `ls -l` is what
-		// separates that from the other two — a read the user can make and this scan cannot,
+		// The path is printed because this is the one row that offers no way to stop the
+		// server. The LiveServerUnknown case below also prints no command, but that row is
+		// Reachable — `tmux -S <path> ls` answers for it and a re-run may settle it — whereas
+		// here the socket may not open at all and reapTargets drops the row under every flag.
+		// Under the third cause the file is present and merely unopenable, and `ls -l` is what
+		// separates that from the other two: a read the user can make and this scan cannot,
 		// since making it is exactly what failed. It is also the only handle offered on the
-		// residual #730 accepted: an orphan behind ENOTDIR/ELOOP now lands here and reap will
-		// not take it, so the path is the whole remedy rather than a supplement to one.
+		// residual #730 accepted — an orphan behind ENOTDIR/ELOOP lands here and reap will not
+		// take it — so the path is the whole remedy rather than a supplement to one.
 		// The verdict leads and the causes follow, which also keeps "never kills them" on one
 		// line: TestRenderOrphansUnknownReachabilityPromisesNoKill reads the promise as a
 		// contiguous string, and a wrap through the middle of it silently stops being the
