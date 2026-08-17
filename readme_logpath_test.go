@@ -1,7 +1,6 @@
 package main
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -48,31 +47,21 @@ func TestNoDocClaimsTheLogLivesInTheTempDir(t *testing.T) {
 	require.Equal(t, logFileName, filepath.Base(livePath),
 		"the log package writes %q, but this guard searches prose for %q", filepath.Base(livePath), logFileName)
 
-	var scanned int
+	// The same durable-prose file set as TestNoProseCitesAPosition, whole: .sh
+	// included, because a copy-pasteable `grep pprof` recipe aimed at the wrong
+	// directory is the #566 shape and a shell script is where such a recipe lives.
+	// The two guards answer "which prose is shipped?" the same way and a third does
+	// not have to guess.
+	//
+	// Unlike that one this scan is whole-file rather than comment-scoped: a string
+	// literal naming the log beside the temp dir is the same wrong claim as a
+	// comment doing it.
+	scanned := map[string]int{}
 	root := moduleRoot(t)
-	require.NoError(t, filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, relErr := filepath.Rel(root, path)
-		require.NoError(t, relErr)
-		if d.IsDir() {
-			switch {
-			case d.Name() == ".git", d.Name() == "node_modules", d.Name() == "bin":
-				return filepath.SkipDir
-			case rel == filepath.FromSlash(historicalDocs):
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if ext := filepath.Ext(path); ext != ".go" && ext != ".md" {
-			return nil
-		}
-		scanned++
+	for _, rel := range trackedProse(t, root) {
+		scanned[filepath.Ext(rel)]++
 
-		body, readErr := os.ReadFile(path)
-		require.NoError(t, readErr)
-		for i, line := range strings.Split(string(body), "\n") {
+		for i, line := range strings.Split(readFile(t, filepath.Join(root, filepath.FromSlash(rel))), "\n") {
 			if !strings.Contains(line, logFileName) {
 				continue
 			}
@@ -83,12 +72,16 @@ func TestNoDocClaimsTheLogLivesInTheTempDir(t *testing.T) {
 				}
 			}
 		}
-		return nil
-	}))
+	}
 
-	// Without this the test passes just as happily on a walk that matched
-	// nothing: a broken skip rule would turn the guard off rather than fail it.
-	require.NotZero(t, scanned, "walked no .go or .md files; the skip rules are wrong")
+	// Without this the test passes just as happily on a scan that reached nothing:
+	// a broken exemption would turn the guard off rather than fail it. Per
+	// extension, because this scan has already been narrowed once by accident — it
+	// dropped every shell script when it moved onto the shared list, and a total
+	// still in the hundreds said nothing about it.
+	for _, ext := range []string{".go", ".md", ".sh"} {
+		require.NotZerof(t, scanned[ext], "scanned no %s files; the exemptions are wrong", ext)
+	}
 
 	require.Contains(t, moduleFile(t, "README.md"), "~/.atrium/atrium.log",
 		"the README must name the log's real location — after the move it is the only prose that does")

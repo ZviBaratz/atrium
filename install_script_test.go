@@ -87,10 +87,13 @@ import (
 //     instead of a CI runner discovering it.
 //
 // The stubs are written from Go into a temp dir rather than committed as testdata, so
-// they stay out of `git ls-files -- '*.sh'` — the list both TestShellScriptsParse and the
-// shellcheck job are built from. That is deliberate (a fixture is not one of the scripts
-// those two grade) and it costs the stubs their syntax check, so newInstallFixture runs
-// `bash -n` over each one itself.
+// they stay out of `git ls-files -- '*.sh'` — the list the guards that grade the scripts
+// as a *set* are built from, whether they parse them, lint them or read their prose. (A
+// guard aimed at one named script reaches it by path and never consults that list, which
+// is how internal/doctor grades install.sh.) That is deliberate (a fixture is not one of
+// the scripts those guards grade) and it costs
+// the stubs their syntax check, so newInstallFixture runs `bash -n` over each one
+// itself.
 //
 // # Verifying that these actually catch what they claim
 //
@@ -344,7 +347,7 @@ func newInstallFixture(t *testing.T) *installFixture {
 }
 
 // writeStub installs one fake command and checks it parses. These files are invisible to
-// TestShellScriptsParse and to the shellcheck job by design, and that same design removes
+// every guard built on the committed-script list, by design, and that same design removes
 // the only thing that would have caught a typo in the Go string literal above.
 func (f *installFixture) writeStub(t *testing.T, name, body string) {
 	t.Helper()
