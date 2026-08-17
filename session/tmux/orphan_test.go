@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -373,7 +374,8 @@ func exitErrorCarrying(msg string) error {
 // fills ExitError.Stderr only when the caller left cmd.Stderr nil, which is what both
 // probes do (ambientServerPID, probeSocketOwner). A call site that captured stderr itself
 // would empty the field classifyPIDProbe reads and silently return it to treating every
-// failure as an answer — the #730 bug, restored by a refactor that looks unrelated.
+// failure as an answer — the #730 bug, restored by a refactor that looks unrelated. Both
+// directions are asserted, because only the second one fails when that refactor lands.
 //
 // What it does NOT prove is that either probe still leaves cmd.Stderr nil; that is a
 // property of the call sites, and only probeSocketOwner has it measured end to end
@@ -381,13 +383,31 @@ func exitErrorCarrying(msg string) error {
 // which names the gap rather than letting this test look like it closes it.
 func TestOutputPopulatesExitErrorStderr(t *testing.T) {
 	const msg = "error connecting to /tmp/sock (Permission denied)"
-	cmd := exec.CommandContext(t.Context(), "sh", "-c", "printf '%s\\n' \"$1\" >&2; exit 1", "sh", msg)
+	const script = "printf '%s\\n' \"$1\" >&2; exit 1"
+
+	cmd := exec.CommandContext(t.Context(), "sh", "-c", script, "sh", msg)
 	_, err := cmd.Output()
 
 	var exitErr *exec.ExitError
 	require.ErrorAs(t, err, &exitErr, "a command that exits non-zero must produce an ExitError")
 	require.Contains(t, string(exitErr.Stderr), msg,
 		"Output() must populate ExitError.Stderr when cmd.Stderr is nil — the classification reads nothing else")
+
+	// The half that names the regression. Asserting only the line above leaves a guard that
+	// passes whether or not the nil-Stderr precondition matters: it is this direction that
+	// goes red the day a probe starts capturing stderr for its own logging, which empties
+	// the field classifyPIDProbe reads and returns #730 without touching #730's code.
+	var captured bytes.Buffer
+	withStderr := exec.CommandContext(t.Context(), "sh", "-c", script, "sh", msg)
+	withStderr.Stderr = &captured
+	_, err = withStderr.Output()
+
+	var capturedErr *exec.ExitError
+	require.ErrorAs(t, err, &capturedErr)
+	require.Empty(t, capturedErr.Stderr,
+		"a caller that sets cmd.Stderr takes the diagnostic for itself and leaves ExitError.Stderr empty")
+	require.Contains(t, captured.String(), msg,
+		"and the diagnostic is not lost — it went to the caller's buffer, which is what makes this silent")
 }
 
 // TestClassifyPIDProbeTreatsAnUnopenableSocketAsNoAnswer is the destructive half of the
