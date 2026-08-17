@@ -61,10 +61,6 @@ func TestRender(t *testing.T) {
 	// fix, and it left this file re-armed for the next pin bump after repairing the other file
 	// that had the same bug. This row read 0.27.4/0.27 long after gemini's pin moved.
 	geminiVerified := registryPin(t, agent.KeyGemini)
-	require.NotEqual(t, geminiWithinPin, geminiVerified,
-		"the Gemini row needs two DISTINCT versions or its column-order assertion below is "+
-			"vacuous — both indices would be the same. If a pin bump made these equal, move "+
-			"geminiWithinPin up within the minor rather than deleting the order check")
 
 	out := Render([]Result{
 		{Key: agent.KeyClaude, Name: "Claude Code", Installed: "2.1.179", Verified: "2.1.170", Status: StatusDrifted},
@@ -82,39 +78,47 @@ func TestRender(t *testing.T) {
 	//
 	// It is NOT what catches a column swap, which an earlier draft of this comment also claimed
 	// for it: a swap keeps both literals on the same row, so no per-row lookup can see one. The
-	// `ordered` column below is the only thing here that can, which is why it is a field of the
-	// table rather than a loop over one hand-picked row — the previous form scanned "Claude
-	// Code" alone, leaving the Gemini row's two versions with no order assertion at all.
+	// installed/verified columns below are the only thing here that can, which is why they are
+	// fields of the table rather than a loop over one hand-picked row — the previous form
+	// scanned "Claude Code" alone, leaving the Gemini row's two versions unordered.
 	for _, tc := range []struct {
-		label   string
-		wants   []string
-		ordered []string // pairs that must appear left-to-right in this row
+		label             string
+		wants             []string
+		installed, verifd string // "" to skip the column check (no version pair on this row)
 	}{
-		{"Claude Code", []string{"2.1.179", "2.1.170", "drifted"}, []string{"2.1.179", "2.1.170"}},
-		{"Gemini CLI", []string{geminiWithinPin, geminiVerified, "ok"}, []string{geminiWithinPin, geminiVerified}},
-		{"Codex", []string{"not installed"}, nil},
-		{"Aider", []string{"0.64.1", "unknown"}, nil},
+		{"Claude Code", []string{"drifted"}, "2.1.179", "2.1.170"},
+		{"Gemini CLI", []string{"ok"}, geminiWithinPin, geminiVerified},
+		{"Codex", []string{"not installed"}, "", ""},
+		{"Aider", []string{"0.64.1", "unknown"}, "", ""},
 	} {
 		row := renderedRow(t, out, tc.label)
 		for _, want := range tc.wants {
 			require.Containsf(t, row, want,
 				"Render() row %q is missing %q\n--- got ---\n%s", tc.label, want, out)
 		}
-
-		// Installed must precede Verified. Asserted with both indices proved present first: the
-		// bare `Index(a) > Index(b)` this replaced is never true when the first needle is
-		// missing (-1 loses to every real index), so it passed silently on a row that had
-		// dropped a value — and with no found-flag its enclosing loop also passed silently on a
-		// row Render had dropped entirely.
-		for i := 0; i+1 < len(tc.ordered); i++ {
-			first, second := strings.Index(row, tc.ordered[i]), strings.Index(row, tc.ordered[i+1])
-			require.GreaterOrEqualf(t, first, 0, "row %q lost %q", tc.label, tc.ordered[i])
-			require.GreaterOrEqualf(t, second, 0, "row %q lost %q", tc.label, tc.ordered[i+1])
-			require.Lessf(t, first, second,
-				"Render() put %q before %q on the %q row — a column swap leaves both literals "+
-					"present and reverses what the row tells the user\n--- row ---\n%s",
-				tc.ordered[i+1], tc.ordered[i], tc.label, row)
+		if tc.installed == "" {
+			continue
 		}
+
+		// Each version must be in ITS OWN COLUMN, located by splitting the row at the "verified"
+		// label rather than by comparing strings.Index of the two values.
+		//
+		// Two separate traps, both hit for real. The index form is never true when the first
+		// needle is missing (-1 loses to every real index), so it passed silently on a row that
+		// had dropped a value. And it is wrong whenever one version is a PREFIX of the other:
+		// with the pin at "0.27" and geminiWithinPin at "0.27.4", Index finds "0.27" inside
+		// "0.27.4" and compares that occurrence against itself. Splitting at the label is
+		// immune to both, and it asserts the stronger property anyway — not "a is left of b"
+		// but "a is in the installed column and b is in the verified one".
+		left, right, cut := strings.Cut(row, "verified")
+		require.Truef(t, cut, "row %q has no \"verified\" column\n--- row ---\n%s", tc.label, row)
+		require.Containsf(t, left, tc.installed,
+			"Render() did not put %q in the installed column of the %q row — a column swap "+
+				"leaves both literals present and reverses what the row tells the user"+
+				"\n--- row ---\n%s", tc.installed, tc.label, row)
+		require.Containsf(t, right, tc.verifd,
+			"Render() did not put %q in the verified column of the %q row\n--- row ---\n%s",
+			tc.verifd, tc.label, row)
 	}
 }
 

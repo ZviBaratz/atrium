@@ -119,7 +119,7 @@ func TestCheckGatesPerAccount(t *testing.T) {
 func TestCheckGatesIgnoresAdaptersPinningNoGates(t *testing.T) {
 	r := fakeGateReader{m: map[string]map[string]any{"/cfg": {"tengu_copper_thistle": true}}}
 	adapters := []*agent.Adapter{
-		{Key: agent.KeyGemini, DisplayName: "Gemini CLI", VerifiedVersion: "0.55.1"},
+		{Key: agent.KeyGemini, DisplayName: "Gemini CLI", VerifiedVersion: "0.27"},
 		{Key: agent.KeyCodex, DisplayName: "Codex"},
 	}
 	assert.Empty(t, CheckGates(adapters, oneDir("/cfg"), r),

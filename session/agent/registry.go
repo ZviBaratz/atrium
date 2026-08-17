@@ -846,37 +846,41 @@ var codex = &Adapter{
 // gemini surface, which does not live in this file at all: generateNameGemini's `gemini -p`
 // output contract (session/naming.go), still checked only at 0.27.
 //
-// READ THAT AGAINST VerifiedVersion BELOW, because the pin is one scalar for the whole
-// adapter. Moving it to 0.55.1 for the driven gate also stops `atrium doctor` warning about
-// the three surfaces that were NOT re-driven: a user on 0.55.x used to see "⚠ drifted", which
-// was the one runtime hint that gemini's busy, confirmation and naming paths were unverified
-// there, and now sees "ok". The disclosure is this comment and gemini/busy +
-// gemini/prompt/confirmation in pane_width_test.go's paneCoverageExempt. Splitting the pin
-// per-surface is the only thing that would make it a signal again, and no adapter does that
-// today; that is #721, and it is not gemini-specific — gemini is only where a rotted literal
-// made it visible.
+// READ THAT AGAINST VerifiedVersion BELOW, WHICH STAYS AT 0.27 — one surface is not the whole
+// surface, exactly as it is not for claude (see VerifiedVersion above: "the pin is a claim
+// about the WHOLE surface … Bumping on a partial drive is how a pin starts lying"). #713
+// re-drove the gate and nothing else, so 0.27 is still the last version at which this adapter
+// as a whole was checked, and that is what the scalar says.
 //
-// THAT IS THE OPPOSITE OF WHAT CLAUDE'S PIN DOES, twice over (see VerifiedVersion above: "the
-// pin is a claim about the WHOLE surface … Bumping on a partial drive is how a pin starts
-// lying", and "one surface is not the whole surface"). The divergence is deliberate and it
-// turns on a fact about the two gaps, not on a different principle. Under minor granularity
-// doctor truncates both sides before comparing (internal/doctor/compare.go), so claude's pin at
-// 2.1.170 against an installed 2.1.220 truncates to 2.1 either way and doctor is SILENT whether
-// or not #354's partial drive is recorded there: refusing the bump costs claude no signal and
-// buys an accurate record. gemini's pin was 28 minors behind, where the same refusal is not a
-// record but a standing warning on every 0.55 user's `atrium doctor` — one they cannot act on,
-// for surfaces that need auth and a paid turn to verify, sitting next to a gate that IS now
-// driven. Bumping trades an unactionable true warning for a silence disclosed here.
+// It shipped bumped to 0.55.1 for six review rounds, and the argument for it was that gemini's
+// pin is 28 minors behind where claude's is nearly current, so refusing costs claude nothing
+// and costs gemini a standing warning. Both halves are true — doctor truncates to minor
+// (internal/doctor/compare.go), so claude's 2.1.170 against an installed 2.1.220 is silent
+// either way — and the conclusion still does not follow, for three reasons that only became
+// visible once the cost of each direction was measured rather than asserted:
 //
-// It is a trade, not a free move, and the honest way to weigh it is by what the muted surfaces
-// would cost if they HAVE rotted: the busy marker's render site is located above at 0.55.1
-// (lowercase, in the responding footer), a missed confirmation is NoAutoTap and degrades to
-// "idle" rather than to a wrong keystroke, and generateNameGemini yields a poor session title.
-// None of them is #713's class, where the failure was a false completion ding on a blocked
-// session. If the project would rather hold the claude rule uniformly and take the standing
-// warning, the reversal is this pin plus geminiWithinPin (internal/doctor/check_test.go), the
-// Gemini row in render_test.go and the table in drift_fields_test.go — four literals, no
-// behaviour.
+//   - The warning is DISMISSIBLE. Drift is not a `doctor`-only line: it raises a startup hint
+//     and a persistent "⚠ stale" badge, and both are acknowledged per installed version
+//     (config.State.AckedDrift, app/app_driftcheck.go). So the price of an honest pin is one
+//     dismissable hint per new gemini release, not a permanent nag. The bump was bought
+//     against a cost that does not exist.
+//   - The silence hides #713's OWN failure class. HasBusyMarker is a case-sensitive Contains
+//     and the bundle ships both spellings; if "esc to cancel" has rotted, every streaming
+//     gemini session reads not-busy and lands on Ready with a completion ding. That is the
+//     bug this file was edited to fix, and the pin is the only runtime signal over it.
+//   - The evidence that reassures me about that marker is the tier that already failed. The
+//     render site is located above and it is lowercase — but it is a bundle grep, and this
+//     file's rule is that presence is necessary and not sufficient, with #713 as the proof:
+//     the gate literal was verified exactly that way, from package source, and had rotted.
+//
+// And it ratchets. At 0.56 the warning returns, the gate is the cheap surface to re-drive
+// (a startup screen, no auth, no turn), and the pin moves again — while confirmation and
+// generateNameGemini, which need auth and a paid turn, are never the reason it moves. A pin
+// bumped on whatever was cheapest to check converges on meaning nothing.
+//
+// The asymmetry is the whole argument: a wrong "drifted" is noise, dismissed in a keystroke;
+// a wrong "ok" is silent and self-concealing. Splitting the pin per-surface is what makes both
+// honest at once — that is #721, and it is not gemini-specific.
 //
 // The OLDER direction is silent by construction, and that is not specific to gemini: doctor
 // reports drift only when installed > verified (internal/doctor/compare.go, driftExceeds), so
@@ -893,10 +897,11 @@ var gemini = &Adapter{
 	DisplayName: "Gemini CLI",
 	aliases:     []string{"gemini"},
 
-	// Re-driven at 0.55.1 for the gate (#713); see the header for what that does and does
-	// not cover. Minor granularity: the confirmation wording tracks minor releases; pure
-	// patch bumps within a minor don't warrant a warning.
-	VerifiedVersion:  "0.55.1",
+	// NOT bumped for #713, which re-drove the gate and only the gate — see the header. The
+	// pin is a claim about the whole adapter, and busy, confirmation and generateNameGemini
+	// are still checked at 0.27, so 0.27 is what it says. Minor granularity: the confirmation
+	// wording tracks minor releases; pure patch bumps within a minor don't warrant a warning.
+	VerifiedVersion:  "0.27",
 	DriftGranularity: GranularityMinor,
 
 	BusyMarkers: []string{"esc to cancel"},

@@ -41,7 +41,13 @@ func statusFor(results []Result, k agent.Key) Status {
 // geminiWithinPin is the installed version TestCheckClassifies feeds for gemini: newer than
 // the registry's pin, but inside the same minor, so Check's not-drifted branch is the one that
 // runs. requireWithinPin holds it there.
-const geminiWithinPin = "0.55.9"
+//
+// It is a 0.27 patch because the pin is 0.27, NOT because that is what anyone has installed —
+// the real CLI is 0.55.x, which is genuine drift and therefore useless for exercising the
+// not-drifted branch. It read 0.55.9 while #713 briefly carried the pin at 0.55.1, and
+// requireWithinPin is what failed when the pin came back; that is the guard working, not a
+// fixture to loosen.
+const geminiWithinPin = "0.27.4"
 
 // requireWithinPin fails unless installed is at-or-above the adapter's pin AND in the same
 // minor — the only shape that exercises "newer, but not by enough to be drift".
@@ -49,10 +55,13 @@ const geminiWithinPin = "0.55.9"
 // It exists because StatusOK is not evidence of that branch. driftExceeds returns
 // Compare(...) > 0, so installed OLDER than verified is also not drift, also StatusOK, and
 // also green. That is not hypothetical: this row read "0.27.4" against a 0.27 pin until #713
-// moved the pin to 0.55.1, at which point it kept passing while testing the older-than branch
-// instead — silently, because the fixture is a literal and Check runs against the LIVE
-// registry. Any pin bump does it again, so the fixture is checked against the pin rather than
-// against a memory of it. When this fails, move geminiWithinPin into the new minor.
+// briefly moved the pin to 0.55.1, at which point it kept passing while testing the
+// older-than branch instead — silently, because the fixture is a literal and Check runs
+// against the LIVE registry. It caught the move back, too: when #713 restored the pin to 0.27
+// this failed by name against the 0.55.9 fixture the bump had introduced. Any pin change does
+// it in one direction or the other, which is the point — the fixture is checked against the
+// pin rather than against a memory of it. When this fails, move geminiWithinPin into the
+// pin's minor.
 func requireWithinPin(t *testing.T, key agent.Key, installed string) {
 	t.Helper()
 
