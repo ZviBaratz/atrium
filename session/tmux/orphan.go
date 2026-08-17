@@ -681,6 +681,11 @@ func ambientServerPID(ctx context.Context) (pid int, known bool) {
 // "error connecting to …" — which is evidence, and answers pid 0. Anything else means
 // tmux never got to answer: it is absent, or the probe's budget was spent. That is not
 // evidence, and known is false.
+//
+// Close answers the same question textually (sessionAlreadyGone) and must keep doing so:
+// this rule is safe for a read-only probe, where a wrong answer costs one unreported pid,
+// and unsafe for a kill, where a deadline-killed tmux is also an ExitError and would be
+// read as a clean teardown of a session still running (#723).
 func classifyPIDProbe(ctx context.Context, out []byte, err error) (pid int, known bool) {
 	// Checked first: a killed-by-deadline process also surfaces as an ExitError, which
 	// would otherwise be read as tmux having reported an empty socket.

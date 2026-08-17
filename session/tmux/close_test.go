@@ -41,8 +41,20 @@ func TestCloseTargetsSessionByExactName(t *testing.T) {
 // error when kill-session fails because the session was already gone (external
 // kill, crashed/absent server). It still attempts the kill — the classification is
 // on the failure, not a pre-check that could skip a live session.
+// The last entry is the missing SOCKET rather than a missing session, and it is the one
+// that was absent until #723: with no socket file, Close recorded a real error, so every
+// caller that gates cleanup on a clean kill skipped it. TerminalPane.CloseForInstance
+// releases the instance's owned shell name only when the reap succeeded, so the name was
+// held forever — naming nothing, and reserving its title against every new session.
+// Reachable whenever no tmux server is running: fresh boot, all sessions paused, after
+// `atrium reap`.
 func TestCloseTreatsDeadSessionAsSuccess(t *testing.T) {
-	for _, msg := range []string{"can't find session: x", "no server running on /tmp/sock", "session not found"} {
+	for _, msg := range []string{
+		"can't find session: x",
+		"no server running on /tmp/sock",
+		"session not found",
+		"error connecting to /tmp/sock (No such file or directory)",
+	} {
 		t.Run(msg, func(t *testing.T) {
 			var attempted bool
 			cmdExec := cmd_test.MockCmdExec{
@@ -66,6 +78,46 @@ func TestCloseTreatsDeadSessionAsSuccess(t *testing.T) {
 
 			require.NoError(t, s.Close(), "an already-dead session must not surface a spurious teardown error")
 			require.True(t, attempted, "Close should still attempt kill-session, not silently skip it")
+		})
+	}
+}
+
+// TestCloseSurfacesAnUnreachableSocket is the negative half of the case above, and it is
+// what makes that one's PAIR match load-bearing rather than decorative.
+//
+// tmux formats the message as `error connecting to %s (%s)` with strerror, so matching the
+// prefix alone would classify these as "already gone" too. They are not: the socket EXISTS
+// and hosts a server this process could not address, which may be running the very session
+// being killed. Reporting a clean kill there is the one direction Close must never take —
+// its caller then prunes state for an agent that is still alive.
+//
+// Widen sessionAlreadyGone's socket case to `strings.Contains(hay, "error connecting to")`
+// and this test is what goes red.
+func TestCloseSurfacesAnUnreachableSocket(t *testing.T) {
+	for _, msg := range []string{
+		"error connecting to /tmp/sock (Permission denied)",
+		"error connecting to /tmp/sock (Connection refused)",
+	} {
+		t.Run(msg, func(t *testing.T) {
+			cmdExec := cmd_test.MockCmdExec{
+				RunFunc: func(cmd *exec.Cmd) error {
+					if slices.Contains(cmd.Args, "kill-session") {
+						if cmd.Stderr != nil {
+							_, _ = fmt.Fprintln(cmd.Stderr, msg)
+						}
+						return fmt.Errorf("exit status 1")
+					}
+					return nil
+				},
+				OutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return []byte(""), nil },
+			}
+			s := NewSessionWithDeps(context.Background(), "live", "claude", NewMockPtyFactory(t), cmdExec)
+
+			err := s.Close()
+			require.Error(t, err,
+				"a socket that exists but cannot be addressed is not evidence the session is gone")
+			require.Contains(t, err.Error(), "kill tmux session",
+				"the failure must be surfaced as a teardown error, with tmux's own diagnostic folded in")
 		})
 	}
 }

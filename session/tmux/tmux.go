@@ -906,15 +906,34 @@ func errWithStderr(err error, stderr string) error {
 
 // sessionAlreadyGone reports whether a kill-session failure just means the session
 // was already dead rather than a real teardown failure. tmux prints "can't find
-// session"/"session not found" when the session is gone and "no server running on
-// ..." when the whole server is down; both mean no live session remains, which is
+// session"/"session not found" when the session is gone, "no server running on ..."
+// when the whole server is down, and "error connecting to <socket> (No such file or
+// directory)" when the socket FILE is not there at all — a server that has never run
+// on it, or whose last one exited. All of them mean no live session remains, which is
 // exactly what Close aims for. The message can arrive on stderr (real tmux) or in
 // the error itself (test fakes), so check both. Anything unrecognized — a hung
 // server, a timeout — falls through as a real error so the caller can surface it;
 // tmux's messages are stable English, so the failure direction is the safe one.
+//
+// The socket case is matched as a PAIR rather than on "error connecting to" alone,
+// and that is the whole of its correctness. tmux formats it as
+// `error connecting to %s (%s)` with strerror, so the prefix also covers
+// "(Permission denied)" — a socket that exists, hosts a server this process may not
+// address, and may be running the very session being killed. Reading that as a clean
+// kill would report a teardown that did not happen (#723).
+//
+// Deliberately textual, where orphan.go's classifyPIDProbe answers the same question
+// structurally (any *exec.ExitError means tmux ran and made a determination). That
+// rule is right for a read-only pid probe and wrong here: a deadline-killed tmux is
+// also an ExitError, liveness gets away with the structural test only by checking the
+// deadline first, and for kill-session "the budget ran out" must not read as "already
+// gone" — it is the hung-server case above, the one that leaves the agent alive.
 func sessionAlreadyGone(err error, stderr string) bool {
 	hay := strings.ToLower(err.Error() + " " + stderr)
-	return strings.Contains(hay, "no server running") ||
+	socketMissing := strings.Contains(hay, "error connecting to") &&
+		strings.Contains(hay, "no such file or directory")
+	return socketMissing ||
+		strings.Contains(hay, "no server running") ||
 		strings.Contains(hay, "session not found") ||
 		strings.Contains(hay, "can't find session")
 }
