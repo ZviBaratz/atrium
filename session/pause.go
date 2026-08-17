@@ -11,6 +11,7 @@ import (
 	"github.com/ZviBaratz/atrium/internal/teardown"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session/git"
+	"github.com/ZviBaratz/atrium/session/tmux"
 )
 
 // Pause/resume lifecycle: parking a session (commit dirty work, close the tmux
@@ -110,6 +111,26 @@ func isAutoPauseCommit(subject string) bool {
 	return strings.HasPrefix(s, autoPauseCommitPrefix) && strings.HasSuffix(s, autoPauseCommitSuffix)
 }
 
+// closeParkedSession stops a session's agent: it tears the attach down and THEN kills
+// the tmux session. Every park below goes through it, so the pairing is one unit with
+// one rationale rather than three copies of two lines.
+//
+// The order is the whole of its correctness, and it is not a swap. Close kills the
+// session and closes ptmx, but it never clears attachCh, cancels the context or
+// disables the stdout pump, so a park that closed without detaching would strand the
+// goroutines of an attach it raced, with no channel close to release the reader
+// (#701). Detach owns the attach teardown; close owns the session.
+//
+// Neither failure aborts the park: every caller ends the instance Paused, and Paused
+// means no agent process, so a park that gave up halfway would leave exactly the
+// contradiction #710 was filed about. Close is itself a teardown.Errors path that logs
+// its own aggregate, so it goes through Wrap rather than Record (as Instance.Kill
+// does); DetachSafely does not log, so it keeps Record.
+func closeParkedSession(tc *teardown.Errors, ts *tmux.Session) {
+	tc.Record("detach tmux session", ts.DetachSafely())
+	tc.Wrap("close tmux session", ts.Close())
+}
+
 // pause closes the tmux session — ending the agent process with it — and removes the
 // worktree, preserving the branch.
 //
@@ -169,8 +190,7 @@ func (i *Instance) pause() error {
 	// session as the goal met rather than a failure (sessionAlreadyGone), so this
 	// branch does not start reporting an error for the ordinary case.
 	if wt == nil {
-		tc.Record("detach tmux session", ts.DetachSafely())
-		tc.Wrap("close tmux session", ts.Close())
+		closeParkedSession(&tc, ts)
 		i.SetStatus(Paused)
 		return tc.Err()
 	}
@@ -183,8 +203,7 @@ func (i *Instance) pause() error {
 	} else if !valid {
 		log.WarningLog.Printf("worktree at %s is orphaned; skipping dirty check and remove",
 			wt.GetWorktreePath())
-		tc.Record("detach tmux session", ts.DetachSafely())
-		tc.Wrap("close tmux session", ts.Close())
+		closeParkedSession(&tc, ts)
 		// Drop any leftover directory so a future Resume's `git worktree add` won't conflict.
 		tc.Record("remove orphaned worktree directory", os.RemoveAll(wt.GetWorktreePath()))
 		tc.Record("prune git worktrees", wt.Prune())
@@ -204,6 +223,16 @@ func (i *Instance) pause() error {
 	// a lost-session recovery doesn't loop and the row doesn't freeze at Running.
 	removeWorktree := true
 	if dirty, err := wt.IsDirty(); err != nil {
+		// removeWorktree deliberately stays true, and it is NOT the same judgement as
+		// the commit failure below: a failed check has not met the precondition, it has
+		// only failed to ask, so this branch removes a worktree that may hold WIP.
+		// Filed as #740 rather than inverted here, because "unknown" has two causes that
+		// want opposite answers and only one of them is transient. A contended
+		// index.lock wants the worktree kept; a base repo deleted out from under the
+		// session reaches this same branch (git reports "not a git repository" through
+		// the worktree's gitdir), and there keeping it strands a directory with no
+		// branch left to rescue anything onto — which is the #270 orphan fallback
+		// below, and what TestPause_RemoveFailureFallsBackToParkedPaused holds.
 		tc.Record("check if worktree is dirty", err)
 	} else if dirty {
 		// Commit changes locally (without pushing to GitHub)
@@ -221,16 +250,14 @@ func (i *Instance) pause() error {
 	// Stop the agent, and do it BEFORE the worktree below goes: a process whose cwd is
 	// unlinked out from under it keeps running with a `(deleted)` working directory it
 	// can neither read nor write, which is what a paused session used to be left as
-	// (#710).
+	// (#710). The ordering is this site's; why the two calls travel together is
+	// closeParkedSession's.
 	//
-	// Detach and THEN close, rather than swapping one for the other. Close kills the
-	// tmux session and closes ptmx, but it never clears attachCh, cancels the context
-	// or disables the stdout pump — so a pause that raced an attach would strand that
-	// attach's goroutines with no channel close to release the reader (#701). Detach
-	// owns the attach teardown; close owns the session. Continue past a failure of
-	// either: the pause must still park the session.
-	tc.Record("detach tmux session", ts.DetachSafely())
-	tc.Wrap("close tmux session", ts.Close())
+	// Unconditional, including on the branch above that keeps the worktree. The
+	// deleted-cwd hazard is not the only reason to stop the agent — the session ends
+	// Paused either way, and Paused means no agent process, which is the invariant the
+	// poll skip, the session cap, `peek` and Preview all already read that way.
+	closeParkedSession(&tc, ts)
 
 	if removeWorktree {
 		// Check if worktree exists before trying to remove it
@@ -367,12 +394,25 @@ func (i *Instance) Resume() error {
 	// above still reattaches and this one never may.
 	//
 	// A live session here is one an older, detach-only pause left behind, so the close
-	// is both this fix's belt-and-braces and its upgrade path. It is logged rather than
-	// returned: if the kill really failed, the relaunch below fails on Start's
-	// duplicate-name guard and reports that instead of a guess made here.
+	// is both this fix's belt-and-braces and its upgrade path.
+	//
+	// A failure ABORTS the resume rather than being logged and walked past. The relaunch
+	// below would fail on Start's duplicate-name guard — but recreateSession answers a
+	// failed launch by tearing the worktree down through Worktree.Cleanup, which is the
+	// KILL teardown: `git worktree remove -f` and `git branch -D`, with no retention ref,
+	// because only Kill records one. On this path Setup has just re-added the worktree and
+	// unwindAutoPauseCommits has just soft-reset the parked WIP back into it, so that
+	// rollback would destroy the WIP and every commit the session ever made. Returning
+	// leaves both where they are: the worktree stays materialized and the branch intact,
+	// which is a state Resume already handles (valid worktree → reuse, and its auto-commit
+	// is already unwound), so a retry is simply a second Resume.
+	//
+	// This closes the route a failed close opens, not the rollback itself: an ordinary
+	// launch failure below still reaches it, which pre-dates this and is filed as #741.
 	if ts.DoesSessionExist() {
 		if err := ts.Close(); err != nil {
-			log.ErrorLog.Printf("failed to close the session %s was parked with: %v", i.Title, err)
+			log.ErrorLog.Print(err)
+			return fmt.Errorf("failed to close the session %s was parked with: %w", i.Title, err)
 		}
 	}
 	if err := i.recreateSession(materializedHere); err != nil {

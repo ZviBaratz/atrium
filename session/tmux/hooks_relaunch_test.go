@@ -6,7 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
+	"slices"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/cmd/cmd_test"
@@ -24,7 +25,10 @@ import (
 // one tmux command Session.start launches as a pty rather than running. A fake that
 // watched only the executor would never see the session come back.
 type relaunchableTmux struct {
-	alive bool
+	// Guarded because Start (the PTY side) and exec's RunFunc (the executor side) are
+	// two entry points onto one flag, and nothing promises a future test drives them
+	// from one goroutine.
+	alive atomic.Bool
 	pty   *MockPtyFactory
 }
 
@@ -33,9 +37,15 @@ func newRelaunchableTmux(t *testing.T) *relaunchableTmux {
 	return &relaunchableTmux{pty: NewMockPtyFactory(t)}
 }
 
+// tmuxVerb reports whether cmd is the tmux command for verb. Matched as an argument
+// rather than as a substring of the rendered command line: a session name, window name
+// or program argument can contain "kill-session" too, and matching that would flip the
+// fake's liveness on a command that never asked for it.
+func tmuxVerb(cmd *exec.Cmd, verb string) bool { return slices.Contains(cmd.Args, verb) }
+
 func (r *relaunchableTmux) Start(cmd *exec.Cmd) (*os.File, error) {
-	if strings.Contains(cmd.String(), "new-session") {
-		r.alive = true
+	if tmuxVerb(cmd, "new-session") {
+		r.alive.Store(true)
 	}
 	return r.pty.Start(cmd)
 }
@@ -45,12 +55,11 @@ func (r *relaunchableTmux) Close() { r.pty.Close() }
 func (r *relaunchableTmux) exec() cmd_test.MockCmdExec {
 	return cmd_test.MockCmdExec{
 		RunFunc: func(cmd *exec.Cmd) error {
-			s := cmd.String()
 			switch {
-			case strings.Contains(s, "kill-session"):
-				r.alive = false
-			case strings.Contains(s, "has-session"):
-				if !r.alive {
+			case tmuxVerb(cmd, "kill-session"):
+				r.alive.Store(false)
+			case tmuxVerb(cmd, "has-session"):
+				if !r.alive.Load() {
 					// tmux's own wording: Close classifies a kill-session failure by
 					// this text (sessionAlreadyGone) to tell an already-dead session
 					// from a real teardown failure.
@@ -129,6 +138,16 @@ func TestRenameWhileParkedReKeysTheHookChannelOnResume(t *testing.T) {
 	require.FileExists(t, parkedSettings, "the launch wrote a settings.json")
 
 	require.NoError(t, s.Close())
+
+	// Put the parked directory back before the rename. Close has just swept it, so
+	// without this the "leaves nothing behind" assertion below would hold against any
+	// implementation — including one whose re-key sweeps nothing at all — and the guard
+	// would be measuring Close rather than the re-key. A directory sitting under the
+	// frozen name at relaunch time is the state freezeHookName's sweep exists for; a
+	// rename that does not go through a close reaches it directly.
+	require.NoError(t, os.MkdirAll(parkedDir, 0o755))
+	require.NoError(t, os.WriteFile(parkedSettings, []byte("{}"), 0o644))
+
 	require.NoError(t, s.Rename("renamed while parked", Prefix()+"parked_rename"))
 	require.NoError(t, s.Start(t.TempDir()))
 

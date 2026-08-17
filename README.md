@@ -1092,7 +1092,8 @@ is a snapshot — a port free when the session is created can be taken before yo
 binds it — so it is a filter against what is already running, not a reservation.
 
 If nothing in the range is free the session still starts, without `$ATRIUM_PORT`, and
-says so in a modal. Widen the range or free a port by pausing another session.
+says so in a modal. Widen the range or free a port by killing another session — pausing
+one will not, for the reason two paragraphs up.
 
 While the script runs the session's row says so, and the preview names it in place of
 the generic "Setting up workspace…" it shows for every other session that has not come

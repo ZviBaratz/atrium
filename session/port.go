@@ -194,9 +194,12 @@ func (i *Instance) reservePort(s repocfg.Script) {
 		// Not fatal: the session starts without a port, exactly as a repo with no
 		// port_range does. Said out loud because the symptom otherwise is a dev server
 		// command that silently runs with an empty --port.
+		// The remedy says "killing", not "killing or pausing": a park KEEPS its number
+		// (see the file header), so telling the user to pause would send them round a
+		// loop that cannot end.
 		i.setPortProblem(fmt.Sprintf(
 			"No port was free in %s for %q.\n\nThe session is running without $ATRIUM_PORT. "+
-				"Free one by killing or pausing another session in this repo, or widen port_range in config.json.",
+				"Free one by killing another session in this repo, or widen port_range in config.json.",
 			rng, i.Title))
 		log.WarningLog.Printf("port_range %s is exhausted; %q starts without a port", rng, i.Title)
 		return
@@ -204,8 +207,13 @@ func (i *Instance) reservePort(s repocfg.Script) {
 	i.setPort(port)
 }
 
-// releasePort gives up the session's port, and does nothing when it holds none. Called
-// at kill, the one place a session gives its number back.
+// releasePort gives up the session's port, and does nothing when it holds none.
+//
+// Three callers, and only one of them is a teardown. Kill, where the session is gone.
+// resolveSetupRun, when nothing routes this repo any more. And reservePort above, when
+// the entry that does route it has stopped declaring a port_range. The last two are one
+// idea — a config edit took the range away — reached at the two points that can notice
+// it. A park is deliberately not among them; see the file header for why.
 func (i *Instance) releasePort() {
 	i.mu.Lock()
 	port := i.port

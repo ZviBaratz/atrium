@@ -256,3 +256,67 @@ func TestUnwindAutoPauseCommits_PreservesRealCommit(t *testing.T) {
 	require.Equal(t, headBefore, gitOutput(t, wtPath, "rev-parse", "HEAD"),
 		"a real commit at HEAD must never be unwound")
 }
+
+// TestResumeKeepsTheBranchWhenTheParkedSessionWillNotClose. Resume closes a session an
+// older, detach-only pause left behind (#710) and then relaunches. That close is the one
+// step whose failure must ABORT rather than be walked past, and the reason is entirely in
+// what comes next: the relaunch would fail on Start's duplicate-name guard, and
+// recreateSession answers a failed launch by tearing the worktree down through
+// Worktree.Cleanup — `git worktree remove -f` and `git branch -D`, the KILL teardown, with
+// no retention ref because only Kill records one.
+//
+// The state that reaches it is exactly the upgrade path: a park that removed the worktree,
+// so Resume materializes it here (materializedHere), re-adds it and soft-resets the parked
+// WIP back into it moments before the rollback would delete both it and every commit the
+// session ever made.
+//
+// The branch assertion is the consequence and the seam is the mechanism, in that order.
+// Recording through the real Cleanup rather than replacing it keeps the destruction real:
+// a regression deletes the branch here, it does not merely report a call.
+func TestResumeKeepsTheBranchWhenTheParkedSessionWillNotClose(t *testing.T) {
+	wt := newTestWorktree(t)
+	repoPath := wt.GetRepoPath()
+	branch := wt.GetBranchName()
+
+	require.NoError(t, os.WriteFile(filepath.Join(wt.GetWorktreePath(), "work.txt"), []byte("hours of it\n"), 0644))
+	require.NoError(t, wt.CommitChanges("feat: the session's whole history"))
+	sessionSHA := gitOutput(t, repoPath, "rev-parse", branch)
+
+	// The park: the worktree is gone, the tmux session is not.
+	require.NoError(t, wt.Remove())
+
+	// A server that answers has-session but refuses to kill. Not one of the messages
+	// sessionAlreadyGone forgives, so Close reports a genuine teardown failure — the
+	// case this test is about — rather than "the session was already dead".
+	stuck := cmd_test.MockCmdExec{
+		RunFunc: func(cmd *exec.Cmd) error {
+			if tmuxVerb(cmd, "kill-session") {
+				return errors.New("server not responding")
+			}
+			return nil
+		},
+		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
+	}
+	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", newRecordingPtyFactory(t, nil), stuck)
+	inst := &Instance{Title: "sess", status: Paused, started: true, gitWorktree: wt, tmuxSession: ts}
+
+	rolledBack := false
+	orig := worktreeCleanup
+	t.Cleanup(func() { worktreeCleanup = orig })
+	worktreeCleanup = func(w *git.Worktree) error {
+		rolledBack = true
+		return orig(w)
+	}
+
+	err := inst.Resume()
+
+	require.Error(t, err, "a session that will not close cannot be resumed over")
+	// BranchTip rather than gitOutput: a deleted branch is the failure under test, and
+	// `rev-parse` on one that is gone fails the test with git's "ambiguous argument"
+	// instead of saying what was lost.
+	tip, exists := git.BranchTip(context.Background(), repoPath, branch)
+	require.True(t, exists, "a failed resume deleted the session's branch, and every commit on it with it")
+	require.Equal(t, sessionSHA, tip, "the branch must come through a failed resume untouched")
+	require.False(t, rolledBack, "a failed resume must not reach the kill teardown")
+	require.ErrorContains(t, err, "parked with", "the report must name the close, not the relaunch it never tried")
+}

@@ -27,7 +27,7 @@ const (
 	KeyTab      // Tab is a special keybinding for switching between panes.
 	KeyShiftTab // ShiftTab cycles between panes in reverse order.
 
-	KeyPause    // Commit changes and pause the session, freeing its worktree
+	KeyPause    // Stop the agent, commit changes, and free the session's worktree
 	KeyPauseAll // Pause every active session in the current view (batch park)
 	KeyResume
 	// KeyUndoKill brings back the most recently killed session (or the whole

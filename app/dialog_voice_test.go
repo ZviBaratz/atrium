@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -63,26 +64,45 @@ func TestConfirmationsFitTheSmallestSupportedTerminal(t *testing.T) {
 	// The narrowest size TestViewFitsTerminalBounds sweeps, and the smallest terminal
 	// anything here is written for.
 	const minWidth, minHeight = 80, 24
-	cases := map[string]string{
-		"pause": pauseConfirmMessage("active", 3),
-		// The widest form the resume dialog ever takes: resumeInstances appends the
-		// capacity clause to this same box rather than opening a second one (#463).
-		"resume": resumeConfirmMessage("paused", 3) + "\n" + hostCapacityLine(4, 2),
+	// Both fields come from the functions that build the real dialog, composed the way
+	// the real dialog composes them — a fixture assembled out of the same words would
+	// measure a box the app never renders, and the pieces are shorter than the whole in
+	// both directions here: resumeInstances appends resumeCapClause (not the bare
+	// hostCapacityLine it wraps) to this same box rather than opening a second one
+	// (#463), and both dialogs set a counted confirm label, which is longer than any
+	// stand-in and is itself part of what has to fit.
+	const n = 3
+	cases := map[string]struct{ msg, label string }{
+		"pause": {
+			pauseConfirmMessage("active", n),
+			fmt.Sprintf("pause %d session%s", n, plural(n)),
+		},
+		"resume": {
+			resumeConfirmMessage("paused", n) + "\n" + resumeCapClause(4, 2, n),
+			fmt.Sprintf("resume %d session%s", n, plural(n)),
+		},
 	}
-	for name, msg := range cases {
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			h := newCreateFormHome(t)
 			h.state = stateConfirm
-			h.confirmationOverlay = overlay.NewConfirmationOverlay(msg)
-			h.confirmationOverlay.SetConfirmLabel("go ahead")
+			h.confirmationOverlay = overlay.NewConfirmationOverlay(tc.msg)
+			h.confirmationOverlay.SetConfirmLabel(tc.label)
 			h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: minWidth, Height: minHeight})
 
 			// The consequence first, then the mechanism, and neither fatal: a require
 			// on the height would abort the subtest and the failure output would never
 			// name what the user actually loses.
-			assert.Contains(t, xansi.Strip(h.View().Content), "esc to cancel",
-				"the confirm hint was clipped away, so the dialog no longer says how to answer it")
-			box := strings.Split(h.confirmationOverlay.Render(), "\n")
+			//
+			// The box's own bottom border, not the hint text: at this width the hint
+			// wraps mid-phrase ("…n or esc to" / "cancel"), so a contiguous match for it
+			// reports a clip on a box that fits perfectly well — which is what the real
+			// confirm label, longer than any stand-in, turned up. The border is the last
+			// line of the box either way, and the bottom is the end PlaceOverlay clips,
+			// so it goes before the hint does.
+			box := strings.Split(xansi.Strip(h.confirmationOverlay.Render()), "\n")
+			assert.Contains(t, xansi.Strip(h.View().Content), box[len(box)-1],
+				"the bottom of the confirmation was clipped away, taking the line that says how to answer it")
 			assert.LessOrEqual(t, len(box), minHeight,
 				"the confirmation box is taller than the smallest supported terminal, so it will be clipped")
 		})
