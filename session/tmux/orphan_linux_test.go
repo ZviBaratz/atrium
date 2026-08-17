@@ -626,20 +626,37 @@ func TestALiveServerBehindAnUnopenableSocketIsNotAReapTarget(t *testing.T) {
 	sock := fmt.Sprintf("atrium-permtest-%d", rand.Int31())
 	sockPath := filepath.Join(tmuxTmp, fmt.Sprintf("tmux-%d", os.Getuid()), sock)
 
-	// Teardown is armed before anything starts, and it restores the mode FIRST: every way
-	// of stopping this server by socket path is blocked by the very state the test creates,
-	// so a cleanup that went straight to kill-server would leak the server it could not
-	// reach — the defect this file is about. The pid SIGKILL is the backstop for a start
-	// that half-succeeded, and it is addressed by pid rather than by name for the same
-	// reason the sibling reaps by absolute path.
-	var serverPID int
+	// Teardown is armed before anything starts, in two layers, in the order
+	// TestOrphanedServerIsFoundAndKillableAfterItsSocketRootIsDeleted established: the pid
+	// layer is registered SECOND so it runs FIRST.
+	//
+	// That order is not cosmetic here. Signalling a pid after a successful kill-server aims
+	// SIGKILL at a pid the server has already released — the reuse window `atrium reap`
+	// itself refuses to stand in, re-verifying ProcessStartTime before it signals — and this
+	// runs on a developer's machine under `just test`. Killing first closes it: the pid is
+	// live when the signal lands, and the socket layer that follows is a no-op belt.
+	//
+	// The socket layer restores the mode FIRST, because every way of stopping this server by
+	// socket path is blocked by the very state the test creates, so a cleanup that went
+	// straight to kill-server would leak the server it could not reach — the defect this
+	// file is about.
+	//
+	// The pane's own process is recorded too, not just the server's. `sleep 600` outlives a
+	// failed teardown by ten minutes, and a leaked child is what this file exists to prevent
+	// as much as a leaked server.
 	t.Cleanup(func() {
 		_ = os.Chmod(sockPath, 0o700)
 		_ = exec.CommandContext(context.Background(), "tmux", "-S", sockPath, "kill-server").Run()
-		if serverPID > 0 {
-			_ = syscall.Kill(serverPID, syscall.SIGKILL)
-		}
 		_ = os.RemoveAll(tmuxTmp)
+	})
+	var serverPID int
+	var childPIDs []int
+	t.Cleanup(func() {
+		for _, pid := range append([]int{serverPID}, childPIDs...) {
+			if pid > 0 {
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+			}
+		}
 	})
 
 	// TMUX_TMPDIR on cmd.Env, never os.Setenv: TestMain installed one for the whole binary
@@ -656,6 +673,16 @@ func TestALiveServerBehindAnUnopenableSocketIsNotAReapTarget(t *testing.T) {
 	serverPID, err = strconv.Atoi(strings.TrimSpace(pidOut))
 	require.NoError(t, err)
 	require.FileExists(t, sockPath)
+
+	// The pane's pid goes to the teardown now, while the socket still opens — deliberately
+	// not read from the scan's Children later. A backstop that depended on the thing under
+	// test would be missing in exactly the runs that need it: if ScanServers fails to find
+	// this server, that is both the interesting failure and the one that leaks a `sleep 600`.
+	paneOut, err := runWithEnv(t, env, "tmux", "-L", sock, "list-panes", "-F", "#{pane_pid}")
+	require.NoError(t, err)
+	panePID, err := strconv.Atoi(strings.TrimSpace(paneOut))
+	require.NoError(t, err)
+	childPIDs = append(childPIDs, panePID)
 
 	// ---- the state: the socket cannot be opened, and the server does not care ----
 	require.NoError(t, os.Chmod(sockPath, 0o000))

@@ -982,8 +982,12 @@ func sessionAlreadyGone(err error, stderr string) bool {
 // rule through socketUnreachableMessage with no sessionAlreadyGone ahead of it, because on
 // the reap path the two connect failures must land on OPPOSITE sides: the absent path is
 // the #547 orphan the reaper exists to find, and the unopenable one is a live server it
-// must not touch. Delete the conjunct and both tmux-backed orphan tests go red, which is
-// what "load-bearing" now means here rather than "depth".
+// must not touch. Delete the conjunct and the two ENOENT tests in orphan_linux_test.go go
+// red — TestOrphanedServerIsFoundAndKillableAfterItsSocketRootIsDeleted and
+// TestAServerWhoseSocketFileIsGoneStillReportsItsAttachedClient — which is what
+// "load-bearing" now means here rather than "depth". Named rather than counted because
+// there are three tmux-backed orphan tests and the third, the unopenable-socket one, keeps
+// passing under that mutant: widening the rule cannot change a verdict it already reaches.
 //
 // The errno tail is open-ended (tmux formats it with strerror) and, for a connect() failure,
 // so is the set of errnos a given kernel picks — the messages in unreachableSocketMessages
@@ -1011,14 +1015,22 @@ func socketUnreachable(err error, stderr string) bool {
 	return socketUnreachableMessage(err.Error() + " " + stderr)
 }
 
-// socketUnreachableMessage is the rule above over tmux's diagnostic alone, for the caller
-// that has the text but must not touch the error: classifyPIDProbe holds an *exec.ExitError
-// whose ProcessState may be nil, and Error() panics on one of those — which is what every
-// bare &exec.ExitError{} fixture in this package is (orphan_test.go). Splitting the message
-// out is therefore load-bearing rather than tidiness.
+// socketUnreachableMessage is the rule above over tmux's diagnostic alone, for the two
+// callers that hold the text rather than an error: classifyPIDProbe, which has already
+// unwrapped its *exec.ExitError to reach Stderr, and the precondition assertion in
+// TestALiveServerBehindAnUnopenableSocketIsNotAReapTarget, which has captured a real
+// diagnostic and no error at all.
 //
-// Callers pass whatever they have; the join and the fold happen here so no caller can get
-// the case handling wrong.
+// Convenience, not necessity, and the earlier version of this comment claimed otherwise:
+// it said a bare &exec.ExitError{} panics on Error() because its ProcessState is nil, so
+// classifyPIDProbe could not call socketUnreachable. That is false — (*os.ProcessState).String
+// has a nil-receiver branch and returns "<nil>" — and it was measured, not reasoned, in
+// review of #739. socketUnreachable(exitErr, string(exitErr.Stderr)) would work; it would
+// just fold "exit status 1" into the haystack for nothing. One implementation, two entry
+// points, no claim about panics.
+//
+// Callers pass whatever they have; the fold happens here so no caller can get the case
+// handling wrong.
 func socketUnreachableMessage(hay string) bool {
 	hay = strings.ToLower(hay)
 	return strings.Contains(hay, "error connecting to") &&

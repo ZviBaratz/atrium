@@ -353,28 +353,41 @@ func TestClassifyPIDProbeSeparatesAnEmptySocketFromAnUnaskedQuestion(t *testing.
 	}
 }
 
-// exitErrorWithStderr returns a genuine *exec.ExitError carrying msg on stderr, produced
-// by running a command that fails the way tmux does.
+// exitErrorCarrying is the fixture the classification table below is driven from: an
+// *exec.ExitError whose Stderr holds tmux's diagnostic, which is the only part of it
+// classifyPIDProbe reads.
 //
-// Constructed rather than literal because it cannot be a literal: ExitError embeds a
-// *os.ProcessState, which has no exported constructor, and the zero value panics on
-// Error(). A real subprocess is the only way to obtain one that both carries Stderr and
-// can be printed.
+// A literal, and an earlier version of this file said that was impossible — that
+// ExitError's embedded *os.ProcessState has no exported constructor and the zero value
+// panics on Error(), so only a real subprocess would do. The first half is true and the
+// second is not: (*os.ProcessState).String has a nil-receiver branch and returns "<nil>".
+// Nothing here calls Error() anyway. The subprocess it justified is gone; what that
+// subprocess genuinely proved has its own test below, where it is about os/exec rather
+// than smuggled into seven table rows.
+func exitErrorCarrying(msg string) error {
+	return &exec.ExitError{Stderr: []byte(msg)}
+}
+
+// TestOutputPopulatesExitErrorStderr pins the standard-library mechanism the whole
+// classification rests on, with a syscall rather than a reading of the docs: Output()
+// fills ExitError.Stderr only when the caller left cmd.Stderr nil, which is what both
+// probes do (ambientServerPID, probeSocketOwner). A call site that captured stderr itself
+// would empty the field classifyPIDProbe reads and silently return it to treating every
+// failure as an answer — the #730 bug, restored by a refactor that looks unrelated.
 //
-// It also settles the mechanism the classification rests on, with a syscall instead of a
-// reading of the standard library: Output() populates ExitError.Stderr only when the
-// caller left cmd.Stderr nil, which both probes here do (ambientServerPID,
-// probeSocketOwner). A change at either call site that captured stderr itself would empty
-// this field and silently return the classifier to reading every failure as an answer.
-func exitErrorWithStderr(t *testing.T, msg string) error {
-	t.Helper()
+// What it does NOT prove is that either probe still leaves cmd.Stderr nil; that is a
+// property of the call sites, and only probeSocketOwner has it measured end to end
+// (TestALiveServerBehindAnUnopenableSocketIsNotAReapTarget). See classifyPIDProbe's doc,
+// which names the gap rather than letting this test look like it closes it.
+func TestOutputPopulatesExitErrorStderr(t *testing.T) {
+	const msg = "error connecting to /tmp/sock (Permission denied)"
 	cmd := exec.CommandContext(t.Context(), "sh", "-c", "printf '%s\\n' \"$1\" >&2; exit 1", "sh", msg)
 	_, err := cmd.Output()
+
 	var exitErr *exec.ExitError
-	require.ErrorAs(t, err, &exitErr, "the fixture must produce a real ExitError")
+	require.ErrorAs(t, err, &exitErr, "a command that exits non-zero must produce an ExitError")
 	require.Contains(t, string(exitErr.Stderr), msg,
-		"Output() must populate ExitError.Stderr when cmd.Stderr is nil — the whole classification reads it")
-	return err
+		"Output() must populate ExitError.Stderr when cmd.Stderr is nil — the classification reads nothing else")
 }
 
 // TestClassifyPIDProbeTreatsAnUnopenableSocketAsNoAnswer is the destructive half of the
@@ -394,14 +407,23 @@ func exitErrorWithStderr(t *testing.T, msg string) error {
 // reason it mattered in #727: a message covered on one caller's path and uncovered on
 // another's reads as covered, and narrowing the predicate then leaves a green suite.
 //
-// The gone list is asserted too, and it is not a restatement of the row above. It is the
-// guard on over-correction: widen socketUnreachableMessage to a bare "error connecting to"
-// and the missing-socket message stops being an answer — which is the #547 orphan, the one
-// thing `reap` exists to find.
+// The gone list is asserted too, and it is not a restatement of the row above — but only
+// one of its four entries earns that, and saying "the gone list" credited all four.
+// Measured, in review of #739: widen socketUnreachableMessage to a bare "error connecting
+// to" and exactly the
+//
+//	error connecting to /tmp/sock (No such file or directory)
+//
+// row goes red. That row is the #547 orphan, the one thing `reap` exists to find, so it is
+// the whole over-correction guard. The other three are not connect diagnostics at all;
+// they hold the branch to firing only on connect failures — a predicate widened to swallow
+// "no server running on …" reddens them — but a classifier that hardcoded known=true would
+// satisfy all three. They are the weaker half of this table and are worth stating as such,
+// because a count of green subtests is not a count of guards.
 func TestClassifyPIDProbeTreatsAnUnopenableSocketAsNoAnswer(t *testing.T) {
 	for _, msg := range unreachableSocketMessages {
 		t.Run("no answer: "+msg, func(t *testing.T) {
-			pid, known := classifyPIDProbe(t.Context(), nil, exitErrorWithStderr(t, msg))
+			pid, known := classifyPIDProbe(t.Context(), nil, exitErrorCarrying(msg))
 			require.False(t, known,
 				"tmux could not open the socket, so it asked no server anything; reading that as an "+
 					"answer makes a live server a default kill target (#730)")
@@ -410,7 +432,7 @@ func TestClassifyPIDProbeTreatsAnUnopenableSocketAsNoAnswer(t *testing.T) {
 	}
 	for _, msg := range alreadyGoneMessages {
 		t.Run("answered: "+msg, func(t *testing.T) {
-			pid, known := classifyPIDProbe(t.Context(), nil, exitErrorWithStderr(t, msg))
+			pid, known := classifyPIDProbe(t.Context(), nil, exitErrorCarrying(msg))
 			require.True(t, known,
 				"tmux reached a determination here; classifying it as no-answer would put the #547 "+
 					"orphan — a live server whose socket file was deleted — out of the reaper's reach")
