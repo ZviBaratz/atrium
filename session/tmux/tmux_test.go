@@ -132,6 +132,16 @@ func TestStartupGates(t *testing.T) {
 		{"claude idle box has no gate", "claude", "│ > │  ? for shortcuts", false},
 		{"claude ignores aider gate string", "claude", "Open documentation url for more info", false},
 		{"aider ignores claude gate string", "aider", "Do you trust the files in this folder?", false},
+		// gemini's gate needs the accept row INSIDE a box whose bottom border ends the pane
+		// (#713) — the box is what separates a live dialog from the same words in the
+		// transcript, so a bare row is deliberately not enough here.
+		{"gemini folder-trust option rows", "gemini",
+			" ╭────────────────────────────╮\n │ ● 1. Trust folder (repo)   │\n │   3. Don't trust           │\n ╰────────────────────────────╯", true},
+		{"gemini option row outside a box is transcript", "gemini", "● 1. Trust folder (repo)\n  3. Don't trust", false},
+		// 0.55.1 gave gemini the same headline claude uses, and gemini deliberately does NOT
+		// key on it — it is unreachable once a narrow pane wraps it across the dialog's box
+		// border (#713). So the shared string must gate claude above and not gemini here.
+		{"gemini ignores the shared headline", "gemini", "Do you trust the files in this folder?", false},
 		// Pre-adapter, every non-claude program matched aider's documentation gate and
 		// received its stray 'D' keystroke; an unknown agent must match nothing.
 		{"unknown agent has no gates", "someagent", "Open documentation url for more info", false},
@@ -146,6 +156,184 @@ func TestStartupGates(t *testing.T) {
 	}
 }
 
+// geminiTrustGateProdCapture is gemini 0.55.1's folder-trust dialog in PRODUCTION capture
+// form: `tmux capture-pane -p -e -J`, the form tmux.go actually reads, escapes and all.
+// Driven 2026-08-16 by scripts/drive-agent.sh at 40x40 on an isolated socket, verbatim but
+// for trailing all-blank rows; written as one quoted line per row because a Go raw string
+// cannot hold an ESC byte.
+//
+// It exists because every other gemini fixture in this repo is `capture-pane -p`, which
+// tmux strips the escapes out of, and the gate's anchor is far more sensitive to them than
+// the literal window it replaced (#713 round 4 review). isHorizontalRule rejects a line
+// holding any character outside the box set, so a single escape surviving cleanForDetection
+// ON THE BORDER would take the whole gate down rather than cost it a line — and the two
+// load-bearing rows here, the bottom border and the accept row, both carry SGR mid-line.
+//
+// This is the FITS-THE-PANE shape, where the border is the last non-empty row. That is the
+// shape the pre-#713 anchor already accepted, so on its own it is a control for a case that
+// was never at risk; geminiTrustGateOverflowProdCapture below is the shape the trailing
+// allowance exists for, and the pair is what covers the anchor.
+//
+// Measured on this capture: 152 escape sequences, every one CSI SGR, and zero OSC. OSC is
+// the class ansiRegex does not match, so the hazard is real in principle and absent in fact
+// at 0.55.1. Those three numbers are RECOMPUTED by the test below, which an earlier draft of
+// this comment claimed of an assertion that did no such thing — it checked only that the raw
+// pane does not gate and the cleaned one does, which stays true at any escape count and with
+// an OSC sequence added anywhere off the two load-bearing rows.
+//
+// The gating assertions are still there and check BOTH directions: uncleaned the pane must NOT
+// gate, or the fixture has quietly lost its escapes and proves nothing.
+var geminiTrustGateProdCapture = strings.Join([]string{
+	"",
+	" \x1b[38;2;71;150;228m▝\x1b[38;2;102;136;217m▜\x1b[38;2;132;122;206m▄\x1b[38;2;164;113;167m \x1b[38;2;195;103;127m ",
+	"\x1b[39m \x1b[38;2;71;150;228m \x1b[38;2;102;136;217m \x1b[38;2;132;122;206m▝\x1b[38;2;164;113;167m▜\x1b[38;2;195;103;127m▄",
+	"\x1b[39m \x1b[38;2;71;150;228m \x1b[38;2;102;136;217m▗\x1b[38;2;132;122;206m▟\x1b[38;2;164;113;167m▀\x1b[38;2;195;103;127m ",
+	"\x1b[39m \x1b[38;2;71;150;228m▝\x1b[38;2;102;136;217m▀\x1b[38;2;132;122;206m \x1b[38;2;153;116;180m \x1b[38;2;174;109;153m \x1b[38;2;195;103;127m ",
+	"",
+	"\x1b[39m \x1b[1m\x1b[38;2;255;255;255mGemini CLI\x1b[0m\x1b[38;2;175;175;175m v0.55.1",
+	"",
+	"",
+	"",
+	"\x1b[38;2;255;255;175mℹ Skipping project agents due to",
+	"\x1b[39m  \x1b[38;2;255;255;175muntrusted folder. To enable, ensure",
+	"\x1b[39m  \x1b[38;2;255;255;175mthat the project root is trusted.",
+	"",
+	"\x1b[39m \x1b[38;2;255;255;175m╭────────────────────────────────────╮",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m                                    \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[1m\x1b[38;2;255;255;255mDo you trust the files in this\x1b[0m     \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[1m\x1b[38;2;255;255;255mfolder?\x1b[0m                            \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m                                    \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255mTrusting a folder allows Gemini\x1b[39m    \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255mCLI to load its local\x1b[39m              \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255mconfigurations, including custom\x1b[39m   \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255mcommands, hooks, MCP servers,\x1b[39m      \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255magent skills, and settings. These\x1b[39m  \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255mconfigurations could execute code\x1b[39m  \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255mon your behalf or change the\x1b[39m       \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255mbehavior of the CLI.\x1b[39m               \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m                                    \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m                                    \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;215;255;215m\x1b[48;2;0;95;0m●\x1b[39m \x1b[38;2;215;255;215m1.\x1b[39m \x1b[38;2;215;255;215mTrust folder (repo)\x1b[39m          \x1b[49m \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255m \x1b[39m \x1b[38;2;255;255;255m2.\x1b[39m \x1b[38;2;255;255;255mTrust parent folder (gemini7…\x1b[39m \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255m \x1b[39m \x1b[38;2;255;255;255m3.\x1b[39m \x1b[38;2;255;255;255mDon't trust\x1b[39m                   \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m                                    \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m╰────────────────────────────────────╯",
+}, "\n")
+
+// The capture-form seam, which neither package can test alone: the fixtures live in
+// session/agent and cleanForDetection lives here, so this is the only place the pane
+// production reads meets the matcher production runs.
+func TestGeminiTrustGateSurvivesProductionCaptureForm(t *testing.T) {
+	// The escape census, recomputed rather than asserted in prose. ansiRegex is production's
+	// own CSI matcher (poll.go); anything it does not match is what survives cleanForDetection
+	// and can land on the border.
+	csi := ansiRegex.FindAllString(geminiTrustGateProdCapture, -1)
+	require.Len(t, csi, 152,
+		"the fixture is a frozen capture; a different escape count means it was edited, and the "+
+			"claim that every escape here is one ansiRegex strips no longer rests on anything")
+	for _, seq := range csi {
+		require.True(t, strings.HasSuffix(seq, "m"),
+			"%q is a CSI sequence that is not SGR; the comment above claims all 152 are SGR", seq)
+	}
+	require.Equal(t, 152, strings.Count(geminiTrustGateProdCapture, "\x1b"),
+		"every ESC in the capture must be one ansiRegex matched — a leftover is by definition "+
+			"an escape production does not strip, and OSC is the class that reaches the border")
+	require.NotContains(t, geminiTrustGateProdCapture, "\x1b]",
+		"no OSC at 0.55.1: that is the measurement, and it is what makes the hazard theoretical")
+
+	s := NewSessionWithDeps(context.Background(), "gate-test", "gemini", NewMockPtyFactory(t), cmd_test.MockCmdExec{})
+
+	_, raw := s.adapter.GateUp(geminiTrustGateProdCapture)
+	require.False(t, raw,
+		"the raw -e capture must NOT gate: its border carries SGR, so if this passes the "+
+			"fixture has lost the escapes that make the cleaned assertion below mean anything")
+
+	_, cleaned := s.adapter.GateUp(cleanForDetection(geminiTrustGateProdCapture))
+	require.True(t, cleaned,
+		"gemini's trust gate must fire on the pane PRODUCTION captures once it is cleaned the "+
+			"way production cleans it; the fixtures in session/agent are the -p form, which "+
+			"never carried an escape for the anchor to trip over")
+}
+
+// geminiTrustGateOverflowProdCapture is the OTHER shape, in the same production form:
+// gemini 0.55.1's folder-trust dialog OVERFLOWING its pane, so a "Press Ctrl+O to s…" hint
+// renders BELOW the box's bottom border. Driven 2026-08-17 by scripts/drive-agent.sh at 24x24
+// — `up gemini 24 24` then `sample`, never a resize, because a resized rung of this dialog is
+// not equal to a native one (#713).
+//
+// It exists because the capture above cannot stand for this one. That one ends AT the border,
+// which is the shape the pre-#713 anchor already accepted, so as a seam test it was a control
+// for a case that was never at risk. The seven-of-twelve geometries that missed all look like
+// THIS, and the two rows the trailing allowance turns on — the border, and the hint that now
+// sits under it — each carry their own SGR run, in different colours. If either lost an escape
+// ansiRegex does not strip, the border stops being a horizontal rule and the whole gate goes
+// down rather than costing a line.
+//
+// Its `capture-pane -p` twin is committed in session/agent as geminiTrustGateOverflowPane24,
+// and the two were byte-identical once the escapes came out — driven a day apart, in run
+// directories with different names, which is also an independent reproduction of the render.
+// That comparison was made by hand at capture time and NOTHING HOLDS IT: the two fixtures are
+// unexported consts in packages that cannot see each other's test files, so if one is edited
+// the pair drifts silently. It is disclosed rather than asserted because a copy of either
+// fixture on this side of the boundary would be a third artifact to keep in step, not a guard.
+var geminiTrustGateOverflowProdCapture = strings.Join([]string{
+	" \x1b[38;2;255;255;175m│\x1b[39m \x1b[1m\x1b[38;2;255;255;255mfiles in this\x1b[0m      \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[1m\x1b[38;2;255;255;255mfolder?\x1b[0m            \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m                    \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255mTrusting a folder\x1b[39m  \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255mallows Gemini CLI\x1b[39m  \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255mto load its local\x1b[39m  \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255mconfigurations,\x1b[39m    \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255mincluding custom\x1b[39m   \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255mcommands, hooks,\x1b[39m   \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255mMCP servers, agent\x1b[39m \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255mskills, and\x1b[39m        \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255msettings. These\x1b[39m    \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255mconfigurations\x1b[39m     \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255mcould execute code\x1b[39m \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;175;175;175m... last 5 lines …\x1b[39m \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m                    \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;215;255;215m\x1b[48;2;0;95;0m●\x1b[39m \x1b[38;2;215;255;215m1.\x1b[39m \x1b[38;2;215;255;215mTrust folder…\x1b[39m\x1b[49m \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255m \x1b[39m \x1b[38;2;255;255;255m2.\x1b[39m \x1b[38;2;255;255;255mTrust parent…\x1b[39m \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m \x1b[38;2;255;255;255m \x1b[39m \x1b[38;2;255;255;255m3.\x1b[39m \x1b[38;2;255;255;255mDon't trust\x1b[39m   \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m│\x1b[39m                    \x1b[38;2;255;255;175m│",
+	"\x1b[39m \x1b[38;2;255;255;175m╰────────────────────╯",
+	"\x1b[39m   \x1b[38;2;215;175;255mPress Ctrl+O to s…",
+}, "\n")
+
+// The seam for the overflow render, which is the one the trailing allowance exists for.
+func TestGeminiTrustGateSurvivesProductionCaptureFormWhenOverflowing(t *testing.T) {
+	csi := ansiRegex.FindAllString(geminiTrustGateOverflowProdCapture, -1)
+	require.Len(t, csi, 133,
+		"the fixture is a frozen capture; a different escape count means it was edited")
+	for _, seq := range csi {
+		require.True(t, strings.HasSuffix(seq, "m"), "%q is a CSI sequence that is not SGR", seq)
+	}
+	require.Equal(t, 133, strings.Count(geminiTrustGateOverflowProdCapture, "\x1b"),
+		"every ESC must be one ansiRegex matched — a leftover is an escape production does "+
+			"not strip, and this render puts two load-bearing rows in its path")
+	require.NotContains(t, geminiTrustGateOverflowProdCapture, "\x1b]", "no OSC at 0.55.1")
+
+	// The premise that makes this fixture different from the one above: the pane does NOT end
+	// at the border. If a future capture did, this would silently become a second copy of it.
+	rows := strings.Split(strings.TrimRight(geminiTrustGateOverflowProdCapture, "\n"), "\n")
+	require.Contains(t, rows[len(rows)-1], "Press Ctrl+O",
+		"the last row must be the overflow hint — that is the whole difference between this "+
+			"capture and geminiTrustGateProdCapture")
+
+	s := NewSessionWithDeps(context.Background(), "gate-test", "gemini", NewMockPtyFactory(t), cmd_test.MockCmdExec{})
+
+	_, raw := s.adapter.GateUp(geminiTrustGateOverflowProdCapture)
+	require.False(t, raw,
+		"the raw -e capture must NOT gate, or the fixture has lost the escapes that make the "+
+			"cleaned assertion below mean anything")
+
+	_, cleaned := s.adapter.GateUp(cleanForDetection(geminiTrustGateOverflowProdCapture))
+	require.True(t, cleaned,
+		"an OVERFLOWING dialog must still gate once production cleans the pane — this is #713 "+
+			"on the height axis, at the one shape the other production capture cannot cover")
+}
+
 // A pane sitting on a startup/trust gate must classify as PaneGate, not PaneIdle.
 // Regression for #266: gates carry no busy marker and match no prompt matcher, so
 // without the gate branch they fall through to idle and the row lies as Ready while
@@ -155,7 +343,12 @@ func TestPollClassifiesStartupGateAsGate(t *testing.T) {
 		{"claude folder-trust", "claude", "Quick safety check…\n ❯ 1. Yes, I trust this folder\n Enter to confirm · Esc to cancel"},
 		{"claude new MCP server", "claude", "New MCP server found in this project: nanoclaw\n [Enter] to approve"},
 		{"codex folder-trust", "codex", "Do you trust the contents of this directory?\n› 1. Yes, continue"},
-		{"gemini folder-trust", "gemini", "Do you trust this folder?\n● 1. Trust folder"},
+		// Keyed on the option row inside a live box, not the headline: gemini's headline is
+		// unreachable once a narrow pane wraps it across the box border, and the box is what
+		// proves the dialog is on screen rather than in scrollback (#713,
+		// session/agent/gemini_pane_test.go).
+		{"gemini folder-trust", "gemini",
+			" ╭──────────────────────────────────────╮\n │ Do you trust the files in this folder│\n │ ● 1. Trust folder (repo)             │\n │   3. Don't trust                     │\n ╰──────────────────────────────────────╯"},
 		{"aider first-run docs", "aider", "Open documentation url for more info? (Y)es/(N)o/(D)on't ask again [Yes]:"},
 	}
 	for _, tc := range cases {

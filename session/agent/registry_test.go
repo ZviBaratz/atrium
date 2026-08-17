@@ -1798,9 +1798,16 @@ func TestCodexGateAndResume(t *testing.T) {
 
 // geminiIdlePane is gemini's idle composer: a ">" prompt inside a "│"-bordered box.
 // Composed from the installed 0.27 package source (InputPrompt.js), NOT captured from a
-// live pane — gemini's free individual auth path closed, so it cannot be driven here
-// (#347/#645). Treated as evidence of the box SHAPE, which several tests already rely on;
+// live pane. Treated as evidence of the box SHAPE, which several tests already rely on;
 // it is deliberately not the basis for any new matcher.
+//
+// The reason it stays composed is narrower than this comment used to claim. "gemini cannot
+// be driven here (#347/#645)" was too broad, and #713 falsified it: the folder-trust gate
+// renders on the STARTUP screen and costs no API turn, so it has now been driven live at
+// 0.55.1 across a width ladder (gemini_pane_test.go) — which is how the gate literal's rot
+// was found. What is still out of reach is everything past that dialog: the idle composer,
+// the loading row and the tool-confirmation dialog all need an authenticated session and a
+// real turn, which is what #347/#645 were about.
 const geminiIdlePane = "✦ Done.\n\n╭───╮\n│ > │\n╰───╯\n~/project   no sandbox   gemini-2.5-pro"
 
 // aiderIdlePane is aider's idle pane, captured from the same live 0.86.2 session as the
@@ -1813,8 +1820,18 @@ var aiderIdlePane = strings.Join([]string{
 	">",
 }, "\n")
 
-// --- Gemini fixtures. Strings verified against the installed 0.27 package
-// source: LoadingIndicator.js, ToolConfirmationMessage.js, FolderTrustDialog.js.
+// --- Gemini fixtures, all composed rather than captured. The busy and confirmation strings
+// come from the 0.27 package source (LoadingIndicator.js, ToolConfirmationMessage.js) and
+// are still present in the 0.55.1 bundle, but no pane has rendered either here. The trust
+// gate is the exception and no longer belongs to that tier: it is pinned to verbatim 0.55.1
+// captures in gemini_pane_test.go (#713).
+//
+// What changed at the vendor was the gate's HEADLINE, not its component. An earlier draft
+// here said "FolderTrustDialog.js is gone from the 0.55.1 bundle along with the literal it
+// carried", which is false twice over: the component ships in bundle/interactiveCli-*.js
+// carrying its own source marker (packages/cli/src/ui/components/FolderTrustDialog.tsx), and
+// only the standalone .js file is gone, because 0.55.1 ships bundled at all. A reader told
+// the component was removed stops looking for it.
 
 func TestGeminiBusyMarker(t *testing.T) {
 	working := strings.Join([]string{
@@ -1874,8 +1891,25 @@ func TestGeminiPrompts(t *testing.T) {
 }
 
 func TestGeminiGateAndResume(t *testing.T) {
-	_, ok := gemini.GateUp("Do you trust this folder?\n● 1. Trust folder\n  2. Trust parent folder")
+	// The shape, minimally: the gate keys on the accept ROW inside a live box, so this
+	// composed pane carries both and not the headline. Verbatim 0.55.1 captures across a
+	// width ladder — including the width where the headline is unreachable and the width
+	// where the rows themselves truncate — are in gemini_pane_test.go; this stays here as
+	// the adapter's own smoke test.
+	_, ok := gemini.GateUp(strings.Join([]string{
+		" ╭──────────────────────────────────────╮",
+		" │ Do you trust the files in this folder│",
+		" │ ● 1. Trust folder (repo)             │",
+		" │   2. Trust parent folder (tmp)       │",
+		" │   3. Don't trust                     │",
+		" ╰──────────────────────────────────────╯",
+	}, "\n"))
 	require.True(t, ok)
+
+	// The headline alone is not the anchor, and must not be mistaken for one: it is what
+	// 0.55.1 renders and what a bundle grep hands you, and it dies on a narrow pane (#713).
+	_, ok = gemini.GateUp("Do you trust the files in this folder?")
+	require.False(t, ok, "the headline is not what the gate keys on — see gemini_pane_test.go")
 
 	require.Equal(t, "gemini --resume latest", gemini.Resume("gemini"))
 	require.Equal(t, "--resume", gemini.ResumeProbe)

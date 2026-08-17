@@ -12,6 +12,13 @@ func TestAdaptersExposesSeededVersions(t *testing.T) {
 		// by its version; the pin records that every capture in registry.go came from
 		// the ungated (hint-list) footer branch. #337.
 		KeyClaude: {"2.1.210", GranularityMinor, map[string]bool{"tengu_copper_thistle": false}},
+		// Deliberately NOT moved by #713, which re-drove the folder-trust gate and nothing
+		// else: the busy and confirmation literals are bundle-grep presence only and
+		// generateNameGemini's contract was last checked here, so 0.27 is still the last
+		// version at which the WHOLE adapter was verified. registry.go's gemini header
+		// carries the argument, including why the drifted warning that results is the
+		// cheaper error. A future bump belongs to a drive that covers all four surfaces,
+		// or to the per-surface split in #721.
 		KeyGemini: {"0.27", GranularityMinor, nil},
 		KeyCodex:  {"0.147.0", GranularityMinor, nil},
 		KeyAider:  {"0.86.2", GranularityMinor, nil},

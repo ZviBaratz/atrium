@@ -819,20 +819,88 @@ var codex = &Adapter{
 	// is installed (see session/naming.go).
 }
 
-// Gemini CLI (google-gemini/gemini-cli, React-Ink). Strings verified against
-// the installed 0.27 package source: LoadingIndicator.js renders "(esc to
-// cancel, 5s)" above the input box whenever streaming state is neither Idle nor
-// WaitingForConfirmation, and ToolConfirmationMessage.js includes "No, suggest
-// changes (esc)" in every confirmation variant. The pre-adapter matcher,
-// "Yes, allow once", no longer appears anywhere in the package.
+// Gemini CLI (google-gemini/gemini-cli, React-Ink). The heuristic surfaces below sit at two
+// different evidence tiers, and #713 is what the difference costs — say which is which
+// rather than let one word cover both.
+//
+// DRIVEN at 0.55.1: the folder-trust Gate, captured live on a width ladder by
+// scripts/drive-agent.sh and pinned in gemini_pane_test.go. That is the only surface here a
+// pane has actually rendered.
+//
+// BUNDLE-GREP ONLY at 0.55.1: "esc to cancel" and "No, suggest changes (esc)" are both
+// still present in @google/gemini-cli/bundle, and the pre-adapter matcher
+// "Yes, allow once" is still absent. For the busy marker the grep is a targeted one rather
+// than a presence check, because the bundle ships BOTH spellings and HasBusyMarker's
+// strings.Contains is case-sensitive (agent.go), so which one renders decides whether the
+// marker is live at all: the 20 "Esc to cancel" hits are dialog footers (DialogFooter's default
+// cancelAction, the auth-key prompt, the theme picker), while the streaming footer builds
+// `(esc to cancel, ${elapsedTime}…)` under streamingState === "responding" — lowercase, and the
+// responding footer is the surface BusyMarkers reads. That locates the render site and its
+// condition; it still does not say what a live pane puts on screen around it. Presence is
+// necessary and NOT sufficient — this file's
+// own rule — and #713 is the proof: the gate literal that rotted was verified the same way,
+// from the 0.27 package source (FolderTrustDialog.js, back when the package shipped
+// unbundled), and a grep of the shipped bundle cannot see that a live pane truncates or wraps
+// a string out of a matcher's window. Reaching either of those two needs auth and a real
+// turn, which is why they stayed ungraded when the gate was re-driven. So does the fourth
+// gemini surface, which does not live in this file at all: generateNameGemini's `gemini -p`
+// output contract (session/naming.go), still checked only at 0.27.
+//
+// READ THAT AGAINST VerifiedVersion BELOW, WHICH STAYS AT 0.27 — one surface is not the whole
+// surface, exactly as it is not for claude (see VerifiedVersion above: "the pin is a claim
+// about the WHOLE surface … Bumping on a partial drive is how a pin starts lying"). #713
+// re-drove the gate and nothing else, so 0.27 is still the last version at which this adapter
+// as a whole was checked, and that is what the scalar says.
+//
+// It shipped bumped to 0.55.1 for six review rounds, and the argument for it was that gemini's
+// pin is 28 minors behind where claude's is nearly current, so refusing costs claude nothing
+// and costs gemini a standing warning. Both halves are true — doctor truncates to minor
+// (internal/doctor/compare.go), so claude's 2.1.170 against an installed 2.1.220 is silent
+// either way — and the conclusion still does not follow, for three reasons that only became
+// visible once the cost of each direction was measured rather than asserted:
+//
+//   - The warning is DISMISSIBLE. Drift is not a `doctor`-only line: it raises a startup hint
+//     and a persistent "⚠ stale" badge, and both are acknowledged per installed version
+//     (config.State.AckedDrift, app/app_driftcheck.go). So the price of an honest pin is one
+//     dismissable hint per new gemini release, not a permanent nag. The bump was bought
+//     against a cost that does not exist.
+//   - The silence hides #713's OWN failure class. HasBusyMarker is a case-sensitive Contains
+//     and the bundle ships both spellings; if "esc to cancel" has rotted, every streaming
+//     gemini session reads not-busy and lands on Ready with a completion ding. That is the
+//     bug this file was edited to fix, and the pin is the only runtime signal over it.
+//   - The evidence that reassures me about that marker is the tier that already failed. The
+//     render site is located above and it is lowercase — but it is a bundle grep, and this
+//     file's rule is that presence is necessary and not sufficient, with #713 as the proof:
+//     the gate literal was verified exactly that way, from package source, and had rotted.
+//
+// And it ratchets. At 0.56 the warning returns, the gate is the cheap surface to re-drive
+// (a startup screen, no auth, no turn), and the pin moves again — while confirmation and
+// generateNameGemini, which need auth and a paid turn, are never the reason it moves. A pin
+// bumped on whatever was cheapest to check converges on meaning nothing.
+//
+// The asymmetry is the whole argument: a wrong "drifted" is noise, dismissed in a keystroke;
+// a wrong "ok" is silent and self-concealing. Splitting the pin per-surface is what makes both
+// honest at once — that is #721, and it is not gemini-specific.
+//
+// The OLDER direction is silent by construction, and that is not specific to gemini: doctor
+// reports drift only when installed > verified (internal/doctor/compare.go, driftExceeds), so
+// every install below the pin reads "ok" whatever its panes render. Moving a pin forward
+// therefore never warns the users it just stopped covering. The gate's shape makes that
+// cheaper than it could be — it reads ONE literal, "Trust folder", which the 0.27 dialog
+// rendered too, which is why the two-literal version of this fix was withdrawn — but it does
+// NOT make an older install covered, and an earlier draft of this paragraph implied it did.
+// The gate also requires a box, and whether 0.27 drew one is unknown: it was never driven, and
+// the tree's only artifact of that shape is unboxed and does not gate. See
+// geminiTrustGateVisible.
 var gemini = &Adapter{
 	Key:         KeyGemini,
 	DisplayName: "Gemini CLI",
 	aliases:     []string{"gemini"},
 
-	// Heuristic strings verified against gemini 0.27. Minor granularity: the
-	// confirmation wording tracks minor releases; pure patch bumps within a
-	// minor don't warrant a warning.
+	// NOT bumped for #713, which re-drove the gate and only the gate — see the header. The
+	// pin is a claim about the whole adapter, and busy, confirmation and generateNameGemini
+	// are still checked at 0.27, so 0.27 is what it says. Minor granularity: the confirmation
+	// wording tracks minor releases; pure patch bumps within a minor don't warrant a warning.
 	VerifiedVersion:  "0.27",
 	DriftGranularity: GranularityMinor,
 
@@ -845,11 +913,24 @@ var gemini = &Adapter{
 		// holding position (#347). The literal is quotable from this file exactly as
 		// codex's is, and Enter on a real confirmation runs the shell command or
 		// writes the file — but the CLI is deprecated in favour of Antigravity
-		// (docs/superpowers/specs/2026-07-23-antigravity-integration-design.md), and
-		// anchoring it would take a primitive nothing else needs: the confirmation
-		// renders INSIDE a rounded box with the app footer below it, so
-		// footerBelowBox hands back the footer and never the dialog, and
-		// aboveBoxBlock anchors on a composer the confirmation has replaced.
+		// (docs/superpowers/specs/2026-07-23-antigravity-integration-design.md).
+		//
+		// This used to add that anchoring it "would take a primitive nothing else
+		// needs: the confirmation renders INSIDE a rounded box with the app footer
+		// below it, so footerBelowBox hands back the footer and never the dialog, and
+		// aboveBoxBlock anchors on a composer the confirmation has replaced". The
+		// first clause stopped being true in this same change: bottomBoxBlock is that
+		// primitive, and trailingBelowBoxCap was sized to admit exactly one rendered
+		// row below a border — the app footer. So the remaining reason is evidence,
+		// not machinery. Every gemini pane this repo holds is a TRUST dialog; no
+		// confirmation has ever been driven, because reaching one needs auth and a
+		// real turn, and this file's own rule is that bundle presence is necessary
+		// and not sufficient. Anchoring an undriven surface on a box whose shape is
+		// only assumed is how #713 shipped. The exposure while it stays flat is real
+		// and is the #342 direction: a working pane that QUOTES "No, suggest changes
+		// (esc)" — quotable from this file, from #715, from any agent reading the
+		// tracker — reports needs-input and withholds its queued prompt. Closing it
+		// needs a driven capture first; that is #721's neighbour and not this change.
 		// Surfacing as needs-input costs a gemini user one keystroke; autoyes users
 		// who want the taps have gemini's own --yolo / --approval-mode.
 		{Name: "confirmation", Window: WindowPrompt, NoAutoTap: true,
@@ -857,14 +938,278 @@ var gemini = &Adapter{
 	},
 
 	Gates: []Gate{
-		// FolderTrustDialog.js: "Do you trust this folder?" with "Trust folder"
-		// pre-highlighted.
-		{Contains: []string{"Do you trust this folder"}},
+		// The folder-trust dialog, keyed on its accept row inside a LIVE box — see
+		// geminiTrustGateVisible for why neither a bare literal nor a conjunction of two
+		// was enough. Driven live at 0.55.1 (#713); the ladder is geminiTrustGateLadder,
+		// proven at widths 80/40/24 with a disclosed miss at 20.
+		{Match: geminiTrustGateVisible},
 	},
 
 	Resume:        func(program string) string { return program + " --resume latest" },
 	ResumeProbe:   "--resume",
 	HeadlessNamer: true, // `gemini -p` prints bare text (session/naming.go)
+}
+
+// geminiTrustGateVisible reports gemini's folder-trust dialog. It requires the accept row to
+// appear inside a box whose bottom border ends the pane or sits within trailingBelowBoxCap
+// lines of the end, and both halves of that are load-bearing: the literal says which dialog,
+// the box says it is live.
+//
+// What the dialog renders, read off the bundle that draws it (bundle/interactiveCli-*.js at
+// 0.55.1): a title Text of "Do you trust the files in this folder?", the discovery blurb,
+// then a RadioButtonSelect whose three labels are `Trust folder (${dirName})`, `Trust parent
+// folder (${parentFolder})` and "Don't trust" — options LAST, which is half of why they are
+// the anchor. The component was NOT removed: a draft of this comment said the
+// FolderTrustDialog.js it used to name "is not in the package at all any more", which is
+// false and sends a reader away from the code. 0.55.1 ships bundled, so the standalone .js
+// file is gone, but the component is in the bundle and carries its own source marker,
+// packages/cli/src/ui/components/FolderTrustDialog.tsx. The HEADLINE was reworded; nothing
+// was deleted.
+//
+// The bundle-file COUNTS an earlier draft carried here ("4 files", "four of them") are gone
+// on purpose. Nothing in the suite can recount them — the tests are hermetic and the package
+// need not be installed — so they were prose that could only rot, and how many chunks a
+// vendor splits its bundle into says nothing about Atrium. Presence is the claim; the version
+// it was checked at is the datum, and that is VerifiedVersion.
+//
+// Why "Trust folder" alone identifies the dialog. The claim is a NEGATIVE, and stated as one
+// so it can be rechecked with a single grep: no other string the 0.55.1 TUI renders as a label
+// contains "Trust folder". In particular it does NOT match `Trust this folder (${dirName})`,
+// which is /permissions' modify-trust dialog — a mid-session settings screen that must not
+// report as a startup gate — because "this " sits between the two words.
+//
+// An earlier draft made that point by ENUMERATING every `Trust `-prefixed label in the package
+// and asserting the list was complete. It was not: the package also ships "Trust the server
+// (bypass all tool call confirmation prompts)", "Trust all provided hooks for a project",
+// "Trust Level", "Trust Services", "Trust Tokens", "Trust CMP" and more. None of them changes
+// the conclusion, which is the point — the enumeration was doing no work and could only rot,
+// exactly like the bundle-file counts removed two paragraphs above.
+//
+// The one true exception is worth naming because it looks like a counter-example and is not:
+// bundle/docs/cli/trusted-folders.md documents the option as `- **Trust folder**: Grants full
+// trust to the current folder`. It is shipped documentation, never drawn in the TUI, and it
+// could only reach this matcher by an agent printing the file into its own pane — the quoted-
+// prose class the box requirement exists for. So the literal needs no second literal to
+// disambiguate it, and asking for one costs more than it buys (below).
+//
+// Why the box, and why the box must END the pane. A literal alone cannot say the dialog is
+// on screen, and this gate has three distinct ways to be wrong about that. All three were
+// measured, and each has a named guard:
+//
+//   - PROSE. A working pane whose transcript quotes the row — this repo's own source, a
+//     summary of this file, a review comment — matched when the gate was a flat bottom-N
+//     window. Measured: GateUp true AND HasBusyMarker true on the same pane, and poll.go
+//     ranks the gate above the busy marker on purpose ("a false gate beats positive proof
+//     of work"), so the row reported needs-input while the agent streamed and its queued
+//     prompt was withheld. That is #342's direction, and it is strictly worse than the
+//     rotted literal #713 replaced, which was FALSE on that pane.
+//     TestGeminiTrustGateIgnoresItsOwnRowsInProse. This class is NARROWED, not closed: prose
+//     cannot reach the block, but quoted BOX ART carries walls and a corner border like any
+//     real box, so a transcript that quotes a dialog and ends at the quoted border does gate.
+//     Measured, and pinned as behaviour rather than left in a sentence —
+//     TestGeminiTrustGateFiresOnQuotedBoxArtEndingThePane. The residue is transient (one more
+//     rendered line drops it) where the window form was persistent.
+//   - WRAP SYNTHESIS. flattenChrome joins lines with a space, so a transcript reading
+//     "Never Trust" / "folder contents from an untrusted source" flattens to a string
+//     containing "Trust folder" and fired the gate — on a pane where no line renders the
+//     phrase at all. bottomBoxBlock returns its interior UNFLATTENED for this reason.
+//     TestGeminiTrustGateIsNotSynthesizedAcrossAWrap.
+//   - THE DISMISSED DIALOG. A window-only gate keeps matching a dialog that is still on
+//     screen but no longer live, and while a gate is up AwaitingInput (tmux.go) is false, so
+//     the queued FIRST prompt — the moment a queued prompt is most likely to exist — is never
+//     delivered. Requiring the border to be at the bottom drops the gate once anything taller
+//     than trailingBelowBoxCap renders beneath it — a composer, being a box, always is.
+//     TestGeminiTrustGateDropsOnceSomethingRendersBelowIt. Note
+//     what is and is not established here: that gemini LEAVES the answered dialog on screen is
+//     NOT verified — driving it costs an Enter at a dialog whose acceptance writes
+//     ~/.gemini/trustedFolders.json, and the capture harness deliberately does not isolate the
+//     agent's config dir. The anchor is worth having either way, because it costs nothing and
+//     does not depend on the answer; agy pins the same property with agyAcceptedGatePane and
+//     earns it from a captured post-acceptance pane, which is the stronger evidence tier.
+//
+// The bottom border is the last non-empty line on all four WIDTH rungs (each ends "╰──…──╯"),
+// including the width-20 miss — but that is a property of those captures, not of the dialog,
+// and an earlier draft of this paragraph mistook the one for the other. It said the fact to
+// re-measure "if this ever goes quiet" was "a future gemini that renders a footer beneath the
+// dialog", and offered the resulting missed gate as the fail-safe direction.
+//
+// Both halves were wrong. gemini 0.55.1 ALREADY renders a footer beneath the dialog: whenever
+// the box overflows its pane it draws a one-line <ShowMoreLines> hint under the bottom border.
+// And a missed gate is not the fail-safe direction here — it is #713 itself, the bug this
+// matcher exists for. Driven at twelve geometries, the border-must-end-the-pane form missed
+// seven, including the 45x19 pane a plain 70x24 terminal produces at the default split. So the
+// anchor allows trailingBelowBoxCap trailing lines, and the rungs that prove it are
+// geminiTrustGateOverflowLadder. What no fixture can re-measure is the vendor: these are frozen
+// strings, so only re-driving the harness sees the next render change, which is what
+// VerifiedVersion and doctor's drift check are for.
+//
+// What the block is bounded BY matters as much as what anchors it, and the first draft of
+// this fix got it wrong in both directions at once: it scanned upward for a matching top
+// border. That demands the WHOLE dialog be on screen, and the agent's pane is the preview
+// pane rather than the terminal (session/instance.go SetPreviewSize), so on a pane shorter
+// than the dialog BOX — 28 rows at width 24, 33 at width 20 (geminiDialogRows; this sentence
+// used to give 37, which is the width-24 capture's height and overstates the threshold by nine
+// rows, and those figures are themselves height-40 measurements, since the box shrinks with the
+// pane) — the top border has scrolled off and the gate went down. #713's own symptom on the
+// height axis, at ordinary terminal sizes. It was also
+// unbounded the other way: any two rules with transcript between them made that span
+// "interior". bottomBoxBlock now takes the run of side-walled rows above the border instead,
+// which is height-independent and self-bounding; see its doc for the measurements, and
+// TestGeminiTrustGateSurvivesADialogTallerThanThePane /
+// TestGeminiTrustGateIgnoresTranscriptBetweenTwoRules for the guards.
+//
+// Capture form is a real exposure here, and it is not the form the panes below are in. They
+// were taken with `capture-pane -p`; production reads `-p -e -J` (session/tmux/tmux.go) and
+// strips CSI with ansiRegex (session/tmux/poll.go), which does not strip OSC. isHorizontalRule
+// rejects a line holding any character outside the box set, so one surviving escape ON THE
+// BORDER takes the whole gate down, where the old literal-in-a-window form would at worst have
+// lost the lines it landed on. That is a sharper failure than the anchor it replaced, so it
+// was measured rather than assumed: a prod-form pane driven at 0.55.1 carries 152 escape
+// sequences, every one CSI SGR and none OSC, with SGR mid-line on both load-bearing rows —
+// and cleanForDetection hands the matcher something it gates on.
+// session/tmux's TestGeminiTrustGateSurvivesProductionCaptureForm holds the capture and
+// asserts both directions, because the two halves live in different packages: the fixture
+// production reads here, the cleaner that feeds it there.
+//
+// What was tried in between, recorded because the trade is not obvious. Round 1 of #713 keyed
+// on Contains{"Trust folder", "Don't trust"}; Contains is an ALTERNATION, and "Don't trust" is
+// ordinary English, so it fired on prose containing only the second. Round 2 made it a Match
+// requiring BOTH — which narrowed the prose window without closing it (a pane quoting both
+// rows within fifteen lines still matched) and left the other two classes untouched, because
+// all three are liveness failures and a conjunction of literals is not a liveness test. It
+// also cost coverage no one asked for: the dialog gemini shipped at 0.27 had "Trust folder"
+// but the tree's only fixture of it carried no "Don't trust" row, so requiring both would
+// have taken the gate away from installs older than the pin while doctor stayed silent about
+// it (driftExceeds only reports installed > verified).
+//
+// That artifact is geminiPre055TrustGatePane, and it is named here because for one round it
+// was not in the tree at all: #713 replaced the fixture these two paragraphs cite with a
+// 0.55.1-shaped boxed pane, leaving the reasoning pointing at nothing. What it is worth is
+// bounded — it is hand-composed, 0.27 has never been driven, and it is evidence of what this
+// repo once claimed the dialog looked like, not of what gemini rendered.
+//
+// The argument above is about the LITERAL only, and the older-install case is not thereby
+// covered — an earlier draft of this paragraph closed by claiming one literal plus a structural
+// anchor "makes the gate work on both dialog shapes at once", which nothing here establishes.
+// The anchor is a second requirement, and whether 0.27 met it is unknown: fed to this matcher
+// the recorded shape returns FALSE. So what dropping the second literal buys is the removal of
+// one of two ways to miss on an older install, not coverage of it. If a pre-0.55 user reports
+// the #713 symptom, that is the thing to drive, and doctor will not have said a word (same
+// direction: installed < verified is not drift, and no adapter carries a version FLOOR the way
+// internal/doctor's dependency specs do — #722).
+//
+// Keeping the 0.27 headline as a SECOND Gate is the obvious mitigation and it does not work.
+// Anchored, it is redundant: if 0.27 drew a box then "Trust folder" is already inside it and
+// the shipped matcher covers that install unaided; if it did not, no anchored literal reaches
+// it either — both miss for the same reason. So the second Gate helps only UNANCHORED, and
+// unanchored it reopens the PROSE class above for every 0.55+ user. Both halves are measured
+// in TestGeminiPre055ShapeIsUncoveredAndTheSecondLiteralWouldNotCoverIt, the second on a
+// working pane (busy marker present) that merely quotes #713's own text — which is the
+// literal's likeliest appearance on a current user's screen, an agent reading this tracker.
+// geminiProsePane could not have shown it: that fixture quotes the option ROWS.
+//
+// Still uncovered, and disclosed:
+//
+//   - The startup AUTHENTICATION dialog. gemini ships an AuthDialog asking "How would you like
+//     to authenticate for this project?" and a "Do you want to continue?" confirmation, both
+//     boxed RadioButtonSelects like the trust dialog. Gates holds exactly one matcher, keyed on
+//     the trust dialog's accept row, and no Prompt matches these — so nothing here covers a
+//     second keystroke-consuming startup screen. Whether it lands on Ready (the #713 chain) is
+//     NOT established: it turns on the busy marker, and "esc to cancel" is matched
+//     case-sensitively while the bundle ships both that spelling and "Esc to cancel". Unlike
+//     /permissions below, this one is cheap to settle — it IS the auth screen, so reaching it
+//     needs no authenticated session, only a driven run whose HOME is isolated (answering the
+//     trust dialog to get past it writes ~/.gemini/trustedFolders.json, which is why
+//     drive-agent.sh, which does not isolate the agent's config dir, has not been pointed at it).
+//   - /permissions' modify-trust dialog, which does need an authenticated session.
+//   - IdeIntegrationNudge, which is worse — it renders its headline behind a "> " Text inside
+//     the same rounded box, so InputBoxVisible is TRUE on it, making AwaitingInput true and
+//     typing a queued prompt into a RadioButtonSelect whose highlighted default is "Yes". That
+//     is the #512 class rather than this gate's milder one, and it is #717.
+//
+// Width. The headline is UNREPAIRABLE as an anchor once it wraps: gemini draws the dialog in
+// a rounded box, so a wrapped headline has the box's own "│" between its halves, and
+// flattenChrome joins on whitespace only. Measured on residue-free captures, it is
+// unreachable at 40, 24 and 20 at every GateWindow up to 200 — more lines than any of those
+// panes has. Codex wraps WITHOUT a box, which is why widening its window worked there and why
+// #713's guess that the same "would also work at width 40" does not hold here.
+// TestGeminiTrustGateHeadlineIsUnreachableOnceItWraps pins it.
+//
+// The option rows truncate from the right rather than wrapping, so "Trust folder" survives as
+// a left-anchored prefix however long the directory name is — until the row itself is cut,
+// which happens between 24 and 20. 24 is therefore a MEASURED floor: at 20 the rows read
+// "● 1. Trust fo…" and "3. Don't tr…" and the gate misses. That is not parity with agy, whose
+// gate also stops at 24 — agy's 24 is an evidence gap (its gate has never been driven
+// narrower, though its busy and confirmation ladders reach 20), not a measured cliff. And the
+// miss is not free: at width 20 the user loses the "waiting on setup screen" hint and gains a
+// false completion ding, which is #713 itself surviving at one width.
+// TestGeminiTrustGateOptionRowsAreTruncatedAtWidth20 holds it so it stays disclosed.
+//
+// The composer is a box too, which is the one hole "bottom-most box" does not close on its
+// own. Measured: a pane ending at a composer border whose typed text reads "Trust folder"
+// raises the gate — and InputBoxVisible is true on it, so the effect is the #342 direction
+// again (AwaitingInput false, queued prompt withheld) with the user's own keystrokes as the
+// trigger. This paragraph used to add that "gemini's real render puts a footer line below the
+// composer (geminiIdlePane), which is why this is narrow rather than routine" — retracted on
+// both counts. geminiIdlePane is hand-composed from 0.27 package source and its own doc says it
+// is not evidence for a matcher, so it never established what gemini renders; and a lone footer
+// line is inside trailingBelowBoxCap now, so it would not put the composer out of reach even if
+// it were real. The glyph check below is the only thing that closes it, and it closes it only
+// while the glyph is ON SCREEN — which is a bound, not a quibble, because the pane here is the
+// PREVIEW pane and it is short: 19 rows at a plain 70x24 terminal, per geminiOverflowPaneHeights.
+// A composer taller than that scrolls its "> " row off the top, leaving walled continuation rows
+// under a bottom border, and isInputBoxLine has nothing left to match. Measured: a two-row
+// continuation whose text carries "Trust folder", a border, and a footer row gives GateUp true
+// with InputBoxVisible FALSE — needs-input suppressed, the queued prompt withheld, the row
+// reporting "waiting on setup screen" while the user is typing. That is the #342 direction with
+// the user's own keystrokes as the trigger, and it is DISCLOSED rather than closed:
+// TestGeminiTrustGateFiresOnAComposerTallerThanThePane pins it so it cannot rot into a surprise.
+//
+// Closing it means demanding the MENU shape — "Trust folder" preceded by a list index, which
+// BaseSelectionList renders as "N." — and that was rejected on #713's own evidence: the rows
+// gemini renumbers or restyles are exactly the ones a narrow pane truncates, and every literal
+// this gate has lost was lost by being more specific than it needed to be. The trigger needs a
+// paste taller than the pane that quotes "Trust folder"; the miss it would risk needs only a
+// vendor bump. So a
+// block that reads as a composer is rejected: the trust dialog is a MENU, its rows open with
+// "●" and a number, and no rung renders a composer glyph anywhere inside the dialog —
+// TestGeminiCapturesRenderNoComposerGlyphInsideTheDialog, which scans the whole block. It
+// cannot be TestGeminiTrustGateIsNeitherComposerNorPrompt, which this comment used to cite:
+// that one calls InputBoxVisible, and InputBoxVisible reads the last WindowPrompt (15)
+// non-empty lines, while the block it must speak for is deeper than that on the narrow rungs
+// — the guard measures how much deeper rather than saying so here. It would stay green with a
+// glyph in the upper half of the dialog while the gate went down.
+//
+// defaultPrompts rather than the adapter's own set, because gemini declares no InputBoxPrompts
+// and a package-level func cannot reference `gemini` without an initialization cycle. That
+// substitution is pinned by TestGeminiUsesTheDefaultComposerGlyphs, so an adapter that later
+// gains a custom glyph fails there instead of silently reopening this hole.
+//
+// No GateWindow is consulted at all, and the reason is narrower than an earlier draft claimed.
+// It said "GateUp short-circuits on Match before it flattens anything, so an adapter-level
+// GateWindow would not reach this and setting one would be inert" — false as a general
+// statement about GateUp. A Match returning FALSE falls through to `continue` (agent.go), and
+// the next Gate carrying Contains flattens at gateWindow() as usual; measured with a
+// two-gate adapter whose first Match always returns false, which flattens and gates. What is
+// actually true is that gemini declares exactly ONE Gate today, so nothing ever reaches the
+// flatten. Adding a second — the startup auth dialog disclosed below is the obvious candidate —
+// silently reinstates a flatten on every gemini poll, and GateWindow stops being inert with it.
+// The window this gate has is the box.
+func geminiTrustGateVisible(content string) bool {
+	block, ok := bottomBoxBlock(content)
+	if !ok {
+		return false
+	}
+	found := false
+	for _, line := range block {
+		if isInputBoxLine(line, defaultPrompts) {
+			return false // a composer, not the dialog
+		}
+		if strings.Contains(line, "Trust folder") {
+			found = true
+		}
+	}
+	return found
 }
 
 // aiderConfirmVisible backs the aider "confirm" matcher. Every confirm_ask

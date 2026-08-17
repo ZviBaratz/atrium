@@ -121,8 +121,12 @@ func describeWidth(w int) string {
 // negative shapes are adapter-specific and no table of them would be derivable from the
 // registry the way this one is. Those guards are agy's answered confirmation and idle
 // composer (registry_test.go TestAgyConfirmationPrompt), its slash menu
-// (TestAgySlashMenuIsNotAPrompt), its accepted gate (TestAgyTrustGate) and codex's composer
-// ladders (codex_pane_test.go TestCodexComposersReadAsNeitherPromptNorGate).
+// (TestAgySlashMenuIsNotAPrompt), its accepted gate (TestAgyTrustGate), codex's composer
+// ladders (codex_pane_test.go TestCodexComposersReadAsNeitherPromptNorGate) and gemini's
+// width-20 trust dialog, which is negative in a third way — the gate is MISSED there, so
+// gemini_pane_test.go holds both that miss and the composer/prompt readings that make it
+// harmless (TestGeminiTrustGateOptionRowsAreTruncatedAtWidth20,
+// TestGeminiTrustGateIsNeitherComposerNorPrompt).
 var paneCoverage = map[string][]paneCapture{
 	// claude's gate is one Match (claudeGateVisible) covering the folder-trust dialog and
 	// both MCP-approval shapes, so every capture below belongs to the same key however many
@@ -182,6 +186,18 @@ var paneCoverage = map[string][]paneCapture{
 	"codex/gate":            codexTrustGateLadder,
 	"codex/prompt/approval": codexApprovalLadder,
 
+	// #713. The first gemini entry in this table, and the only gemini surface any pane has
+	// rendered — its busy and confirmation matchers stay exempt below. The ladder stops at 24
+	// on purpose: 20 was driven too and is a MISS, held as negative evidence in
+	// gemini_pane_test.go rather than dropped, because a table that silently omits the rung
+	// it fails at is the #648 defect one level up.
+	// Both ladders: the width rungs (height 40) and the height rungs (19 and 24), which are
+	// separate captures rather than a second table because #713 shipped twice — once on each
+	// axis — and a coverage map that held only one of them called the gate covered while it
+	// missed on seven driven geometries.
+	"gemini/gate": append(append([]paneCapture(nil), geminiTrustGateLadder...),
+		geminiTrustGateOverflowLadder...),
+
 	"agy/gate": {
 		{name: "agyTrustGatePane", width: 120, note: "", pane: agyTrustGatePane},
 		{name: "agyTrustGateNarrowPane", width: 28, note: "question truncated away", pane: agyTrustGateNarrowPane},
@@ -228,9 +244,13 @@ var paneCoverageExempt = map[string]string{
 	"claude/prompt/selection": "pinned only against hand-composed panes (TestClaudePrompts), never a capture",
 	"codex/busy":              "pinned only against a hand-composed pane (TestCodexBusyMarker), never a capture",
 
-	"gemini/gate":                "no verbatim capture at ANY width — every gemini pane in this package is hand-written",
-	"gemini/busy":                "no verbatim capture at ANY width",
-	"gemini/prompt/confirmation": "no verbatim capture at ANY width",
+	// gemini/gate left this map in #713 — driven at 80/40/24, plus a 20 that misses. The two
+	// below did not, and the distinction is the point: reaching either needs auth and a real
+	// turn, where the gate needed only a startup screen. Their literals are present in the
+	// 0.55.1 bundle, which is exactly the evidence the gate's own literal had before it was
+	// found to have rotted, so read these as unverified rather than as fine.
+	"gemini/busy":                "still bundle-grep only at 0.55.1; the loading row needs a live streaming turn",
+	"gemini/prompt/confirmation": "still bundle-grep only at 0.55.1; the dialog needs a live tool confirmation",
 
 	// Not because aider is width-immune — it is not, and saying so would be the kind of
 	// comfortable claim this file exists to stop. aiderConfirmVisible requires the
@@ -282,6 +302,22 @@ var wantRungs = map[string][]int{
 
 	"codex/gate":            {20, 24, 28, 40, 60, 120},
 	"codex/prompt/approval": {20, 24, 28, 40, 60, 120},
+
+	// Floors at 24, and the rung below it was driven rather than left unknown: at 20 the
+	// selector rows truncate to "Trust fo…" / "Don't tr…" and the gate misses. See
+	// TestGeminiTrustGateOptionRowsAreTruncatedAtWidth20.
+	//
+	// agy's gate below stops at 24 too and this used to call that the same floor "for the same
+	// mechanism". It is not the same fact: 24 is the narrowest width agy's gate has ever been
+	// DRIVEN at, while agy/busy and agy/prompt/confirmation both reach 20 — an evidence gap,
+	// not a measured cliff. Gemini's 24 is a cliff, because 20 was driven and misses.
+	//
+	// Five entries for four widths: the second 24 and the 45 are the HEIGHT rungs
+	// (geminiTrustGateOverflowLadder), driven at pane heights 24 and 19 where the dialog
+	// overflows and gemini draws a hint below its bottom border. They are listed here because
+	// they are width-bearing captures like any other, but the axis they were driven for is not
+	// one this table can express — geminiOverflowPaneHeights records it.
+	"gemini/gate": {24, 24, 40, 45, 80},
 
 	"agy/gate":                {24, 28, 120},
 	"agy/busy":                {20, 24, 28, 40, 120, 120},

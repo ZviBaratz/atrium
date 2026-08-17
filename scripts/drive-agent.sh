@@ -440,6 +440,25 @@ current_width() {
 	t display-message -p -t "$PANE" '#{window_width}'
 }
 
+# The height half of the same question. It arrived late: until #713 opened the height
+# axis every capture in this tree was 40 rows, so only the width was ever verified, and
+# a -y that failed to land would have propagated through a whole ladder under the
+# comment that calls a mislabelled capture the one failure this script exists to prevent.
+current_height() {
+	t display-message -p -t "$PANE" '#{window_height}'
+}
+
+# assert_geometry fails unless the live window is exactly the size the caller believes it
+# asked for. Both dimensions, because "-x landed" says nothing about -y: resize-window
+# takes them independently and start_session's -x/-y can be clamped by the server.
+assert_geometry() {
+	local want_w="$1" want_h="$2" got_w got_h
+	got_w="$(current_width)"
+	got_h="$(current_height)"
+	[[ "$got_w" == "$want_w" && "$got_h" == "$want_h" ]] ||
+		die "asked for ${want_w}x${want_h} but the window is ${got_w}x${got_h} — refusing to write a mislabelled capture"
+}
+
 settle() { sleep "$SETTLE"; }
 
 # write_capture writes the three artifacts for one screen: the fixture-form pane, a
@@ -554,6 +573,10 @@ start_session() {
 	# session would resize it out from under the recorded width.
 	t set-option -gw window-size manual
 	resolve_ids
+	# And verify both dimensions landed, now that the caller can vary either. `ladder`
+	# checks every rung it resizes to; this is the same check for the size the session was
+	# CREATED at, which nothing verified while every run was 120x40 by default.
+	assert_geometry "$width" "$height"
 	# Wait for the CLI to paint before handing control back, so the first capture is
 	# not of an empty pane.
 	local _i
@@ -730,37 +753,81 @@ EOF
 # still carry the evidence, agyTrustGatePane taken in ".../repo" and
 # agyTrustGateNarrowPane in ".../fresh28".
 cmd_fresh() {
-	local width="${1:-$DEFAULT_WIDTH}"
+	local width="${1:-$DEFAULT_WIDTH}" height="${2:-}"
+	# load_run FIRST, because the height defaults to the run's and $HEIGHT is one of the
+	# fields load_run sources out of meta.env. Defaulting it before that read the empty
+	# global and killed the width-only form outright — `fresh 40` died on its own
+	# validation with "must be numbers, got: 40 " (an empty second value), which is the
+	# documented form, the one the cost-saver section tells you to reach for, and the only
+	# way to capture a once-per-path gate at a second width. load_run is a read; nothing
+	# below it is destroyed until reap, so the validation still runs before anything dies.
+	load_run
+	height="${height:-$HEIGHT}"
 	# Validated BEFORE anything is destroyed, and for two separate reasons.
 	#
 	# The width is interpolated into a path that is then `rm -rf`'d, so a value
 	# carrying ".." walks out of the run root: `fresh /../../../x` would build
 	# $RUN/fresh/../../../x and delete somebody else's directory. Digits cannot.
+	# The height is interpolated into the same path and is checked the same way.
 	#
 	# And this verb reaps the live session before it hands the width to tmux, so
 	# without a check here a typo is answered by tmux's bare "width invalid" AFTER
 	# the session is gone — throwing away a dialog that cost an API turn to reach.
-	[[ "$width" =~ ^[0-9]+$ ]] || die "width must be a number, got: $width"
-	((width > 0)) || die "width must be greater than zero"
-	load_run
+	local dim
+	for dim in "$width" "$height"; do
+		[[ "$dim" =~ ^[0-9]+$ ]] || die "width and height must be numbers, got: $width $height"
+		((10#$dim > 0)) || die "width and height must be greater than zero, got: $width $height"
+	done
+	# Canonicalised out of base 8. `((dim))` reads a leading-zero token as OCTAL while tmux
+	# reads the same string as decimal, so `fresh 010` passed validation as 8, named its
+	# workdir fresh010, and handed tmux "010" for a 10-column session — a capture labelled
+	# with a geometry it was not taken at, which is the one failure this script exists to
+	# prevent. `fresh 08` was worse: bash printed "value too great for base" and then died
+	# with the wrong message. Normalising here fixes the comparison, the path and the tmux
+	# argument together, rather than teaching each of the three about base 8.
+	width=$((10#$width))
+	height=$((10#$height))
+	# The workdir keeps its bare-width name at the run's own height, so an existing
+	# ladder's capture paths and workspace names do not move; a height that differs
+	# from the run's gets its own directory, because the two are different renders.
 	local workdir="$RUN/fresh$width"
+	((height == HEIGHT)) || workdir="$RUN/fresh${width}x${height}"
 	# Belt as well as braces: the regex above already makes an escape impossible, so
 	# this asserts the property rather than trusting the derivation to preserve it.
 	assert_under_run_root "$workdir"
 	reap "$SOCK"
 	[[ -e "$workdir" ]] && rm -rf "$workdir"
 	new_workspace "$workdir"
-	start_session "$workdir" "$width" "$HEIGHT" "$PROGRAM"
+	start_session "$workdir" "$width" "$height" "$PROGRAM"
 	# The ids change with the session; meta.env must follow or every later verb
 	# targets a pane that no longer exists.
 	#
 	# Rewritten through a sibling file rather than with `sed -i`: GNU takes a bare -i,
 	# BSD requires a backup-suffix argument after it, and the spelling that satisfies
 	# both does not exist. The sibling lives in $RUN, so `down` reaps it either way.
+	#
+	# BOTH dimensions are rewritten with them, and that is not cosmetic: `ladder` re-asserts
+	# -y "$HEIGHT" on every rung and returns to -x "$WIDTH" at the end, so a stale value
+	# here silently resizes a session started at 45x19 to something neither verb drove and
+	# hands back captures labelled with a geometry they were not taken at — the one failure
+	# this script exists to prevent. Writing only one of the two is worse than writing
+	# neither: it leaves meta.env describing a session that never existed.
 	sed -e "s|^PANE=.*|PANE=$PANE|" -e "s|^WINDOW=.*|WINDOW=$WINDOW|" \
+		-e "s|^WIDTH=.*|WIDTH=$width|" -e "s|^HEIGHT=.*|HEIGHT=$height|" \
 		"$RUN/meta.env" >"$RUN/meta.env.new"
 	mv "$RUN/meta.env.new" "$RUN/meta.env"
-	note "fresh session at width $width in $workdir (pane $PANE)"
+	# A `sed` substitution whose pattern matches nothing exits 0. If this run's meta.env
+	# predates one of these fields — written by an older build of this script — the rewrite
+	# is a silent no-op and every later verb aims at the old value, so the file is read back
+	# rather than trusted. Four cheap greps against the failure they prevent.
+	local field
+	for field in "PANE=$PANE" "WINDOW=$WINDOW" "WIDTH=$width" "HEIGHT=$height"; do
+		grep -qx -- "$field" "$RUN/meta.env" ||
+			die "meta.env did not take '$field' — it is missing that key, so later verbs would aim at the old session"
+	done
+	WIDTH=$width
+	HEIGHT=$height
+	note "fresh session at ${width}x${height} in $workdir (pane $PANE)"
 }
 
 # sends_enter reports whether a list of tmux key names contains one that submits.
@@ -907,18 +974,18 @@ cmd_ladder() {
 	local widths=("$@")
 	[[ ${#widths[@]} -gt 0 ]] || widths=("${DEFAULT_WIDTHS[@]}")
 
-	local w got
+	local w
 	for w in "${widths[@]}"; do
 		# Both dimensions, every rung: resize-window -x sets ONLY the width, so a
 		# height changed behind our back (an attach, a stray client) would otherwise
 		# persist silently through the whole ladder.
 		t resize-window -t "$WINDOW" -x "$w" -y "$HEIGHT"
 		settle
-		# Verify the resize LANDED before capturing. A pane captured at a width other
+		# Verify the resize LANDED before capturing. A pane captured at a geometry other
 		# than the one in its filename is a fixture that lies — the single worst thing
-		# this script could produce.
-		got="$(current_width)"
-		[[ "$got" == "$w" ]] || die "asked for width $w but the window is $got — refusing to write a mislabelled capture"
+		# this script could produce. Both dimensions: the height is re-asserted on every
+		# rung just above, and until #713 nothing checked that it took.
+		assert_geometry "$w" "$HEIGHT"
 		write_capture "$label-w$w"
 		printf '  w%-4s %s non-empty lines\n' "$w" "$(grep -c . "$RUN/captures/$label-w$w.txt" || true)" >&2
 	done
@@ -1199,8 +1266,11 @@ VERBS
                            (mirrors SendPasted — what Atrium really does for a prompt)
   wait <regex> [secs]      poll until the pane matches; dumps the pane on timeout
   ladder <label> [w...]    resize + capture at each width (default 120 60 40 34 28 26 24 20)
-  fresh [width]            restart in a NEW workspace at <width> — for a once-per-path
-                           screen (a trust gate) that a resize cannot bring back
+  fresh [width] [height]   restart in a NEW workspace at <width>x<height> — for a
+                           once-per-path screen (a trust gate) that a resize cannot bring
+                           back, and whenever a rung's exact bytes matter (see THE
+                           JUDGEMENT). height defaults to the run's; give it to sweep the
+                           HEIGHT axis, which `ladder` cannot (see THE HEIGHT AXIS)
   sample <label> [s] [i]   capture a frame every i seconds for s seconds
   emit [prefix] [--join]   print Go fixtures for every capture, to stdout
   status                   run, size, capture count, live-fleet count
@@ -1254,6 +1324,14 @@ THE JUDGEMENT — what this script does NOT do for you
     whatever sits nearest the bottom and is short enough not to truncate. "Key on the
     question, never the option text" is BACKWARDS for a gate, where the question is
     the long thing.
+  * A wrap inside a BORDERED box is not repaired by flattening either. flattenChrome
+    joins on whitespace, and a box's "│" is not whitespace, so gemini's wrapped
+    headline reads "…in this │ │ folder?" and no GateWindow reassembles it (#713).
+    Codex wraps the same text with no border and its widened window works. Check
+    whether the region has a border before concluding a wrap is recoverable.
+  * A RESIZED rung is not always equal to a natively-narrow one, and there is no known
+    test for which case you are in — one dialog was verified equal (#647), another
+    diverged at every width driven (#713). See the cost-saver below.
   * Pick the literal by the NARROWEST REACHABLE pane, not by your capture width. An
     agent's pane is Atrium's PREVIEW pane (app/app_layout.go GetPreviewSize →
     ui/list.go SetSessionPreviewSize → session/instance.go SetPreviewSize), the list
@@ -1274,10 +1352,68 @@ THE JUDGEMENT — what this script does NOT do for you
     footer, so an unmatched dialog still satisfies HasBusyMarker and the row latches
     Working forever.
 
-COST-SAVER
+COST-SAVER, AND ITS ONE LIMIT
   Resize a LIVE dialog instead of re-running turns. A dialog waits for input, so one
   API turn covers the whole ladder — that is what `ladder` is for. `sample` needs a
   turn in flight, and `fresh` needs a new workspace, so budget those separately.
+
+  It is verified for exactly ONE dialog: #647 diffed agy's trust gate resized to 28 against
+  one started at 28, byte for byte. It does NOT generalise. gemini's trust dialog was driven
+  both ways at 80/40/24/20 in a single run and the resized rung differed from the native one
+  at ALL FOUR (#713): the CLI repaints only its own region, so the rows above keep torn
+  fragments of the previous, WIDER frame, and those fragments are live content to a matcher.
+  The width-40 resize rung carried a leftover headline on ONE line where the real dialog's is
+  wrapped — enough to report the headline REACHABLE at 40 when it is not.
+
+  Do not predicate this on the dialog's height. An earlier draft of this help said the
+  equivalence "holds while the dialog FITS the pane" and told you to reach for `fresh` once it
+  is taller. That trigger is wrong: gemini's dialog BOX fits the 40-row pane at all four rungs
+  with room to spare, and every one of them still diverged, so the rule would have licensed
+  precisely the capture that lied. Why it diverges is not established.
+
+  That draft also said "none of gemini's four rungs overflowed the 40-row pane", which is a
+  different and false claim: the SESSION's output overflowed at three of the four — the logo is
+  cut at width 40 and gone at 24, and the width-20 capture opens mid-sentence. The box fitting
+  is what the argument needs; the session's scrollback is not it.
+
+  Two per-rung tables in session/agent/gemini_pane_test.go own these numbers, and they are
+  different measurements: geminiCaptureRows (the capture's height) and geminiDialogRows (the box
+  alone), recomputed by TestGeminiCaptureRowsMatchTheCaptures and
+  TestGeminiDialogBoxIsFullyOnScreen. The capture heights were repeated here as "33, 38, 35 and
+  38" and the 35 was wrong — the sibling file had already corrected it to 37, and nothing
+  compares prose in a shell script to a Go fixture. One file owns the numbers.
+
+  So: a rung whose bytes depend on the previous rung is a fixture that lies. `ladder` is still
+  the right first move — it is what makes a width sweep affordable — but before a resized rung
+  becomes a committed fixture, either re-drive it with `fresh <width>` or diff it against one
+  that was. `up`'s own width is free of this, being the first render there is.
+
+THE HEIGHT AXIS
+  Everything above is about width, and for a long time so was every capture. `up <program>
+  [width] [height]` has always taken a height — that third argument is where the 40 comes from
+  and it is the answer to "at what height was this ladder driven?" — but nothing else could
+  change one: `ladder` re-asserts -y "\$HEIGHT" on every rung and `fresh` took no height at all,
+  and \$DEFAULT_HEIGHT is 40, so every rung of every ladder ever driven here was 40 rows. That is
+  not a small gap. A CLI lays its dialogs out against the pane HEIGHT as well as its width, and
+  a matcher keyed on what sits at the bottom of the pane is a height-sensitive claim being
+  validated on a single height.
+
+  It cost #713 a second round. gemini's trust gate was re-anchored on "the box's bottom border
+  ends the pane", swept across four widths, and shipped green — while gemini 0.55.1 draws a
+  "Press Ctrl+O to show more lines" hint BELOW that border whenever the dialog overflows its
+  pane. Driven at twelve geometries the anchor missed seven, including the 45x19 pane a plain
+  70x24 terminal produces. No width sweep could have found it.
+
+  Two levers, and which one you want depends on whether the screen comes back. `up <program>
+  <width> <height>` starts the whole run at a geometry, which is how #713's two committed height
+  rungs were driven — one run per geometry, each in its own run directory. `fresh <width>
+  <height>` moves an EXISTING run to a new one in a new workspace, which is what a once-per-path
+  screen needs, since a trust gate does not reopen for a directory it has been answered for.
+  Both are native sessions at that size. There is deliberately NO resize-based height ladder —
+  the divergence above is not width-specific, so a height sweep by resize would manufacture
+  exactly the fixtures this section warns about. Sweep heights with repeated `fresh`, and
+  record the height beside the capture: session/agent/gemini_pane_test.go's
+  geminiOverflowPaneHeights exists because paneCapture carries a width and nothing else.
 EOF
 }
 
