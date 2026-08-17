@@ -829,7 +829,15 @@ var codex = &Adapter{
 //
 // BUNDLE-GREP ONLY at 0.55.1: "esc to cancel" and "No, suggest changes (esc)" are both
 // still present in @google/gemini-cli/bundle, and the pre-adapter matcher
-// "Yes, allow once" is still absent. Presence is necessary and NOT sufficient — this file's
+// "Yes, allow once" is still absent. For the busy marker the grep is a targeted one rather
+// than a presence check, because the bundle ships BOTH spellings and HasBusyMarker's
+// strings.Contains is case-sensitive (agent.go), so which one renders decides whether the
+// marker is live at all: the 20 "Esc to cancel" hits are dialog footers (DialogFooter's default
+// cancelAction, the auth-key prompt, the theme picker), while the streaming footer builds
+// `(esc to cancel, ${elapsedTime}…)` under streamingState === "responding" — lowercase, and the
+// responding footer is the surface BusyMarkers reads. That locates the render site and its
+// condition; it still does not say what a live pane puts on screen around it. Presence is
+// necessary and NOT sufficient — this file's
 // own rule — and #713 is the proof: the gate literal that rotted was verified the same way,
 // from the 0.27 package source (FolderTrustDialog.js, back when the package shipped
 // unbundled), and a grep of the shipped bundle cannot see that a live pane truncates or wraps
@@ -847,6 +855,28 @@ var codex = &Adapter{
 // per-surface is the only thing that would make it a signal again, and no adapter does that
 // today; that is #721, and it is not gemini-specific — gemini is only where a rotted literal
 // made it visible.
+//
+// THAT IS THE OPPOSITE OF WHAT CLAUDE'S PIN DOES, twice over (see VerifiedVersion above: "the
+// pin is a claim about the WHOLE surface … Bumping on a partial drive is how a pin starts
+// lying", and "one surface is not the whole surface"). The divergence is deliberate and it
+// turns on a fact about the two gaps, not on a different principle. Under minor granularity
+// doctor truncates both sides before comparing (internal/doctor/compare.go), so claude's pin at
+// 2.1.170 against an installed 2.1.220 truncates to 2.1 either way and doctor is SILENT whether
+// or not #354's partial drive is recorded there: refusing the bump costs claude no signal and
+// buys an accurate record. gemini's pin was 28 minors behind, where the same refusal is not a
+// record but a standing warning on every 0.55 user's `atrium doctor` — one they cannot act on,
+// for surfaces that need auth and a paid turn to verify, sitting next to a gate that IS now
+// driven. Bumping trades an unactionable true warning for a silence disclosed here.
+//
+// It is a trade, not a free move, and the honest way to weigh it is by what the muted surfaces
+// would cost if they HAVE rotted: the busy marker's render site is located above at 0.55.1
+// (lowercase, in the responding footer), a missed confirmation is NoAutoTap and degrades to
+// "idle" rather than to a wrong keystroke, and generateNameGemini yields a poor session title.
+// None of them is #713's class, where the failure was a false completion ding on a blocked
+// session. If the project would rather hold the claude rule uniformly and take the standing
+// warning, the reversal is this pin plus geminiWithinPin (internal/doctor/check_test.go), the
+// Gemini row in render_test.go and the table in drift_fields_test.go — four literals, no
+// behaviour.
 //
 // The OLDER direction is silent by construction, and that is not specific to gemini: doctor
 // reports drift only when installed > verified (internal/doctor/compare.go, driftExceeds), so
@@ -878,11 +908,24 @@ var gemini = &Adapter{
 		// holding position (#347). The literal is quotable from this file exactly as
 		// codex's is, and Enter on a real confirmation runs the shell command or
 		// writes the file — but the CLI is deprecated in favour of Antigravity
-		// (docs/superpowers/specs/2026-07-23-antigravity-integration-design.md), and
-		// anchoring it would take a primitive nothing else needs: the confirmation
-		// renders INSIDE a rounded box with the app footer below it, so
-		// footerBelowBox hands back the footer and never the dialog, and
-		// aboveBoxBlock anchors on a composer the confirmation has replaced.
+		// (docs/superpowers/specs/2026-07-23-antigravity-integration-design.md).
+		//
+		// This used to add that anchoring it "would take a primitive nothing else
+		// needs: the confirmation renders INSIDE a rounded box with the app footer
+		// below it, so footerBelowBox hands back the footer and never the dialog, and
+		// aboveBoxBlock anchors on a composer the confirmation has replaced". The
+		// first clause stopped being true in this same change: bottomBoxBlock is that
+		// primitive, and trailingBelowBoxCap was sized to admit exactly one rendered
+		// row below a border — the app footer. So the remaining reason is evidence,
+		// not machinery. Every gemini pane this repo holds is a TRUST dialog; no
+		// confirmation has ever been driven, because reaching one needs auth and a
+		// real turn, and this file's own rule is that bundle presence is necessary
+		// and not sufficient. Anchoring an undriven surface on a box whose shape is
+		// only assumed is how #713 shipped. The exposure while it stays flat is real
+		// and is the #342 direction: a working pane that QUOTES "No, suggest changes
+		// (esc)" — quotable from this file, from #715, from any agent reading the
+		// tracker — reports needs-input and withholds its queued prompt. Closing it
+		// needs a driven capture first; that is #721's neighbour and not this change.
 		// Surfacing as needs-input costs a gemini user one keystroke; autoyes users
 		// who want the taps have gemini's own --yolo / --approval-mode.
 		{Name: "confirmation", Window: WindowPrompt, NoAutoTap: true,
@@ -1106,7 +1149,23 @@ var gemini = &Adapter{
 // both counts. geminiIdlePane is hand-composed from 0.27 package source and its own doc says it
 // is not evidence for a matcher, so it never established what gemini renders; and a lone footer
 // line is inside trailingBelowBoxCap now, so it would not put the composer out of reach even if
-// it were real. The hole is closed by the glyph check below and nothing else. So a
+// it were real. The glyph check below is the only thing that closes it, and it closes it only
+// while the glyph is ON SCREEN — which is a bound, not a quibble, because the pane here is the
+// PREVIEW pane and it is short: 19 rows at a plain 70x24 terminal, per geminiOverflowPaneHeights.
+// A composer taller than that scrolls its "> " row off the top, leaving walled continuation rows
+// under a bottom border, and isInputBoxLine has nothing left to match. Measured: a two-row
+// continuation whose text carries "Trust folder", a border, and a footer row gives GateUp true
+// with InputBoxVisible FALSE — needs-input suppressed, the queued prompt withheld, the row
+// reporting "waiting on setup screen" while the user is typing. That is the #342 direction with
+// the user's own keystrokes as the trigger, and it is DISCLOSED rather than closed:
+// TestGeminiTrustGateFiresOnAComposerTallerThanThePane pins it so it cannot rot into a surprise.
+//
+// Closing it means demanding the MENU shape — "Trust folder" preceded by a list index, which
+// BaseSelectionList renders as "N." — and that was rejected on #713's own evidence: the rows
+// gemini renumbers or restyles are exactly the ones a narrow pane truncates, and every literal
+// this gate has lost was lost by being more specific than it needed to be. The trigger needs a
+// paste taller than the pane that quotes "Trust folder"; the miss it would risk needs only a
+// vendor bump. So a
 // block that reads as a composer is rejected: the trust dialog is a MENU, its rows open with
 // "●" and a number, and no rung renders a composer glyph anywhere inside the dialog —
 // TestGeminiCapturesRenderNoComposerGlyphInsideTheDialog, which scans the whole block. It
@@ -1121,9 +1180,16 @@ var gemini = &Adapter{
 // substitution is pinned by TestGeminiUsesTheDefaultComposerGlyphs, so an adapter that later
 // gains a custom glyph fails there instead of silently reopening this hole.
 //
-// No GateWindow is consulted at all: GateUp short-circuits on Match before it flattens
-// anything, so an adapter-level GateWindow would not reach this and setting one would be
-// inert. The window this gate has is the box.
+// No GateWindow is consulted at all, and the reason is narrower than an earlier draft claimed.
+// It said "GateUp short-circuits on Match before it flattens anything, so an adapter-level
+// GateWindow would not reach this and setting one would be inert" — false as a general
+// statement about GateUp. A Match returning FALSE falls through to `continue` (agent.go), and
+// the next Gate carrying Contains flattens at gateWindow() as usual; measured with a
+// two-gate adapter whose first Match always returns false, which flattens and gates. What is
+// actually true is that gemini declares exactly ONE Gate today, so nothing ever reaches the
+// flatten. Adding a second — the startup auth dialog disclosed below is the obvious candidate —
+// silently reinstates a flatten on every gemini poll, and GateWindow stops being inert with it.
+// The window this gate has is the box.
 func geminiTrustGateVisible(content string) bool {
 	block, ok := bottomBoxBlock(content)
 	if !ok {
