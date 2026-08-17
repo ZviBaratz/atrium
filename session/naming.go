@@ -170,8 +170,11 @@ func generateName(ctx context.Context, executor cmd.Executor, claudePath, workDi
 // It fails toward a lost title rather than a wrong one — Output returns the
 // non-zero exit as an error, so the empty stdout never reaches sanitizeName —
 // which is why #736 disclosed it rather than folding a behaviour change into a
-// matcher fix. Tracked separately; the fix is an env var on the command, not a
-// contract change here.
+// matcher fix. Tracked as #744; the fix is GEMINI_CLI_TRUST_WORKSPACE=true on
+// runGeminiHeadless's command, not a contract change here. Note what #736 also
+// took away while filing it: the adapter's pin moved past 0.55.1, and doctor
+// warns only when installed > verified, so a 0.55.x install that used to read
+// "drifted" now reads "ok" with naming still broken.
 func generateNameGemini(ctx context.Context, executor cmd.Executor, geminiPath, prompt string, stats *git.DiffStats) (string, error) {
 	sessionContext := buildContext(prompt, stats)
 	if sessionContext == "" {

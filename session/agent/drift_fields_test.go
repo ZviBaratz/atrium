@@ -13,12 +13,15 @@ func TestAdaptersExposesSeededVersions(t *testing.T) {
 		// the ungated (hint-list) footer branch. #337.
 		KeyClaude: {"2.1.210", GranularityMinor, map[string]bool{"tengu_copper_thistle": false}},
 		// Moved by #736, which is the drive this comment used to ask for by name: "a drive
-		// that covers all four surfaces". It drove the confirmation dialog and the busy
-		// marker on a width ladder and probed generateNameGemini's `gemini -p` contract, in
-		// the same authenticated sessions, joining the two gates #713 and #717 had already
-		// driven at 0.55.1. registry.go's gemini header lists each surface with its capture,
-		// including the two things the drive found that a bundle grep could not: both
-		// literals are PRESENT and neither is reachable at every width.
+		// that covers all four surfaces". Four was the count when that was written and #717
+		// has since added a second Gate, so what #736 actually had to cover was five — it
+		// drove the confirmation dialog and the busy marker on a width ladder and probed
+		// generateNameGemini's `gemini -p` contract, in the same authenticated sessions,
+		// joining the two gates #713 and #717 had already driven at 0.55.1. registry.go's
+		// gemini header lists each surface with its capture, including the two things the
+		// drive found that a bundle grep could not: both literals are PRESENT and neither is
+		// reachable at every width. It also records what this pin now hides — #744, a live
+		// 0.55.x naming break that doctor stopped flagging the moment the pin passed it.
 		//
 		// The other route this comment offered is still open and still better — a per-surface
 		// pin (#721), which would have let #713 move the one surface it drove instead of

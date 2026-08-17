@@ -22,9 +22,14 @@ import (
 // authenticated session and a real turn, and drive-agent.sh drove against the real ~/.gemini.
 // These were driven with ATR_CAP_ENV (#736) pointing GEMINI_CLI_HOME and
 // GEMINI_FORCE_FILE_STORAGE at a throwaway home, so the run could authenticate without being
-// able to touch the developer's config. Proof the isolation is render-neutral: the trust gate
-// driven at width 80 under the same ATR_CAP_ENV came back byte-identical to
-// geminiTrustGatePane80, which was driven without it.
+// able to touch the developer's config. The isolation was checked for render-neutrality rather
+// than assumed: the trust gate driven at width 80 under the same ATR_CAP_ENV came back
+// byte-identical to geminiTrustGatePane80, which was driven without it.
+//
+// That check is PROVENANCE, like the date and the auth type above it, not an invariant the
+// suite holds — the isolated capture was a duplicate of a fixture already in the tree, and
+// committing it would have bought an equality between two literals that only a human edit can
+// break. What a later drive should redo is the check, not the assertion.
 //
 // AUTH TYPE IS PART OF THE PROVENANCE. These were driven under `gemini-api-key`, not
 // `oauth-personal`, and not by preference: at 0.55.1 oauth-personal returns
@@ -584,23 +589,17 @@ var geminiConfirmLadder = []paneCapture{
 	{name: "geminiConfirmPane120", width: 120, note: "a completed tool box above the dialog", pane: geminiConfirmPane120},
 }
 
-// The busy ladder is SHORTER than the confirmation one, and the gap is the finding. It covers
-// only the widths where HasBusyMarker actually fires; four driven rungs miss, for TWO
-// different reasons, and collapsing them into one list would hide the half that a window can
-// still fix.
+// The busy ladder is SHORTER than the confirmation one, and the gap is the finding. Four of
+// the seven driven rungs missed when they were captured, for TWO different reasons, and
+// keeping them apart is what let one half be fixed: the marker sat one row past MarkerWindow
+// at 34 and 33, so the window moved 8 -> 9 and those two rungs are covered here. The other
+// half is below, and no window reaches it.
 var geminiBusyLadder = []paneCapture{
-	{name: "geminiBusyPane40", width: 40, note: "loading row 8 non-empty lines up — the last that fits", pane: geminiBusyPane40},
+	{name: "geminiBusyPane33", width: 33, note: "footer wraps; marker 9 non-empty lines up", pane: geminiBusyPane33},
+	{name: "geminiBusyPane34", width: 34, note: "footer wraps; marker 9 non-empty lines up", pane: geminiBusyPane34},
+	{name: "geminiBusyPane40", width: 40, note: "footer on one row; marker 8 up", pane: geminiBusyPane40},
 	{name: "geminiBusyPane45x19", width: 45, note: "19 rows, marker inside the window", pane: geminiBusyPane45x19},
 	{name: "geminiBusyPane120", width: 120, note: "the wide LoadingIndicator layout", pane: geminiBusyPane120},
-}
-
-// Missed because the marker is ON SCREEN but OUT OF THE WINDOW. gemini sets MarkerWindow: 8,
-// and at these widths the below-composer footer takes one row more, pushing the loading row to
-// the 9th non-empty line from the bottom. A wider window would reach it — which is what makes
-// these different from the two below, and why they are not in the same list.
-var geminiBusyOutOfWindowRungs = []paneCapture{
-	{name: "geminiBusyPane34", width: 34, note: "marker rendered, 9 non-empty lines up", pane: geminiBusyPane34},
-	{name: "geminiBusyPane33", width: 33, note: "marker rendered, 9 non-empty lines up", pane: geminiBusyPane33},
 }
 
 // Missed because the marker is NOT ON SCREEN AT ALL. The loading row truncates rather than
@@ -675,6 +674,67 @@ func TestGeminiConfirmationCancelRowTruncatesBelowWidth34(t *testing.T) {
 	}
 }
 
+// The matcher's width floor, which is set by the row the doc used NOT to reason about. A
+// conjunction's floor is its widest term: the label column is paneWidth-9, "Allow once" is 10
+// cells and the cancel prefix 7, so "Allow once" binds and the floor is a 19-column pane. The
+// narrowest rung driven is 20, one column above it — and pane_width_test.go's header records
+// that the preview width is not clamped to any minimum, so a narrower pane is not hypothetical.
+//
+// Measured on the driven bytes rather than on the arithmetic, because the arithmetic is the
+// claim being checked: at width 20 the allow row still carries its whole label while the
+// cancel row is ALREADY elided, which is what "one column of headroom, on the other literal"
+// looks like from outside the box model.
+func TestGeminiConfirmationFloorIsSetByTheAllowRow(t *testing.T) {
+	labelCol := func(pane string, want string) string {
+		for _, l := range strings.Split(pane, "\n") {
+			if strings.Contains(l, want) {
+				return l
+			}
+		}
+		return ""
+	}
+
+	allow := labelCol(geminiConfirmPane20, "Allow once")
+	require.NotEmpty(t, allow, "the premise: the narrowest driven rung still renders the allow row")
+	require.NotContains(t, allow, "…", "the binding literal is NOT elided at width 20 — it fits, barely")
+
+	cancel := labelCol(geminiConfirmPane20, "No, sug")
+	require.Contains(t, cancel, "…",
+		"the other literal IS elided here, which is why 7 cells of headroom on it says nothing "+
+			"about the matcher's floor")
+
+	// The label column, MEASURED off the driven bytes rather than asserted from the box
+	// arithmetic that predicts it. The cancel row is elided, so its label field is full: its
+	// rune count IS the column. Everything the doc says about the floor rests on this number.
+	const width = 20
+	label := strings.TrimSuffix(strings.TrimPrefix(strings.Trim(cancel, "│"), "   3. "), " ")
+	require.Equal(t, width-9, len([]rune(label)),
+		"the label column is paneWidth-9; measured %q", label)
+	require.Equal(t, width-9-1, len([]rune("Allow once")),
+		"and the binding literal fills all but ONE cell of it at the narrowest driven rung — "+
+			"which is what makes 19 the floor, and 20 the last rung that proves anything")
+}
+
+// The residual of #736's own class, pinned rather than left to be rediscovered. The box clause
+// says "last box on the pane", not "dialog" — so gemini's own tool-RESULT box fires if it
+// carries both rows, and in THIS repo it can: both literals are verbatim in registry.go and in
+// this file. Narrower than the flat matcher, which fired on a bare transcript line with no box
+// at all, and not closed.
+func TestGeminiConfirmationStillFiresOnAQuotedDialogEndingThePane(t *testing.T) {
+	const quoted = `✦ Here is what registry.go says the matcher keys on:
+
+╭────────────────────────────────────────────╮
+│ ✓  ReadFile registry.go                    │
+│                                            │
+│ ● 1. Allow once                            │
+│   3. No, suggest changes (esc)             │
+╰────────────────────────────────────────────╯
+`
+	require.True(t, geminiConfirmationVisible(quoted),
+		"disclosed, not fixed: a bottom-most box quoting both rows is indistinguishable from "+
+			"the dialog without a per-branch header literal, and four branches are undriven")
+}
+
 // The composer veto's PREMISE. geminiConfirmationVisible returns false on any block line that
 // reads as a composer, which is only meaningful while no confirmation rung contains one.
 func TestGeminiConfirmCapturesRenderNoComposerGlyphInsideTheDialog(t *testing.T) {
@@ -723,17 +783,9 @@ func TestGeminiBusyMarkerMissesAtNarrowWidths(t *testing.T) {
 		})
 	}
 
-	// The two causes, asserted apart. Without the Contains half these would say only "it
-	// misses", and the two failures would look like one — while one is fixable by a window
-	// and the other is not reachable by any.
-	for _, c := range geminiBusyOutOfWindowRungs {
-		t.Run("out-of-window/"+c.label(), func(t *testing.T) {
-			require.Contains(t, c.pane, marker,
-				"the premise: the marker IS rendered at this width")
-			require.False(t, gemini.HasBusyMarker(c.pane),
-				"but MarkerWindow (%d) does not reach it", gemini.MarkerWindow)
-		})
-	}
+	// The cause, asserted rather than implied. Without the Contains half this would say only
+	// "it misses", which is also true of the two rungs a wider window DID fix — and those two
+	// are now in the ladder above, so the distinction is only legible if it is written down.
 	for _, c := range geminiBusyTruncatedRungs {
 		t.Run("truncated/"+c.label(), func(t *testing.T) {
 			require.Contains(t, c.pane, "Thinking...",
@@ -745,10 +797,12 @@ func TestGeminiBusyMarkerMissesAtNarrowWidths(t *testing.T) {
 	}
 }
 
-// The window budget, as a number rather than a sentence. gemini's loading row sits directly
-// above the composer, so what decides whether MarkerWindow reaches it is how many non-empty
-// rows the composer and footer occupy — and that grows by one when the footer wraps. Eight is
-// exactly enough at 40 and one short at 34.
+// The window budget, as a number rather than a sentence, and the measurement MarkerWindow is
+// fitted to. gemini's loading row sits directly above the composer, so what decides whether
+// the window reaches it is how many non-empty rows the composer and footer occupy — and that
+// grows by one when the footer wraps. 8 is exactly enough at 40 and one short at 34, which is
+// why the constant is 9 and why 9 buys no margin at all: it is the deepest rung driven, not a
+// bound anything derives. A rung whose footer wrapped twice would need 10 and is not covered.
 func TestGeminiBusyMarkerSitsAtTheEdgeOfItsWindow(t *testing.T) {
 	depth := func(pane string) int {
 		var nonEmpty []string
@@ -764,12 +818,12 @@ func TestGeminiBusyMarkerSitsAtTheEdgeOfItsWindow(t *testing.T) {
 		}
 		return -1
 	}
-	require.Equal(t, 8, depth(geminiBusyPane40),
-		"the widest margin any covered rung has is zero: 8 in a window of 8")
-	require.Equal(t, 9, depth(geminiBusyPane34),
-		"one row deeper, and the marker is gone — the footer wrapped")
-	require.Equal(t, gemini.MarkerWindow, 8,
-		"if this constant moves, the two numbers above stop meaning what they say")
+	require.Equal(t, 8, depth(geminiBusyPane40), "footer on one row")
+	require.Equal(t, 9, depth(geminiBusyPane34), "one row deeper — the footer wrapped")
+	require.Equal(t, 9, depth(geminiBusyPane33), "same wrap, same depth")
+	require.Equal(t, 9, gemini.MarkerWindow,
+		"the constant IS the deepest rung above: it buys zero margin, and moving either "+
+			"without the other silently changes which widths detect as busy")
 }
 
 // The conjunction, one literal at a time. No driven rung can test this — a real dialog always

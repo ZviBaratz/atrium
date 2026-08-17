@@ -321,12 +321,21 @@ func TestDriveAgentCapEnvRejectsBadEntries(t *testing.T) {
 		{"duplicate", "A=1\nA=2", "sets A twice"},
 		{"carriage return", "A=1\r", "carriage return"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			out, _, err := runDriveAgentTmux(t, script, dir, tc.env, `validate_cap_env`)
-			require.Error(t, err, "output:\n%s", out)
-			require.Contains(t, out, tc.want, "output:\n%s", out)
-		})
+		// Both entry points, every entry. `up` validates the VARIABLE; every native rung of
+		// a ladder reaches new-session through load_cap_env, which validates the FILE. One
+		// table over both is what holds them to the same list — a refusal that lived on only
+		// one path is the shape this guard exists to prevent.
+		for _, path := range []struct{ name, snippet string }{
+			{"variable", `validate_cap_env <<<"$ATR_CAP_ENV"`},
+			{"file", `printf '%s\n' "$ATR_CAP_ENV" >"$RUN/cap-env"; load_cap_env`},
+		} {
+			t.Run(tc.name+"/"+path.name, func(t *testing.T) {
+				dir := t.TempDir()
+				out, _, err := runDriveAgentTmux(t, script, dir, tc.env, path.snippet)
+				require.Error(t, err, "output:\n%s", out)
+				require.Contains(t, out, tc.want, "output:\n%s", out)
+			})
+		}
 	}
 }
 
@@ -348,14 +357,44 @@ func TestDriveAgentCapEnvKeepsProvenanceOffTheEnvWrapper(t *testing.T) {
 		"if this stops holding the wart is gone and this guard should be retired, not deleted")
 
 	// And the fix: the program string is untouched, so the same derivation yields the agent.
-	out, argv, err := runDriveAgentTmux(t, script, t.TempDir(), "GEMINI_CLI_HOME=/iso",
+	// start_session is in the snippet because the last assertion reads the recorded argv —
+	// without it argv is the empty string and NotContains passes against nothing.
+	dir := t.TempDir()
+	writeMetaEnv(t, dir)
+	out, argv, err := runDriveAgentTmux(t, script, dir, "GEMINI_CLI_HOME=/iso",
 		`program=gemini; printf 'BIN=%s\n' "${program%% *}"; write_cap_env; load_cap_env
-		 printf 'BARE=%s\n' "${CAP_ENV_BARE[0]}"`)
+		 printf 'BARE=%s\n' "${CAP_ENV_BARE[0]}"
+		 start_session "$TMP/repo" 45 19 "$program"`)
 	require.NoError(t, err, "output:\n%s", out)
 	require.Contains(t, out, "BIN=gemini", "output:\n%s", out)
 	require.Contains(t, out, "BARE=GEMINI_CLI_HOME=/iso",
 		"probe_version needs the bare form, or the recorded version is a differently-configured binary's")
-	require.NotContains(t, argv, "env ", "argv:\n%s", argv)
+	require.NotEmpty(t, argv, "the premise: start_session recorded an argv for the next assertion to read")
+	require.NotContains(t, argv, "[env]", "argv:\n%s", argv)
+}
+
+// The refusal list and the argv builder must be one code path. validate_cap_env runs at `up`
+// over $ATR_CAP_ENV, but every native rung of a ladder reaches new-session through `fresh` ->
+// start_session -> load_cap_env, which reads $RUN/cap-env — a file `help` names, so editing it
+// is an invited operation. TMUX_TMPDIR is the entry that matters: inside the pane it points a
+// nested tmux at the live Atrium fleet, the accident every -S in that script exists to prevent
+// (#547/#581). Asserted on the FILE, which is the path `up`'s validation never sees.
+func TestDriveAgentCapEnvIsRevalidatedOnLoad(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not on PATH")
+	}
+	script := filepath.Join(moduleRoot(t), "scripts", "drive-agent.sh")
+	dir := t.TempDir()
+	writeMetaEnv(t, dir)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "cap-env"),
+		[]byte("GEMINI_CLI_HOME=/iso\nTMUX_TMPDIR=/tmp\n"), 0o600))
+
+	out, argv, err := runDriveAgentTmux(t, script, dir, "",
+		`start_session "$TMP/repo" 45 19 gemini`)
+	require.Error(t, err, "a hand-edited TMUX_TMPDIR must stop the run; output:\n%s", out)
+	require.Contains(t, out, "belongs to the harness")
+	require.NotContains(t, argv, "TMUX_TMPDIR",
+		"the refusal must land before new-session, not after; argv:\n%s", argv)
 }
 
 // emit stamps the fixture header, and a capture taken under a non-default agent config is not

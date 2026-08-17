@@ -321,9 +321,15 @@ load_run() {
 # had to hand-write its fixture headers around it. Passing the variables separately
 # leaves $program untouched, so the provenance stays correct by construction.
 
-# validate_cap_env refuses a malformed ATR_CAP_ENV. It is PURE and runs before cmd_up
-# creates anything, so a typo costs a message rather than a half-built run directory —
-# the same ordering `fresh` learned to use for its width.
+# validate_cap_env refuses a malformed entry set, read from STDIN. It is PURE, and cmd_up
+# runs it before creating anything, so a typo costs a message rather than a half-built run
+# directory — the same ordering `fresh` learned to use for its width.
+#
+# Reading stdin rather than $ATR_CAP_ENV is what lets the refusal list and the argv builder
+# be ONE code path: load_cap_env runs it over $RUN/cap-env on every `fresh`. Validating only
+# at `up` would leave the TMUX_TMPDIR refusal below unenforced on the file, which `help`
+# advertises by name as where the environment is recorded — an invitation to hand-edit it,
+# and a hand-edited TMUX_TMPDIR in the pane points a nested tmux at the live fleet.
 validate_cap_env() {
 	local line name seen=""
 	while IFS= read -r line; do
@@ -355,7 +361,7 @@ validate_cap_env() {
 		# is the one to refuse by name.
 		[[ "$line" != *$'\r'* ]] ||
 			die "ATR_CAP_ENV entry contains a carriage return: $name"
-	done <<<"${ATR_CAP_ENV:-}"
+	done
 }
 
 # write_cap_env records the validated entries beside meta.env. ALWAYS written, empty
@@ -380,6 +386,9 @@ load_cap_env() {
 	CAP_ENV_BARE=()
 	[[ -f "$RUN/cap-env" ]] ||
 		die "no $RUN/cap-env — this run directory predates ATR_CAP_ENV, so a session started now would silently not carry it. \`down\` and \`up\` again."
+	# Re-validated on the way OUT of the file, not only on the way in: this is the path
+	# every `fresh` takes, and the file is hand-editable.
+	validate_cap_env <"$RUN/cap-env"
 	local line
 	# Redirected, never piped: a `while read` on the right of a pipe runs in a subshell
 	# and the arrays would not survive it.
@@ -786,7 +795,7 @@ cmd_up() {
 
 	# Before the run directory, the socket and the scratch repo exist — same ordering,
 	# same reason: a typo here should cost a message, not a half-built run to clean up.
-	validate_cap_env
+	validate_cap_env <<<"${ATR_CAP_ENV:-}"
 
 	local fleet_before
 	fleet_before="$(fleet_sessions)"
@@ -1471,13 +1480,14 @@ ENV
                  `new-session -e`. Recorded in $RUN/cap-env, re-applied by `fresh` on
                  every rung, and used for `<bin> --version` too. `emit` discloses the
                  NAMES (never the values) in the fixture header; `status` shows them.
-                 TMUX/TMUX_TMPDIR/TMUX_PANE are refused — see ISOLATING AN AGENT'S
-                 CONFIG DIR below.
+                 TMUX/TMUX_TMPDIR/TMUX_PANE are refused, on the file as well as on the
+                 variable — see ISOLATING AN AGENT'S CONFIG DIR below.
   SETTLE         seconds to let the CLI repaint after a resize/keystroke (default 1.5)
   KEEP=1         keep the run directory on `down`
   FORCE=1        allow `keys Enter` at a persist-to-settings dialog
   NOENTER=1      `send`/`paste` deliver the text and DO NOT submit. For a fixture of an
                  unsubmitted composer (#735). Refuses a text containing a newline.
+                 Unspent: no committed fixture is driven with it yet.
 
 ISOLATING AN AGENT'S CONFIG DIR
   By default this harness does NOT isolate it, and that is deliberate — driving a live,

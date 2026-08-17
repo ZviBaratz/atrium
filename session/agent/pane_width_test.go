@@ -213,9 +213,9 @@ var paneCoverage = map[string][]paneCapture{
 	// isolation the drive needed and for the auth type it was driven under.
 	"gemini/prompt/confirmation": geminiConfirmLadder,
 	// Deliberately SHORTER than the confirmation ladder taken in the same sessions. gemini's
-	// busy marker misses four of the seven driven widths, for two different reasons, and the
-	// rungs that miss are held next door as negative evidence rather than dropped —
-	// geminiBusyOutOfWindowRungs and geminiBusyTruncatedRungs.
+	// busy marker misses two of the seven driven widths — the loading row truncates there, so
+	// no window reaches it — and those rungs are held next door as negative evidence rather
+	// than dropped: geminiBusyTruncatedRungs.
 	"gemini/busy": geminiBusyLadder,
 
 	"agy/gate/trust": {
@@ -353,7 +353,7 @@ var wantRungs = map[string][]int{
 	// Three rungs where seven were driven. The floor is not 40 because nothing narrower was
 	// captured — it is 40 because 34 and 33 render the marker outside MarkerWindow and 24 and
 	// 20 do not render it at all.
-	"gemini/busy": {40, 45, 120},
+	"gemini/busy": {33, 34, 40, 45, 120},
 
 	"agy/gate/trust":          {24, 28, 120},
 	"agy/busy":                {20, 24, 28, 40, 120, 120},
