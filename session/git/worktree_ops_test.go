@@ -224,6 +224,44 @@ func TestSetupFromExistingBranch_RemovesOrphanedDirectory(t *testing.T) {
 	}
 }
 
+func TestSetupFromExistingBranch_RecordsBaseCommit(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	repoPath := filepath.Join(t.TempDir(), "repo")
+	mustRunGit(t, "", "init", repoPath)
+	mustRunGit(t, repoPath, "config", "user.name", "Test User")
+	mustRunGit(t, repoPath, "config", "user.email", "test@example.com")
+
+	if err := os.WriteFile(filepath.Join(repoPath, "README.md"), []byte("hello\n"), 0644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	mustRunGit(t, repoPath, "add", "README.md")
+	mustRunGit(t, repoPath, "commit", "-m", "initial")
+	mustRunGit(t, repoPath, "branch", "feature/test")
+
+	worktreeRoot, err := getWorktreeDirectory()
+	if err != nil {
+		t.Fatalf("getWorktreeDirectory: %v", err)
+	}
+
+	g := &Worktree{
+		repoPath:         repoPath,
+		worktreePath:     filepath.Join(worktreeRoot, "feature-test"),
+		branchName:       "feature/test",
+		isExistingBranch: true,
+	}
+
+	if err := g.Setup(); err != nil {
+		t.Fatalf("Setup() error = %v", err)
+	}
+
+	want := strings.TrimSpace(mustRunGit(t, repoPath, "rev-parse", "feature/test"))
+	if got := g.GetBaseCommitSHA(); got != want {
+		t.Fatalf("GetBaseCommitSHA() = %q, want %q — diff pane will be empty without a recorded base", got, want)
+	}
+}
+
 // removeOrphanedWorktreeDir is Cleanup's fallback when git can no longer manage a
 // worktree (e.g. the project repo was renamed/removed). It must delete the dir when
 // it lives under the managed worktrees/ tree and refuse anything outside it.
