@@ -1,7 +1,6 @@
 package main
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -48,31 +47,19 @@ func TestNoDocClaimsTheLogLivesInTheTempDir(t *testing.T) {
 	require.Equal(t, logFileName, filepath.Base(livePath),
 		"the log package writes %q, but this guard searches prose for %q", filepath.Base(livePath), logFileName)
 
+	// Same durable-prose file set as TestNoProseCitesAPosition, so the two guards
+	// answer "which prose is shipped?" the same way and a third does not have to
+	// guess. Unlike that one this scan is whole-file: a string literal naming
+	// atrium.log beside the temp dir is the same wrong claim as a comment doing it.
 	var scanned int
 	root := moduleRoot(t)
-	require.NoError(t, filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, relErr := filepath.Rel(root, path)
-		require.NoError(t, relErr)
-		if d.IsDir() {
-			switch {
-			case d.Name() == ".git", d.Name() == "node_modules", d.Name() == "bin":
-				return filepath.SkipDir
-			case rel == filepath.FromSlash(historicalDocs):
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if ext := filepath.Ext(path); ext != ".go" && ext != ".md" {
-			return nil
+	for _, rel := range trackedProse(t, root) {
+		if ext := filepath.Ext(rel); ext != ".go" && ext != ".md" {
+			continue
 		}
 		scanned++
 
-		body, readErr := os.ReadFile(path)
-		require.NoError(t, readErr)
-		for i, line := range strings.Split(string(body), "\n") {
+		for i, line := range strings.Split(readFile(t, filepath.Join(root, filepath.FromSlash(rel))), "\n") {
 			if !strings.Contains(line, logFileName) {
 				continue
 			}
@@ -83,12 +70,11 @@ func TestNoDocClaimsTheLogLivesInTheTempDir(t *testing.T) {
 				}
 			}
 		}
-		return nil
-	}))
+	}
 
-	// Without this the test passes just as happily on a walk that matched
-	// nothing: a broken skip rule would turn the guard off rather than fail it.
-	require.NotZero(t, scanned, "walked no .go or .md files; the skip rules are wrong")
+	// Without this the test passes just as happily on a scan that reached
+	// nothing: a broken exemption would turn the guard off rather than fail it.
+	require.NotZero(t, scanned, "scanned no .go or .md files; the exemptions are wrong")
 
 	require.Contains(t, moduleFile(t, "README.md"), "~/.atrium/atrium.log",
 		"the README must name the log's real location — after the move it is the only prose that does")
