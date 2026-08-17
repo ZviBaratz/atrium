@@ -225,7 +225,7 @@ const geminiTrustGatePane20 = `  untrusted folder.
  │                │
  ╰────────────────╯`
 
-// The driven ladder, feeding paneCoverage["gemini/gate"] directly rather than being listed
+// The driven ladder, feeding paneCoverage["gemini/gate/trust"] directly rather than being listed
 // there a second time — the same arrangement codex's two ladders use.
 //
 // 80 is the width #713 measured the bug at, 40 is where the headline dies, and 24 is the
@@ -350,7 +350,7 @@ const geminiTrustGateOverflowPane24 = `
    Press Ctrl+O to s…
 `
 
-// The height rungs as captures. They join paneCoverage["gemini/gate"] alongside the width
+// The height rungs as captures. They join paneCoverage["gemini/gate/trust"] alongside the width
 // ladder, so the width machinery sweeps them too and deleting one is loud; they stay out of
 // geminiAllCaptures for the box-fits reason above.
 var geminiTrustGateOverflowLadder = []paneCapture{
@@ -1002,7 +1002,7 @@ func TestGeminiTrustGateLadderKeepsEveryDrivenRung(t *testing.T) {
 }
 
 // The shipped gate fires at every rung it claims — and the rungs are exactly the ones
-// paneCoverage["gemini/gate"] publishes, so the two can never disagree about what was driven.
+// paneCoverage["gemini/gate/trust"] publishes, so the two can never disagree about what was driven.
 //
 // This is deliberately NOT justified as "a better failure message than the generic loop". An
 // earlier draft said pane_width_test.go's TestEveryCoveredMatcherFiresAtEveryCapturedWidth
@@ -1018,7 +1018,7 @@ func TestGeminiTrustGateDetectedAtEveryDrivenWidth(t *testing.T) {
 	require.Equal(t,
 		ladderRungs(append(append([]paneCapture(nil), geminiTrustGateLadder...),
 			geminiTrustGateOverflowLadder...)),
-		ladderRungs(paneCoverage["gemini/gate"]),
+		ladderRungs(paneCoverage["gemini/gate/trust"]),
 		"paneCoverage must publish exactly the driven ladders, or the width table is describing "+
 			"a different set of panes than this file drove")
 

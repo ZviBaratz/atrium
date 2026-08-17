@@ -116,6 +116,18 @@ func (m PromptMatcher) matches(content string) bool {
 // never auto-dismisses a gate (surfacing it as needs-input is safer than blindly
 // accepting a folder-trust or new-MCP screen); GateUp is a detection-only signal.
 type Gate struct {
+	// Name identifies which gate this is, the way PromptMatcher.Name does — required on
+	// every Gate, and the reason it exists is coverage rather than logic.
+	//
+	// Nothing in detection reads it: GateUp returns the Gate itself, and a caller wanting
+	// to know which one fired can compare that. What could not be done without it is
+	// saying which gate a piece of EVIDENCE covers. paneCoverage keys on
+	// "<adapter>/gate/<name>", so an adapter with two gates has two keys, and a ladder
+	// proving one of them cannot silently stand in for the other. Until #717 every adapter
+	// declared exactly one gate and the key was "<adapter>/gate"; pane_width_test.go
+	// carried a require.Len(a.Gates, 1) whose failure message was an instruction to add
+	// this field before adding a second gate.
+	Name string
 	// Contains marks the gate as up when any entry is present in the region GateUp
 	// narrowed to — the flattened bottom WindowPrompt lines — not anywhere in the pane.
 	// That window is a budget, not a liveness proof (see GateUp): a gate whose literals

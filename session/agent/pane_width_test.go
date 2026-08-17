@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/mattn/go-runewidth"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -132,7 +133,7 @@ var paneCoverage = map[string][]paneCapture{
 	// both MCP-approval shapes, so every capture below belongs to the same key however many
 	// of them there are. (There were five when this was written; #666 added four. Say "every"
 	// rather than a number in a comment sitting directly above the thing that can be counted.)
-	"claude/gate": {
+	"claude/gate/startup": {
 		{name: "claudeTrustPane", width: 0, note: "folder-trust, 2.1.185", pane: claudeTrustPane},
 		// Neither 2.1.210 MCP capture has a usable width, and #666 settled why rather than
 		// leaving it a suspicion. claudeMCPMultiPane's comment claims 110 in a per-width
@@ -183,7 +184,7 @@ var paneCoverage = map[string][]paneCapture{
 		{name: "claudeModelErrorPane", width: 0, note: "", pane: claudeModelErrorPane},
 	},
 
-	"codex/gate":            codexTrustGateLadder,
+	"codex/gate/trust":      codexTrustGateLadder,
 	"codex/prompt/approval": codexApprovalLadder,
 
 	// #713. The first gemini entry in this table, and the only gemini surface any pane has
@@ -195,10 +196,18 @@ var paneCoverage = map[string][]paneCapture{
 	// separate captures rather than a second table because #713 shipped twice — once on each
 	// axis — and a coverage map that held only one of them called the gate covered while it
 	// missed on seven driven geometries.
-	"gemini/gate": append(append([]paneCapture(nil), geminiTrustGateLadder...),
+	"gemini/gate/trust": append(append([]paneCapture(nil), geminiTrustGateLadder...),
 		geminiTrustGateOverflowLadder...),
 
-	"agy/gate": {
+	// A key of its own, which is the whole point of Gate.Name (#717). The first draft
+	// appended these rungs to the trust gate's key on the reasoning that GateUp is true if
+	// EITHER gate matches, so one key could carry both — and the coverage test rejected it
+	// immediately, because fires() asks the NAMED gate and geminiTrustGateVisible does not
+	// fire on the nudge. That is the silent half-coverage the discriminator exists to
+	// refuse, caught on its first use.
+	"gemini/gate/ide-nudge": geminiIdeNudgeLadder,
+
+	"agy/gate/trust": {
 		{name: "agyTrustGatePane", width: 120, note: "", pane: agyTrustGatePane},
 		{name: "agyTrustGateNarrowPane", width: 28, note: "question truncated away", pane: agyTrustGateNarrowPane},
 		{name: "agyTrustGateSubOptionPane", width: 24, note: "option row itself truncated", pane: agyTrustGateSubOptionPane},
@@ -258,7 +267,7 @@ var paneCoverageExempt = map[string]string{
 	// bracket suffix on its own line kills the matcher exactly the way agy's truncation
 	// did. The reason is simply that no ladder has ever been driven: its shapes were
 	// captured live at 0.86.2, at a width nobody wrote down.
-	"aider/gate":           "no width ladder driven; its one pinned pane is an interpreted line of unrecorded width",
+	"aider/gate/docs":      "no width ladder driven; its one pinned pane is an interpreted line of unrecorded width",
 	"aider/prompt/confirm": "no width ladder driven; its shapes are inline single-line cases in TestAiderConfirmShapes, not named captures",
 }
 
@@ -295,12 +304,12 @@ var paneCoverageExempt = map[string]string{
 // vanishing from the middle, means either a literal got wider or a capture was deleted — and
 // both should be loud.
 var wantRungs = map[string][]int{
-	"claude/gate":                    {20, 20, 28, 40, 110, 110},
+	"claude/gate/startup":            {20, 20, 28, 40, 110, 110},
 	"claude/busy":                    {100, 100},
 	"claude/prompt/permission":       {28, 100},
 	"claude/prompt/permission-local": {20, 20, 29, 29, 30},
 
-	"codex/gate":            {20, 24, 28, 40, 60, 120},
+	"codex/gate/trust":      {20, 24, 28, 40, 60, 120},
 	"codex/prompt/approval": {20, 24, 28, 40, 60, 120},
 
 	// Floors at 24, and the rung below it was driven rather than left unknown: at 20 the
@@ -312,14 +321,20 @@ var wantRungs = map[string][]int{
 	// DRIVEN at, while agy/busy and agy/prompt/confirmation both reach 20 — an evidence gap,
 	// not a measured cliff. Gemini's 24 is a cliff, because 20 was driven and misses.
 	//
-	// Five entries for four widths: the second 24 and the 45 are the HEIGHT rungs
-	// (geminiTrustGateOverflowLadder), driven at pane heights 24 and 19 where the dialog
-	// overflows and gemini draws a hint below its bottom border. They are listed here because
-	// they are width-bearing captures like any other, but the axis they were driven for is not
-	// one this table can express — geminiOverflowPaneHeights records it.
-	"gemini/gate": {24, 24, 40, 45, 80},
+	// The trust dialog's width ladder (24/40/80) plus its two HEIGHT rungs — the second 24
+	// and the 45 (geminiTrustGateOverflowLadder), driven at pane heights 24 and 19 where the
+	// dialog overflows and gemini draws a hint below its bottom border. They are listed here
+	// because they are width-bearing captures like any other, but the axis they were driven
+	// for is not one this table can express — geminiOverflowPaneHeights records it.
+	"gemini/gate/trust": {24, 24, 40, 45, 80},
 
-	"agy/gate":                {24, 28, 120},
+	// The IDE nudge floors four columns lower than its sibling on the same adapter, and the
+	// difference is measured rather than lucky: the trust dialog's option rows interpolate a
+	// directory name that pushes them past the cut at 20, while the nudge's rows are fixed
+	// strings. Two gates, two floors, which is why floors are per-KEY and not per-adapter.
+	"gemini/gate/ide-nudge": {20, 24, 40, 80},
+
+	"agy/gate/trust":          {24, 28, 120},
 	"agy/busy":                {20, 24, 28, 40, 120, 120},
 	"agy/prompt/confirmation": {20, 24, 28, 40, 120},
 }
@@ -370,19 +385,9 @@ func requiredCoverageKeys(t *testing.T) []string {
 	t.Helper()
 	var keys []string
 	for _, a := range registry {
-		if len(a.Gates) > 0 {
-			// The key scheme has no gate discriminator, because Gate — unlike
-			// PromptMatcher — has no Name, and it is not comparable either (Match is a
-			// func), so GateUp's return value cannot identify which gate fired. Every
-			// adapter declares exactly one today (claude's single Match covers trust
-			// AND both MCP shapes). A second one must fail here rather than be silently
-			// half-covered by a key that cannot say which gate it means.
-			require.Len(t, a.Gates, 1,
-				"%s declares %d gates; Gate has no Name, so the \"<adapter>/gate\" key can no "+
-					"longer identify which one is covered — give Gate a discriminator before "+
-					"adding a second", a.Key, len(a.Gates))
-			keys = append(keys, string(a.Key)+"/gate")
-		}
+		gateKeys, err := gateCoverageKeys(a)
+		require.NoError(t, err)
+		keys = append(keys, gateKeys...)
 		if len(a.BusyMarkers) > 0 {
 			keys = append(keys, string(a.Key)+"/busy")
 		}
@@ -405,6 +410,70 @@ func adapterFor(t *testing.T, key string) (*Adapter, string) {
 	}
 	require.Fail(t, "coverage key names no adapter in the registry", "key %q", key)
 	return nil, ""
+}
+
+// gateCoverageKeys derives one coverage key per GATE, and errors on a gate with no Name.
+//
+// A pure function of the adapter rather than an assertion inline in requiredCoverageKeys,
+// because the Name requirement guards a gate NOBODY HAS DECLARED YET: every gate in the
+// registry has a name today, so an inline require would be a line no test can fail. Extracted,
+// TestGateCoverageKeysRefuseANamelessGate feeds it one — the insertion mutation an omission
+// needs.
+//
+// One key per gate, not per adapter. Until #717 every adapter declared exactly one, the key was
+// "<adapter>/gate", and requiredCoverageKeys carried a require.Len(…, 1) whose failure message
+// was an instruction: give Gate a discriminator before adding a second. gemini's IDE nudge is
+// that second gate. Without the discriminator a ladder proving the trust dialog would satisfy
+// "gemini/gate" while the nudge went uncovered — the silent half-coverage that assertion
+// existed to refuse, and which the first draft of this change walked straight into.
+func gateCoverageKeys(a *Adapter) ([]string, error) {
+	keys := make([]string, 0, len(a.Gates))
+	for _, g := range a.Gates {
+		if g.Name == "" {
+			return nil, fmt.Errorf("%s declares a gate with no Name; its coverage key "+
+				"would be \"%s/gate/\" and could not say which gate it means", a.Key, a.Key)
+		}
+		keys = append(keys, string(a.Key)+"/gate/"+g.Name)
+	}
+	return keys, nil
+}
+
+// TestGateCoverageKeysRefuseANamelessGate is the insertion mutation for the Name requirement:
+// the registry cannot supply a counterexample, so the test constructs one.
+func TestGateCoverageKeysRefuseANamelessGate(t *testing.T) {
+	ok, err := gateCoverageKeys(&Adapter{Key: "demo", Gates: []Gate{
+		{Name: "trust", Contains: []string{"x"}},
+		{Name: "nudge", Contains: []string{"y"}},
+	}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"demo/gate/trust", "demo/gate/nudge"}, ok,
+		"two gates, two keys — which is the whole point of the discriminator")
+
+	_, err = gateCoverageKeys(&Adapter{Key: "demo", Gates: []Gate{{Contains: []string{"x"}}}})
+	require.Error(t, err, "a nameless gate must be refused, not silently keyed \"demo/gate/\"")
+	assert.Contains(t, err.Error(), "demo")
+}
+
+// gateFor returns the named gate of an adapter.
+func gateFor(t *testing.T, a *Adapter, name string) Gate {
+	t.Helper()
+	for _, g := range a.Gates {
+		if g.Name == name {
+			return g
+		}
+	}
+	require.Fail(t, "adapter declares no such gate", "%s has no %q", a.Key, name)
+	return Gate{}
+}
+
+// gateMatches runs ONE gate's own predicate the way GateUp would run it — Match on the whole
+// cleaned pane, Contains on the adapter's flattened gate window — without letting an earlier
+// gate answer for it.
+func gateMatches(a *Adapter, g Gate, content string) bool {
+	if g.Match != nil {
+		return g.Match(content)
+	}
+	return g.matches(flattenChrome(content, a.gateWindow()))
 }
 
 // promptMatcherFor returns the named matcher of an adapter.
@@ -443,9 +512,33 @@ func fires(t *testing.T, key string, c paneCapture) bool {
 	a, kind := adapterFor(t, key)
 
 	switch {
-	case kind == "gate":
-		_, up := a.GateUp(c.pane)
-		return up
+	case strings.HasPrefix(kind, "gate/"):
+		want := strings.TrimPrefix(kind, "gate/")
+		g := gateFor(t, a, want)
+		if !gateMatches(a, g, c.pane) {
+			return false
+		}
+		// The ordering half, for the same reason the prompt branch has one. GateUp
+		// returns the FIRST gate that matches, so on a pane an earlier gate also claims,
+		// a later one could never be proven through it — the width question would
+		// silently become an ordering question. gemini is the first adapter where that
+		// is reachable at all, having two.
+		//
+		// What the gateMatches call above buys, stated precisely because a mutation
+		// measured it: asking GateUp alone reaches the same PASS/FAIL on every input,
+		// since a named gate that matches always makes GateUp true and the assertion
+		// below catches the rest. What it buys is the message — a capture whose own gate
+		// misses reports "does not fire at this width", which is the #648 question,
+		// instead of "matched by gate X first", which is a different diagnosis. It is
+		// kept for that and for symmetry with the prompt branch, not because the verdict
+		// turns on it.
+		won, ok := a.GateUp(c.pane)
+		require.True(t, ok, "%s: %s matches %q but GateUp found no gate at all", key, c.name, want)
+		require.Equal(t, want, won.Name,
+			"%s: %s (%s) is matched by gate %q first, so GateUp never reaches %q — this "+
+				"capture cannot be evidence for the gate it is filed under",
+			key, c.name, describeWidth(c.width), won.Name, want)
+		return true
 	case kind == "busy":
 		return a.HasBusyMarker(c.pane)
 	case strings.HasPrefix(kind, "prompt/"):
