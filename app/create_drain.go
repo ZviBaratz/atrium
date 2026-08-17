@@ -17,6 +17,7 @@ package app
 // advance with Force, or is refused.
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -58,14 +59,19 @@ const createStartBudget = 1
 // One, because those gates are git. Before executeCreateRequest can know whether a
 // request ends in a start or a refusal it runs targetValidity (git.IsGitRepo, then
 // git.CurrentBranchName), git.RepoGroupKey (rev-parse --show-toplevel), and — for a
-// non-direct target — variantTitleConflictIn (git.LocalBranchExists) and allExhausted,
+// non-direct target — createConflictIn (git.LocalBranchExists) and allExhausted,
 // whose resolveSpawnPool adds git.GetRemoteURL. Five subprocess round trips,
-// synchronously, on the Bubble Tea update goroutine, before a verdict exists. A direct
-// target spends four rather than five: it skips CurrentBranchName (targetValidity
-// returns before it for a non-repo) and LocalBranchExists (branchSlugConflict returns ""
-// for direct — no worktree, no branch to collide with), and adds git.ProbeGitRepo, which
-// confirms the direct verdict rather than inheriting IsGitRepo's guess (see
-// executeCreateRequest).
+// synchronously, on the Bubble Tea update goroutine, before a verdict exists.
+//
+// A direct target spends three, not five. It skips CurrentBranchName (targetValidity
+// returns before it for a non-repo), LocalBranchExists (branchSlugConflict returns ""
+// for direct — no worktree, no branch to collide with) and GetRemoteURL
+// (resolveSpawnPool guards it on !plan.direct, app_session.go), and adds
+// git.ProbeGitRepo, which confirms the direct verdict rather than inheriting IsGitRepo's
+// guess (see executeCreateRequest). An Adopt request — one the startup reconcile
+// re-queued to finish an interrupted build — spends four: a git target's five minus the
+// LocalBranchExists it skips deliberately rather than for want of a branch (see
+// createConflictIn).
 //
 // Redundancy in that count is deliberate. IsGitRepo, RepoGroupKey and — on the direct
 // path — ProbeGitRepo each run `rev-parse --show-toplevel` on the same path, and
@@ -73,8 +79,16 @@ const createStartBudget = 1
 // picker's default label, which a headless request has no use for). Collapsing them
 // means the drain computing "is this a git target, and what group is it" by hand
 // instead of through the helpers the create form uses — a fourth hand-copied
-// pre-flight, which is the more expensive mistake. One more round trip follows on the
-// accept path, where startNewSession resolves GetRemoteURL a second time.
+// pre-flight, which is the more expensive mistake.
+//
+// The ACCEPT path adds more, and only for a git target. startNewSession resolves
+// GetRemoteURL a second time (guarded on !direct, app_session.go, the same guard
+// resolveSpawnPool carries), and holdCreateRequest runs git.LocalBranchExists again to
+// record what was true of the session branch at the instant it claimed the request
+// (#716) — guarded on !inst.IsDirect(), having no branch. So two more for a git target
+// and ZERO for a direct one: both additions are on the same side of the same
+// discriminator. Neither is in the counts above, which are what reaching a VERDICT
+// costs; a refusal pays for neither.
 //
 // Bounding starts alone does not bound that work: a refusal spends no start budget, so
 // a backlog refused for a full cap would gate every one of fifty requests inside a
@@ -200,9 +214,20 @@ func (m *home) drainCreateRequests() tea.Cmd {
 		if (started >= createStartBudget || gated >= createGateBudget) && disposed >= createDisposalBudget {
 			break
 		}
-		// An in-flight request still has its file, on purpose (see
-		// settleCreateRequest), so it has to be skipped rather than re-executed.
-		if m.outboxPoisoned[e.Path] || m.createRequestInFlight(e.Path) {
+		// No in-flight check here, and that is the claim doing the work rather than an
+		// omission: holdCreateRequest renames an accepted request out of the record
+		// name format, so ListCreates does not return one that is still starting. What
+		// used to be a linear scan of createsInFlight is now that rename — and the arm
+		// it guarded that actually bit was the expiry one below, where a start crossing
+		// the 24h horizon mid-flight was rejected and unlinked out from under its own
+		// running session. A claimed request is not walked at all, so it cannot expire
+		// while it is being built.
+		//
+		// "Does not" rather than "cannot", because the rename can fail. holdCreateRequest
+		// builds the session anyway rather than refusing one whose worktree is already
+		// going up, and poisons the path on its way past — which is why the skip below
+		// is load-bearing for that case and not only for an unlink that failed.
+		if m.outboxPoisoned[e.Path] {
 			continue
 		}
 
@@ -256,10 +281,10 @@ func (m *home) drainCreateRequests() tea.Cmd {
 				refused++
 				continue
 			}
-			// The file deliberately stays until the start lands and the row is
-			// persisted, so `atrium new --wait` reading its absence means "created and
-			// recorded" rather than "consumed".
-			m.holdCreateRequest(e.Path, inst)
+			// The request deliberately stays on disk — as a claim — until the start
+			// lands and the row is persisted, so `atrium new --wait` reading the
+			// absence of both means "created and recorded" rather than "consumed".
+			m.holdCreateRequest(e.Path, e.Request, inst)
 			started++
 			cmds = append(cmds, cmd)
 		}
@@ -459,7 +484,7 @@ func (m *home) executeCreateRequest(r outbox.Request) (*session.Instance, tea.Cm
 	// The group is derived here rather than read from m.newSessionGroup, which is
 	// create-form state this path must not touch — see titleConflictIn.
 	group := git.RepoGroupKey(m.ctx, path)
-	if conflict := m.variantTitleConflictIn(group, r.Title, path, direct); conflict != "" {
+	if conflict := m.createConflictIn(group, r, path, direct); conflict != "" {
 		return nil, nil, fmt.Sprintf("%s (%q in %s)", conflict, r.Title, path)
 	}
 
@@ -525,8 +550,32 @@ func (m *home) executeCreateRequest(r outbox.Request) (*session.Instance, tea.Cm
 	return inst, cmd, ""
 }
 
-// holdCreateRequest records that path's session is starting, keying it by the very
-// instance startNewSession built.
+// createConflictIn is the conflict gate a spooled request is held to:
+// variantTitleConflictIn, except that a request the startup reconcile marked for
+// adoption skips the branch half of it.
+//
+// The branch half is not decoration. git.Worktree.Setup reads a pre-existing branch as
+// a resume (session/git/worktree_ops.go), so a creation that reaches it with a taken
+// slug adopts that branch's work instead of failing — which is why the form and this
+// drain are the two creation paths that consult git.LocalBranchExists at all. Skipping
+// it is therefore a hole in a load-bearing guard, and the only thing that may open it
+// is evidence a request cannot carry on its own: reconcileCreateClaims sets Adopt only
+// for a branch it has proved exists, belongs to no session row, and was not there when
+// the interrupted build claimed the request. Under those three, the branch IS the
+// session's own half-built work and resuming it is the outcome the caller asked for.
+//
+// The title half still applies with Adopt set. A row that owns the title is a live
+// session, and nothing about finishing an interrupted build makes it right to mint a
+// second session on top of one.
+func (m *home) createConflictIn(group string, r outbox.Request, path string, direct bool) string {
+	if r.Adopt {
+		return m.titleConflictIn(group, r.Title)
+	}
+	return m.variantTitleConflictIn(group, r.Title, path, direct)
+}
+
+// holdCreateRequest records that path's session is starting — in memory, keyed by the
+// very instance startNewSession built, and on disk, by claiming the spool record.
 //
 // Keyed by the object rather than looked up by identity, because a (Title, Path)
 // search is not the same question the conflict check answered. titleConflictIn scopes
@@ -536,11 +585,77 @@ func (m *home) executeCreateRequest(r outbox.Request) (*session.Instance, tea.Cm
 // row never settles. That leak is not local: settle is a silent miss, the entry stays
 // forever, and createStartBudget is seeded from the map's length, so every later
 // `atrium new` on the machine is skipped with no notice, no log line and no receipt.
-func (m *home) holdCreateRequest(path string, inst *session.Instance) {
+//
+// The map still holds the RECORD path, not the claim file's, because that is the path
+// the rest of the protocol is keyed on: the receipt a refusal writes, and the file the
+// caller's --wait is watching. outbox.ClaimPath derives the other from it.
+//
+// The claim is what survives this process (#716). Both halves are needed and neither
+// subsumes the other: the map settles a start that completes here, and the claim is
+// the only thing a start interrupted by a SIGKILL leaves behind for the next launch to
+// finish. A claim that cannot be written is logged and the create proceeds unclaimed,
+// because refusing a session whose worktree is already going up is worse — but "proceeds
+// unclaimed" is not the pre-#716 behaviour and must not be described as it. Pre-#716 the
+// createRequestInFlight scan kept the still-named record from being drained twice; that
+// scan is gone, so the unclaimed record is poisoned here instead. What degrades to the
+// pre-#716 behaviour is only the crash window itself: that one request is again
+// unrecoverable if this process dies mid-Start.
+//
+// It runs before Start does. startNewSession returns a boot command Bubble Tea has not
+// executed yet, so the CreateRequest stamp below and the claim's branch probe both
+// happen on the update goroutine with nothing else touching the instance.
+func (m *home) holdCreateRequest(path string, r outbox.Request, inst *session.Instance) {
 	if m.createsInFlight == nil {
 		m.createsInFlight = make(map[*session.Instance]string)
 	}
 	m.createsInFlight[inst] = path
+	// Stamped on the instance, persisted with the row, and read only by the next
+	// launch's reconcile — see session.InstanceData.CreateRequest for why a
+	// (Title, Path) match cannot stand in for it.
+	inst.CreateRequest = path
+
+	meta := outbox.ClaimMeta{At: time.Now()}
+	if !inst.IsDirect() {
+		// The same expression branchSlugConflict evaluates, against the same config
+		// this model holds — so the branch recorded here is the one the gate a few
+		// lines ago tested, exactly as right and exactly as wrong. (git's own
+		// newSessionWorktree derives it identically but from a freshly loaded config,
+		// which is the pre-existing seam, not one this adds.)
+		//
+		// Recorded rather than left to be recomputed later, because BranchPrefix is a
+		// config value: one edited between a crash and the next launch would have the
+		// reconcile probe for a branch nobody made, read the orphan as "nothing was
+		// built", and create a second session beside it.
+		meta.SessionBranch = git.BranchNameForSession(m.appConfig.BranchPrefix, inst.Title)
+		// Measured here rather than inferred from the gate that ran a moment ago. For
+		// an ordinary request the gate has just proved this false and the probe agrees;
+		// for a re-queued Adopt it is true by design, and the difference between "true
+		// because we are finishing our own orphan" and "true because someone else's
+		// branch is in the way" is exactly what the next reconcile has to read off this
+		// record. Inferring it from r.Adopt would record a guess in the one field whose
+		// job is to be evidence.
+		meta.BranchExisted = git.LocalBranchExists(m.ctx, inst.Path, meta.SessionBranch)
+	}
+	if err := outbox.Claim(path, meta); err != nil {
+		// The record is still at its own name, so ListCreates will hand it back on the
+		// next tick — and the guard that used to catch that (createRequestInFlight) was
+		// deleted on the strength of the rename that just failed. Unguarded, the second
+		// pass runs the gates against the row startNewSession has already inserted,
+		// refuses the request for its own session's title, and writes that receipt to a
+		// --wait that is about to be handed a working session; the expiry arm can also
+		// unlink the record out from under a build still running its setup script.
+		//
+		// Poisoned, the drain skips it for the rest of this run — the same treatment
+		// discardSpoolFile gives a record it could not unlink, and for the same reason.
+		// settleCreateRequest still clears the file at the end of the build, because
+		// DiscardCreate drops the record and the claim without caring which exists.
+		if m.outboxPoisoned == nil {
+			m.outboxPoisoned = make(map[string]bool)
+		}
+		m.outboxPoisoned[path] = true
+		log.ErrorLog.Printf("failed to claim the create request for %q; it is being built but "+
+			"a crash before it is recorded will strand it: %v", r.Title, err)
+	}
 }
 
 // settleCreateRequest closes out the spool file behind a session that has finished
@@ -559,19 +674,19 @@ func (m *home) holdCreateRequest(path string, inst *session.Instance) {
 // recorded. --wait reads the branch out of state.json the moment the file goes away,
 // so unlinking first would also race it into reporting a session with no branch.
 //
-// The remaining window is a crash between the two. It does not duplicate, but neither
-// is it two clean cases. The next launch re-reads the file and lands in one of three:
-// the session persisted, so the title collides and the request is refused; nothing was
-// built yet, and re-creating it is exactly right; or — the middle — Worktree.Setup got
-// as far as creating the branch and persistInstances never ran. State.json has no row,
-// so titleConflictIn sees no conflict, but branchSlugConflict's LocalBranchExists does,
-// and the request is refused with "branch already exists" — once, because a refusal
-// unlinks the record along with writing its receipt, so the *request* is finished after
-// that launch even though the orphaned branch and worktree are not: they belong to no
-// row that `atrium ls` can show, and the remedy is to delete the branch by hand. The
-// caller does hear it, like any other refusal. Closing it properly means the link
-// between a request and its session outliving the process, which createsInFlight (a
-// map, in memory) deliberately does not: see atrium#716.
+// The remaining window is a crash between the two, and holdCreateRequest's claim is
+// what makes it survivable (#716). The next launch finds a claim rather than a
+// re-drainable request, and reconcileCreateClaims judges it on evidence instead of
+// re-running the gates. Three of its verdicts answer the three states an interrupted
+// build can leave: the row is there and stamped with this record, so the request
+// SUCCEEDED and its caller is told so rather than "already used"; nothing was built, so
+// it is re-queued; or Worktree.Setup got as far as creating the branch and
+// persistInstances never ran, leaving a branch no row owns — which is re-queued to
+// adopt that branch rather than refused for it. (A fourth, refusal, covers what none of
+// those describe: an expired or unreadable claim, or a branch that is somebody else's.)
+// Before the claim existed the third state was a permanent refusal ("branch already
+// exists") plus an orphan branch and worktree belonging to no row `atrium ls` could
+// show, removable only by hand.
 //
 // An orderly shutdown does not go through here at all, which is why
 // reconcileInFlightStarts settles what it adopts.
@@ -585,7 +700,11 @@ func (m *home) settleCreateRequest(inst *session.Instance, startErr error) {
 		return
 	}
 	delete(m.createsInFlight, inst)
-	m.discardSpoolFile(path, func() error { return outbox.Remove(path) })
+	// DiscardCreate, not Remove: holdCreateRequest renamed the record, so the file to
+	// drop is normally the claim — and "normally" is why this drops both rather than
+	// picking one. Success leaves no receipt, so the caller's --wait reads the absence
+	// of both — see awaitSpool.
+	m.discardSpoolFile(path, func() error { return outbox.DiscardCreate(path) })
 }
 
 // failCreateRequest is settleCreateRequest's failure half with the reason written by
@@ -599,25 +718,22 @@ func (m *home) failCreateRequest(inst *session.Instance, reason string) {
 		return
 	}
 	delete(m.createsInFlight, inst)
-	m.discardSpoolFile(path, func() error { return outbox.Reject(path, reason) })
-}
-
-// createRequestInFlight reports whether path's session is already starting. A linear
-// scan because the map is bounded by the number of creates started but not yet
-// settled, which createStartBudget holds to one — that budget counts concurrency, not
-// arrivals, so the bound holds across ticks and not merely within one.
-func (m *home) createRequestInFlight(path string) bool {
-	for _, p := range m.createsInFlight {
-		if p == path {
-			return true
-		}
-	}
-	return false
+	// The receipt goes to the record path and the file dropped is the claim. Both
+	// halves, and in that order: Reject writes before it unlinks so a --wait cannot
+	// read the gap as a success, and the claim is the half --wait is actually
+	// watching by now.
+	m.discardSpoolFile(path, func() error {
+		return errors.Join(outbox.Reject(path, reason), outbox.DiscardCreate(path))
+	})
 }
 
 // rejectCreateRequest leaves a receipt naming the reason and removes the request,
 // so `atrium new --wait` reports the refusal instead of reading the unlink as a
 // successful creation.
+//
+// Only the gate arms of drainCreateRequests reach this, and none of them has claimed
+// anything — a request is claimed exactly when it is accepted (holdCreateRequest), so
+// there is no claim file to release here. A refusal AFTER a claim is failCreateRequest.
 func (m *home) rejectCreateRequest(path, reason string) {
 	m.discardSpoolFile(path, func() error { return outbox.Reject(path, reason) })
 }

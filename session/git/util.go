@@ -196,6 +196,37 @@ func LocalBranchExists(ctx context.Context, repoPath, branch string) bool {
 	return err == nil
 }
 
+// LookupLocalBranch answers the same question as LocalBranchExists but keeps "git could
+// not be asked" out of the answer.
+//
+// LocalBranchExists is `err == nil`, and show-ref cannot do better: it exits non-zero
+// both for a ref that is absent and for a repo it cannot read, so every failure — git
+// off PATH mid-upgrade, a fork failure under memory pressure, a cold-repo timeout, a
+// cancelled context — is indistinguishable from "no such branch". That is harmless
+// where the answer only gates a creation (a false "absent" there just lets the gate
+// through to git, which fails honestly a moment later) and harmful where a caller acts
+// destructively on the negative, which is why the create-recovery path (#716) uses this
+// instead: reading a git failure as "nothing was built" would spend the one recovery a
+// stranded request gets and leave the orphan behind permanently.
+//
+// for-each-ref rather than show-ref, because it exits 0 with empty output for a ref that
+// is simply not there and non-zero only when the repository itself could not be read.
+// The pattern matches at path boundaries, so refs/heads/<branch>/sub would match too;
+// the answer is an exact line comparison rather than "any output".
+func LookupLocalBranch(ctx context.Context, repoPath, branch string) (bool, error) {
+	ref := "refs/heads/" + branch
+	out, err := localGit(ctx, repoPath, "for-each-ref", "--format=%(refname)", ref)
+	if err != nil {
+		return false, fmt.Errorf("failed to look up branch %q in %s: %w", branch, repoPath, err)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.TrimSpace(line) == ref {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // RepoGroupKey predicts the repo-group key the session list will file a session
 // under when created from path: the repo root's basename when path is inside a
 // git repo (even a subdirectory), else the directory's own basename (how direct

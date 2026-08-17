@@ -152,6 +152,14 @@ type Instance struct {
 	Branch string
 	// Program is the program to run in the instance.
 	Program string
+	// CreateRequest is the `atrium new` spool record this session was built for, ""
+	// for every other creation path (#716). It is stamped by the create drain between
+	// startNewSession returning and Start actually running — both on the update
+	// goroutine, and Start does not begin until Bubble Tea runs the boot command the
+	// drain returns, so the write does not race the goroutine that reads it.
+	//
+	// See InstanceData.CreateRequest for what it is for and why it is never cleared.
+	CreateRequest string
 	// forkSeed, when non-nil, seeds this session's conversation from a checkpoint of
 	// another one (#644). It is consumed by the first Start and deliberately not
 	// persisted: SaveInstances stores only Started() instances, so a fork that never
@@ -625,6 +633,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		// Takes i.mu, like the GetStatus above it — safe here because
 		// ToInstanceData is never called with the instance lock held.
 		StatusChangedAt: i.StatusChangedAt(),
+		CreateRequest:   i.CreateRequest,
 		Program:         i.Program,
 		AutoYes:         i.AutoYes,
 		Unread:          i.Unread(),
@@ -725,8 +734,11 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 		CreatedAt:    data.CreatedAt,
 		UpdatedAt:    data.UpdatedAt,
 		Program:      data.Program,
-		direct:       data.Direct,
-		isolateDeps:  data.IsolateDeps,
+		// Restored so the reconcile can still recognise this row as the one a claim
+		// asked for after any number of restarts, not only the one that made it.
+		CreateRequest: data.CreateRequest,
+		direct:        data.Direct,
+		isolateDeps:   data.IsolateDeps,
 
 		claudeAccount:        data.ClaudeAccount,
 		claudeConfigDir:      data.ClaudeConfigDir,

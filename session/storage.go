@@ -79,6 +79,21 @@ type InstanceData struct {
 	// the pre-upgrade behavior. (Compare DiffStatsData.Unpushed, where they differ.)
 	IsolateDeps bool `json:"isolate_deps,omitempty"`
 
+	// CreateRequest is the `atrium new` spool record this session was built for, or
+	// "" for one created from the form, a fork or smart auto-dispatch (#716).
+	//
+	// It is a provenance stamp with exactly one reader: the startup reconcile, which
+	// uses it to tell "the session this claim asked for exists and is recorded" from
+	// "a session of that title exists and is somebody else's". A (Title, Path) match
+	// cannot make that distinction — it is the same match the drain's conflict gate
+	// already ran and passed before the crash — and getting it wrong reports a
+	// stranger's session to a caller's --wait as its own.
+	//
+	// Never cleared once the request settles. A record path carries nanoseconds plus
+	// a random nonce, so a stale stamp cannot collide with a later claim, and clearing
+	// it would buy a whole state.json rewrite per create for nothing.
+	CreateRequest string `json:"create_request,omitempty"`
+
 	Program string `json:"program"`
 
 	// ClaudeAccount / ClaudeConfigDir / ClaudeAccountDefault pin the Claude Code

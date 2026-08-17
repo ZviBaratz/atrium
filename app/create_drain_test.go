@@ -40,6 +40,16 @@ func createSpoolCount(t *testing.T) int {
 	return len(entries)
 }
 
+// createClaimCount is createSpoolCount for the other half of the spool. The two are
+// disjoint by construction — a claim is not in the record name format ListCreates
+// screens on — so a test that means "still there" has to say which half it means.
+func createClaimCount(t *testing.T) int {
+	t.Helper()
+	entries, err := outbox.ListClaims()
+	require.NoError(t, err)
+	return len(entries)
+}
+
 // refuseDrain runs the drain and asserts it refused rather than created. Both halves
 // matter: the caller learns why from a rejection receipt (asserted per-test below),
 // and the person at the TUI — the only one who can raise a cap or free a title — from
@@ -64,6 +74,50 @@ func disposeDrain(t *testing.T, h *home) {
 	assert.Nil(t, h.drainCreateRequests(), "a disposal is nobody's to act on at the TUI")
 	assert.NotContains(t, h.menu.NoticeText(), "refused",
 		"and must not raise the refusal notice")
+}
+
+// assertCreateHeld asserts that a request the drain accepted is being held across its
+// start, in the two-file shape #716 gave that hold. Both halves are load-bearing and
+// neither implies the other:
+//
+//   - the record has left the record name format, so no later tick can re-execute it or
+//     expire it out from under the session it is building;
+//   - a claim has taken its place, so a process killed mid-Start leaves the next launch
+//     something to finish, and a caller blocked in --wait keeps waiting instead of
+//     reading the record's absence as a created session.
+//
+// A test that asserted only the first would pass against a drain that simply unlinked
+// on accept, which is the bug this replaced.
+func assertCreateHeld(t *testing.T, record string) {
+	t.Helper()
+	assert.NoFileExists(t, record,
+		"an accepted request must leave the record format, or a later tick re-executes or expires it")
+	assert.FileExists(t, outbox.ClaimPath(record),
+		"and must leave a claim, or a crash mid-Start strands it with nothing to reconcile")
+	_, rejected := outbox.Rejection(record)
+	assert.False(t, rejected, "a request in flight is not a rejected one")
+}
+
+// assertCreateSettled asserts a request has reached a terminal state. Both files, not
+// just the record: the claim is half of what awaitSpool now reads as "done", so one
+// left behind blocks the caller's --wait and is re-judged by every later launch.
+func assertCreateSettled(t *testing.T, record string) {
+	t.Helper()
+	assert.NoFileExists(t, record)
+	assert.NoFileExists(t, outbox.ClaimPath(record),
+		"a settled request leaves no claim for the next launch to reconcile")
+}
+
+// assertCreateQueued asserts a request is still queued and untouched — the shape of a
+// tick that HELD rather than refused. Distinct from assertCreateHeld: nothing has been
+// accepted, so the record is exactly where `atrium new` put it and there is no claim.
+func assertCreateQueued(t *testing.T, record string) {
+	t.Helper()
+	assert.FileExists(t, record, "the request waits rather than being refused")
+	assert.NoFileExists(t, outbox.ClaimPath(record),
+		"and is not claimed either — nothing accepted it")
+	_, rejected := outbox.Rejection(record)
+	assert.False(t, rejected, "a held request is not a rejected one")
 }
 
 // titled returns the instance with this title, or nil.
@@ -116,9 +170,7 @@ func TestCreateDrainCreatesSessionAndHoldsTheFile(t *testing.T) {
 	inst := titled(h, "fix-auth")
 	require.NotNil(t, inst, "the session must be in the list")
 	assert.Equal(t, session.Loading, inst.GetStatus())
-	assert.FileExists(t, path, "the request must survive until the start lands and the row is persisted")
-	_, rejected := outbox.Rejection(path)
-	assert.False(t, rejected, "a request in flight is not a rejected one")
+	assertCreateHeld(t, path)
 }
 
 // TestCreateDrainRemovesFileOnStartSuccess: the file's absence is what a waiting
@@ -133,7 +185,7 @@ func TestCreateDrainRemovesFileOnStartSuccess(t *testing.T) {
 	require.NotNil(t, inst)
 	h.settleCreateRequest(inst, nil)
 
-	assert.NoFileExists(t, path)
+	assertCreateSettled(t, path)
 	_, rejected := outbox.Rejection(path)
 	assert.False(t, rejected, "a successful create leaves no receipt")
 }
@@ -154,21 +206,26 @@ func TestCreateDrainRejectsOnStartFailure(t *testing.T) {
 	reason, ok := outbox.Rejection(path)
 	require.True(t, ok, "a failed start must leave a receipt")
 	assert.Contains(t, reason, "worktree is dirty")
-	assert.NoFileExists(t, path)
+	assertCreateSettled(t, path)
 }
 
-// TestCreateDrainSkipsRequestAlreadyInFlight: the file stays put while the session
-// starts, so the next tick must leave the same request alone rather than re-executing
-// it and writing an "already used" receipt over a create that is going fine.
+// TestCreateDrainSkipsRequestAlreadyInFlight: the request stays on disk while the
+// session starts, so the next tick must leave it alone rather than re-executing it and
+// writing an "already used" receipt over a create that is going fine.
 //
-// This pins the OUTCOME, and the outcome has two independent causes: the in-flight
-// guard, and createStartBudget — which is seeded from len(createsInFlight), so it is
-// already spent while a start is running and the default arm continues before any gate.
-// Either alone delivers a green run here, which is why deleting the guard leaves this
-// test (and the whole package) passing. Not a defect in the assertion, but a limit on
-// what it proves: for the guard itself see
-// TestCreateDrainDoesNotExpireARequestItIsStillStarting, whose arm has its own budget
-// and so is not covered by the start budget at all.
+// It pins the OUTCOME, and until #716 that outcome had two independent causes — a
+// linear scan of createsInFlight, and createStartBudget, seeded from that same map and
+// so already spent while a start runs. Either alone delivered a green run here, which
+// is why deleting the scan left this test and the whole package passing: it named the
+// cause that was not doing the work.
+//
+// One cause now, and it is neither of those. holdCreateRequest renames the record out
+// of the format ListCreates screens on, so the second tick cannot see the request at
+// all; the scan is gone, and the assertion below on the two spool halves is what
+// distinguishes "left alone" from "consumed". createStartBudget still covers the same
+// ground it always did, which is why this remains an outcome test rather than a
+// mechanism one — see TestCreateDrainDoesNotExpireARequestItIsStillStarting for the
+// arm the budget genuinely cannot reach.
 func TestCreateDrainSkipsRequestAlreadyInFlight(t *testing.T) {
 	h := drainHome(t)
 	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: t.TempDir()})
@@ -177,53 +234,67 @@ func TestCreateDrainSkipsRequestAlreadyInFlight(t *testing.T) {
 	assert.Nil(t, h.drainCreateRequests(), "the second tick must find nothing to do")
 
 	assert.Equal(t, 1, h.list.NumInstances())
-	assert.FileExists(t, path, "the in-flight request must survive the next tick")
+	assert.Zero(t, createSpoolCount(t), "the second tick has no request to re-execute")
+	assertCreateHeld(t, path)
 	reason, rejected := outbox.Rejection(path)
 	assert.False(t, rejected, "a request in flight must not be rejected by its own session: %s", reason)
 }
 
-// TestCreateDrainDoesNotExpireARequestItIsStillStarting is the in-flight guard's own
-// test — the one thing no other mechanism in the loop delivers.
+// TestCreateDrainDoesNotExpireARequestItIsStillStarting pins the hazard the old
+// in-flight scan existed for, against the mechanism that replaced it.
 //
-// createStartBudget covers the default arm, because it is seeded from the in-flight map
-// and so is already spent while a start runs. The EXPIRY arm draws on
+// The hazard: createStartBudget covers the default arm, because it is seeded from the
+// in-flight map and so is already spent while a start runs. The EXPIRY arm draws on
 // createDisposalBudget instead, is evaluated ahead of the default arm, and therefore
-// sees none of that: without the guard, a request whose Start crosses the 24h horizon
-// mid-flight is rejected and unlinked underneath its own running session. The caller's
-// --wait, which reads the record's disappearance as "created and recorded", is instead
-// handed a receipt saying the request expired — for a session that at that moment exists.
+// sees none of that — so a request whose Start crosses the 24h horizon mid-flight was
+// rejected and unlinked underneath its own running session. The caller's --wait, which
+// reads the record's disappearance as "created and recorded", was handed a receipt
+// saying the request expired, for a session that at that moment exists. Reachable
+// without contrivance: a request spooled just under the horizon and a repo whose setup
+// script takes a minute.
 //
-// Reachable without contrivance: a request spooled just under the horizon and a repo
-// whose setup script takes a minute. It is staged here by ageing the record on disk
-// between two ticks, because the drain re-decodes every file on every tick and there is
-// no clock to move.
+// What changed with #716 is that the guard is now structural rather than a skip. An
+// accepted request is renamed out of the record name format, so ListCreates does not
+// return it and no arm of the loop — expiry included — can reach it at all. That is
+// what the middle of this test measures: the aged request reads as expired to anything
+// that CAN see it, and the drain's own listing cannot.
+//
+// Expiry is not lost, only moved to where it is safe: a claim that outlives its process
+// is judged by reconcileCreateClaims, which has the evidence to tell an expired
+// abandoned build from a running one (see TestReconcileRefusesAnExpiredClaim).
+//
+// Staged by ageing the record on disk between two ticks, because the drain re-decodes
+// every file on every tick and there is no clock to move.
 func TestCreateDrainDoesNotExpireARequestItIsStillStarting(t *testing.T) {
 	h := drainHome(t)
 	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: t.TempDir()})
 
 	require.NotNil(t, h.drainCreateRequests(), "the first tick starts it")
 	require.NotNil(t, titled(h, "fix-auth"))
-	require.FileExists(t, path, "and holds the record across the start")
+	assertCreateHeld(t, path)
 
-	// Age the held record past the horizon, as a slow Start would.
-	raw, err := os.ReadFile(path)
+	// Age the held request past the horizon, as a slow Start would.
+	claim := outbox.ClaimPath(path)
+	raw, err := os.ReadFile(claim)
 	require.NoError(t, err)
 	var record map[string]any
 	require.NoError(t, json.Unmarshal(raw, &record))
 	record["created_at"] = time.Now().Add(-2 * outbox.TTL).Format(time.RFC3339Nano)
 	aged, err := json.Marshal(record)
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(path, aged, 0o600))
+	require.NoError(t, os.WriteFile(claim, aged, 0o600))
 
-	entries, err := outbox.ListCreates()
+	claims, err := outbox.ListClaims()
 	require.NoError(t, err)
-	require.Len(t, entries, 1)
-	require.True(t, entries[0].Request.Expired(time.Now()),
-		"precondition: the record now reads as expired to the arm under test")
+	require.Len(t, claims, 1)
+	require.True(t, claims[0].Request.Expired(time.Now()),
+		"precondition: the request now reads as expired to anything that can see it")
+	assert.Zero(t, createSpoolCount(t),
+		"and the drain's own listing cannot see it, which is what makes the expiry arm unreachable")
 
 	h.drainCreateRequests()
 
-	assert.FileExists(t, path, "a request whose session is still starting must not be expired")
+	assertCreateHeld(t, path)
 	reason, rejected := outbox.Rejection(path)
 	assert.False(t, rejected, "nor handed its caller an expiry receipt: %s", reason)
 }
@@ -276,7 +347,7 @@ func TestCreateDrainDefersToAStagedSpawnPlan(t *testing.T) {
 
 			assert.Nil(t, h.drainCreateRequests(), "a staged plan holds the drain")
 			assert.Zero(t, h.list.NumInstances(), "nothing may be created under a pending confirm")
-			assert.FileExists(t, path, "and the request waits rather than being refused")
+			assertCreateQueued(t, path)
 		})
 	}
 }
@@ -370,6 +441,117 @@ func TestCreateDrainRejectsExistingBranch(t *testing.T) {
 	assert.Zero(t, h.list.NumInstances())
 }
 
+// TestCreateDrainAdoptsAnExistingBranchWhenTheReconcileSaysSo is the other end of
+// atrium#716: the startup reconcile re-queues an interrupted build's request marked
+// Adopt, and the drain has to let that one request past the branch check the test above
+// pins — otherwise the recovery hands the caller the same permanent refusal.
+//
+// The same fixture as TestCreateDrainRejectsExistingBranch, one field apart. That is
+// deliberate: the pair is what shows the flag is the whole difference, rather than the
+// check having been loosened for everyone.
+func TestCreateDrainAdoptsAnExistingBranchWhenTheReconcileSaysSo(t *testing.T) {
+	h := drainHome(t)
+	repo := gitRepoWithBranch(t, h.appConfig.BranchPrefix+"fix-auth")
+	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: repo, Adopt: true})
+
+	require.NotNil(t, h.drainCreateRequests(), "an adopting request must be created, not refused")
+	assert.Equal(t, 1, h.list.NumInstances())
+	assertCreateHeld(t, path)
+	reason, rejected := outbox.Rejection(path)
+	assert.False(t, rejected, "and must not be handed a receipt: %s", reason)
+}
+
+// TestCreateDrainStillRefusesATakenTitleWhenAdopting is the Adopt arm's negative
+// control, and the reason it skips only HALF of the conflict gate.
+//
+// Adopt licenses taking a branch no session owns; it says nothing about a title a live
+// session holds. Without this, "skip the whole conflict check when Adopt is set" scores
+// full marks on the test above — and would mint a second session on top of a running
+// one, sharing its tmux name.
+func TestCreateDrainStillRefusesATakenTitleWhenAdopting(t *testing.T) {
+	h := drainHome(t)
+	repo := gitRepoWithBranch(t, h.appConfig.BranchPrefix+"fix-auth")
+	addInstance(t, h, "fix-auth", repo)
+	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: repo, Adopt: true})
+
+	refuseDrain(t, h)
+
+	reason, ok := outbox.Rejection(path)
+	require.True(t, ok)
+	assert.Contains(t, reason, titleErrAlreadyUsed)
+	assert.Equal(t, 1, h.list.NumInstances(), "the live session is the only one")
+}
+
+// TestCreateDrainRecordsWhatWasTrueOfTheBranchWhenItClaimed pins the evidence half of
+// the claim, at the one moment it can be measured. Recorded false here and true for the
+// adopting request, because those are the facts — and the startup reconcile reads
+// exactly this field to tell an orphan it may finish from a foreign branch it may not.
+//
+// Measured, not inferred, and the third row is what says so. The first two agree with
+// `BranchExisted = r.Adopt` exactly, so a claim that copied its answer off the flag
+// would pass them both while recording a guess. The third splits them: a request the
+// reconcile marked Adopt, whose branch someone deleted before this tick ran, has no
+// existing branch — and recording "true" there would tell the NEXT reconcile the branch
+// it finds was foreign, turning a recoverable build into a permanent refusal.
+func TestCreateDrainRecordsWhatWasTrueOfTheBranchWhenItClaimed(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		branch string
+		adopt  bool
+		want   bool
+	}{
+		{name: "fresh branch", branch: "", want: false},
+		{name: "adopting an orphan", branch: "fix-auth", adopt: true, want: true},
+		{name: "adopting a branch that has since gone", branch: "", adopt: true, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := drainHome(t)
+			existing := ""
+			if tc.branch != "" {
+				existing = h.appConfig.BranchPrefix + tc.branch
+			}
+			repo := gitRepoWithBranch(t, existing)
+			path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: repo, Adopt: tc.adopt})
+
+			require.NotNil(t, h.drainCreateRequests())
+			assertCreateHeld(t, path)
+
+			claims, err := outbox.ListClaims()
+			require.NoError(t, err)
+			require.Len(t, claims, 1)
+			require.NotNil(t, claims[0].Request.Claim)
+			assert.Equal(t, tc.want, claims[0].Request.Claim.BranchExisted)
+			assert.Equal(t, h.appConfig.BranchPrefix+"fix-auth", claims[0].Request.Claim.SessionBranch,
+				"the branch recorded must be the one Setup would mint")
+		})
+	}
+}
+
+// TestCreateDrainStampsTheRequestOnTheSession: the stamp is what lets a later reconcile
+// recognise this row as the one this request produced, so it has to be on the instance
+// before Start persists it — not written afterwards by a process that may not survive.
+func TestCreateDrainStampsTheRequestOnTheSession(t *testing.T) {
+	h := drainHome(t)
+	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: t.TempDir()})
+
+	require.NotNil(t, h.drainCreateRequests())
+	inst := titled(h, "fix-auth")
+	require.NotNil(t, inst)
+	assert.Equal(t, path, inst.CreateRequest)
+	assert.Equal(t, path, inst.ToInstanceData().CreateRequest, "and must survive serialization")
+}
+
+// TestFormCreateCarriesNoRequestStamp is the stamp's negative control: only a spooled
+// create has a request behind it, so a session from the form or a fork must carry "".
+// A stamp on everything would make the reconcile's "did THIS request make a session"
+// question meaningless.
+func TestFormCreateCarriesNoRequestStamp(t *testing.T) {
+	h := drainHome(t)
+	inst := addInstance(t, h, "typed-by-hand", t.TempDir())
+	assert.Empty(t, inst.CreateRequest)
+	assert.Empty(t, inst.ToInstanceData().CreateRequest)
+}
+
 // TestCreateDrainCreatesInAGitRepo is TestCreateDrainRejectsExistingBranch's
 // negative control: the same repo without the branch creates, so the refusal above
 // is the branch check firing and not the git target being rejected outright.
@@ -419,7 +601,7 @@ func TestCreateDrainHoldsWhenTmuxUnusable(t *testing.T) {
 	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: t.TempDir()})
 
 	assert.Nil(t, h.drainCreateRequests(), "a held tick creates nothing and says nothing")
-	assert.FileExists(t, path, "the request must survive an unusable tmux")
+	assertCreateQueued(t, path)
 	reason, rejected := outbox.Rejection(path)
 	assert.False(t, rejected, "and must not be spent on a receipt: %s", reason)
 	assert.Zero(t, h.list.NumInstances())
@@ -449,7 +631,7 @@ func TestCreateDrainStillDisposesWhileTmuxIsUnusable(t *testing.T) {
 	reason, ok := outbox.Rejection(path)
 	require.True(t, ok, "an expired record is discarded even with tmux down")
 	assert.Contains(t, reason, "horizon")
-	assert.NoFileExists(t, path)
+	assertCreateSettled(t, path)
 }
 
 // TestCreateDrainRefusesADirectTargetItCouldNotConfirm is the guard on the worst thing
@@ -523,7 +705,7 @@ func TestCreateDrainHoldsWhileATeardownIsInFlight(t *testing.T) {
 	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: t.TempDir()})
 
 	assert.Nil(t, h.drainCreateRequests(), "a tick mid-teardown creates nothing")
-	assert.FileExists(t, path, "and must defer the request rather than spend it")
+	assertCreateQueued(t, path)
 	reason, rejected := outbox.Rejection(path)
 	assert.False(t, rejected, "a deferral leaves no receipt: %s", reason)
 
@@ -666,7 +848,13 @@ func TestCreateDrainBudgetIsOnePerTick(t *testing.T) {
 
 	require.NotNil(t, h.drainCreateRequests())
 	assert.Equal(t, 1, h.list.NumInstances(), "one tick starts one session")
-	assert.Equal(t, 3, createSpoolCount(t), "and leaves the rest, in flight or waiting")
+	// Two, not three: the started one has been claimed, and a claim is out of the
+	// record name format ListCreates screens on. Both counts are asserted because
+	// either alone would pass against a drain that lost a request — three queued and
+	// no claim would mean nothing was started, one queued and one claim would mean one
+	// was dropped.
+	assert.Equal(t, 2, createSpoolCount(t), "and leaves the unstarted ones queued")
+	assert.Equal(t, 1, createClaimCount(t), "with the started one held as a claim")
 }
 
 // TestCreateDrainBudgetCountsStartsStillInFlight is what the budget is actually for,
@@ -791,7 +979,7 @@ func TestCreateDrainForceAcceptsAnExhaustedPoolByPinningAMember(t *testing.T) {
 	require.NotNil(t, inst, "the session must exist")
 	assert.NotEmpty(t, inst.ClaudeAccountName(),
 		"and be pinned to a member, or startNewSession would have refused it")
-	assert.FileExists(t, path, "an accepted request is held, not rejected")
+	assertCreateHeld(t, path)
 }
 
 // exhaustedPool configures a two-member claude pool with every member rate-limited —
@@ -866,7 +1054,7 @@ func TestCreateSettlesOnSuccessfulPersist(t *testing.T) {
 
 	h.Update(instanceStartedMsg{instance: inst, origin: spawnBackground})
 
-	assert.NoFileExists(t, path)
+	assertCreateSettled(t, path)
 	_, rejected := outbox.Rejection(path)
 	assert.False(t, rejected)
 }
@@ -925,7 +1113,7 @@ func TestReconcileSettlesAnAdoptedCreateRequest(t *testing.T) {
 	h.reconcileInFlightStarts(ctx)
 
 	require.Equal(t, session.Running, inst.GetStatus(), "precondition: the session was adopted")
-	assert.NoFileExists(t, path, "an adopted session's request is closed out, not left behind")
+	assertCreateSettled(t, path)
 	_, rejected := outbox.Rejection(path)
 	assert.False(t, rejected, "adoption is a success, not a refusal")
 }
@@ -962,7 +1150,7 @@ func TestCreateDrainHoldsWhileAQuitIsPending(t *testing.T) {
 
 	assert.Nil(t, h.drainCreateRequests(), "a pending quit holds the drain")
 	assert.Zero(t, h.list.NumInstances(), "nothing may be created after the user asked to leave")
-	assert.FileExists(t, path, "and the request waits rather than being refused")
+	assertCreateQueued(t, path)
 
 	// The control: clear the quit and the same request creates, so the hold above is
 	// the quit and not some other refusal.
@@ -1038,7 +1226,7 @@ func TestCreateDrainHoldsWhileAnActionIsInFlight(t *testing.T) {
 
 	assert.Nil(t, h.drainCreateRequests(), "an in-flight action holds the drain")
 	assert.Zero(t, h.list.NumInstances())
-	assert.FileExists(t, path, "and the request waits rather than being refused")
+	assertCreateQueued(t, path)
 
 	// The control: clear the action and the same request creates.
 	h.actionInFlight = false
@@ -1102,12 +1290,13 @@ func TestHoldCreateRequestKeysOnTheInstanceItCreated(t *testing.T) {
 	created := addInstance(t, h, "fix-auth", dir)
 	require.NotSame(t, decoy, created)
 
-	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: dir})
-	h.holdCreateRequest(path, created)
+	r := outbox.Request{Title: "fix-auth", Path: dir}
+	path := spoolCreate(t, r)
+	h.holdCreateRequest(path, r, created)
 
 	h.settleCreateRequest(created, nil)
 	assert.Empty(t, h.createsInFlight, "the session that started is the one that settles")
-	assert.NoFileExists(t, path)
+	assertCreateSettled(t, path)
 }
 
 // TestFailedBackgroundCreateKillsOnlyItself. The failure path tears the new session
@@ -1442,4 +1631,61 @@ func TestBackgroundCreateSizesItsOwnPane(t *testing.T) {
 	gotInst = nil
 	h.handleInstanceStarted(instanceStartedMsg{instance: inst, origin: spawnInteractive})
 	assert.Nil(t, gotInst, "the interactive origin resizes through its WindowSizeMsg instead")
+}
+
+// TestHoldCreateRequestPoisonsARecordItCouldNotClaim closes the hole deleting
+// createRequestInFlight left.
+//
+// The old drain skipped a request whose instance was in createsInFlight. That scan was
+// removed on the argument that holdCreateRequest renames an accepted request out of the
+// record name format, so ListCreates cannot return one that is still starting — true of
+// the rename that SUCCEEDS. holdCreateRequest deliberately builds the session anyway
+// when the claim fails (refusing one whose worktree is already going up would be worse),
+// and the record then keeps its own name with nothing left to skip it.
+//
+// The consequence is not theoretical: the next tick runs the gates against the row
+// startNewSession has already inserted, titleConflictIn finds it, and the caller's
+// --wait is handed "already used" naming their own session — the exact #716 symptom this
+// PR exists to remove — for a session that is about to come up fine. The expiry arm can
+// also unlink the record out from under a build still running its setup script.
+//
+// Staged by making the claim rename fail: the spool directory is stripped of write
+// permission, so os.Rename inside outbox.Claim cannot create the new name.
+func TestHoldCreateRequestPoisonsARecordItCouldNotClaim(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions, so the claim would not fail")
+	}
+	h := drainHome(t)
+	dir := t.TempDir()
+	created := addInstance(t, h, "fix-auth", dir)
+
+	r := outbox.Request{Title: "fix-auth", Path: dir}
+	path := spoolCreate(t, r)
+
+	spoolDir := filepath.Dir(path)
+	require.NoError(t, os.Chmod(spoolDir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(spoolDir, 0o700) })
+
+	h.holdCreateRequest(path, r, created)
+
+	require.FileExists(t, path, "the record kept its name, which is the premise of this test")
+	assert.True(t, h.outboxPoisoned[path],
+		"so the drain must be told to skip it for the rest of this run")
+}
+
+// TestHoldCreateRequestDoesNotPoisonARecordItClaimed is that guard's negative control.
+// Poisoning unconditionally would pass the test above and quietly disable the skip's
+// real job — a record whose unlink failed — as well as making every settle's
+// bookkeeping meaningless.
+func TestHoldCreateRequestDoesNotPoisonARecordItClaimed(t *testing.T) {
+	h := drainHome(t)
+	dir := t.TempDir()
+	created := addInstance(t, h, "fix-auth", dir)
+
+	r := outbox.Request{Title: "fix-auth", Path: dir}
+	path := spoolCreate(t, r)
+	h.holdCreateRequest(path, r, created)
+
+	assertCreateHeld(t, path)
+	assert.False(t, h.outboxPoisoned[path], "a claim that worked needs no skip; the rename is the skip")
 }
