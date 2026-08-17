@@ -1632,3 +1632,60 @@ func TestBackgroundCreateSizesItsOwnPane(t *testing.T) {
 	h.handleInstanceStarted(instanceStartedMsg{instance: inst, origin: spawnInteractive})
 	assert.Nil(t, gotInst, "the interactive origin resizes through its WindowSizeMsg instead")
 }
+
+// TestHoldCreateRequestPoisonsARecordItCouldNotClaim closes the hole deleting
+// createRequestInFlight left.
+//
+// The old drain skipped a request whose instance was in createsInFlight. That scan was
+// removed on the argument that holdCreateRequest renames an accepted request out of the
+// record name format, so ListCreates cannot return one that is still starting — true of
+// the rename that SUCCEEDS. holdCreateRequest deliberately builds the session anyway
+// when the claim fails (refusing one whose worktree is already going up would be worse),
+// and the record then keeps its own name with nothing left to skip it.
+//
+// The consequence is not theoretical: the next tick runs the gates against the row
+// startNewSession has already inserted, titleConflictIn finds it, and the caller's
+// --wait is handed "already used" naming their own session — the exact #716 symptom this
+// PR exists to remove — for a session that is about to come up fine. The expiry arm can
+// also unlink the record out from under a build still running its setup script.
+//
+// Staged by making the claim rename fail: the spool directory is stripped of write
+// permission, so os.Rename inside outbox.Claim cannot create the new name.
+func TestHoldCreateRequestPoisonsARecordItCouldNotClaim(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions, so the claim would not fail")
+	}
+	h := drainHome(t)
+	dir := t.TempDir()
+	created := addInstance(t, h, "fix-auth", dir)
+
+	r := outbox.Request{Title: "fix-auth", Path: dir}
+	path := spoolCreate(t, r)
+
+	spoolDir := filepath.Dir(path)
+	require.NoError(t, os.Chmod(spoolDir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(spoolDir, 0o700) })
+
+	h.holdCreateRequest(path, r, created)
+
+	require.FileExists(t, path, "the record kept its name, which is the premise of this test")
+	assert.True(t, h.outboxPoisoned[path],
+		"so the drain must be told to skip it for the rest of this run")
+}
+
+// TestHoldCreateRequestDoesNotPoisonARecordItClaimed is that guard's negative control.
+// Poisoning unconditionally would pass the test above and quietly disable the skip's
+// real job — a record whose unlink failed — as well as making every settle's
+// bookkeeping meaningless.
+func TestHoldCreateRequestDoesNotPoisonARecordItClaimed(t *testing.T) {
+	h := drainHome(t)
+	dir := t.TempDir()
+	created := addInstance(t, h, "fix-auth", dir)
+
+	r := outbox.Request{Title: "fix-auth", Path: dir}
+	path := spoolCreate(t, r)
+	h.holdCreateRequest(path, r, created)
+
+	assertCreateHeld(t, path)
+	assert.False(t, h.outboxPoisoned[path], "a claim that worked needs no skip; the rename is the skip")
+}
