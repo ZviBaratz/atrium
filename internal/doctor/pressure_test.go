@@ -17,21 +17,6 @@ const (
 	tib = 1 << 40
 )
 
-// pressureRow returns the rendered line whose text contains label, so a value
-// assertion tests the value in its own row rather than anywhere in the block — the
-// "91%" of the swap row must not be satisfiable by an unrelated figure elsewhere.
-// Mirrors capacityRow.
-func pressureRow(t *testing.T, out, label string) string {
-	t.Helper()
-	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, label) {
-			return line
-		}
-	}
-	t.Fatalf("no row containing %q in:\n%s", label, out)
-	return ""
-}
-
 // withPressureSeams points every platform reader at canned data and restores them, so
 // the assembly and all threshold arithmetic run identically on any platform. Mirrors
 // oom_test.go's seam swap.
@@ -253,7 +238,7 @@ func TestPressureDedupesByDevice(t *testing.T) {
 	require.Equal(t, 2, deduped)
 
 	out := RenderPressure(r)
-	require.Contains(t, pressureRow(t, out, "temp dir"), "same filesystem as")
+	require.Contains(t, renderedRow(t, out, "temp dir"), "same filesystem as")
 }
 
 // TestMeasureFSWalksToAnExistingAncestor covers the fresh-install case: GetConfigDir
@@ -281,7 +266,7 @@ func TestMeasureFSWalksToAnExistingAncestor(t *testing.T) {
 	// path that does not exist.
 	fs := Filesystem{Label: "data dir", Path: missing, Measured: root, Known: true,
 		TotalBytes: 10 * gib, AvailBytes: 5 * gib}
-	row := pressureRow(t, RenderPressure(PressureResult{
+	row := renderedRow(t, RenderPressure(PressureResult{
 		Supported: true, Filesystems: []Filesystem{fs},
 	}), "data dir")
 	require.Contains(t, row, "not yet created")
@@ -369,10 +354,10 @@ func TestRenderPressureReportsUnknownsAsUnknown(t *testing.T) {
 			{Label: "temp dir"},                          // Path empty too
 		},
 	})
-	require.Contains(t, pressureRow(t, out, "swap"), "unknown")
-	require.Contains(t, pressureRow(t, out, "available RAM"), "unknown")
-	require.Contains(t, pressureRow(t, out, "data dir"), "unreadable")
-	require.Contains(t, pressureRow(t, out, "temp dir"), "unknown")
+	require.Contains(t, renderedRow(t, out, "swap"), "unknown")
+	require.Contains(t, renderedRow(t, out, "available RAM"), "unknown")
+	require.Contains(t, renderedRow(t, out, "data dir"), "unreadable")
+	require.Contains(t, renderedRow(t, out, "temp dir"), "unknown")
 	require.False(t, PressureWarned(PressureResult{Supported: true}),
 		"nothing readable is not a warning")
 }
@@ -402,7 +387,7 @@ func TestRenderPressureNotesZramSwap(t *testing.T) {
 // a full tmpfs does, so it earns the note.
 func TestRenderPressureNotesASwaplessHost(t *testing.T) {
 	out := RenderPressure(PressureResult{Supported: true, SwapKnown: true, SwapTotal: 0})
-	require.Contains(t, pressureRow(t, out, "swap"), "none configured")
+	require.Contains(t, renderedRow(t, out, "swap"), "none configured")
 	require.Contains(t, out, "nowhere")
 }
 
@@ -435,7 +420,7 @@ func TestWarnGlyphGoesInTheValueNotTheLabel(t *testing.T) {
 	})
 
 	for _, label := range []string{"swap", "space", "inodes"} {
-		row := pressureRow(t, out, label)
+		row := renderedRow(t, out, label)
 		require.Contains(t, row, "⚠", "row %q should be flagged", label)
 		before, _, _ := strings.Cut(row, "⚠")
 		require.Contains(t, before, label,
@@ -451,7 +436,7 @@ func TestWarnGlyphGoesInTheValueNotTheLabel(t *testing.T) {
 // valueColumn returns the display column at which a row's value begins.
 func valueColumn(t *testing.T, out, label string) int {
 	t.Helper()
-	row := pressureRow(t, out, label)
+	row := renderedRow(t, out, label)
 	idx := strings.Index(row, label) + len(label)
 	rest := row[idx:]
 	return idx + len(rest) - len(strings.TrimLeft(rest, " "))

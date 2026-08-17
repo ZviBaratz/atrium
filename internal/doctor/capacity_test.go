@@ -23,17 +23,22 @@ func TestCheckCapacity(t *testing.T) {
 	}
 }
 
-// capacityRow returns the rendered line whose text contains label, so a value
-// assertion tests the value in its own row rather than anywhere in the block — the
-// "8" of "hardware threads" must not be satisfiable by an unrelated figure elsewhere.
-func capacityRow(t *testing.T, out, label string) string {
+// renderedRow returns the rendered line whose text contains label, so a value assertion
+// tests the value in its own row rather than anywhere in the block — the "8" of "hardware
+// threads" must not be satisfiable by an unrelated figure elsewhere.
+//
+// Shared by every doctor renderer's tests. It was capacityRow, and pressure_test.go carried a
+// byte-identical pressureRow whose own doc said "Mirrors capacityRow"; #715 was about to add a
+// third and fourth copy in render_test.go. Nothing about it is capacity- or pressure-specific,
+// so it is one helper with a general name rather than one per renderer.
+func renderedRow(t *testing.T, out, label string) string {
 	t.Helper()
 	for _, line := range strings.Split(out, "\n") {
 		if strings.Contains(line, label) {
 			return line
 		}
 	}
-	t.Fatalf("no %q row in RenderCapacity output:\n%s", label, out)
+	t.Fatalf("no %q row in the rendered output:\n%s", label, out)
 	return ""
 }
 
@@ -49,11 +54,11 @@ func TestRenderCapacity_ShowsHostAndOverride(t *testing.T) {
 		{"total RAM", "32.0 GiB"},
 		{"recommended cap", "4 sessions"},
 	} {
-		if row := capacityRow(t, out, tc.label); !strings.Contains(row, tc.want) {
+		if row := renderedRow(t, out, tc.label); !strings.Contains(row, tc.want) {
 			t.Errorf("%q row = %q, want it to contain %q", tc.label, row, tc.want)
 		}
 	}
-	if row := capacityRow(t, out, "max_sessions"); !strings.Contains(row, "unlimited") {
+	if row := renderedRow(t, out, "max_sessions"); !strings.Contains(row, "unlimited") {
 		t.Errorf("the override row must explain the escape hatch, got %q", row)
 	}
 }
