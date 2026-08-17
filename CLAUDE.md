@@ -153,10 +153,11 @@ at what is missed rather than at what is already caught:
 Prefer `file:line` evidence over reasoning about what a name implies. A finding
 you cannot cite is a hypothesis. Shipped prose is the opposite case — a finding is
 read while it is still true, a comment is not — so cite the symbol, never the
-position. `TestNoProseCitesAPosition` enforces that for Go comments, shell comments
-and markdown — a workflow YAML comment, the justfile, a `.tmpl` and a plan under
-`docs/superpowers` are unguarded, and it cannot check that you cited a symbol at
-all, only that you did not cite a line.
+position. `TestNoProseCitesAPosition` reads the git index and enforces that in
+exactly three places: Go comments, `#` comments in `.sh`, and unfenced markdown.
+Prose in any other file type is unguarded, as is a plan under `docs/superpowers`,
+which is exempt on purpose. And it cannot check that you cited a symbol at all,
+only that you did not cite a line.
 
 ## Conventions
 

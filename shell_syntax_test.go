@@ -2,10 +2,8 @@ package main
 
 import (
 	"context"
-	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -44,24 +42,11 @@ func TestShellScriptsParse(t *testing.T) {
 	// whatever is lying in the tree — a half-written repro.sh left in the root
 	// mid-debug turns `just ci` red for a file that is not part of the repo — and it
 	// needs a skip list to keep out vendored trees, which then has to be maintained
-	// against guesses about what might appear under them.
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "git", "-C", root, "ls-files", "-z", "--", "*.sh").Output()
-	require.NoError(t, err, "git ls-files failed; this test reads the index, not the working tree")
-
+	// against guesses about what might appear under them. trackedFiles is that
+	// lister, shared with the prose guards so the rule has one home.
 	var scripts []string
-	for _, rel := range strings.Split(string(out), "\x00") {
-		if rel == "" {
-			continue
-		}
-		// A file can be in the index and absent from the tree mid-rebase; nothing is
-		// proved by trying to parse one that is not there.
-		abs := filepath.Join(root, rel)
-		if _, statErr := os.Stat(abs); statErr != nil {
-			continue
-		}
-		scripts = append(scripts, abs)
+	for _, rel := range trackedFiles(t, root, "*.sh") {
+		scripts = append(scripts, filepath.Join(root, filepath.FromSlash(rel)))
 	}
 
 	// A guard that silently matches nothing is worse than no guard: if the pathspec
