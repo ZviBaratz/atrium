@@ -381,7 +381,7 @@ func Clear() (int, error) {
 			// --wait is watching the claim as well as the record (see ClaimPath), so
 			// unlinking one in silence is the same false success a bare os.Remove would
 			// be. The receipt goes to the record path because that is the path the
-			// producer knows; ReleaseClaim then takes the file.
+			// producer knows; DiscardCreate then takes both files.
 			if record, claimed := claimedRecordName(de); claimed {
 				path := filepath.Join(dir, record)
 				err := errors.Join(Reject(path, clearReason), DiscardCreate(path))

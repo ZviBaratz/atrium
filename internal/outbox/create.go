@@ -284,7 +284,7 @@ func ListCreates() ([]CreateEntry, error) {
 }
 
 // ClaimPath returns the file a claimed request lives in. Every other function here
-// — Claim, Requeue, ReleaseClaim, and the receipt trio a caller reaches for a claimed
+// — Claim, Requeue, DiscardCreate, and the receipt trio a caller reaches for a claimed
 // request — takes the RECORD path, the one WriteCreate returned and the one
 // `atrium new --wait` is watching. One path per request is what keeps a rejection
 // receipt readable by the process that is blocked on it: a Reject aimed at the claim
