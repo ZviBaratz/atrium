@@ -769,11 +769,13 @@ func classifyPIDProbe(ctx context.Context, out []byte, err error) (pid int, know
 			//   - probeSocketOwner: end to end, by a real tmux server behind a real
 			//     unopenable socket (TestALiveServerBehindAnUnopenableSocketIsNotAReapTarget).
 			//     Errno, diagnostic, stream and field are all measured there.
-			//   - ambientServerPID: NOT covered end to end. Every ScanServers test stubs that
-			//     seam, so the rule below is exercised for it while its wiring is not. It is
-			//     one line, three functions up, in the same shape — but "the same shape" is an
-			//     inference, which is what this note exists to keep visible rather than to
-			//     settle.
+			//   - ambientServerPID: NOT covered for this branch. It does run for real in the
+			//     tests above — they leave the ambientPID seam alone — but what they make
+			//     unopenable is the FOREIGN socket under their own root, never the ambient one
+			//     this probe addresses, so it answers normally throughout and the connect
+			//     failure below is never taken through it. Its wiring is one line, three
+			//     functions up, in the same shape as probeSocketOwner's; "the same shape" is an
+			//     inference, which is what this note keeps visible rather than settles.
 			//
 			// exitErrorWithStderr (orphan_test.go) holds the stdlib half — Output() populates
 			// Stderr when cmd.Stderr is nil — to a syscall rather than to a reading of the
