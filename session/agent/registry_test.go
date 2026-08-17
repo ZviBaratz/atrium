@@ -1633,7 +1633,7 @@ func TestClaudeGateAnchorEdges(t *testing.T) {
 	// server, and several per prose paragraph once the pane is narrow enough to reflow — so the
 	// narrow rungs, not the wide ones, are where this gets close.
 	tallest, tallestName := 0, ""
-	for _, c := range paneCoverage["claude/gate"] {
+	for _, c := range paneCoverage["claude/gate/startup"] {
 		region, hasRule := footerBelowBox(c.pane)
 		if !hasRule {
 			continue

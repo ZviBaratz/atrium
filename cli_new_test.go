@@ -659,10 +659,127 @@ func TestNewWaitDoesNotReadARefusalAsSuccess(t *testing.T) {
 	}
 	t.Cleanup(func() { betweenSpoolSamples = func() {} })
 
-	err = awaitSpool(path, 5*time.Second, spoolWaitCopy{refused: "refused", timedOut: "timed out"})
+	err = awaitSpool(path, outbox.ClaimPath(path), 5*time.Second,
+		spoolWaitCopy{refused: "refused", timedOut: "timed out"})
 	require.True(t, fired, "precondition: the window was reproduced")
 	require.Error(t, err, "a refusal read as a success is the whole failure mode")
 	assert.Contains(t, err.Error(), "already exists here")
+}
+
+// TestNewWaitKeepsWaitingWhileTheRequestIsClaimed is the completion protocol's #716
+// half. The drain renames the record to a claim for the whole of the session build, so
+// the record's absence alone no longer means "created" — it means "some atrium has
+// taken this", which is precisely the state --wait exists to sit through. Reading it as
+// success would print `created` and exit 0 while the worktree is still going up, and a
+// script would move on to a session with no branch.
+func TestNewWaitKeepsWaitingWhileTheRequestIsClaimed(t *testing.T) {
+	sandboxDataDir(t)
+	path, err := outbox.WriteCreate(outbox.Request{Title: "fix-auth", Path: tempRepo(t)})
+	require.NoError(t, err)
+	require.NoError(t, outbox.Claim(path, outbox.ClaimMeta{At: time.Now(), SessionBranch: "zvi/fix-auth"}))
+	require.NoFileExists(t, path, "precondition: the record itself is gone")
+
+	err = awaitSpool(path, outbox.ClaimPath(path), 20*time.Millisecond,
+		spoolWaitCopy{refused: "refused", timedOut: "still queued"})
+	require.Error(t, err, "a claimed request has not completed")
+	assert.Contains(t, err.Error(), "still queued")
+}
+
+// TestWaitForCreateWatchesTheClaimToo is the wiring, and a mutation battery is what
+// found it missing: every other test here drives awaitSpool directly and passes the
+// claim path itself, so all of them stay green against a waitForCreate that passes "".
+//
+// What that mutant produces is not a hang but a WRONG ANSWER, which is why the assertion
+// is on the wording. With the claim unwatched the record's absence ends the wait, the
+// state.json read-back finds no row, and the caller is told its outcome "was lost" and
+// sent to check the log — for a session whose worktree is at that moment still going up.
+func TestWaitForCreateWatchesTheClaimToo(t *testing.T) {
+	sandboxDataDir(t)
+	repo := tempRepo(t)
+	path, err := outbox.WriteCreate(outbox.Request{Title: "fix-auth", Path: repo})
+	require.NoError(t, err)
+	require.NoError(t, outbox.Claim(path, outbox.ClaimMeta{At: time.Now(), SessionBranch: "zvi/fix-auth"}))
+
+	var out bytes.Buffer
+	err = waitForCreate(&out, path, "fix-auth", repo, 20*time.Millisecond)
+
+	require.Error(t, err, "a session that is still being built has not been created")
+	assert.Contains(t, err.Error(), "being built right now",
+		"a claimed request is in flight, not an outcome that was lost")
+	assert.NotContains(t, err.Error(), "outcome was lost")
+	assert.Empty(t, out.String(), "and nothing may be reported as created")
+}
+
+// TestSpoolSettledReadsTheRecordBeforeTheClaim pins the stat ORDER, which is the whole
+// correctness of the two-file wait.
+//
+// Record first: once it is absent the request is either claimed or finished, and the
+// claim stat separates those two whichever way it then races the drain. Claim first
+// loses outright — the claim reads absent (not taken yet), the drain claims, the record
+// then reads absent too, both look gone, and a build that has not begun is reported to
+// `atrium new --wait` as a created session, exit 0.
+//
+// betweenSpoolStats reproduces exactly that window; arranging the end state cannot,
+// because both orders agree about every state that holds still.
+func TestSpoolSettledReadsTheRecordBeforeTheClaim(t *testing.T) {
+	sandboxDataDir(t)
+	path, err := outbox.WriteCreate(outbox.Request{Title: "fix-auth", Path: tempRepo(t)})
+	require.NoError(t, err)
+
+	// The drain claims in the window between the two stats. A record-first reader has
+	// already seen the record present and reports "not settled"; a claim-first reader
+	// would have seen no claim, then find the record gone, and call it done.
+	fired := false
+	betweenSpoolStats = func() {
+		if fired {
+			return
+		}
+		fired = true
+		require.NoError(t, outbox.Claim(path, outbox.ClaimMeta{At: time.Now()}))
+	}
+	t.Cleanup(func() { betweenSpoolStats = func() {} })
+
+	settled, statErr := spoolSettled(path, outbox.ClaimPath(path))
+	require.NoError(t, statErr)
+	assert.False(t, settled, "a request claimed mid-sample has not settled")
+	assert.False(t, fired, "record-first never reaches the second stat while the record is present")
+}
+
+// TestSpoolSettledIsTerminalOnlyWhenBothAreGone is the positive half — without it the
+// test above passes against a spoolSettled that never returns true at all.
+func TestSpoolSettledIsTerminalOnlyWhenBothAreGone(t *testing.T) {
+	sandboxDataDir(t)
+	path, err := outbox.WriteCreate(outbox.Request{Title: "fix-auth", Path: tempRepo(t)})
+	require.NoError(t, err)
+
+	settled, statErr := spoolSettled(path, outbox.ClaimPath(path))
+	require.NoError(t, statErr)
+	require.False(t, settled, "queued")
+
+	require.NoError(t, outbox.Claim(path, outbox.ClaimMeta{At: time.Now()}))
+	settled, statErr = spoolSettled(path, outbox.ClaimPath(path))
+	require.NoError(t, statErr)
+	require.False(t, settled, "claimed")
+
+	require.NoError(t, outbox.DiscardCreate(path))
+	settled, statErr = spoolSettled(path, outbox.ClaimPath(path))
+	require.NoError(t, statErr)
+	assert.True(t, settled, "settled")
+}
+
+// TestSpoolSettledIgnoresAClaimForASpoolWithoutOne is the prompt spool's side. `send`
+// has no claim step — queuing a prompt IS the whole job — so passing "" must leave its
+// protocol exactly as it was, and must not make it stat a path that will never exist.
+func TestSpoolSettledIgnoresAClaimForASpoolWithoutOne(t *testing.T) {
+	sandboxDataDir(t)
+	path, err := outbox.WriteCreate(outbox.Request{Title: "fix-auth", Path: tempRepo(t)})
+	require.NoError(t, err)
+	// A claim beside it, which a spool with no claim step must not consult.
+	require.NoError(t, outbox.Claim(path, outbox.ClaimMeta{At: time.Now()}))
+
+	settled, statErr := spoolSettled(path, "")
+	require.NoError(t, statErr)
+	assert.True(t, settled, "with no companion, the record's absence is the whole answer")
 }
 
 // TestNewProfileResolvesWithNoConfigFile is the headless-bootstrap case --profile
@@ -809,7 +926,7 @@ func TestAwaitSpoolRetriesAStatItCouldNotAnswer(t *testing.T) {
 	}
 	t.Cleanup(func() { betweenSpoolSamples = func() {} })
 
-	err = awaitSpool(record, 10*time.Second, spoolWaitCopy{refused: "refused", timedOut: "timed out"})
+	err = awaitSpool(record, "", 10*time.Second, spoolWaitCopy{refused: "refused", timedOut: "timed out"})
 	require.GreaterOrEqual(t, samples, 2, "precondition: the window was reproduced")
 	assert.NoError(t, err, "a transient Stat error must not end the wait")
 }
@@ -823,10 +940,65 @@ func TestAwaitSpoolReportsAStatErrorThatNeverClears(t *testing.T) {
 	blocker := filepath.Join(dir, "blocker")
 	require.NoError(t, os.WriteFile(blocker, []byte("not a directory"), 0o600))
 
-	err := awaitSpool(filepath.Join(blocker, "record.json"), 10*time.Millisecond,
+	err := awaitSpool(filepath.Join(blocker, "record.json"), "", 10*time.Millisecond,
 		spoolWaitCopy{refused: "refused", timedOut: "no atrium picked it up"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to read the outbox")
 	assert.NotContains(t, err.Error(), "no atrium picked it up",
 		"a bad data dir must not be reported as a TUI that did not answer")
+}
+
+// TestSpoolSettledSurvivesARequeueMidSample is the mirror of the test above, and the
+// case record-first ordering alone loses.
+//
+// outbox.Claim renames record→claim, which is what the record-first argument is built
+// against. outbox.Requeue renames the other way, claim→record — the startup reconcile
+// handing an interrupted build back to the drain — and against THAT rename record-first
+// is exactly as wrong as claim-first is against Claim: the record reads absent (it is
+// still a claim), Requeue renames, the claim reads absent too, and a request that is
+// queued and about to be built normally is reported to `atrium new --wait` as a created
+// session. waitForCreate then finds no row and aborts with a message about a session
+// that is seconds from existing.
+//
+// The re-read of the record is what closes it, so this test stages the rename in the
+// window the re-read looks across.
+func TestSpoolSettledSurvivesARequeueMidSample(t *testing.T) {
+	sandboxDataDir(t)
+	path, err := outbox.WriteCreate(outbox.Request{Title: "fix-auth", Path: tempRepo(t)})
+	require.NoError(t, err)
+	require.NoError(t, outbox.Claim(path, outbox.ClaimMeta{At: time.Now()}))
+
+	// In the FIRST window — between the record stat and the claim stat — which is where
+	// this rename has to land to hide the file from both. Fired later it would be
+	// harmless: the claim stat would still see the claim and end the sample.
+	calls := 0
+	betweenSpoolStats = func() {
+		calls++
+		if calls == 1 {
+			require.NoError(t, outbox.Requeue(path, true))
+		}
+	}
+	t.Cleanup(func() { betweenSpoolStats = func() {} })
+
+	settled, statErr := spoolSettled(path, outbox.ClaimPath(path))
+	require.NoError(t, statErr)
+	assert.False(t, settled, "a request re-queued mid-sample is queued, not created")
+	assert.Equal(t, 2, calls, "reached only by re-reading the record, which is the fix")
+	assert.FileExists(t, path, "and the record really is back, so 'not settled' is the true answer")
+}
+
+// TestSpoolSettledStillReportsATrulySettledRecord is the negative control for the
+// re-read: an implementation that answered "not settled" unconditionally, or that
+// re-read some other path, would pass every ordering test above and never terminate a
+// real wait.
+func TestSpoolSettledStillReportsATrulySettledRecord(t *testing.T) {
+	sandboxDataDir(t)
+	path, err := outbox.WriteCreate(outbox.Request{Title: "fix-auth", Path: tempRepo(t)})
+	require.NoError(t, err)
+	require.NoError(t, outbox.Claim(path, outbox.ClaimMeta{At: time.Now()}))
+	require.NoError(t, outbox.DiscardCreate(path))
+
+	settled, statErr := spoolSettled(path, outbox.ClaimPath(path))
+	require.NoError(t, statErr)
+	assert.True(t, settled, "both files gone with nothing racing is the settled state")
 }

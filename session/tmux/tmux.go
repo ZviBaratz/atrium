@@ -125,6 +125,12 @@ type Session struct {
 	// captureErrLog throttles capture-pane error logging so a persistent failure
 	// can't flood the log with hundreds of identical lines per second.
 	captureErrLog *log.Every
+	// livenessErrLog throttles the same way for an unreachable socket, and is separate
+	// from captureErrLog on purpose: sharing one window would let whichever failure
+	// happened first suppress the other for a minute, and these two are reached on
+	// mutually exclusive paths (a session whose socket cannot be opened never gets as
+	// far as capture-pane).
+	livenessErrLog *log.Every
 
 	// Initialized by Start or Restore
 	//
@@ -348,15 +354,16 @@ const atriumMarkerEnv = "ATRIUM=1"
 
 func newSession(ctx context.Context, sessionName, windowName, program string, ptyFactory PtyFactory, cmdExec cmd.Executor) *Session {
 	return &Session{
-		baseCtx:       ctx,
-		sanitizedName: sessionName,
-		windowName:    windowName,
-		program:       program,
-		adapter:       agent.Resolve(program),
-		ptyFactory:    ptyFactory,
-		cmdExec:       cmdExec,
-		captureErrLog: log.NewEvery(60 * time.Second),
-		monitor:       newStatusMonitor(program),
+		baseCtx:        ctx,
+		sanitizedName:  sessionName,
+		windowName:     windowName,
+		program:        program,
+		adapter:        agent.Resolve(program),
+		ptyFactory:     ptyFactory,
+		cmdExec:        cmdExec,
+		captureErrLog:  log.NewEvery(60 * time.Second),
+		livenessErrLog: log.NewEvery(60 * time.Second),
+		monitor:        newStatusMonitor(program),
 	}
 }
 
@@ -904,19 +911,79 @@ func errWithStderr(err error, stderr string) error {
 	return err
 }
 
-// sessionAlreadyGone reports whether a kill-session failure just means the session
-// was already dead rather than a real teardown failure. tmux prints "can't find
-// session"/"session not found" when the session is gone and "no server running on
-// ..." when the whole server is down; both mean no live session remains, which is
-// exactly what Close aims for. The message can arrive on stderr (real tmux) or in
-// the error itself (test fakes), so check both. Anything unrecognized — a hung
-// server, a timeout — falls through as a real error so the caller can surface it;
-// tmux's messages are stable English, so the failure direction is the safe one.
+// sessionAlreadyGone reports whether a failed tmux command means no session is left to
+// act on, rather than a real failure. Two callers read it that way — Close, where "gone"
+// is the teardown goal already met, and liveness, where it is a definitive "no" — so a
+// case added here moves kill classification and poll classification together, so it needs
+// adding to alreadyGoneMessages (close_test.go) — the table that holds BOTH callers to it:
+// close_test.go drives the kill through it and tmux_test.go drives the poll through the same
+// list. Those two lists are the authority on which messages land which way. The message can
+// arrive on stderr (real tmux) or in the error itself (test fakes), so check both;
+// anything unrecognized falls through as a real error for the caller to surface.
+//
+// The socket case is matched as a PAIR rather than on "error connecting to" alone, and
+// that is the whole of its correctness. tmux formats it as `error connecting to %s (%s)`
+// with strerror, so the prefix also covers "(Permission denied)" — a socket that exists,
+// hosting a server this process cannot address, which may be running the very session
+// being killed. socketUnreachable is that other half.
+//
+// Residual, accepted and tracked in #730: a missing socket FILE is not proof the server
+// is gone. Unlink a live server's socket and the server and its panes keep running while
+// every tmux command aimed at that path reports ENOENT, so Close reports a clean kill and
+// TerminalPane.CloseForInstance releases the shell's owned name. Holding the name instead
+// recovers nothing — the path is unaddressable in both directions — and would reserve the
+// instance's title forever in the far commoner case #723 is about, no server running at
+// all. Proving a server absent takes orphan.go's /proc scan, not a fifth string.
+//
+// Deliberately textual, where orphan.go's classifyPIDProbe answers a similar question
+// structurally (any *exec.ExitError means tmux ran and made a determination). The
+// asymmetry is in the commands, not in the guards: kill-session exits non-zero for plenty
+// of reasons that are not "gone", while the display-message probe there essentially only
+// fails when nothing is on the socket to answer.
 func sessionAlreadyGone(err error, stderr string) bool {
 	hay := strings.ToLower(err.Error() + " " + stderr)
-	return strings.Contains(hay, "no server running") ||
+	socketMissing := strings.Contains(hay, "error connecting to") &&
+		strings.Contains(hay, "no such file or directory")
+	return socketMissing ||
+		strings.Contains(hay, "no server running") ||
 		strings.Contains(hay, "session not found") ||
 		strings.Contains(hay, "can't find session")
+}
+
+// socketUnreachable reports whether tmux could not open the socket at all for a reason
+// other than the file's absence — "(Permission denied)" on a socket a live server may
+// still be serving. That is neither "gone" nor an answer about the session: nothing was
+// asked of any server, so liveness must keep the prior status rather than read it as a
+// death. The ENOENT exclusion is what makes that split correct, and it is checked here
+// rather than left to call order: sessionAlreadyGone owns the one connect failure that does
+// mean gone, and at liveness's single call site it has already matched and returned before
+// this runs, so the conjunct is unreachable there — it is depth for the next caller, whose
+// order nothing here can promise.
+//
+// The errno tail is open-ended (tmux formats it with strerror) and, for a connect() failure,
+// so is the set of errnos a given kernel picks — the messages in unreachableSocketMessages
+// were captured on Linux, and CI's macOS job runs a different one. Hence the shape of the
+// test: any errno but ENOENT, so an unlisted one is classified safely rather than reaching
+// the ExitError branch and being read as a death. The cost of that default is below.
+//
+// The trade this makes, deliberately. sessionIndeterminate leaves the status untouched, and
+// it does not merely fail to advance the lost-session strike counter — app_poll.go derives
+// sessionLost from PaneDead alone and DELETES the strike entry for any other result, so an
+// intermittent unreachable socket resets the count and never accumulates toward the recover
+// threshold. While the condition persists the instance is therefore never parked as Paused:
+// a permanently unopenable socket shows a frozen status instead of a recoverable Paused one,
+// and the throttled log line in liveness is the only signal that anything is wrong. That is
+// accepted because the reverse default is the #270 mass-pause shape, where every session
+// behind one unopenable socket is torn down on the strength of a probe that never reached a
+// server — the rare case degrades quietly here, rather than the common one destructively.
+// (The cancelled-probe case is NOT an argument for this branch; it is caught by the ctx
+// guard two cases earlier and never produces a connect diagnostic at all.) Neither outcome
+// is honest, because "I cannot reach the socket" is not a session state; giving it one needs
+// #730's /proc check, which can answer what neither branch here can.
+func socketUnreachable(err error, stderr string) bool {
+	hay := strings.ToLower(err.Error() + " " + stderr)
+	return strings.Contains(hay, "error connecting to") &&
+		!strings.Contains(hay, "no such file or directory")
 }
 
 // SetDetachedSize set the width and height of the session while detached. This makes the
@@ -959,20 +1026,23 @@ func (t *Session) updateWindowSize(cols, rows int) error {
 type sessionLiveness int
 
 const (
-	sessionAlive         sessionLiveness = iota // has-session succeeded
-	sessionGone                                 // tmux answered "no such session"/"no server running"
-	sessionIndeterminate                        // probe never got a definitive answer (timeout, exec failure)
+	sessionAlive sessionLiveness = iota // has-session succeeded
+	// sessionGone has two producers in liveness: a message sessionAlreadyGone recognizes,
+	// and — for now — any other non-zero exit, via a fallthrough whose premise its own
+	// guards disprove. Audit the second before trusting this state (see liveness).
+	sessionGone
+	sessionIndeterminate // probe never got a definitive answer (timeout, exec failure)
 )
 
 // liveness probes the tmux server for this session and classifies the result.
-// A non-nil error is not automatically "gone": a deadline-kill or a fork/exec
-// failure means the probe never reached a definitive answer, so the caller must
-// keep the prior status rather than tear the session down.
+// A non-nil error is not automatically "gone": a context-killed probe, a fork/exec
+// failure, or a socket tmux could not open means the probe never reached a definitive
+// answer, so the caller must keep the prior status rather than tear the session down.
 func (t *Session) liveness() sessionLiveness {
 	ctx, cancel := t.opContext()
 	defer cancel()
-	// Capture stderr so a definitive "session not found"/"no server running" can
-	// be recognized the same way Close's sessionAlreadyGone does.
+	// Capture stderr so a definitive answer can be recognized the same way Close's
+	// sessionAlreadyGone does — the message is there, not in the error.
 	var stderr bytes.Buffer
 	// Using "-t name" does a prefix match, which is wrong. `-t=` does an exact match.
 	existsCmd := tmuxCommand(ctx, "has-session", fmt.Sprintf("-t=%s", t.snapshotName()))
@@ -981,20 +1051,42 @@ func (t *Session) liveness() sessionLiveness {
 	switch {
 	case err == nil:
 		return sessionAlive
-	// A deadline-kill can surface as an ExitError ("signal: killed"), so this must
-	// be checked before the ExitError branch below. Inspect the context (a real
-	// timeout in production) and the error chain (a fake executor in tests).
-	case errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded):
+	// A context-killed probe surfaces as an ExitError ("signal: killed"), so this must
+	// be checked before the ExitError branch below — and on ctx.Err() rather than on
+	// DeadlineExceeded alone, because a CANCELLED context (app shutdown, opContext's
+	// parent going away) kills the process just the same while ctx.Err() reads
+	// Canceled. Reading that as a death parks live sessions as Paused on the way out,
+	// which is the #270 mass-pause shape. The error chain is checked too, for a fake
+	// executor that reports the cause without a real context.
+	case ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled):
 		return sessionIndeterminate
 	// tmux gave a definitive "no live session" answer.
 	case sessionAlreadyGone(err, stderr.String()):
 		return sessionGone
-	// tmux actually ran and exited non-zero for some other reason — has-session
-	// only fails when the session is absent, so this is still a real "no".
+	// tmux could not open the socket for a reason that is not its absence: nothing was
+	// asked of any server, and one may be alive behind it (#730). Logged, throttled,
+	// because this classification is otherwise completely silent — it leaves the status
+	// alone and clears the strike count, so a socket stuck this way shows a stale status
+	// forever with nothing anywhere to say why (see socketUnreachable's doc).
+	case socketUnreachable(err, stderr.String()):
+		if t.livenessErrLog.ShouldLog() {
+			log.ErrorLog.Printf("tmux socket unreachable for session %q; its status is frozen "+
+				"at the last known value until this clears: %v",
+				t.snapshotName(), errWithStderr(err, stderr.String()))
+		}
+		return sessionIndeterminate
+	// tmux actually ran and exited non-zero for some other reason. Read as a real "no" on
+	// the grounds that has-session only fails when the session is absent — a premise the
+	// two cases above are both counterexamples to, so this default is known incomplete
+	// rather than sound. Every message it has not been taught lands here and is read as a
+	// death: an unlisted connect errno, `unknown command: has-session` below the version
+	// floor, a usage error from a malformed target. Inverting it (only a recognized message
+	// is gone) is tracked in #734; it is a behaviour change on every tmux failure this
+	// package has not enumerated, which is more than #723's blast radius can carry.
 	case errors.As(err, new(*exec.ExitError)):
 		return sessionGone
-	// The probe never reached the server (fork/exec EMFILE/ENOMEM, ctx canceled,
-	// a stalled-but-alive server): inconclusive, keep the prior status.
+	// The probe never reached the server (fork/exec EMFILE/ENOMEM, a stalled-but-alive
+	// server): inconclusive, keep the prior status.
 	default:
 		return sessionIndeterminate
 	}

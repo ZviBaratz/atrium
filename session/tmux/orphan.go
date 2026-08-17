@@ -681,6 +681,19 @@ func ambientServerPID(ctx context.Context) (pid int, known bool) {
 // "error connecting to …" — which is evidence, and answers pid 0. Anything else means
 // tmux never got to answer: it is absent, or the probe's budget was spent. That is not
 // evidence, and known is false.
+//
+// Close answers a similar question textually (sessionAlreadyGone) and must keep doing so.
+// The reason is the command, not the guard — the ctx check below covers a killed probe
+// either way: display-message fails essentially only when nothing is on the socket to
+// answer, while kill-session exits non-zero for plenty of reasons that are not "gone" (a
+// wedged server above all), and reading one of those as a clean teardown would prune state
+// for a session still running (#723).
+//
+// A wrong answer here is not cheap either, so do not relax it: pid 0 with known=true is
+// what assembleServers turns into ReachableKnown/!Reachable, and reapTargets selects that
+// pair as a kill target by default. An unopenable socket ("(Permission denied)") reaches
+// it through the ExitError branch — Atrium cannot address that server, but the agent
+// inside it may be working (#730).
 func classifyPIDProbe(ctx context.Context, out []byte, err error) (pid int, known bool) {
 	// Checked first: a killed-by-deadline process also surfaces as an ExitError, which
 	// would otherwise be read as tmux having reported an empty socket.
