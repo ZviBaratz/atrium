@@ -133,12 +133,10 @@ func TestReapWithoutKillSignalsNothing(t *testing.T) {
 // TestReapKillTargetsOnlyProvenUnreachableServers.
 //
 // Reachable servers are recoverable with the tmux command doctor prints, so they are
-// left alone without --all. Unknown-reachability servers are never targeted at all,
-// under either flag, and every one of the three causes of that state can be a live
-// server: when tmux cannot be run, and when the probe's budget expires, nothing was
-// established and the ambient live server could not be excluded either, so those rows may
-// be the running fleet; and a socket that exists but cannot be opened hosts a server
-// Atrium cannot address but whose agents are working (#730). This
+// left alone without --all. Unknown-reachability servers are never targeted at all, under
+// either flag, because a live server reaches that state — most plainly when its socket
+// exists and cannot be opened, where Atrium cannot address the server but its agents are
+// working (#730). This
 // assertion is the second half of that fix — session/tmux proves the field comes back
 // false for such a server (TestALiveServerBehindAnUnopenableSocketIsNotAReapTarget), and
 // this proves the field is what spares it.

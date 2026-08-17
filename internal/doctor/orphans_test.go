@@ -112,6 +112,9 @@ func TestRenderOrphansWithholdsAKillServerItCannotVouchFor(t *testing.T) {
 		"with the live server unidentified this row may be the live server; no kill command may be printed: %q", unknown)
 	require.Contains(t, unknown, "pid 1952486", "the row itself must still be reported")
 	require.Contains(t, unknown, "could not be identified")
+	require.Contains(t, unknown, "check that tmux runs and that Atrium's own socket opens",
+		"a bare re-run is a loop on the #730 cause, which answers the same way every time; "+
+			"the check that can actually clear it has to ship with it")
 
 	// The control: with the live server identified, the exclusion happened and the
 	// remedy is exactly what makes the row useful. A fix that simply stopped printing
@@ -126,8 +129,8 @@ func TestRenderOrphansWithholdsAKillServerItCannotVouchFor(t *testing.T) {
 // TestRenderOrphansCautionsAKillServerItCannotVouchFor is the report side of #603, and it
 // deliberately reaches the opposite conclusion from the test above.
 //
-// There the ambient probe could not be run, so nothing about the row is established and
-// there is no way for the user to establish it either — the only honest move is to print no
+// There the ambient probe was never answered, so which server is the fleet is still an open
+// question and a re-run is the move that may close it — which is why that row prints no
 // command. Here the probe ran and answered "nothing on the socket I asked about", while this
 // row answers its own socket by absolute path: the probe looked somewhere else (another
 // TMUX_TMPDIR, the other brand, a config that would not parse), and re-running it asks the
@@ -279,7 +282,11 @@ func TestRenderOrphansStaleGapCountsWhatCouldNotBeRead(t *testing.T) {
 	// scan's budget was spent, and "check that tmux is on PATH" is wrong advice on a host
 	// whose PATH is fine — it sends the user to inspect the one thing that is not broken
 	// and never names the cause a re-run fixes. So the re-run leads.
-	require.Regexp(t, `re-run to get a complete answer[\s\S]*is on PATH`, out,
+	//
+	// The `ls -l` tail is asserted in the same expression, not a separate Contains: it is
+	// the only move offered for #730's cause, which neither the re-run nor the PATH check
+	// clears, and its order relative to the other two is the whole point of the sentence.
+	require.Regexp(t, `re-run to get a complete answer[\s\S]*is on PATH[\s\S]*can be opened \(ls -l\)`, out,
 		"the re-run must come first: it is the remedy for the cause checking PATH cannot explain")
 }
 
@@ -402,20 +409,17 @@ func TestRenderOrphansReachableServerPrintsTheExactCommand(t *testing.T) {
 	require.Contains(t, out, "up 3m")
 }
 
-// TestRenderOrphansUnknownReachabilityPromisesNoKill. With tmux unavailable nothing
+// TestRenderOrphansUnknownReachabilityPromisesNoKill. With the probe unanswered nothing
 // is proven — and the live server could not be excluded either, so these rows may
 // well be the running fleet. The row has to say so, because the user reading it is
 // deciding whether to reach for `reap --kill`.
 //
-// It also has to give the user something to do, which is why the path is asserted here
-// and not merely in the format string. This is the branch that offers no way to stop the
-// server: the LiveServerUnknown row prints no command either, but it is Reachable and can
-// be inspected by name, while this one may not open at all and reapTargets drops it under
-// every flag. Since #730 it is where a live server behind an unopenable socket lands, along
-// with the residual that fix accepted — an orphan behind ENOTDIR/ELOOP, which reap can no
-// longer take. Naming the file is the whole remedy for both: the row cannot say which cause
-// fired, but `ls -l` on the path can, and a row that withheld it would leave the user with
-// a verdict and no next step.
+// It also has to give the user something to do, which is why the path is asserted here and
+// not merely in the format string. `ls -l` is the only handle this row offers, and it is a
+// read the scan could not make — making it is exactly what failed. Since #730 this is where
+// a live server behind an unopenable socket lands, along with the residual that fix accepted
+// — an orphan behind ENOTDIR/ELOOP, which reap can no longer take. A row that withheld the
+// path would leave the user with a verdict and no next step.
 func TestRenderOrphansUnknownReachabilityPromisesNoKill(t *testing.T) {
 	out := RenderOrphans(OrphanResult{
 		Supported: true,
@@ -430,11 +434,11 @@ func TestRenderOrphansUnknownReachabilityPromisesNoKill(t *testing.T) {
 	require.Contains(t, out, "never kills them")
 	require.Contains(t, out, "holds nothing")
 	require.Contains(t, out, "`ls -l /tmp/tmux-1000/atrium`",
-		"the branch with no way to stop the server must at least name the file to look at")
+		"the row must name the file to look at: it is the only read that narrows the causes")
 	require.Contains(t, out, "could not open the socket",
 		"and it must name the cause that neither a re-run nor a PATH check can clear")
 	require.NotContains(t, out, "UNREACHABLE",
-		"an unrunnable probe is not a finding; only a probe that answered may say unreachable")
+		"an unanswered probe is not a finding; only a probe that answered may say unreachable")
 }
 
 // TestRenderOrphansStaleSocketsNameExactPathsNotAGlob.

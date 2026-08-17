@@ -220,15 +220,16 @@ func (g ScanGaps) IncompleteInventory() bool { return g.SocketTableUnread || g.P
 // this Atrium's own tmux server. It exists so that "identified" means one thing — a live pid
 // was positively determined, and so excluded — wherever that question is asked.
 //
-// Its two causes reach an identical state: the exclusion in assembleServers matched
-// nothing, while a live server answers its own socket and so arrives Reachable. Neither is
-// an inventory gap, which is why IncompleteInventory() counts neither.
+// Its two causes share the one state this predicate is about: the exclusion in
+// assembleServers matched nothing, so no row is proven not to be the fleet. Neither is an
+// inventory gap, which is why IncompleteInventory() counts neither. How such a row is then
+// classified is not shared — ScanGaps.LiveServerUnknown's doc has that — and nothing here
+// depends on it.
 //
 // Which callers use this, and which do not, follows from what each one has to say. The
 // `--all` guard asks only whether it may act, so it keys on this (cli_reap.go). The report
-// has to word a remedy, and the two causes take different ones — a re-run fixes an
-// unanswered probe and cannot fix a wrong-place answer — so renderOrphanServer branches on
-// the fields themselves instead.
+// has to word a remedy, and the two causes take different ones, so renderOrphanServer
+// branches on the fields themselves instead.
 func (g ScanGaps) LiveServerUnidentified() bool {
 	return g.LiveServerUnknown || g.EmptyFleetUnproven
 }
@@ -341,10 +342,10 @@ func probeAmbient(ctx context.Context) (pid int, known bool) {
 // there is no server on that socket" is a determined answer and a safe one; "tmux could
 // not be asked" — the binary absent, the probe's budget spent, a fork that failed under
 // memory pressure, or (since #730) a connect() that never opened the socket, which is
-// tmux running and still asking nobody — establishes nothing. A caller that collapses the two reports an
-// empty fleet on a host that has a live one. That was #599 here, and it was still true
-// in internal/doctor's OOM section afterwards, which ran its own copy of this probe with
-// the classification left out.
+// tmux running and still asking nobody — establishes nothing. A caller that collapses the
+// two reports an empty fleet on a host that has a live one. That was #599 here, and it
+// was still true in internal/doctor's OOM section afterwards, which ran its own copy of
+// this probe with the classification left out.
 //
 // One home for the rule is the point: classifyPIDProbe's doc comment argues that a rule
 // about what counts as evidence is the last thing that should be able to drift between
@@ -460,8 +461,9 @@ type StaleSocket struct {
 // a claim of health manufactured out of having seen nothing (#598).
 //
 // The two fields are independent because the remedies differ: an unlistable directory
-// is an existence or permission problem, while unrunnable probes mean tmux could not be
-// executed. Unlike ScanGaps neither makes any caller refuse to act, because nothing
+// is an existence or permission problem, while a file that reached a probe and was not
+// classified has its own set of causes, which Unprobed's doc below owns and this one does
+// not restate. Unlike ScanGaps neither makes any caller refuse to act, because nothing
 // acts on this list — reap only prints it, and the remedy is an `rm --` line the user
 // runs. These gaps cost the accuracy of a report and nothing else.
 type StaleGaps struct {
@@ -590,9 +592,7 @@ func probeSocketPath(ctx context.Context) (path string, ok bool) {
 }
 
 // liveSocketPath asks the server on Atrium's socket where that socket is. ok is false
-// when there is no server to ask, when tmux could not be run at all, and when it ran and
-// could not open the socket: all three mean the same thing to SocketDir, which is that
-// there is no server's answer to use. They are worth no more than this because none of
+// whenever no answer came back. The reasons are not enumerated here, because none of
 // them says anything about the *directory* — only about whether a server was there to
 // name it. This is a plain `err != nil`, not classifyPIDProbe's split, and it stays one:
 // the caller needs "no answer", never which kind (#730). What the *caller* may then claim
@@ -776,11 +776,11 @@ func classifyPIDProbe(ctx context.Context, out []byte, err error) (pid int, know
 			//     tests above — they leave the ambientPID seam alone — but what they make
 			//     unopenable is the FOREIGN socket under their own root, never the ambient one
 			//     this probe addresses, so it answers normally throughout and the connect
-			//     failure below is never taken through it. Its wiring is one line, three
-			//     functions up, in the same shape as probeSocketOwner's; "the same shape" is an
-			//     inference, which is what this note keeps visible rather than settles.
+			//     failure below is never taken through it. Its wiring is one line, in the same
+			//     shape as probeSocketOwner's; "the same shape" is an inference, which is what
+			//     this note keeps visible rather than settles.
 			//
-			// exitErrorWithStderr (orphan_test.go) holds the stdlib half — Output() populates
+			// TestOutputPopulatesExitErrorStderr holds the stdlib half — Output() populates
 			// Stderr when cmd.Stderr is nil — to a syscall rather than to a reading of the
 			// docs. That is a fact about os/exec, not about either call site.
 			if socketUnreachableMessage(string(exitErr.Stderr)) {

@@ -147,8 +147,9 @@ func renderScanGaps(b *strings.Builder, g tmux.ScanGaps) {
 // fleet. That is the #584 shape, arrived at through the report rather than through a glob.
 //
 // The whole gaps value rather than one "identified" bool, because the two ways it can be
-// unidentified need different sentences: one is an unrunnable probe and one is a probe that
-// answered about the wrong socket, and only the first leaves the row uninspectable (#603).
+// unidentified need different sentences: under LiveServerUnknown the ambient question is
+// still open and a re-run may close it, while EmptyFleetUnproven means the probe answered
+// about the wrong socket and answers the same way however often it runs (#603).
 //
 // The connected-client note goes below the switch rather than into a case of it because only
 // its first line is orthogonal to reachability: that something is using this server is true of
@@ -180,26 +181,26 @@ func renderOrphanServer(b *strings.Builder, s tmux.OrphanServer, now time.Time, 
 		// fine nowhere, and a re-run never clears a mode bit. The same reasoning
 		// StaleGaps.Unprobed's doc gives for not naming one cause there.
 		//
-		// The path is printed because this is the one row that offers no way to stop the
-		// server. The LiveServerUnknown case below also prints no command, but that row is
-		// Reachable — `tmux -S <path> ls` answers for it and a re-run may settle it — whereas
-		// here the socket may not open at all and reapTargets drops the row under every flag.
-		// Under the third cause the file is present and merely unopenable, and `ls -l` is what
-		// separates that from the other two: a read the user can make and this scan cannot,
-		// since making it is exactly what failed. It is also the only handle offered on the
-		// residual #730 accepted — an orphan behind ENOTDIR/ELOOP lands here and reap will not
-		// take it — so the path is the whole remedy rather than a supplement to one.
+		// The path is printed because `ls -l` is the one read that narrows those three, and
+		// it is a read this scan cannot make — making it is exactly what failed. What it
+		// settles is whether the socket opens, so it rules the third cause in or out and
+		// claims no more than that; the line says that rather than promising to tell the user
+		// which, because on a healthy socket it separates nothing. It is also the only handle
+		// offered on the residual #730 accepted — an orphan behind ENOTDIR/ELOOP lands here
+		// and reap will not take it.
+		//
 		// The verdict leads and the causes follow, which also keeps "never kills them" on one
 		// line: TestRenderOrphansUnknownReachabilityPromisesNoKill reads the promise as a
 		// contiguous string, and a wrap through the middle of it silently stops being the
 		// promise anyone asserted.
 		b.WriteString("      → nothing here is proven: `atrium reap` lists these and never kills them.\n")
 		b.WriteString("        tmux could not be run, ran out of time, or could not open the socket —\n")
-		fmt.Fprintf(b, "        `ls -l %s` tells you which\n", s.SocketPath)
+		fmt.Fprintf(b, "        `ls -l %s` rules the last one in or out\n", s.SocketPath)
 	case s.Reachable && gaps.LiveServerUnknown:
-		// No command is printed at all here. The honest remedy is to re-run once the
-		// probe works, because the one command that would stop this server is also the
-		// one that would stop the fleet if this row is the fleet.
+		// No command is printed at all here, because the one command that would stop this
+		// server is also the one that would stop the fleet if this row is the fleet. The
+		// re-run leads and the checks follow it, for the reason unidentifiedLiveServerReason
+		// gives: a re-run alone is the instruction #730's cause cannot make good on.
 		fmt.Fprintf(b, "  pid %d  socket %s  up %s  reachable  %s\n",
 			s.PID, s.Socket, HumanAge(now.Sub(s.Started)), childSummary(s.Children))
 		b.WriteString("      → no remedy offered: this Atrium's own server could not be identified,\n")
@@ -334,8 +335,8 @@ func renderStaleSockets(b *strings.Builder, r OrphanResult) {
 
 // renderStaleGaps says what the stale-socket pass could not establish. Each gap gets
 // its own sentence and its own remedy because the two differ in kind: an unlistable
-// directory is an existence or permission problem, while an unrunnable probe means
-// tmux itself could not be executed.
+// directory is an existence or permission problem, while a file that reached a probe and
+// was not classified has the several causes tmux.StaleGaps.Unprobed enumerates.
 //
 // Neither prints renderScanGaps' "`atrium reap --kill` refuses to act" line, and that
 // asymmetry is deliberate. That refusal is real for the server inventory, where a short
