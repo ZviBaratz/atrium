@@ -879,7 +879,7 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 	//
 	// A no-op for every launch that finds no claim, which is all of them but the one
 	// after a crash — one os.ReadDir of a directory the drain polls anyway.
-	if n := reconcileCreateClaims(ctx, instances, appConfig.BranchPrefix, time.Now()); n > 0 {
+	if n := reconcileCreateClaims(ctx, instances, time.Now()); n > 0 {
 		log.InfoLog.Printf("reconciled %d interrupted create request%s left by an earlier atrium", n, plural(n))
 	}
 

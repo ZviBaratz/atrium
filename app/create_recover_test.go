@@ -10,6 +10,7 @@ import (
 
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/internal/outbox"
+	"github.com/ZviBaratz/atrium/internal/testutil"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/ui/theme"
@@ -64,7 +65,7 @@ func recovered(t *testing.T) outbox.Request {
 
 func reconcile(t *testing.T, instances ...*session.Instance) int {
 	t.Helper()
-	return reconcileCreateClaims(context.Background(), instances, strandPrefix, time.Now())
+	return reconcileCreateClaims(context.Background(), instances, time.Now())
 }
 
 // rowFrom builds a loaded session row, standing in for what LoadInstances hands
@@ -136,7 +137,7 @@ func mustClassify(t *testing.T, record string, instances ...*session.Instance) c
 	require.NoError(t, err)
 	for _, c := range claims {
 		if c.Path == record {
-			v, _ := classifyCreateClaim(context.Background(), c, instances, strandPrefix, time.Now())
+			v, _ := classifyCreateClaim(context.Background(), c, instances, time.Now())
 			return v
 		}
 	}
@@ -232,7 +233,8 @@ func TestReconcileFreesTheOrphanWorktreeBeforeRequeueing(t *testing.T) {
 
 	require.True(t, recovered(t).Adopt)
 	assert.NoDirExists(t, stale, "the stale worktree must be gone by the time the drain runs")
-	held, _ := git.StrandedWorktreeFor(context.Background(), repo, branch)
+	held, _, err := git.StrandedWorktreeFor(context.Background(), repo, branch)
+	require.NoError(t, err)
 	assert.Empty(t, held, "and git must no longer report the branch as checked out")
 	assert.True(t, git.LocalBranchExists(context.Background(), repo, branch),
 		"while the branch itself — the interrupted build's actual work — survives")
@@ -285,12 +287,23 @@ func TestReconcileRefusesABranchALiveSessionOwns(t *testing.T) {
 	assert.Contains(t, reason, "someone-else", "and the session standing in the way")
 }
 
-// TestReconcileScopesBranchOwnershipByRepo is that predicate's own negative control. A
-// branch name is unique only within one repository, so two sessions of the same title
-// in two checkouts derive the same slug — and matching on the name alone would let an
-// unrelated repo's live session veto this one's recovery, turning the fix back into the
-// permanent refusal it replaced.
-func TestReconcileScopesBranchOwnershipByRepo(t *testing.T) {
+// TestReconcileRefusesABranchAnotherRepoSessionHolds pins the direction branchOwner
+// deliberately errs in, and it is not the intuitive one.
+//
+// A branch name is unique only within one repository, so a row holding this branch name
+// in a DIFFERENT checkout is, strictly, not evidence about this one — and refusing on it
+// costs a recovery that would have been correct. It is refused anyway, because the two
+// mistakes are not the same size. inst.Path is the directory a session was created FROM
+// (resolveNewTarget stores the caller's cwd through filepath.Abs, which does not resolve
+// symlinks), so a same-repo row reached through /repo/backend or a symlinked path fails
+// the path comparison and reads as "another repo" — and the fall-through from there is
+// claimAdopt, whose first act is `git worktree remove -f` plus os.RemoveAll on that live
+// session's worktree.
+//
+// So: over-refusing writes a receipt naming the branch and the session, and the caller
+// retries under another title. Under-refusing deletes somebody's working directory. This
+// test asserts the receipt.
+func TestReconcileRefusesABranchAnotherRepoSessionHolds(t *testing.T) {
 	sandboxSpool(t)
 	branch := strandPrefix + "fix-auth"
 	repo := gitRepoWithBranch(t, branch)
@@ -300,9 +313,17 @@ func TestReconcileScopesBranchOwnershipByRepo(t *testing.T) {
 
 	require.Equal(t, 1, reconcile(t, elsewhere))
 
-	assert.True(t, recovered(t).Adopt, "another repo's session does not own this repo's branch")
-	_, rejected := outbox.Rejection(record)
-	assert.False(t, rejected, "and must not refuse it on that session's account")
+	rejection, rejected := outbox.Rejection(record)
+	require.True(t, rejected, "a row holding the branch must stop the adoption, wherever it is filed")
+	assert.Contains(t, rejection, branch, "and the receipt must name the branch it left alone")
+	assert.Contains(t, rejection, "another repository",
+		"saying which kind of holder it found, so the message is not simply wrong for this case")
+
+	entries, err := outbox.ListCreates()
+	require.NoError(t, err)
+	assert.Empty(t, entries, "the request is not re-queued to take a branch somebody else holds")
+	assert.True(t, git.LocalBranchExists(context.Background(), repo, branch),
+		"and nothing is deleted on the strength of a match that might be a false one")
 }
 
 // TestReconcileRefusesABranchThatWasNotOurs is the adopt arm's second negative control,
@@ -479,4 +500,146 @@ func mustRead(t *testing.T, path string) []byte {
 	b, err := os.ReadFile(path)
 	require.NoError(t, err)
 	return b
+}
+
+// TestReconcileConsultsTheRowBeforeTheExpiryHorizon pins the arm ORDER, which is a
+// claim classifyCreateClaim's own docstring makes ("the recorded row is consulted first
+// because it is the only evidence that settles the question outright") and which the
+// first cut of this file did not honour.
+//
+// The expiry and unreadable arms used to run ahead of the row lookup. A create that had
+// fully succeeded — row persisted, only the settle interrupted — and then sat unnoticed
+// past the 24h horizon was therefore handed a receipt saying it was "discarded rather
+// than rebuilt", for a session `atrium ls` was showing as running. The row is durable
+// evidence and does not go stale; the horizon is about rebuilding, and there is nothing
+// here left to rebuild.
+func TestReconcileConsultsTheRowBeforeTheExpiryHorizon(t *testing.T) {
+	sandboxSpool(t)
+	repo := gitRepoWithBranch(t, "")
+	record := strandedIn(t, "fix-auth", repo)
+	row := rowFrom(t, "fix-auth", repo, strandPrefix+"fix-auth", record)
+
+	// Well past the horizon, judged by a clock the test owns.
+	future := time.Now().Add(outbox.TTL + 48*time.Hour)
+	require.Equal(t, 1, reconcileCreateClaims(context.Background(), []*session.Instance{row}, future))
+
+	reason, rejected := outbox.Rejection(record)
+	assert.False(t, rejected, "a session that exists is not refused for being old: %s", reason)
+	assertCreateSettled(t, record)
+}
+
+// TestReconcileNamesTheOrphanBranchItAbandonsOnExpiry is the other half of that
+// reordering, and the reason expiry is applied to the VERDICT rather than up front.
+//
+// An expired claim whose build got as far as a branch is discarded on top of an orphan.
+// Refusing it in the same words as one that built nothing would leave the single
+// artifact the user has to clean up by hand as the one thing nobody mentions — atrium
+// #716's complaint, re-entered through the door marked "too old to rebuild".
+func TestReconcileNamesTheOrphanBranchItAbandonsOnExpiry(t *testing.T) {
+	sandboxSpool(t)
+	branch := strandPrefix + "fix-auth"
+	repo := gitRepoWithBranch(t, branch)
+	record := strandedIn(t, "fix-auth", repo)
+
+	future := time.Now().Add(outbox.TTL + 48*time.Hour)
+	require.Equal(t, 1, reconcileCreateClaims(context.Background(), nil, future))
+
+	reason, rejected := outbox.Rejection(record)
+	require.True(t, rejected, "past the horizon it is not rebuilt")
+	assert.Contains(t, reason, branch, "and the branch it leaves behind must be named")
+	assert.Contains(t, reason, "belongs to no session",
+		"together with what that means for the reader")
+	assert.True(t, git.LocalBranchExists(context.Background(), repo, branch),
+		"the branch is left in place rather than deleted — it may hold work")
+}
+
+// TestReconcileExpiresAClaimThatBuiltNothingWithoutNamingABranch is that message's
+// negative control: the branch clause must be earned by an actual branch, not appended
+// to every expiry. An expiry that always claimed to have left a branch behind would
+// send a user hunting for one that was never made.
+func TestReconcileExpiresAClaimThatBuiltNothingWithoutNamingABranch(t *testing.T) {
+	sandboxSpool(t)
+	repo := gitRepoWithBranch(t, "") // nothing was built
+	record := strandedIn(t, "fix-auth", repo)
+
+	future := time.Now().Add(outbox.TTL + 48*time.Hour)
+	require.Equal(t, 1, reconcileCreateClaims(context.Background(), nil, future))
+
+	reason, rejected := outbox.Rejection(record)
+	require.True(t, rejected)
+	assert.NotContains(t, reason, strandPrefix+"fix-auth",
+		"no branch was made, so none may be named")
+	assert.NotContains(t, reason, "belongs to no session")
+}
+
+// TestReconcileLeavesTheClaimWhenGitCannotBeAsked is the claimDefer arm, and it exists
+// because both of the other answers are one-way.
+//
+// git.LocalBranchExists is `err == nil`, so git off PATH, a fork failure under memory
+// pressure or a cancelled context all read as "the branch does not exist" — and that
+// answer is acted on destructively: the request is re-queued, git recovers, the drain
+// refuses it for the branch the failed probe could not see, and the receipt-plus-unlink
+// leaves the orphan permanently. Deferring costs one launch and keeps the recovery.
+//
+// Staged by pointing the request at a directory that is not a repository at all, which
+// is what a failed `for-each-ref` looks like from here.
+func TestReconcileLeavesTheClaimWhenGitCannotBeAsked(t *testing.T) {
+	sandboxSpool(t)
+	notARepo := t.TempDir()
+	record := strandedIn(t, "fix-auth", notARepo)
+
+	assert.Zero(t, reconcile(t), "nothing was decided, so nothing is counted as acted on")
+
+	assert.FileExists(t, outbox.ClaimPath(record), "the claim survives for the next launch")
+	entries, err := outbox.ListCreates()
+	require.NoError(t, err)
+	assert.Empty(t, entries, "it is not re-queued into gates that would refuse it")
+	reason, rejected := outbox.Rejection(record)
+	assert.False(t, rejected, "and no receipt is written on evidence that was never gathered: %s", reason)
+}
+
+// TestReconcileRefusesWhileTheAgentIsStillRunning is the leftover this file missed
+// entirely until a review pointed at it, and the one with the worst consequence.
+//
+// tmux runs on its own server on a dedicated socket, so the session Instance.Start
+// creates outlives the TUI that created it — and Start creates it LAST, which is exactly
+// the window between "everything is built" and "the row is persisted" that a claim
+// exists to cover. Without this arm the reconcile sees a branch no row owns, calls it an
+// orphan, and applyCreateClaim's release runs `git worktree remove -f` plus os.RemoveAll
+// over the working directory of a live agent. The re-queue that follows could not
+// succeed either: the tmux name is a pure function of (repo group, title), so every
+// retry meets "tmux session already exists".
+//
+// The session here is real, started the way the app starts one, and its row is
+// deliberately withheld — the state a SIGKILL in that window leaves on disk.
+func TestReconcileRefusesWhileTheAgentIsStillRunning(t *testing.T) {
+	sandboxSpool(t)
+	testutil.RequireTmux(t)
+	repo := gitRepoWithBranch(t, "")
+
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: "fix-auth", Path: repo, Program: "sleep 300",
+	})
+	require.NoError(t, err)
+	require.NoError(t, inst.Start(true))
+	t.Cleanup(func() { _ = inst.Kill() })
+
+	wt, err := inst.GetGitWorktree()
+	require.NoError(t, err)
+	live := wt.GetWorktreePath()
+	require.DirExists(t, live)
+
+	record := strandedIn(t, "fix-auth", repo)
+
+	// No instances: the row is what the crash lost.
+	require.Equal(t, 1, reconcile(t))
+
+	reason, rejected := outbox.Rejection(record)
+	require.True(t, rejected, "a running agent is not an orphan")
+	assert.Contains(t, reason, inst.TmuxSessionName(),
+		"and the receipt must name the session standing in the way")
+	assert.DirExists(t, live, "the live agent's worktree must not be removed")
+	entries, err := outbox.ListCreates()
+	require.NoError(t, err)
+	assert.Empty(t, entries, "nor re-queued into a retry that could never succeed")
 }
