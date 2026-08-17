@@ -388,7 +388,7 @@ var claude = &Adapter{
 		// reflows, so the 15-line budget no longer bounds the gate and the
 		// width-28 miss it recorded is fixed (registry_test.go
 		// claudeMCPNarrowPane).
-		{Match: claudeGateVisible},
+		{Name: "startup", Match: claudeGateVisible},
 	},
 
 	// tmux word-splits the trailing command string itself, so appending to the
@@ -783,7 +783,7 @@ var codex = &Adapter{
 	Gates: []Gate{
 		// onboarding/trust_directory.rs: "Do you trust the contents of this
 		// directory?" with "Yes, continue" pre-highlighted.
-		{Contains: []string{"Do you trust the contents of this directory"}},
+		{Name: "trust", Contains: []string{"Do you trust the contents of this directory"}},
 	},
 	// Codex WRAPS that body instead of truncating it (the opposite of agy, #512), so the
 	// dialog's line count grows as the pane narrows while its text stays intact: 9
@@ -897,10 +897,12 @@ var gemini = &Adapter{
 	DisplayName: "Gemini CLI",
 	aliases:     []string{"gemini"},
 
-	// NOT bumped for #713, which re-drove the gate and only the gate — see the header. The
-	// pin is a claim about the whole adapter, and busy, confirmation and generateNameGemini
-	// are still checked at 0.27, so 0.27 is what it says. Minor granularity: the confirmation
-	// wording tracks minor releases; pure patch bumps within a minor don't warrant a warning.
+	// NOT bumped for #713, nor for #717, which drove a SECOND gate at 0.55.1 — see the
+	// header. The pin is a claim about the whole adapter, and busy, confirmation and
+	// generateNameGemini are still checked at 0.27, so 0.27 is what it says. Driving one
+	// more dialog does not change which surfaces are stale; it changes how many of the
+	// fresh ones there are. Minor granularity: the confirmation wording tracks minor
+	// releases; pure patch bumps within a minor don't warrant a warning.
 	VerifiedVersion:  "0.27",
 	DriftGranularity: GranularityMinor,
 
@@ -942,7 +944,17 @@ var gemini = &Adapter{
 		// geminiTrustGateVisible for why neither a bare literal nor a conjunction of two
 		// was enough. Driven live at 0.55.1 (#713); the ladder is geminiTrustGateLadder,
 		// proven at widths 80/40/24 with a disclosed miss at 20.
-		{Match: geminiTrustGateVisible},
+		{Name: "trust", Match: geminiTrustGateVisible},
+		// The IDE-integration nudge (#717). A second Gate rather than a second literal
+		// because this one draws a composer glyph inside its own box, which is the exact
+		// shape geminiTrustGateVisible rejects on — see geminiIdeNudgeVisible. Driven live
+		// at 0.55.1; the ladder is geminiIdeNudgeLadder, and unlike the trust gate every
+		// rung of it fires, 20 included.
+		//
+		// Both are Match, and that is load-bearing beyond either matcher: a Gate carrying
+		// Contains would flatten at gateWindow() on every gemini poll, which nothing here
+		// does today. GateWindow is inert only while that stays true.
+		{Name: "ide-nudge", Match: geminiIdeNudgeVisible},
 	},
 
 	Resume:        func(program string) string { return program + " --resume latest" },
@@ -1122,10 +1134,14 @@ var gemini = &Adapter{
 //     trust dialog to get past it writes ~/.gemini/trustedFolders.json, which is why
 //     drive-agent.sh, which does not isolate the agent's config dir, has not been pointed at it).
 //   - /permissions' modify-trust dialog, which does need an authenticated session.
-//   - IdeIntegrationNudge, which is worse — it renders its headline behind a "> " Text inside
-//     the same rounded box, so InputBoxVisible is TRUE on it, making AwaitingInput true and
-//     typing a queued prompt into a RadioButtonSelect whose highlighted default is "Yes". That
-//     is the #512 class rather than this gate's milder one, and it is #717.
+//
+// IdeIntegrationNudge was the third entry on this list and is now COVERED, by a second Gate of
+// its own (geminiIdeNudgeVisible, #717). It is not covered by this matcher and could not be:
+// it renders its headline behind a "> " Text inside the same rounded box, so the composer
+// rejection two lines below returns false on it by design. That glyph is also why it was the
+// worse of the two — InputBoxVisible is TRUE on it, so AwaitingInput was true and a queued
+// prompt was typed into a RadioButtonSelect whose highlighted default is "Yes", the #512 class
+// rather than this gate's milder one.
 //
 // Width. The headline is UNREPAIRABLE as an anchor once it wraps: gemini draws the dialog in
 // a rounded box, so a wrapped headline has the box's own "│" between its halves, and
@@ -1191,10 +1207,12 @@ var gemini = &Adapter{
 // statement about GateUp. A Match returning FALSE falls through to `continue` (agent.go), and
 // the next Gate carrying Contains flattens at gateWindow() as usual; measured with a
 // two-gate adapter whose first Match always returns false, which flattens and gates. What is
-// actually true is that gemini declares exactly ONE Gate today, so nothing ever reaches the
-// flatten. Adding a second — the startup auth dialog disclosed below is the obvious candidate —
-// silently reinstates a flatten on every gemini poll, and GateWindow stops being inert with it.
-// The window this gate has is the box.
+// actually true is that no gemini Gate carries Contains, so nothing ever reaches the flatten.
+// That used to be phrased as "gemini declares exactly ONE Gate today", which #717 made false —
+// the IDE nudge is a second — while leaving the conclusion intact, because it is Match too. A
+// Gate carrying Contains, whenever one is added (the startup auth dialog disclosed above is the
+// obvious candidate), silently reinstates a flatten on every gemini poll, and GateWindow stops
+// being inert with it. The window this gate has is the box.
 func geminiTrustGateVisible(content string) bool {
 	block, ok := bottomBoxBlock(content)
 	if !ok {
@@ -1210,6 +1228,92 @@ func geminiTrustGateVisible(content string) bool {
 		}
 	}
 	return found
+}
+
+// geminiIdeNudgeVisible reports gemini's IDE-integration nudge (#717): the once-per-machine
+// dialog asking whether to connect the detected editor, whose highlighted default installs an
+// extension.
+//
+// It is a SEPARATE Gate from the trust dialog rather than another literal in that one, and the
+// reason is the single fact this whole matcher is built around: the nudge renders its headline
+// behind a "> " Text inside the same rounded box, so isInputBoxLine fires on it and
+// InputBoxVisible is TRUE. geminiTrustGateVisible answers false the moment it sees a composer
+// glyph in the block — correctly, for a dialog that has none — so folding the nudge into it
+// would require deleting the guard that keeps the trust gate off a live composer.
+//
+// That glyph is also what made this worth an issue of its own rather than a second instance of
+// #713. AwaitingInput() is `!GateUp && !DetectPrompt && InputBoxVisible` (session), so before
+// this Gate existed the nudge read as a session waiting at its composer: Atrium delivered the
+// queued initial prompt as keystrokes into a RadioButtonSelect whose highlighted row is option
+// 1, "Yes". `atrium new --prompt` makes that unattended. AwaitingInput()'s own docstring already
+// says the box check cannot exclude a menu-style gate and that GateUp must — this is GateUp
+// doing it. TestGeminiIdeNudgeIsAGateOverAVisibleInputBox asserts both halves, InputBoxVisible
+// true and the gate up, so a later "fix" of the box reading fails there instead of silently
+// re-arming the delivery.
+//
+// Reachable in Atrium, not just in a terminal a developer typed in: detectIde returns nothing
+// unless TERM_PROGRAM is "vscode"/"sublime"/"Zed", ZED_SESSION_ID or XCODE_VERSION_ACTUAL is
+// set, or isJetBrains() holds — and agents inherit the tmux server's environment as captured at
+// server start, so launching Atrium from an IDE's integrated terminal propagates the marker into
+// every agent pane. shouldShowIdePrompt then needs only a first run with ide.hasSeenNudge unset.
+// It is checked BEFORE isFolderTrustDialogOpen in the vendor's own dialog chain, so on a fresh
+// path with an IDE detected this is the screen that renders, not #713's.
+//
+// The literals, and why they are not the ones #717 proposed. Driven natively at 0.55.1 on
+// 2026-08-17 at widths 80/40/24/20 (geminiIdeNudgeLadder), each rung a fresh session rather than
+// a resize, because gemini's dialogs are the measured counterexample to resize-equals-native
+// (#713, and drive-agent.sh's COST-SAVER limit). The issue proposed keying on
+// "No, don't ask again" plus one other row. Measured, that literal does not survive the ladder:
+// the dismiss row TRUNCATES from the right, reading "3. No, don't ask …" at 24 and
+// "3. No, don't …" at 20, so a gate keyed on it would have missed at exactly the widths Atrium's
+// preview pane actually produces — the same shape of mistake #713 was, arrived at from a wide
+// capture. TestGeminiIdeNudgeDismissRowTruncatesBelowWidth40 pins the measurement so the
+// proposal cannot be re-adopted from the issue text.
+//
+// What survives all four rungs is "No (esc)" and the dismiss row's "No, don't" prefix, and both
+// are required — a conjunction through Match, never Contains, which is an ALTERNATION and would
+// make either alone sufficient. That distinction is not theoretical here: #715 round 1 shipped
+// exactly that mistake on the sibling gate and had to be re-cut.
+//
+// "No (esc)" is the load-bearing half and it is measured, not assumed: it appears twice in each
+// interactiveCli bundle file (as the option's label and its key), both inside
+// IdeIntegrationNudge, and nowhere else — so it names this dialog rather than a family. The
+// headline is not used at all, for #713's reason unchanged: gemini draws the dialog in a box, a
+// wrapped headline has the box's own "│" between its halves, and flattenChrome joins on
+// whitespace only. It wraps at 40. TestGeminiIdeNudgeHeadlineWrapsInsideTheBox pins that.
+//
+// Every rung FIRES, including 20 — which the trust gate's ladder cannot say, its option rows
+// being cut by the directory name interpolated into them. The nudge's rows carry no
+// interpolation, so the gate has no measured floor within the widths Atrium can produce.
+//
+// The residue, disclosed rather than closed: the composer is a box too, so a user who pastes
+// text containing both literals into their composer raises this gate. The trust gate closes its
+// version of that hole with the isInputBoxLine rejection, which this matcher cannot use — the
+// glyph is the dialog's own. The direction is the harmless one (#342): GateUp true makes
+// AwaitingInput false, so the queued prompt is WITHHELD and the row reads "waiting on setup
+// screen" until the paste clears. Withholding a prompt is recoverable; typing it into a menu
+// whose default installs an extension is not, and that asymmetry is why the anchor stays where
+// it is. TestGeminiIdeNudgeFiresOnAComposerQuotingBothRows holds it visible.
+//
+// Match rather than Contains for a second reason too. gemini declared exactly one Gate until
+// now, and geminiTrustGateVisible's comment turns on that: a Gate carrying Contains flattens at
+// gateWindow() on every poll, and neither of gemini's two does, so the flatten stays
+// unreachable and GateWindow stays inert. A third Gate with Contains changes that.
+func geminiIdeNudgeVisible(content string) bool {
+	block, ok := openBottomBoxBlock(content)
+	if !ok {
+		return false
+	}
+	var esc, dismiss bool
+	for _, line := range block {
+		if strings.Contains(line, "No (esc)") {
+			esc = true
+		}
+		if strings.Contains(line, "No, don't") {
+			dismiss = true
+		}
+	}
+	return esc && dismiss
 }
 
 // aiderConfirmVisible backs the aider "confirm" matcher. Every confirm_ask
@@ -1273,7 +1377,7 @@ var aider = &Adapter{
 
 	Gates: []Gate{
 		// First-run analytics/docs prompt.
-		{Contains: []string{"Open documentation url for more info"}},
+		{Name: "docs", Contains: []string{"Open documentation url for more info"}},
 	},
 }
 
@@ -1445,7 +1549,7 @@ var agy = &Adapter{
 		// closed rather than acting. Anchoring it structurally the way claudeGateVisible
 		// does would need a live-chrome primitive this gate does not have — it renders
 		// before any composer exists, so there is no input box to anchor against.
-		{Contains: []string{"Yes, I trust"}},
+		{Name: "trust", Contains: []string{"Yes, I trust"}},
 	},
 
 	Resume:        func(program string) string { return program + " --continue" },

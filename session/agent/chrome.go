@@ -317,6 +317,98 @@ func bottomBoxBlock(content string) ([]string, bool) {
 	return lines[start:border], true
 }
 
+// openBottomBoxBlock is bottomBoxBlock for a box whose RIGHT edge is off the pane: same
+// anchor, same trailing allowance, but the bottom border needs only its LEFT corner and the
+// walls above it only their left wall.
+//
+// It exists because a dialog can be wider than the pane by construction rather than by
+// accident. gemini's IdeIntegrationNudge renders its Box with `width: "100%"` AND
+// `marginLeft: 1`, so it overflows by exactly one column at EVERY width — read off the
+// bundle at 0.55.1 and confirmed on four native captures (gemini_ide_nudge_pane_test.go),
+// where "╭───…" opens with no "╮", every content row opens with "│" and closes with nothing,
+// and "╰───…" ends with no "╯". Its sibling FolderTrustDialog computes a `dialogWidth` and
+// sets borderLeft/borderRight explicitly, which is why that one is fully walled and
+// bottomBoxBlock can anchor it. Two dialogs, one CLI, two box shapes.
+//
+// Deliberately a SEPARATE function rather than a relaxation of bottomBoxBlock, and
+// isBoxBottomBorder's own comment is the reason: it requires both corners because a
+// left-corner-only rule also accepts a torn or mid-repaint frame, and every gate that anchors
+// through bottomBoxBlock would inherit that. The looseness here is bounded to the one matcher
+// that needs it, which pairs it with a conjunction of two literals from the dialog it is
+// looking for.
+//
+// The blast radius of the relaxation, stated so it is not rediscovered: a markdown table edge
+// or quoted box art ending the pane satisfies these predicates where it would not satisfy the
+// strict pair. That is what the caller's literals are for, and
+// TestOpenBottomBoxBlockAcceptsWhatTheStrictPairRejects pins the difference rather than
+// leaving it implied.
+func openBottomBoxBlock(content string) ([]string, bool) {
+	lines := strings.Split(content, "\n")
+
+	last := -1
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.TrimSpace(lines[i]) != "" {
+			last = i
+			break
+		}
+	}
+	if last < 0 {
+		return nil, false
+	}
+
+	border := -1
+	for i := last; i >= 0 && last-i <= trailingBelowBoxCap; i-- {
+		if isOpenBoxBottomBorder(lines[i]) {
+			border = i
+			break
+		}
+	}
+	if border < 0 {
+		return nil, false
+	}
+	start := border
+	for start > 0 && isOpenBoxWallLine(lines[start-1]) {
+		start--
+	}
+	if start == border {
+		return nil, false
+	}
+	return lines[start:border], true
+}
+
+// isOpenBoxBottomBorder is isBoxBottomBorder without the right corner: a horizontal rule that
+// OPENS with a bottom-left corner. See openBottomBoxBlock for why a box can legitimately lack
+// the other one.
+func isOpenBoxBottomBorder(line string) bool {
+	if !isHorizontalRule(line) {
+		return false
+	}
+	first, _ := utf8.DecodeRuneInString(strings.TrimSpace(line))
+	return first == '╰' || first == '└'
+}
+
+// isOpenBoxWallLine is isBoxWallLine without the closing wall, and WITHOUT its single-rune
+// guard — which is the part that is easy to keep by reflex and wrong to.
+//
+// isBoxWallLine rejects a one-rune line because in a closed box that rune would have to be both
+// walls at once. In an open box it is the ordinary shape of a padding row: the nudge's Box
+// carries padding: 1, so its first and last content rows render as the left wall and nothing
+// else. All four captures have one directly above the bottom border, so keeping the guard
+// stopped the upward walk on its first step and openBottomBoxBlock returned false on every pane
+// it was written for. Measured, not reasoned about — the first draft of this function had the
+// guard and a comment explaining why it was safe.
+//
+// What that costs: a run of bare "│" above a bottom-left corner now forms a block. Nothing here
+// prevents it, and the caller is what must — see openBottomBoxBlock's blast-radius note.
+func isOpenBoxWallLine(line string) bool {
+	line = strings.TrimSpace(line)
+	first, size := utf8.DecodeRuneInString(line)
+	if size == 0 {
+		return false
+	}
+	return first == '│'
+}
+
 // footerRegion returns the live footer of the pane: the lines below the input box's bottom
 // border. Claude renders its status hints and the variable-height agent-team selector (one
 // line per teammate) there, and the busy marker sits among them — so anchoring to the box
