@@ -981,7 +981,19 @@ func sessionAlreadyGone(err error, stderr string) bool {
 // is honest, because "I cannot reach the socket" is not a session state; giving it one needs
 // #730's /proc check, which can answer what neither branch here can.
 func socketUnreachable(err error, stderr string) bool {
-	hay := strings.ToLower(err.Error() + " " + stderr)
+	return socketUnreachableMessage(err.Error() + " " + stderr)
+}
+
+// socketUnreachableMessage is the rule above over tmux's diagnostic alone, for the caller
+// that has the text but must not touch the error: classifyPIDProbe holds an *exec.ExitError
+// whose ProcessState may be nil, and Error() panics on one of those — which is what every
+// bare &exec.ExitError{} fixture in this package is (orphan_test.go). Splitting the message
+// out is therefore load-bearing rather than tidiness.
+//
+// Callers pass whatever they have; the join and the fold happen here so no caller can get
+// the case handling wrong.
+func socketUnreachableMessage(hay string) bool {
+	hay = strings.ToLower(hay)
 	return strings.Contains(hay, "error connecting to") &&
 		!strings.Contains(hay, "no such file or directory")
 }

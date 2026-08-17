@@ -703,6 +703,20 @@ func classifyPIDProbe(ctx context.Context, out []byte, err error) (pid int, know
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
+			// tmux ran and exited non-zero, but that is a determination only when it is a
+			// determination ABOUT a server. A connect() that never opened the socket asked
+			// nobody anything: the server may be running fine behind a mode bit, holding
+			// agents and their unpushed work. Reading it as an answer makes it pid 0, which
+			// assembleServers turns into ReachableKnown && !Reachable — the pair reapTargets
+			// selects as a kill target by default (#730).
+			//
+			// The diagnostic is read from ExitError.Stderr, which Output() populates only
+			// because both probes here leave cmd.Stderr nil. A future call site that captured
+			// stderr itself would empty this and silently restore the old reading;
+			// exitErrorWithStderr (orphan_test.go) is what holds that mechanism to a syscall.
+			if socketUnreachableMessage(string(exitErr.Stderr)) {
+				return 0, false
+			}
 			return 0, true
 		}
 		return 0, false

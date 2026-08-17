@@ -353,6 +353,72 @@ func TestClassifyPIDProbeSeparatesAnEmptySocketFromAnUnaskedQuestion(t *testing.
 	}
 }
 
+// exitErrorWithStderr returns a genuine *exec.ExitError carrying msg on stderr, produced
+// by running a command that fails the way tmux does.
+//
+// Constructed rather than literal because it cannot be a literal: ExitError embeds a
+// *os.ProcessState, which has no exported constructor, and the zero value panics on
+// Error(). A real subprocess is the only way to obtain one that both carries Stderr and
+// can be printed.
+//
+// It also settles the mechanism the classification rests on, with a syscall instead of a
+// reading of the standard library: Output() populates ExitError.Stderr only when the
+// caller left cmd.Stderr nil, which both probes here do (ambientServerPID,
+// probeSocketOwner). A change at either call site that captured stderr itself would empty
+// this field and silently return the classifier to reading every failure as an answer.
+func exitErrorWithStderr(t *testing.T, msg string) error {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "sh", "-c", "printf '%s\\n' \"$1\" >&2; exit 1", "sh", msg)
+	_, err := cmd.Output()
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, err, &exitErr, "the fixture must produce a real ExitError")
+	require.Contains(t, string(exitErr.Stderr), msg,
+		"Output() must populate ExitError.Stderr when cmd.Stderr is nil — the whole classification reads it")
+	return err
+}
+
+// TestClassifyPIDProbeTreatsAnUnopenableSocketAsNoAnswer is the destructive half of the
+// rule above, and the fix for #730.
+//
+// A non-zero exit is tmux reporting something, but it is a determination *about a server*
+// only when tmux reached one. connect() failing on the socket asks nothing of anybody: the
+// server may be running fine behind a mode bit, holding agents, with unpushed work. Read
+// as an answer it becomes pid 0, which assembleServers turns into
+// ReachableKnown && !Reachable — the exact pair reapTargets selects as a kill target BY
+// DEFAULT, no --all (cli_reap.go). The `--yes` refusal cannot catch it either: it fires on
+// ConnectedClients > 0, and zero connected clients is the normal state for an Atrium
+// session, whose TUI attaches only while someone is looking at it.
+//
+// Driven from the two package tables so this is a third consumer of the fixtures Close and
+// liveness already share, rather than a private copy of them. That matters here for the
+// reason it mattered in #727: a message covered on one caller's path and uncovered on
+// another's reads as covered, and narrowing the predicate then leaves a green suite.
+//
+// The gone list is asserted too, and it is not a restatement of the row above. It is the
+// guard on over-correction: widen socketUnreachableMessage to a bare "error connecting to"
+// and the missing-socket message stops being an answer — which is the #547 orphan, the one
+// thing `reap` exists to find.
+func TestClassifyPIDProbeTreatsAnUnopenableSocketAsNoAnswer(t *testing.T) {
+	for _, msg := range unreachableSocketMessages {
+		t.Run("no answer: "+msg, func(t *testing.T) {
+			pid, known := classifyPIDProbe(t.Context(), nil, exitErrorWithStderr(t, msg))
+			require.False(t, known,
+				"tmux could not open the socket, so it asked no server anything; reading that as an "+
+					"answer makes a live server a default kill target (#730)")
+			require.Zero(t, pid)
+		})
+	}
+	for _, msg := range alreadyGoneMessages {
+		t.Run("answered: "+msg, func(t *testing.T) {
+			pid, known := classifyPIDProbe(t.Context(), nil, exitErrorWithStderr(t, msg))
+			require.True(t, known,
+				"tmux reached a determination here; classifying it as no-answer would put the #547 "+
+					"orphan — a live server whose socket file was deleted — out of the reaper's reach")
+			require.Zero(t, pid)
+		})
+	}
+}
+
 // TestScanServersReportsAnUnidentifiedLiveServer: the flag has to be set by the scan,
 // not merely exist. With the ambient probe unable to answer, nothing was excluded by
 // pid, and every consumer downstream keys on this one field to know that.
