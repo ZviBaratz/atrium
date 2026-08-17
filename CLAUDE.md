@@ -156,8 +156,9 @@ read while it is still true, a comment is not — so cite the symbol, never the
 position. `TestNoProseCitesAPosition` reads the git index and enforces that in
 exactly three places: Go comments, `#` comments in `.sh`, and unfenced markdown.
 Prose in any other file type is unguarded, as is a plan under `docs/superpowers`,
-which is exempt on purpose. And it cannot check that you cited a symbol at all,
-only that you did not cite a line.
+which is exempt on purpose. And it reads one spelling — a path, a colon, a number.
+It cannot tell whether you cited a symbol, and it does not see a position written
+any other way, so `<file> line 251` and a GitHub-style `#L251` go through.
 
 ## Conventions
 

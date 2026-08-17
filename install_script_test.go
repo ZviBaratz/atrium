@@ -87,9 +87,11 @@ import (
 //     instead of a CI runner discovering it.
 //
 // The stubs are written from Go into a temp dir rather than committed as testdata, so
-// they stay out of `git ls-files -- '*.sh'` — the list every guard over the committed
-// scripts is built from, whether it parses them, lints them or reads their prose. That
-// is deliberate (a fixture is not one of the scripts those guards grade) and it costs
+// they stay out of `git ls-files -- '*.sh'` — the list the guards that grade the scripts
+// as a *set* are built from, whether they parse them, lint them or read their prose. (A
+// guard aimed at one named script reaches it by path and never consults that list, which
+// is how internal/doctor grades install.sh.) That is deliberate (a fixture is not one of
+// the scripts those guards grade) and it costs
 // the stubs their syntax check, so newInstallFixture runs `bash -n` over each one
 // itself.
 //

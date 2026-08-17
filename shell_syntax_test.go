@@ -44,18 +44,14 @@ func TestShellScriptsParse(t *testing.T) {
 	// needs a skip list to keep out vendored trees, which then has to be maintained
 	// against guesses about what might appear under them. trackedFiles is that
 	// lister, shared with the prose guards so the rule has one home.
-	var scripts []string
-	for _, rel := range trackedFiles(t, root, "*.sh") {
-		scripts = append(scripts, filepath.Join(root, filepath.FromSlash(rel)))
-	}
+	scripts := trackedFiles(t, root, "*.sh")
 
 	// A guard that silently matches nothing is worse than no guard: if the pathspec
 	// ever stops matching the scripts, this test would pass while checking zero files.
 	require.NotEmpty(t, scripts, "git ls-files matched no *.sh — the query is broken, not the tree")
 
-	for _, script := range scripts {
-		rel, err := filepath.Rel(root, script)
-		require.NoError(t, err)
+	for _, rel := range scripts {
+		script := filepath.Join(root, filepath.FromSlash(rel))
 		t.Run(rel, func(t *testing.T) {
 			// `bash -n` parses without executing, so it always terminates; the
 			// timeout is only so a wedged fork cannot hang the package's run.

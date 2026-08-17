@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
@@ -17,11 +16,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// positionalCitation matches a path bearing one of this repo's source extensions,
-// immediately followed by a line number. Keying on the extension is what keeps
-// ratios (83:100), clock times (10:00), contrast figures (1.44:1) and ports
-// (:3001) out — all of which appear in comments here and none of which is a
-// citation.
+// positionalCitation matches a path followed by a line number. Keying on the
+// extension is what keeps ratios (83:100), clock times (10:00), contrast figures
+// (1.44:1) and ports (:3001) out — all of which appear in comments here and none
+// of which is a citation.
 //
 // The colon binds tight on purpose. Allowing space around it also matched
 // ordinary prose that names a file and then a number — "CLAUDE.md: 3 rules apply
@@ -29,14 +27,20 @@ import (
 // string, the space could span a newline and pair a filename with the next
 // sentence's digit.
 //
-// The set spans both halves of the repo. web/ is a Next.js site with its own
-// toolchain, but a line number pointed into one of its sources rots exactly as a
-// line number pointed into a Go file does — and since web/ stopped being exempt
-// from the scan, leaving its extensions out would have covered the prose in that
-// directory without covering references into it. The planted comment in
-// TestProseCitationScannerReportsAPlantedCitation is what holds that.
+// The set is neither every extension in the tree nor only the Go side. web/ is a
+// Next.js site with its own toolchain, but a line number pointed into one of its
+// sources rots exactly as one pointed into a Go file does, so its extensions are
+// here and the planted comment in TestProseCitationScannerReportsAPlantedCitation
+// holds them. The justfile has no extension to key on and is cited by name, so it
+// is matched literally.
+//
+// What is deliberately absent is the two extensions whose paths this repo prints
+// as data: a pane capture and a transcript fixture. ui/diff_anchor_test.go has a
+// comment quoting a marker row its own code emits, which names a capture file and
+// a row number and is a quoted literal rather than a claim about the tree — the
+// exact false positive that scoping to comments avoids everywhere else.
 var positionalCitation = regexp.MustCompile(
-	`[A-Za-z0-9_./-]+\.(?:go|md|yml|yaml|sh|json|toml|tmpl|ts|tsx|css|mjs):[0-9]+`)
+	`(?:[A-Za-z0-9_./-]+\.(?:go|md|yml|yaml|sh|json|tmpl|ts|tsx|css|mjs)|\bjustfile):[0-9]+`)
 
 // proseHit is one positional citation, located well enough to fix.
 type proseHit struct {
@@ -67,6 +71,12 @@ type proseScan struct {
 	mdLines    int
 	shFiles    int
 	shComments int
+	// shIndented counts the comments whose `#` is not the line's first byte.
+	// shellScanner finds those by a different branch from the ones at column 0,
+	// and a total covers whichever branch survives: break the word-start rule and
+	// every whole-line comment is still counted, so the arm that finds every
+	// trailing and indented comment can die with the count in four figures.
+	shIndented int
 }
 
 // scanProse looks for positional citations in the durable prose of rels, which
@@ -79,26 +89,48 @@ type proseScan struct {
 //     diffRangeLocation writes the same shape into a review anchor. Their
 //     fixtures are string literals doing their job, not claims about the tree,
 //     and an unscoped regex would report every one of them.
+//
 //   - .sh — from the comment `#` to end of line, so a trailing comment counts.
-//     Which `#` that is, shellCommentStart decides.
+//     Which `#` that is, shellScanner decides, and it reads the file rather than
+//     the line: a heredoc body and a quote left open both carry past the newline,
+//     and neither is a comment. docs/demos/render.sh embeds a whole bash script in
+//     one heredoc and a Python program in another, each with comments of its own,
+//     and test/smoke/run.sh passes a multi-line awk program as one quoted argument.
+//     Judging each line alone read all of those as comments of this repo's.
+//
+//     That skips prose as well as programs, and the gap is worth stating: the usage
+//     text drive-agent.sh prints comes out of a heredoc, so it is shipped prose this
+//     guard does not read. Nothing distinguishes it from the embedded programs
+//     mechanically — both are heredoc bodies — and the arm is scoped to comments,
+//     which it is not.
+//
 //   - .md — outside fenced code blocks, which are the markdown equivalent of a
 //     string literal: a pasted compiler error or `go test` output is a transcript,
-//     not a claim. An indented block is one too, so four spaces after a blank line
-//     opens the same exemption. That rule is coarser than CommonMark, which reads
-//     the indent relative to an enclosing list item: a paragraph indented under a
-//     bullet goes unscanned here. Missing a line is the direction to err in — a
-//     guard that turns CI red for a correctly written file costs more than one
-//     that stays quiet about a citation nobody has written yet.
-func scanProse(t *testing.T, root string, rels []string) proseScan {
-	t.Helper()
+//     not a claim. An indented block is one too, so four columns after a blank line
+//     opens the same exemption — columns rather than bytes, because CommonMark
+//     reads a tab as four of them and len() reads it as one. That rule is still
+//     coarser than the spec, which measures the indent relative to an enclosing
+//     list item: a paragraph indented under a bullet goes unscanned here. Missing a
+//     line is the direction to err in — a guard that turns CI red for a correctly
+//     written file costs more than one that stays quiet about a citation nobody has
+//     written yet.
+//
+// An inline code span is the one place that last principle is deliberately
+// inverted: spans are scanned. Backticks are how prose spells a citation — the
+// exempt plans write theirs inside them — so exempting spans would leave this arm
+// reading only the spelling nobody uses. The cost is that a compiler error quoted
+// inline is reported, and the fix for that is to fence it, which is what a
+// transcript wants anyway. inline.md in the control holds both halves.
+func scanProse(root string, rels []string) proseScan {
 	var scan proseScan
 	record := func(rel string, line int, text string) {
 		scan.hits = append(scan.hits, proseHit{rel: rel, line: line, text: strings.TrimSpace(text)})
 	}
-	// Reading is collected rather than asserted for the same reason parsing is:
-	// a require here would unwind the whole scan through runtime.Goexit, so one
+	// Reading is collected rather than asserted for the same reason parsing is: a
+	// require here would unwind the whole scan through runtime.Goexit, so one
 	// unreadable file would hide every violation below it and in every file after
-	// it. Both halves of this loop leave the verdict to the caller.
+	// it. That is also why this function takes no *testing.T — it reports, and the
+	// verdict is the caller's.
 	lines := func(rel, path string) ([]string, bool) {
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -133,12 +165,16 @@ func scanProse(t *testing.T, root string, rels []string) proseScan {
 				continue
 			}
 			scan.shFiles++
+			var sh shellScanner
 			for i, line := range body {
-				hash := shellCommentStart(line)
+				hash := sh.comment(line)
 				if hash < 0 {
 					continue
 				}
 				scan.shComments++
+				if hash > 0 {
+					scan.shIndented++
+				}
 				if positionalCitation.MatchString(line[hash:]) {
 					record(rel, i+1, line)
 				}
@@ -215,14 +251,14 @@ func fenceMarker(line string) (string, bool) {
 }
 
 // eachUnquoted walks line and calls visit for every byte the shell reads as
-// syntax rather than data: outside single and double quotes, and not escaped.
-// visit returns false to stop the walk.
+// syntax rather than data: outside single and double quotes, and not escaped. It
+// starts in quote — 0 for a line that inherits nothing — and returns the quote
+// still open at the end. visit returns false to stop the walk.
 //
-// shellCommentStart and splitCommands both hang off it so the two cannot come to
+// shellScanner and splitCommands both hang off it so the two cannot come to
 // disagree about what "quoted" means — which they did, back when the splitter was
 // a regexp that had never heard of quoting.
-func eachUnquoted(line string, visit func(i int, c byte) bool) {
-	var quote byte
+func eachUnquoted(line string, quote byte, visit func(i int, c byte) bool) byte {
 	for i := 0; i < len(line); i++ {
 		c := line[i]
 		switch {
@@ -240,35 +276,114 @@ func eachUnquoted(line string, visit func(i int, c byte) bool) {
 			i++
 		default:
 			if !visit(i, c) {
-				return
+				return quote
 			}
 		}
 	}
+	return quote
 }
 
-// shellCommentStart returns the index of the `#` that opens a comment on line, or
-// -1. A `#` opens one only when it is unquoted and starts a word, which is what
-// keeps `${#arr}`, `$#`, a URL fragment and a quoted "#1" out. Taking the first
-// `#` on the line instead treated everything after a quoted one as a comment, so
-// a line whose only path-and-number sat in a quoted argument was reported as
-// prose. The shapes are inputs in TestWorkflowLineClassifiersRejectTheLinesTheyMust
-// and plants in TestProseCitationScannerReportsAPlantedCitation, which carries the
-// ones that have to stay silent while a citation sits on the same line.
+// shellScanner reads a script one line at a time, carrying what each line
+// inherits from the ones above it. A quote left open and a heredoc awaiting its
+// terminator both make the following lines data rather than shell, and their `#`
+// lines belong to whatever is embedded there — a Python program, an awk script —
+// rather than to this repo. Judging each line alone read those as comments, so a
+// path and a line number inside an embedded script would have failed CI for prose
+// this repo does not own.
+type shellScanner struct {
+	quote byte
+	// here is the terminator word an open heredoc is waiting for, and strip is
+	// the `<<-` form, which lets that word be indented with tabs.
+	here  string
+	strip bool
+}
+
+// comment returns the index of the `#` that opens a comment on line, or -1, and
+// advances the scanner past it. A `#` opens a comment only when it is unquoted and
+// starts a word, which is what keeps `${#arr}`, `$#`, a URL fragment and a quoted
+// "#1" out. Taking the first `#` on the line instead treated everything after a
+// quoted one as a comment, so a line whose only path-and-number sat in a quoted
+// argument was reported as prose. Those shapes are inputs in
+// TestShellCommentStartFindsTheCommentAndNothingElse, and plants in
+// TestProseCitationScannerReportsAPlantedCitation, which carries the ones that have
+// to stay silent while a citation sits on the same line.
 //
 // Word-start is approximated as "preceded by whitespace", which under-detects
 // rather than over-detects: `foo;#c` is a comment to the shell and prose to this.
 // A guard that turns CI red for correct code is worse than one that misses a
-// spelling no script here uses.
-func shellCommentStart(line string) int {
-	start := -1
-	eachUnquoted(line, func(i int, c byte) bool {
-		if c == '#' && (i == 0 || line[i-1] == ' ' || line[i-1] == '\t') {
-			start = i
+// spelling no script here uses. A line opening two heredocs at once errs the same
+// way, keeping only the second terminator and so skipping past both bodies.
+func (s *shellScanner) comment(line string) int {
+	if s.here != "" {
+		body := line
+		if s.strip {
+			body = strings.TrimLeft(body, "\t")
+		}
+		if body == s.here {
+			s.here, s.strip = "", false
+		}
+		return -1
+	}
+	hash := -1
+	s.quote = eachUnquoted(line, s.quote, func(i int, c byte) bool {
+		switch {
+		case c == '#' && (i == 0 || line[i-1] == ' ' || line[i-1] == '\t'):
+			hash = i
 			return false
+		// `<<` opens a heredoc. `<<<` is a herestring and opens nothing, and the
+		// walk visits each of its three `<`: the middle one is turned away here,
+		// and the first by heredocWord, which reads a terminator as a word and a
+		// `<` does not begin one. Testing for the third `<` here as well was a
+		// second guard on the same case, and a redundant guard is one that can be
+		// deleted with the tests still green.
+		case c == '<' && i+1 < len(line) && line[i+1] == '<' && (i == 0 || line[i-1] != '<'):
+			if word, strip, ok := heredocWord(line[i+2:]); ok {
+				s.here, s.strip = word, strip
+			}
 		}
 		return true
 	})
-	return start
+	return hash
+}
+
+// heredocWord reads the terminator out of what follows a `<<`, and reports
+// whether one is there at all. The word may be quoted, which is how a heredoc
+// declines to expand its body, and the quotes are not part of it.
+func heredocWord(rest string) (string, bool, bool) {
+	strip := strings.HasPrefix(rest, "-")
+	if strip {
+		rest = rest[1:]
+	}
+	rest = strings.TrimLeft(rest, " \t")
+	if rest == "" {
+		return "", false, false
+	}
+	if q := rest[0]; q == '\'' || q == '"' {
+		end := strings.IndexByte(rest[1:], q)
+		if end < 0 {
+			return "", false, false
+		}
+		return rest[1 : 1+end], strip, true
+	}
+	n := 0
+	for n < len(rest) && (rest[n] == '_' ||
+		'0' <= rest[n] && rest[n] <= '9' ||
+		'a' <= rest[n] && rest[n] <= 'z' ||
+		'A' <= rest[n] && rest[n] <= 'Z') {
+		n++
+	}
+	if n == 0 {
+		return "", false, false
+	}
+	return rest[:n], strip, true
+}
+
+// shellCommentStart is comment on a line that inherits nothing, for the callers
+// that have one line and no file around it — a workflow `run:` value is the whole
+// script it is.
+func shellCommentStart(line string) int {
+	var s shellScanner
+	return s.comment(line)
 }
 
 // splitCommands cuts line at the unquoted separators that end one command and
@@ -285,7 +400,7 @@ func shellCommentStart(line string) int {
 func splitCommands(line string) []string {
 	var out []string
 	start := 0
-	eachUnquoted(line, func(i int, c byte) bool {
+	eachUnquoted(line, 0, func(i int, c byte) bool {
 		if c == ';' || c == '&' || c == '|' {
 			out = append(out, line[start:i])
 			start = i + 1
@@ -293,6 +408,46 @@ func splitCommands(line string) []string {
 		return true
 	})
 	return append(out, line[start:])
+}
+
+// indentOf returns the column line's first non-blank byte sits in, counting a tab
+// as advancing to the next multiple of four. Counting bytes read a tab as one
+// column, so a tab-indented markdown transcript missed the four-column rule that
+// exempts an indented code block and was scanned as prose.
+func indentOf(line string) int {
+	return columnAfter(line[:len(line)-len(strings.TrimLeft(line, " \t"))])
+}
+
+// TestIndentOfCountsColumnsNotBytes pins the tab stop. The markdown rule reads
+// four columns, and the only fixture that can distinguish the two rules is one
+// where a tab does not start at column 0 — a tab after a space is one byte and
+// three columns, and both numbers are wrong for the other rule.
+func TestIndentOfCountsColumnsNotBytes(t *testing.T) {
+	for _, tc := range []struct {
+		line string
+		want int
+	}{
+		{"no indent", 0},
+		{"    four spaces", 4},
+		{"\tone tab", 4},
+		{" \ta space then a tab", 4},
+		{"\t\ttwo tabs", 8},
+	} {
+		assert.Equalf(t, tc.want, indentOf(tc.line), "indentOf(%q)", tc.line)
+	}
+}
+
+// columnAfter returns the column a line reaches after s, on the same tab stops.
+func columnAfter(s string) int {
+	col := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\t' {
+			col += 4 - col%4
+			continue
+		}
+		col++
+	}
+	return col
 }
 
 // trackedFiles lists the files in the index matching patterns, relative to root.
@@ -337,9 +492,11 @@ func trackedFiles(t *testing.T, root string, patterns ...string) []string {
 // docs/superpowers is the only exemption, and it is one both callers want: a plan
 // describes the tree it was written against, and naming the exact line to edit is
 // a plan step's job. web/ is not exempt, though it is a standalone Next.js site
-// the Go tooling otherwise ignores. It holds a single tracked prose file, which
-// carries no citation, so exempting it buys nothing here and costs the log-path
-// guard a README that documents a path — this list is shared.
+// the Go tooling otherwise ignores, because the rule about how prose cites is
+// about the prose and not about which toolchain builds the code beside it. What
+// that decision costs is nothing measurable either way: web/ holds one tracked
+// prose file, and it carries neither a citation nor a mention of the log the other
+// caller looks for.
 func trackedProse(t *testing.T, root string) []string {
 	t.Helper()
 	var rels []string
@@ -374,7 +531,7 @@ func trackedProse(t *testing.T, root string) []string {
 func TestNoProseCitesAPosition(t *testing.T) {
 	root := moduleRoot(t)
 	rels := trackedProse(t, root)
-	scan := scanProse(t, root, rels)
+	scan := scanProse(root, rels)
 
 	for _, hit := range scan.hits {
 		t.Errorf("%s:%d cites a position; cite the symbol instead, which survives an edit:\n\t%s",
@@ -386,15 +543,18 @@ func TestNoProseCitesAPosition(t *testing.T) {
 	// than fail it. Assert each surface separately, since a single total would let
 	// a whole extension go dark, and assert the unit each one can lose silently
 	// rather than the file that holds it: a .go file parses and yields no comments,
-	// an unclosed fence blanks a .md file the count still counts, and a
-	// shellCommentStart that found nothing anywhere leaves every .sh file scanned
-	// and unread.
+	// an unclosed fence blanks a .md file the count still counts, and a scanner
+	// that found no `#` anywhere leaves every .sh file scanned and unread.
 	require.NotEmpty(t, rels, "git ls-files matched no prose; the pathspec is broken, not the tree")
 	require.Positive(t, scan.comments, "parsed no comments; ParseComments is not doing its job")
 	require.Positive(t, scan.mdFiles, "scanned no .md files; the exemptions are wrong")
 	require.Positive(t, scan.mdLines, "scanned no .md prose lines; every file is fenced shut")
 	require.Positive(t, scan.shFiles, "scanned no .sh files; the exemptions are wrong")
-	require.Positive(t, scan.shComments, "found no shell comments; shellCommentStart is returning -1 everywhere")
+	require.Positive(t, scan.shComments, "found no shell comments at all; shellScanner is returning -1 everywhere")
+	require.Positive(t, scan.shIndented,
+		"found no shell comment past column 0, so every trailing and indented one is going unread; "+
+			"the word-start branch is dead and the count above cannot see it, because the comments at "+
+			"column 0 are found by the other one")
 
 	// Every listed file must have been read, and every .go file parsed. A file the
 	// scanner could not open is one it reported nothing about, which on its own is
@@ -427,6 +587,10 @@ func TestProseCitationScannerReportsAPlantedCitation(t *testing.T) {
 	// right way round.
 	dir := t.TempDir()
 	files := map[string]string{
+		// Lines 3, 8 and 10 are claims and must be reported; the extensionless one
+		// has no dot to key on, so only a literal name matches it. Line 4 is the
+		// same shape in code, line 6 spaces the colon, and line 12 names a path
+		// this repo's own output prints — all three stay silent.
 		"control.go": "package control\n" +
 			"\n" +
 			"// A claim about session/instance.go:2228 in a comment.\n" +
@@ -434,12 +598,23 @@ func TestProseCitationScannerReportsAPlantedCitation(t *testing.T) {
 			"\n" +
 			"// Prose that names CLAUDE.md: 3 rules is not a citation.\n" +
 			"\n" +
-			"// A claim about web/src/app/page.tsx:42, the other half of the repo.\n",
+			"// A claim about web/src/app/page.tsx:42, the other half of the repo.\n" +
+			"\n" +
+			"// A claim about justfile:52, which has no extension to key on.\n" +
+			"\n" +
+			"// A marker row this repo prints, gone.txt:4, is data and not a claim.\n",
 		// Lines 2-4 are comments and must be reported. Lines 5-8 each carry the
 		// same citation shape in code, and each is silent for a different reason:
 		// no `#` at all, a `#` inside double quotes, a `#` opening `${#…}`, and a
 		// `#` opening `$#`. Only the first is caught by "the line has no comment";
-		// the rest need shellCommentStart to be doing its job.
+		// the rest need the word-start rule to be doing its job. Lines 9-18 are
+		// three embedded programs and a herestring, whose contents belong to them
+		// and not to this repo; the scanner only knows that by carrying state
+		// across lines, and the last one closes on a terminator only the `<<-`
+		// form's tab-stripping can match. Miss that and the file ends inside a
+		// block, taking the comment on line 19 with it. Line 20 is the other
+		// direction: a comment is not shell, so the apostrophe in it opens
+		// nothing, and line 21 proves the scanner is still reading.
 		"control.sh": "#!/usr/bin/env bash\n" +
 			"# A whole-line comment naming config/accessors.go:251.\n" +
 			"PANE=\"\"  # a trailing comment naming session/tmux/tmux.go:512\n" +
@@ -447,7 +622,20 @@ func TestProseCitationScannerReportsAPlantedCitation(t *testing.T) {
 			"grep -oE 'x' \"app/app.go:99\"\n" +
 			"echo \"#1\" && grep -n 'x' \"app/app.go:99\"\n" +
 			"printf '%s' ${#PANE} \"app/app.go:99\"\n" +
-			"[ $# -gt 0 ] && echo \"app/app.go:99\"\n",
+			"[ $# -gt 0 ] && echo \"app/app.go:99\"\n" +
+			"cat <<'PY' > /dev/null\n" +
+			"# a Python comment naming app/app.go:99\n" +
+			"PY\n" +
+			"awk '\n" +
+			"# an awk program naming app/app.go:99\n" +
+			"' /dev/null\n" +
+			"grep -q x <<<\"app/app.go:99\"\n" +
+			"cat <<-'TXT' > /dev/null\n" +
+			"\t# a heredoc body naming app/app.go:99\n" +
+			"\tTXT\n" +
+			"# A comment naming ui/list.go:85, after every block closed.\n" +
+			"# A comment that isn't shell, apostrophe and all.\n" +
+			"# A comment naming ui/diff.go:11, still read after it.\n",
 		"control.md": "Prose naming app/help.go:60.\n" +
 			"\n" +
 			"```\n" +
@@ -479,13 +667,27 @@ func TestProseCitationScannerReportsAPlantedCitation(t *testing.T) {
 			"```\n" +
 			"Prose naming session/tmux/tmux.go:512.\n",
 		// A transcript in an indented block rather than a fenced one. Nothing
-		// delimits it, so only the four spaces and the blank line above say it is
+		// delimits it, so only the four columns and the blank line above say it is
 		// not prose.
 		"indented.md": "Prose naming app/help.go:60.\n" +
 			"\n" +
 			"    main.go:12:5: undefined: foo\n" +
 			"\n" +
 			"More prose naming ui/list.go:85.\n",
+		// The same block indented with a tab, which is four columns to a markdown
+		// reader and one byte to len(). Counting bytes scanned it as prose.
+		"tabbed.md": "Prose naming app/help.go:60.\n" +
+			"\n" +
+			"\tmain.go:12:5: undefined: foo\n" +
+			"\n" +
+			"More prose naming ui/list.go:85.\n",
+		// Both halves of the inline-span decision: the spelling prose actually uses
+		// for a citation, and the transcript that spelling cannot be told apart
+		// from. Reporting both is the choice; exempting spans would silence the
+		// first as well, and that is the one worth catching.
+		"inline.md": "A citation written as `app/help.go:60`, which is how prose spells one.\n" +
+			"\n" +
+			"`main.go:12:5: undefined: foo` quoted inline is reported too; fence it and it is not.\n",
 		// Ends inside a fence, so everything after line 3 goes unscanned. The
 		// caller has to be told, or the file reads as clean.
 		"unbalanced.md": "Prose naming app/help.go:60.\n" +
@@ -506,32 +708,40 @@ func TestProseCitationScannerReportsAPlantedCitation(t *testing.T) {
 	// just as well against a scanner that discarded the error.
 	rels = append(rels, "missing.md", "missing.sh")
 
-	scan := scanProse(t, dir, rels)
+	scan := scanProse(dir, rels)
 
 	byFile := map[string][]int{}
 	for _, hit := range scan.hits {
 		byFile[hit.rel] = append(byFile[hit.rel], hit.line)
 	}
-	assert.Equal(t, []int{3, 8}, byFile["control.go"],
-		"want both comments, including the one citing a web/ source, and neither the string "+
-			"literal below the first nor the spaced colon between them")
-	assert.Equal(t, []int{2, 3, 4}, byFile["control.sh"],
-		"want the whole-line comment and both trailing comments, indented or not, and none of the "+
-			"four code lines below them")
+	assert.Equal(t, []int{3, 8, 10}, byFile["control.go"],
+		"want the three comments, including the one citing a web/ source and the one naming a file "+
+			"with no extension, and none of the string literal, the spaced colon or the printed row")
+	assert.Equal(t, []int{2, 3, 4, 19, 21}, byFile["control.sh"],
+		"want the whole-line comment and both trailing comments, indented or not, plus the two after "+
+			"the embedded programs, and none of the four code lines or the three embedded comments")
 	assert.Equal(t, []int{1, 7}, byFile["control.md"],
 		"want the prose either side of the fence and not the transcript inside it")
 	assert.Equal(t, []int{4}, byFile["tilde.md"], "a ~~~ fence must fence")
 	assert.Equal(t, []int{6}, byFile["nested.md"], "the inner ``` must not close the outer ````")
 	assert.Equal(t, []int{1, 5}, byFile["indented.md"],
 		"want the prose either side and not the indented transcript between them")
+	assert.Equal(t, []int{1, 5}, byFile["tabbed.md"],
+		"a tab indents by four columns, so the transcript between the prose is a code block")
+	assert.Equal(t, []int{1, 3}, byFile["inline.md"],
+		"an inline code span is scanned, both when it holds a citation and when it holds a transcript")
 	assert.Equal(t, []int{1, 6}, byFile["infostring.md"],
 		"want the prose either side of the block and not the fence it quotes; a closing fence carries no info string")
 	assert.Equal(t, []int{1}, byFile["unbalanced.md"], "the prose before the unclosed fence still counts")
 
 	require.Equal(t, 1, scan.goFiles, "the .go arm did not run, or counted the file it could not parse")
 	require.Equal(t, 1, scan.shFiles, "the .sh arm did not run")
-	require.Equal(t, 4, scan.shComments, "the shebang and the three comments above are what shellCommentStart must find")
-	require.Equal(t, 6, scan.mdFiles, "the .md arm did not run over every markdown fixture")
+	require.Equal(t, 7, scan.shComments,
+		"the shebang, the three comments above and the three below the embedded programs are what the "+
+			"scanner must find — and nothing inside a heredoc, a tab-stripped heredoc or a quote "+
+			"that spans lines")
+	require.Equal(t, 2, scan.shIndented, "the trailing and the indented comment are the two past column 0")
+	require.Equal(t, 8, scan.mdFiles, "the .md arm did not run over every markdown fixture")
 	require.Positive(t, scan.comments, "the .go arm parsed no comments")
 	require.Positive(t, scan.mdLines, "the .md arm scanned no unfenced lines")
 
@@ -543,158 +753,11 @@ func TestProseCitationScannerReportsAPlantedCitation(t *testing.T) {
 	require.ElementsMatch(t, []string{"missing.md", "missing.sh"}, scan.unreadable)
 }
 
-// readFile reads a whole file at an absolute path. moduleFile is the form that
-// resolves a name against the module root, and is written in terms of this one.
-func readFile(t *testing.T, path string) string {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
-	return string(data)
-}
-
-const (
-	// realTmuxSkip names the real-tmux test the workflows decline to run.
-	realTmuxSkip = "TestSessionDeathStopsProbing"
-	// realTmuxRuns names the real-tmux test they must NOT decline. Its guarantee
-	// is an absence, which is the half nothing else would notice going missing.
-	realTmuxRuns = "TestCloseSucceedsAfterRebindFromCancelledContext"
-	// realTmuxPkg is the tree both names must resolve in.
-	realTmuxPkg = "session/tmux"
-)
-
-// workflowGlobs are the trees TestEveryWorkflowGoTestSkipsTheRealTmuxTest reads.
-// GitHub honours both spellings of the extension, and filepath.Glob does not
-// recurse, so a composite action needs its own entry rather than being reached
-// through the first. Only the .yml glob matches anything here today; the other two
-// are for the day someone adds a file they cover, which must not silently widen
-// what CI runs. TestWorkflowScannerReachesEverySpelling is what keeps them from
-// being decoration until then.
-//
-// The composite-action entry is one directory deep under .github/actions, which is
-// convention rather than a rule: `uses:` resolves a local action against any path
-// in the repo, so an action elsewhere in the tree is out of scope here and its
-// `run:` steps go unread.
-var workflowGlobs = []string{
-	".github/workflows/*.yml",
-	".github/workflows/*.yaml",
-	".github/actions/*/action.y*ml",
-}
-
-var (
-	// suiteInvocation matches a command that runs the Go suite. The `just` recipes
-	// are in here because each runs `go test` with no -skip, so a workflow step
-	// calling one would run the real-tmux test in CI without this guard ever
-	// counting the line. Which recipes those are is not this comment's to say:
-	// TestSuiteInvocationCoversEveryJustRecipe reads the justfile and holds this
-	// pattern to it, so adding a recipe that runs the suite fails there rather than
-	// opening a hole here.
-	suiteInvocation = regexp.MustCompile(`\bgo test\b|\bjust (?:test|cover|ci)\b`)
-	// skipsRealTmux accepts every spelling of the flag that actually skips it,
-	// including `-skip=NAME` and a name inside an alternation. `-run NAME` is the
-	// inverse and must not satisfy it.
-	skipsRealTmux = regexp.MustCompile(`-skip[= ]\S*` + regexp.QuoteMeta(realTmuxSkip))
-	// skipsRealTmuxRuns is the same test applied to the name that must not be
-	// skipped. A bare substring check stood here and could not tell skipping the
-	// test from running only it, so it failed `-run realTmuxRuns` with a message
-	// saying that line skipped it.
-	skipsRealTmuxRuns = regexp.MustCompile(`-skip[= ]\S*` + regexp.QuoteMeta(realTmuxRuns))
-)
-
-// suiteCommands returns the commands on a workflow line that run the Go suite.
-//
-// Splitting first is what makes the assertions about a *command* rather than a
-// line. Matching the raw line let a -skip anywhere on it vouch for an invocation
-// that had none: in a trailing comment, or on a second command after `&&`. The
-// whole-line comment case was already handled and the trailing one was not, which
-// is the gap shellCommentStart closes.
-func suiteCommands(line string) []string {
-	if i := shellCommentStart(line); i >= 0 {
-		line = line[:i]
-	}
-	var out []string
-	for _, seg := range splitCommands(line) {
-		if suiteInvocation.MatchString(seg) {
-			out = append(out, seg)
-		}
-	}
-	return out
-}
-
-// TestWorkflowLineClassifiersRejectTheLinesTheyMust is the control for the
-// classifiers below. On a tree where every workflow is already correct each one is
-// green whether or not it discriminates, so this supplies the inputs each has to
-// turn away. Which direction goes unnoticed depends on how a classifier is used,
-// and they are not all used the same way: skipsRealTmux is asserted to match, so
-// widening it to everything is the invisible break, while skipsRealTmuxRuns is
-// asserted NOT to match, so its invisible break is narrowing to nothing. Both
-// directions are covered below for both.
-func TestWorkflowLineClassifiersRejectTheLinesTheyMust(t *testing.T) {
-	for _, tc := range []struct {
-		line string
-		want int
-	}{
-		{"        run: go test -skip Foo ./...", 1},
-		{"        run: just test", 1},
-		{"        run: just test-race", 1},
-		{"        run: just cover", 1},
-		{"        run: just ci", 1},
-		{"          run: go build ./... && go vet ./...", 0},
-		{"  # we used to run go test here, before the split", 0},
-		{"          # A job that runs go test must skip the real-tmux one", 0},
-		// A trailing comment is not a command, and a second command is not the
-		// first one. Both used to be counted as part of the line that precedes
-		// them, which let either vouch for the other.
-		{"        run: go test ./...  # -skip lives in the script now", 1},
-		{"        run: go test ./... && go test -skip Foo ./session/tmux/...", 2},
-		// A quoted separator separates nothing. The alternation is the spelling
-		// skipsRealTmux exists to accept, and splitting it left half a flag.
-		{"        run: go test -skip 'TestFoo|" + realTmuxSkip + "' ./...", 1},
-		{"        run: go test ./... | tee out.log", 1},
-	} {
-		assert.Lenf(t, suiteCommands(tc.line), tc.want, "suiteCommands(%q)", tc.line)
-	}
-
-	// The predicates are only ever applied to what suiteCommands returns, so an
-	// input the table above blesses is not yet proof: assert the composition. The
-	// alternation passed skipsRealTmux as a raw line and failed it as a command,
-	// and nothing here could see the difference until the two were run together.
-	alternation := "        run: go test -skip 'TestFoo|" + realTmuxSkip + "' ./..."
-	cmds := suiteCommands(alternation)
-	require.Len(t, cmds, 1, "suiteCommands(%q)", alternation)
-	assert.Regexp(t, skipsRealTmux, cmds[0],
-		"the alternation must survive the split, or the guard fails a workflow that does skip the test")
-
-	for _, tc := range []struct {
-		line string
-		want bool
-	}{
-		{"go test -skip " + realTmuxSkip + " ./...", true},
-		{"go test -skip=" + realTmuxSkip + " ./...", true},
-		{"go test -skip 'TestFoo|" + realTmuxSkip + "' ./...", true},
-		{"go test ./...", false},
-		{"go test -skip TestSomethingElse ./...", false},
-		// -run is the inverse of -skip: this invocation runs ONLY the real-tmux
-		// test. Accepting it because the name is present would invert the guard.
-		{"go test -run " + realTmuxSkip + " ./...", false},
-		{"go test -skip=TestFoo -run " + realTmuxSkip + " ./...", false},
-	} {
-		assert.Equalf(t, tc.want, skipsRealTmux.MatchString(tc.line), "skipsRealTmux(%q)", tc.line)
-	}
-
-	for _, tc := range []struct {
-		line string
-		want bool
-	}{
-		{"go test -skip " + realTmuxRuns + " ./...", true},
-		{"go test -skip=TestFoo -skip=" + realTmuxRuns + " ./...", true},
-		// Runs only that test. Naming it is not skipping it, and the old check
-		// could not tell the two apart.
-		{"go test -run " + realTmuxRuns + " ./...", false},
-		{"go test -skip " + realTmuxSkip + " -run " + realTmuxRuns + " ./session/tmux/...", false},
-	} {
-		assert.Equalf(t, tc.want, skipsRealTmuxRuns.MatchString(tc.line), "skipsRealTmuxRuns(%q)", tc.line)
-	}
-
+// TestShellCommentStartFindsTheCommentAndNothingElse is the unit control for the
+// single-line half of shellScanner. The multi-line half — a heredoc body, a quote
+// left open — is held by control.sh in the planted tree above, because it is a
+// property of a file rather than of a line.
+func TestShellCommentStartFindsTheCommentAndNothingElse(t *testing.T) {
 	for _, tc := range []struct {
 		line string
 		want int
@@ -708,386 +771,52 @@ func TestWorkflowLineClassifiersRejectTheLinesTheyMust(t *testing.T) {
 		{`curl "http://x/y#frag"`, -1},
 		{`grep '#literal'`, -1},
 		{`echo \# escaped`, -1},
+		// A heredoc opener is still a line of shell, and its own trailing comment
+		// is still a comment.
+		{`cat <<'EOF'  # opens a block`, 13},
 	} {
 		assert.Equalf(t, tc.want, shellCommentStart(tc.line), "shellCommentStart(%q)", tc.line)
 	}
-}
 
-// TestTheRealTmuxTestNamesResolve pins realTmuxSkip and realTmuxRuns to functions
-// that exist. Both are bare strings compared against workflow text, and the guard
-// below stays green after either is renamed — the two strings still agree with
-// each other, and agreeing with each other is all it checks. What the rename costs
-// differs: realTmuxSkip leaves the workflows passing a -skip that matches nothing,
-// so the real-tmux test runs in CI wherever the suite does, while realTmuxRuns
-// leaves the assertion that nothing skips it looking for a name nothing could
-// name. TestNoDocClaimsTheLogLivesInTheTempDir asks the log package for its real
-// filename against the same failure: a scanner looking for a string nothing
-// produces any more passes every time.
-func TestTheRealTmuxTestNamesResolve(t *testing.T) {
-	root := moduleRoot(t)
-	pkg := trackedFiles(t, root, realTmuxPkg+"/*.go")
-	require.NotEmpty(t, pkg, "found no .go files under %s", realTmuxPkg)
-
-	// Parsed rather than grepped for "func Name(". A commented-out declaration left
-	// behind by a refactor satisfies a substring search, which would be this test
-	// failing in exactly the way it exists to prevent.
-	declared := map[string]bool{}
-	fset := token.NewFileSet()
-	for _, rel := range pkg {
-		f, err := parser.ParseFile(fset, filepath.Join(root, filepath.FromSlash(rel)), nil, 0)
-		require.NoErrorf(t, err, "%s does not parse", rel)
-		for _, decl := range f.Decls {
-			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil {
-				declared[fn.Name.Name] = true
-			}
-		}
+	// heredocWord decides where a body begins, and getting it wrong in the
+	// permissive direction swallows the rest of the file: the scanner would look
+	// for a terminator that never arrives and report no comment again.
+	for _, tc := range []struct {
+		rest  string
+		word  string
+		strip bool
+		ok    bool
+	}{
+		{"'PY'", "PY", false, true},
+		{`"PY"`, "PY", false, true},
+		{"-'EOF'", "EOF", true, true},
+		{"EOF", "EOF", false, true},
+		{"-EOF", "EOF", true, true},
+		{" EOF > out", "EOF", false, true},
+		{"", "", false, false},
+		{"'unterminated", "", false, false},
+	} {
+		word, strip, ok := heredocWord(tc.rest)
+		assert.Equalf(t, tc.ok, ok, "heredocWord(%q) ok", tc.rest)
+		assert.Equalf(t, tc.word, word, "heredocWord(%q) word", tc.rest)
+		assert.Equalf(t, tc.strip, strip, "heredocWord(%q) strip", tc.rest)
 	}
 
-	for _, name := range []string{realTmuxSkip, realTmuxRuns} {
-		require.Truef(t, declared[name],
-			"%s declares no func %s. The workflows pass that name to -skip and this package's "+
-				"comments describe what it does; a rename that misses either leaves both saying "+
-				"something about a test that no longer exists.", realTmuxPkg, name)
-	}
+	// A herestring is not a heredoc. Reading one as a heredoc opener leaves the
+	// scanner waiting for a terminator spelled like the string's contents, so
+	// every line after it goes unread — and both `<` of the pair have to reject
+	// it, since the walk visits each one.
+	var s shellScanner
+	require.Equal(t, -1, s.comment(`grep -q x <<<"$flat"`))
+	assert.Empty(t, s.here, "a herestring must not open a heredoc")
+	assert.Equal(t, 0, s.comment("# the next line is still read"))
 }
 
-// TestEveryWorkflowGoTestSkipsTheRealTmuxTest holds the claim session/tmux's
-// comments make about CI: TestSessionDeathStopsProbing is skipped by name in every
-// workflow command that runs the suite, and TestCloseSucceedsAfterRebindFromCancelledContext
-// is not, so the workflows' -skip is not what keeps the second one off a real tmux
-// server.
-//
-// That claim used to be carried by a pair of line numbers into a workflow file.
-// One of them was wrong on the day it merged, and the pair also under-counted the
-// skip sites it was pointing at. A sentence naming positions in another file is a
-// lookup nobody performs twice; the file is right here, so read it.
-func TestEveryWorkflowGoTestSkipsTheRealTmuxTest(t *testing.T) {
-	cmds := workflowSuiteCommands(t, moduleRoot(t))
-
-	// Without this a renamed job, a moved workflow or a reindented `run:` turns the
-	// loop below into a no-op and its assertions never execute.
-	require.NotEmpty(t, cmds, "found no suite invocation in %v", workflowGlobs)
-
-	for _, c := range cmds {
-		assert.Regexpf(t, skipsRealTmux, c.cmd,
-			"%s:%d runs the suite without skipping %s. That test drives a real tmux server "+
-				"through a PTY and is local-only, and session/tmux's comments say every "+
-				"workflow command that runs the suite skips it.", c.rel, c.line, realTmuxSkip)
-		assert.NotRegexpf(t, skipsRealTmuxRuns, c.cmd,
-			"%s:%d skips %s. session/tmux documents it as a real-tmux test that DOES run "+
-				"in CI under ATRIUM_CI_REQUIRE_TMUX=1; skip it here and the documented "+
-				"arrangement is no longer true.", c.rel, c.line, realTmuxRuns)
-	}
-}
-
-// workflowCommand is one suite invocation, located well enough to fix.
-type workflowCommand struct {
-	rel  string
-	line int
-	cmd  string
-}
-
-// scriptLine is one line of shell from a `run:` step, and the workflow line it
-// came from.
-type scriptLine struct {
-	line int
-	text string
-}
-
-// runKey matches the `run:` mapping key, capturing its indent and its value. The
-// indent is what bounds a block scalar: everything indented past the key belongs
-// to the script, and the first line that is not ends it.
-var runKey = regexp.MustCompile(`^(\s*)(?:-\s+)?run:\s*(.*)$`)
-
-// runScript returns the shell of every `run:` step in a workflow file. Only a
-// `run:` value is shell; the rest of the document is YAML that merely quotes it.
-// Judging whole lines meant a step named `Run go test with coverage`, an
-// `if: contains(…, 'go test')` or an action's `description:` was read as an
-// unskipped suite invocation, and the only way to satisfy the assertion would have
-// been to write -skip into a step name.
-//
-// A `run:` value that opens a block scalar takes the indented lines below it, and
-// a trailing backslash joins a line to the next — a wrapped invocation is one
-// command, not a head with no -skip followed by a tail that matches nothing.
-func runScript(body []string) []scriptLine {
-	var out, current []scriptLine
-	blockIndent := -1
-	end := func() {
-		out = append(out, joinContinuations(current)...)
-		current, blockIndent = nil, -1
-	}
-	for i, line := range body {
-		if blockIndent >= 0 {
-			if strings.TrimSpace(line) == "" {
-				continue
-			}
-			if indentOf(line) > blockIndent {
-				current = append(current, scriptLine{line: i + 1, text: line})
-				continue
-			}
-			end()
-		}
-		m := runKey.FindStringSubmatch(line)
-		if m == nil {
-			continue
-		}
-		// `|`, `>` and their chomping variants all open a block; so does an empty
-		// value, which is the same step spelled over two lines.
-		if v := strings.TrimSpace(m[2]); v == "" || v[0] == '|' || v[0] == '>' {
-			blockIndent = len(m[1])
-			continue
-		}
-		out = append(out, scriptLine{line: i + 1, text: m[2]})
-	}
-	end()
-	return out
-}
-
-// joinContinuations folds a line ending in a backslash into the one after it,
-// keeping the first line's number so a failure points at the head of the command.
-func joinContinuations(lines []scriptLine) []scriptLine {
-	var out []scriptLine
-	for _, l := range lines {
-		if k := len(out) - 1; k >= 0 {
-			if head := strings.TrimRight(out[k].text, " \t"); strings.HasSuffix(head, `\`) {
-				out[k].text = strings.TrimSuffix(head, `\`) + " " + strings.TrimSpace(l.text)
-				continue
-			}
-		}
-		out = append(out, l)
-	}
-	return out
-}
-
-// indentOf returns the width of line's leading whitespace in bytes.
-func indentOf(line string) int {
-	return len(line) - len(strings.TrimLeft(line, " \t"))
-}
-
-// workflowSuiteCommands returns every command under root that runs the Go suite,
-// across all of workflowGlobs. Split out from the assertions so a control can
-// point it at a tree that is deliberately wrong; against the real tree the
-// assertions are the whole test, and on a repo where every workflow is already
-// correct that proves nothing about which files were read.
-func workflowSuiteCommands(t *testing.T, root string) []workflowCommand {
+// readFile reads a whole file at an absolute path. moduleFile is the form that
+// resolves a name against the module root, and is written in terms of this one.
+func readFile(t *testing.T, path string) string {
 	t.Helper()
-	var out []workflowCommand
-	for _, glob := range workflowGlobs {
-		paths, err := filepath.Glob(filepath.Join(root, filepath.FromSlash(glob)))
-		require.NoError(t, err)
-		for _, path := range paths {
-			rel, relErr := filepath.Rel(root, path)
-			require.NoError(t, relErr)
-			for _, sl := range runScript(strings.Split(readFile(t, path), "\n")) {
-				for _, cmd := range suiteCommands(sl.text) {
-					out = append(out, workflowCommand{rel: filepath.ToSlash(rel), line: sl.line, cmd: cmd})
-				}
-			}
-		}
-	}
-	return out
-}
-
-var (
-	// justGoTest matches a recipe body line that runs `go test`, through the
-	// justfile's `go` variable or directly.
-	justGoTest = regexp.MustCompile(`(?:\{\{go\}\}|\bgo\b) test\b`)
-	// justRunsNoTests matches the `-run '^$'` idiom, which is how `bench` runs
-	// benchmarks without running a single test. A recipe spelled that way cannot
-	// reach the real-tmux test, so it is not a suite recipe.
-	justRunsNoTests = regexp.MustCompile(`-run[= ]'?\^\$'?`)
-)
-
-// justSuiteRecipes returns the names of the recipes in a justfile that run the Go
-// suite, whether in their own body or through a dependency — `ci` runs no `go
-// test` itself and reaches two recipes that do.
-func justSuiteRecipes(justfile string) []string {
-	type recipe struct {
-		deps  []string
-		suite bool
-	}
-	byName := map[string]*recipe{}
-	var order []string
-	current := ""
-	for _, line := range strings.Split(justfile, "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		if indentOf(line) > 0 {
-			if r := byName[current]; r != nil && justGoTest.MatchString(line) && !justRunsNoTests.MatchString(line) {
-				r.suite = true
-			}
-			continue
-		}
-		// Anything else at column 0 ends the previous recipe, whether or not it
-		// starts a new one: a comment, an attribute, an assignment.
-		current = ""
-		colon := strings.Index(line, ":")
-		if strings.HasPrefix(line, "#") || colon < 0 {
-			continue
-		}
-		// `name := value` is an assignment, not a recipe. Nothing in the control
-		// dies when this check is removed, and that is a property of justfiles
-		// rather than a gap: a misread assignment has no indented body, so it can
-		// never be marked a suite recipe. It stays because a name that collided
-		// with a real recipe would overwrite that recipe's dependencies.
-		if colon+1 < len(line) && line[colon+1] == '=' {
-			continue
-		}
-		head := strings.Fields(line[:colon])
-		if len(head) == 0 {
-			continue
-		}
-		current = head[0]
-		if byName[current] == nil {
-			byName[current] = &recipe{}
-			order = append(order, current)
-		}
-		byName[current].deps = strings.Fields(line[colon+1:])
-	}
-
-	for changed := true; changed; {
-		changed = false
-		for _, r := range byName {
-			if r.suite {
-				continue
-			}
-			for _, dep := range r.deps {
-				if d := byName[dep]; d != nil && d.suite {
-					r.suite, changed = true, true
-					break
-				}
-			}
-		}
-	}
-
-	var out []string
-	for _, name := range order {
-		if byName[name].suite {
-			out = append(out, name)
-		}
-	}
-	return out
-}
-
-// TestSuiteInvocationCoversEveryJustRecipe holds suiteInvocation to the justfile.
-//
-// The `just` half of that pattern is a hardcoded list of recipe names, and nothing
-// in the workflows exercises it: every CI step calls `go test` directly, so the
-// alternatives match nothing in this repo and a wrong list is invisible. Add a
-// recipe that runs the suite, or rename one that does, and a workflow step calling
-// it runs the real-tmux PTY test in CI while this guard counts no line at all —
-// the precise hole the list exists to close.
-func TestSuiteInvocationCoversEveryJustRecipe(t *testing.T) {
-	recipes := justSuiteRecipes(readFile(t, filepath.Join(moduleRoot(t), "justfile")))
-	require.NotEmpty(t, recipes, "parsed no suite recipes out of the justfile; the parser is broken, not the file")
-
-	for _, name := range recipes {
-		assert.Regexpf(t, suiteInvocation, "just "+name,
-			"`just %s` runs the Go suite, but suiteInvocation does not match it. A workflow step "+
-				"calling it would run %s in CI and TestEveryWorkflowGoTestSkipsTheRealTmuxTest "+
-				"would never see the line.", name, realTmuxSkip)
-	}
-}
-
-// TestJustfileParserFindsRecipesThroughDependencies is the control for
-// justSuiteRecipes. Against the real justfile it returns a set that happens to be
-// right, and a parser that found recipes by any other rule — or found none at all
-// past the first assignment — would return the same set or an empty one, which the
-// caller's assertions cannot tell apart from correct.
-func TestJustfileParserFindsRecipesThroughDependencies(t *testing.T) {
-	assert.Equal(t, []string{"test", "cover", "ci"}, justSuiteRecipes(strings.Join([]string{
-		`go := env_var_or_default("GO", "go")`,
-		`set shell := ["bash", "-uc"]`,
-		"",
-		"# Run the suite.",
-		"test:",
-		"    {{go}} test ./...",
-		"",
-		"cover:",
-		"    {{go}} test -coverprofile=coverage.out ./...",
-		"    {{go}} tool cover -func=coverage.out",
-		"",
-		"# Benchmarks run no tests, so they cannot reach the real-tmux one.",
-		"bench pattern='.' *pkgs='./...':",
-		"    {{go}} test -run '^$' -bench '{{pattern}}' {{pkgs}}",
-		"",
-		"lint:",
-		"    golangci-lint run",
-		"",
-		"ci: build vet lint test cover",
-	}, "\n")), "want the two recipes that run tests and the aggregate that depends on them, "+
-		"and not bench, whose -run '^$' runs none")
-}
-
-// TestWorkflowScannerReadsOnlyRunSteps is the control for runScript. Every real
-// workflow here puts its suite invocation on a single `run:` line with the -skip
-// already there, so the scanner is green whether or not it can tell shell from
-// YAML — and the failure it hides is a false red on a correct file, which is worse
-// than a miss because the only way to clear it is to write a test flag into a step
-// name.
-func TestWorkflowScannerReadsOnlyRunSteps(t *testing.T) {
-	body := strings.Split(strings.Join([]string{
-		"jobs:",
-		"  test:",
-		"    steps:",
-		// Prose about the suite, in three places YAML allows it. None is shell.
-		"      - name: Run go test with coverage",
-		"        if: contains(github.event.head_commit.message, 'go test')",
-		"        run: go test -skip " + realTmuxSkip + " ./...",
-		"      - name: Wrapped",
-		"        run: |",
-		"          go test \\",
-		"            -skip " + realTmuxSkip + " ./...",
-		"          echo done",
-		// Back out to step level: the block is over, and this key is not shell.
-		"      - name: After the block, still go test in the name",
-		"        uses: ./.github/actions/setup",
-	}, "\n"), "\n")
-
-	var got []scriptLine
-	for _, sl := range runScript(body) {
-		if len(suiteCommands(sl.text)) > 0 {
-			got = append(got, sl)
-		}
-	}
-	require.Len(t, got, 2, "want the two run: invocations and neither the names nor the if:, got %+v", got)
-	assert.Equal(t, 6, got[0].line, "the single-line run: step")
-	assert.Regexp(t, skipsRealTmux, got[0].text)
-	assert.Equal(t, 9, got[1].line, "a wrapped command is reported at its head, not its tail")
-	assert.Regexpf(t, skipsRealTmux, got[1].text,
-		"the backslash must join the flag to the invocation, or the head reads as unskipped")
-}
-
-// TestWorkflowScannerReachesEverySpelling is the control for workflowGlobs. Two of
-// the three match nothing in this repo, so the guard above is green whether they
-// work or not — which is how a `.yaml` workflow could later add an unskipped
-// invocation that nothing reports.
-func TestWorkflowScannerReachesEverySpelling(t *testing.T) {
-	root := t.TempDir()
-	files := map[string]string{
-		".github/workflows/a.yml":          "        run: go test -skip " + realTmuxSkip + " ./...\n",
-		".github/workflows/b.yaml":         "        run: go test ./...\n",
-		".github/actions/setup/action.yml": "        run: just ci\n",
-	}
-	for name, body := range files {
-		path := filepath.Join(root, filepath.FromSlash(name))
-		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o750))
-		require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
-	}
-
-	var seen []string
-	unskipped := 0
-	for _, c := range workflowSuiteCommands(t, root) {
-		seen = append(seen, c.rel)
-		if !skipsRealTmux.MatchString(c.cmd) {
-			unskipped++
-		}
-	}
-	assert.ElementsMatch(t, []string{
-		".github/workflows/a.yml",
-		".github/workflows/b.yaml",
-		".github/actions/setup/action.yml",
-	}, seen, "both extensions must be reached, or one of them can hide an invocation")
-	assert.Equal(t, 2, unskipped, "the .yaml workflow and the composite action must both be judged, not just listed")
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	return string(data)
 }
