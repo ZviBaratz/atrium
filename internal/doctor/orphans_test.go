@@ -406,6 +406,14 @@ func TestRenderOrphansReachableServerPrintsTheExactCommand(t *testing.T) {
 // is proven — and the live server could not be excluded either, so these rows may
 // well be the running fleet. The row has to say so, because the user reading it is
 // deciding whether to reach for `reap --kill`.
+//
+// It also has to give the user something to do, which is why the path is asserted here
+// and not merely in the format string. This is the only branch that prints no command at
+// all, and since #730 it is where a live server behind an unopenable socket lands, along
+// with the residual that fix accepted: an orphan behind ENOTDIR/ELOOP, which reap can no
+// longer take. Naming the file is the whole remedy for both — the row cannot say which
+// cause fired, but `ls -l` on the path can, and a row that withheld it would leave the
+// user with a verdict and no next step.
 func TestRenderOrphansUnknownReachabilityPromisesNoKill(t *testing.T) {
 	out := RenderOrphans(OrphanResult{
 		Supported: true,
@@ -419,6 +427,10 @@ func TestRenderOrphansUnknownReachabilityPromisesNoKill(t *testing.T) {
 	require.Contains(t, out, "reachability unknown")
 	require.Contains(t, out, "never kills them")
 	require.Contains(t, out, "holds nothing")
+	require.Contains(t, out, "`ls -l /tmp/tmux-1000/atrium`",
+		"the only branch that prints no command must at least name the file to look at")
+	require.Contains(t, out, "could not open the socket",
+		"and it must name the cause that neither a re-run nor a PATH check can clear")
 	require.NotContains(t, out, "UNREACHABLE",
 		"an unrunnable probe is not a finding; only a probe that answered may say unreachable")
 }

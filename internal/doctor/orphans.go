@@ -172,13 +172,27 @@ func renderOrphanServer(b *strings.Builder, s tmux.OrphanServer, now time.Time, 
 	case !s.ReachableKnown:
 		fmt.Fprintf(b, "  pid %d  socket %s  up %s  reachability unknown  %s\n",
 			s.PID, s.Socket, HumanAge(now.Sub(s.Started)), childSummary(s.Children))
-		// Two causes, worded as one sentence because this row cannot tell them apart: the
-		// scan carries no reason, only the fact that nothing was established. Naming just
-		// the first would be the wrong advice on the second — a socket that cannot be
-		// opened is a host whose tmux works fine, and "check PATH" sends that user nowhere.
-		// The same reasoning StaleGaps.Unprobed's doc gives for not naming one cause there.
-		b.WriteString("      → tmux could not be run, or could not open the socket, so nothing here\n")
-		b.WriteString("        is proven; `atrium reap` lists these and never kills them\n")
+		// Three causes, worded as one sentence because this row cannot tell them apart: the
+		// scan carries no reason, only the fact that nothing was established. classifyPIDProbe
+		// answers known=false when the context expired, when tmux could not be run at all, and
+		// — since #730 — when tmux ran and could not open the socket. Naming any one of them
+		// would be wrong advice on the other two: "check PATH" sends a user whose tmux works
+		// fine nowhere, and a re-run never clears a mode bit. The same reasoning
+		// StaleGaps.Unprobed's doc gives for not naming one cause there.
+		//
+		// The path is printed because this is the one row with no command on it. Under the
+		// third cause the socket file is present and merely unopenable, and `ls -l` is what
+		// separates that from the other two — a read the user can make and this scan cannot,
+		// since making it is exactly what failed. It is also the only handle offered on the
+		// residual #730 accepted: an orphan behind ENOTDIR/ELOOP now lands here and reap will
+		// not take it, so the path is the whole remedy rather than a supplement to one.
+		// The verdict leads and the causes follow, which also keeps "never kills them" on one
+		// line: TestRenderOrphansUnknownReachabilityPromisesNoKill reads the promise as a
+		// contiguous string, and a wrap through the middle of it silently stops being the
+		// promise anyone asserted.
+		b.WriteString("      → nothing here is proven: `atrium reap` lists these and never kills them.\n")
+		b.WriteString("        tmux could not be run, ran out of time, or could not open the socket —\n")
+		fmt.Fprintf(b, "        `ls -l %s` tells you which\n", s.SocketPath)
 	case s.Reachable && gaps.LiveServerUnknown:
 		// No command is printed at all here. The honest remedy is to re-run once the
 		// probe works, because the one command that would stop this server is also the
@@ -187,16 +201,24 @@ func renderOrphanServer(b *strings.Builder, s tmux.OrphanServer, now time.Time, 
 			s.PID, s.Socket, HumanAge(now.Sub(s.Started)), childSummary(s.Children))
 		b.WriteString("      → no remedy offered: this Atrium's own server could not be identified,\n")
 		b.WriteString("        so this row may be it — and the command that would stop it is the\n")
-		b.WriteString("        command that would stop your live sessions. Re-run first\n")
+		b.WriteString("        command that would stop your live sessions. Re-run first; if it\n")
+		b.WriteString("        persists, check that tmux runs and that Atrium's own socket opens\n")
 	case s.Reachable && gaps.EmptyFleetUnproven && s.OnAnAmbientSocket():
 		// The command stays, with the claim it used to carry retracted beside it. This is
 		// the opposite call from the case above, and the difference is what a user can do
-		// next: there tmux could not be run, so the row cannot be inspected and a re-run
-		// is the only move; here tmux demonstrably runs, this server answers, and the
-		// probe will keep answering about the same wrong socket however often it is
-		// re-run. Withholding would leave a real and verified remedy unnamed and offer
-		// advice that cannot help — so the row is annotated rather than blanked, and it is
-		// `--all`, which needs no per-row judgement, that refuses (#603).
+		// next: there the ambient probe was never answered, so which server is the fleet is
+		// an open question and a re-run is the move that can close it; here tmux demonstrably
+		// runs, this server answers, and the probe will keep answering about the same wrong
+		// socket however often it is re-run. Withholding would leave a real and verified
+		// remedy unnamed and offer advice that cannot help — so the row is annotated rather
+		// than blanked, and it is `--all`, which needs no per-row judgement, that refuses
+		// (#603).
+		//
+		// "tmux could not be run" is what this comment used to say of the case above, and
+		// #730 falsified it: an unopenable ambient socket raises LiveServerUnknown on a host
+		// whose tmux runs fine. The distinction that survives is not whether tmux ran — it is
+		// whether the ambient question is still open, which is why the re-run is offered
+		// there and not here.
 		//
 		// OnAnAmbientSocket keeps the hedge off rows it would be false about. The caution
 		// says this may be a live fleet, and a `-precheck-` or verification socket cannot
@@ -342,12 +364,14 @@ func renderStaleGaps(b *strings.Builder, g tmux.StaleGaps, found bool) {
 				g.Unprobed, plural(g.Unprobed, "file", "files"))
 			b.WriteString("        is empty for want of an answer, not for want of files\n")
 		}
-		// The remedy leads with the re-run and offers PATH second, because the sentence
-		// above has more than one cause: the probe fails when tmux is off PATH *and* when
-		// the scan's budget was spent. Naming only PATH — as this did — sends a user whose
-		// PATH is fine to check it, and never names the cause that a re-run fixes.
+		// The remedy leads with the re-run and offers the checks second, because the
+		// sentence above has three causes: the probe fails when tmux is off PATH, when the
+		// scan's budget was spent, and — since #730 — when the socket file is there and
+		// cannot be opened. Naming only PATH — as this did — sends a user whose PATH is
+		// fine to check it; naming only PATH and the re-run leaves the third with no move
+		// at all, since it answers the same way on every run and tmux is working throughout.
 		b.WriteString("        → re-run to get a complete answer; if it persists, check that tmux\n")
-		b.WriteString("          is on PATH\n")
+		b.WriteString("          is on PATH and that those files can be opened (ls -l)\n")
 	}
 }
 

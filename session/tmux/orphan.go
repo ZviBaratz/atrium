@@ -138,12 +138,20 @@ type ScanGaps struct {
 	// undercounted Children list, since children are attributed from the same partial
 	// table.
 	ProcTableTruncated bool
-	// LiveServerUnknown: the ambient probe was never answered — tmux absent, or its share
-	// of the budget spent — so which server this Atrium is running on was not established
-	// at all. Nothing can then be excluded by pid, so the live server may itself be one of
-	// the rows below. It answers its own socket, so it arrives classified Reachable: never
-	// a default kill target, but `--all` targets reachable servers by design, and the
-	// report's remedy for a reachable server is a `kill-server` aimed straight at it.
+	// LiveServerUnknown: the ambient probe was never answered — tmux absent, its share of
+	// the budget spent, or (since #730) tmux run but unable to open the socket — so which
+	// server this Atrium is running on was not established at all. Nothing can then be
+	// excluded by pid, so the live server may itself be one of the rows below.
+	//
+	// How it arrives there depends on which cause fired, and the two need different care.
+	// Under the first two the socket answers probes, so the live server is classified
+	// Reachable: never a default kill target, but `--all` targets reachable servers by
+	// design, and the report's remedy for a reachable server is a `kill-server` aimed
+	// straight at it — which is what the `--all` guard and renderOrphanServer's withheld
+	// remedy exist for. Under the third the same unopenable socket that silenced the
+	// ambient probe also silences the row's own probe, so it arrives !ReachableKnown and is
+	// out of every target set already; the guard is then belt to a brace rather than the
+	// only thing standing there.
 	//
 	// Not an inventory gap, so IncompleteInventory does not count it. Its consequences
 	// are handled where they apply: the `--all` guard in cli_reap.go, and the remedy
@@ -460,11 +468,14 @@ type StaleGaps struct {
 	// contents is known — not "no stale files" but "no answer".
 	DirUnread bool
 	// Unprobed counts the socket files that were listed and belong to Atrium but could
-	// not be classified: the owner probe did not run, because tmux is off PATH or the
-	// scan's budget expired. Absence of an answer is not evidence of an absent server,
-	// so those files stay off the list. Renderers must not name one of those causes as
-	// though it were the only one — a remedy that says "check PATH" is wrong advice on a
-	// host whose PATH is fine and whose budget ran out.
+	// not be classified. Three causes, and the third is not the same shape as the other
+	// two: the probe did not run at all (tmux off PATH), it ran and was cut short (the
+	// scan's budget expired), or — since #730 — it ran, reached the socket, and could not
+	// open it. Absence of an answer is not evidence of an absent server, so those files
+	// stay off the list. Renderers must not name one of those causes as though it were the
+	// only one: "check PATH" is wrong advice on a host whose PATH is fine and whose budget
+	// ran out, and both of those are wrong advice on a socket whose mode bits are the
+	// problem, where the file named in the list above is the thing to go and look at.
 	//
 	// A count rather than a bool so a caller can tell a directory whose every file is
 	// unproven from a list that is merely one file short; a bool has to hedge both the
@@ -752,8 +763,21 @@ func classifyPIDProbe(ctx context.Context, out []byte, err error) (pid int, know
 			//
 			// The diagnostic is read from ExitError.Stderr, which Output() populates only
 			// because both probes here leave cmd.Stderr nil. A future call site that captured
-			// stderr itself would empty this and silently restore the old reading;
-			// exitErrorWithStderr (orphan_test.go) is what holds that mechanism to a syscall.
+			// stderr itself would empty this and silently restore the old reading — so that
+			// precondition belongs to the CALLERS, and what holds each of them differs:
+			//
+			//   - probeSocketOwner: end to end, by a real tmux server behind a real
+			//     unopenable socket (TestALiveServerBehindAnUnopenableSocketIsNotAReapTarget).
+			//     Errno, diagnostic, stream and field are all measured there.
+			//   - ambientServerPID: NOT covered end to end. Every ScanServers test stubs that
+			//     seam, so the rule below is exercised for it while its wiring is not. It is
+			//     one line, three functions up, in the same shape — but "the same shape" is an
+			//     inference, which is what this note exists to keep visible rather than to
+			//     settle.
+			//
+			// exitErrorWithStderr (orphan_test.go) holds the stdlib half — Output() populates
+			// Stderr when cmd.Stderr is nil — to a syscall rather than to a reading of the
+			// docs. That is a fact about os/exec, not about either call site.
 			if socketUnreachableMessage(string(exitErr.Stderr)) {
 				return 0, false
 			}

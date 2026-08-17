@@ -311,15 +311,20 @@ func reapTargets(servers []tmux.OrphanServer, all bool) []tmux.OrphanServer {
 // unidentifiedLiveServerReason words the --all refusal for the cause at hand.
 //
 // The two causes leave the *reaper* in one position — no selected row is proven not to be
-// the live fleet — but not the user. An unanswered probe is fixed by re-running. A probe
-// that answered about the wrong socket answers the same way every time, so "re-run once the
-// probe works" would send a user whose tmux works fine to re-run until they stopped
-// reading; what fits that case is the reachable row itself, which can be inspected and
-// stopped by name. LiveServerUnknown is tested first: when nothing was established, the
-// weaker claim is the true one.
+// the live fleet — but not the user. A probe that answered about the wrong socket answers
+// the same way every time, so a re-run would send a user whose tmux works fine to re-run
+// until they stopped reading; what fits that case is the reachable row itself, which can be
+// inspected and stopped by name. LiveServerUnknown is tested first: when nothing was
+// established, the weaker claim is the true one.
+//
+// An unanswered probe is *usually* fixed by re-running, and this message used to say so
+// flatly ("re-run once the probe works"). #730 added a cause it is false for: an ambient
+// socket that exists and cannot be opened raises LiveServerUnknown on every run, so the
+// re-run leads and the thing that actually clears it follows, rather than the user being
+// left with the one instruction this branch cannot make good on.
 func unidentifiedLiveServerReason(g tmux.ScanGaps) string {
 	if g.LiveServerUnknown {
-		return fmt.Sprintf("this %s's own tmux server could not be identified, so a reachable server here may be it — re-run once the probe works, or drop --all to kill only the unreachable ones", binName)
+		return fmt.Sprintf("this %s's own tmux server could not be identified, so a reachable server here may be it — re-run, and if that keeps happening check that tmux runs and that this %s's own socket can be opened; or drop --all to kill only the unreachable ones", binName, binName)
 	}
 	return fmt.Sprintf("nothing answered on this run's own %s socket, yet a reachable server here answers its own — so the fleet may be running under another TMUX_TMPDIR or brand, and this row may be it. Check it with `tmux -S <path> ls` and stop it with the kill-server the listing above prints, or drop --all to kill only the unreachable ones", binName)
 }
