@@ -149,10 +149,14 @@ func waitForDrain(path string, timeout time.Duration) error {
 var betweenSpoolSamples = func() {}
 
 // betweenSpoolStats is betweenSpoolSamples for the other ordering spoolSettled owns:
-// the window between the record stat and the in-flight stat, where a drain claiming a
-// request lands. Same reason for existing — the interleaving is microseconds wide, and
-// a test that only arranges the end state cannot tell a correct implementation from one
-// that reads the two files the other way round.
+// the windows between its stats, where a drain claiming a request and a reconcile
+// re-queuing one land. Same reason for existing — the interleaving is microseconds
+// wide, and a test that only arranges the end state cannot tell a correct
+// implementation from one that reads the files the other way round.
+//
+// It fires at both windows (record→companion, companion→record), so a test that stages
+// exactly one rename must make its hook idempotent or count its calls; both directions
+// are staged in cli_new_test.go.
 var betweenSpoolStats = func() {}
 
 // spoolSettled reports whether a spooled record has reached a terminal state: the record
@@ -162,36 +166,59 @@ var betweenSpoolStats = func() {}
 //
 // The stat order is the correctness, and it is the record FIRST. Once the record is
 // absent the request is either claimed or finished, and the companion stat separates
-// those two; whichever way that second stat then races the drain, the answer is right.
-// Reversed, the race is lost outright: the companion is read absent (not claimed yet),
-// the drain claims, the record is then read absent too, both look gone, and a build that
-// has not begun is reported to `atrium new --wait` as a created session, exit 0.
+// those two. Reversed, the race is lost outright: the companion is read absent (not
+// claimed yet), the drain claims, the record is then read absent too, both look gone,
+// and a build that has not begun is reported to `atrium new --wait` as a created
+// session, exit 0. That window is real rather than theoretical because outbox.Claim
+// commits the rename atomically within one directory — there is no instant where both
+// paths are absent mid-claim, so record-first cannot see a false gap there.
 //
-// That window is real rather than theoretical because outbox.Claim commits the rename
-// atomically within one directory — there is no instant where both paths are absent
-// mid-claim, so record-first cannot see a false gap, and companion-first sees the only
-// gap there is.
+// The rename runs the OTHER WAY TOO, and no ordering survives both. outbox.Requeue —
+// the startup reconcile handing an interrupted build back to the drain — renames the
+// claim onto the record, so record-first loses that one for the mirror-image reason:
+// the record is read absent (still a claim), Requeue renames, the claim is read absent
+// too, and a request that is queued and about to be built normally is reported as
+// created. Companion-first would lose the Claim direction instead.
+//
+// So the record is read TWICE, and both gaps close. A rename in either direction leaves
+// the file at one of the two names at every instant, so "record absent, companion
+// absent, record still absent" cannot be satisfied while either rename is in flight:
+// the Claim direction is ruled out by the first read (nothing to rename away), and the
+// Requeue direction by the third (the record is back). The re-read costs one stat on
+// the settled path only — the polling loop's other iterations return at the first
+// switch.
 //
 // A stat that could not answer is returned rather than folded into either verdict; the
 // caller carries it to its deadline for awaitSpool's reason.
 func spoolSettled(record, inFlight string) (bool, error) {
-	switch _, err := os.Stat(record); {
-	case err == nil:
-		return false, nil // still queued
-	case !errors.Is(err, fs.ErrNotExist):
+	gone := func(path string) (bool, error) {
+		switch _, err := os.Stat(path); {
+		case err == nil:
+			return false, nil
+		case !errors.Is(err, fs.ErrNotExist):
+			return false, err
+		}
+		return true, nil
+	}
+
+	switch ok, err := gone(record); {
+	case err != nil:
 		return false, err
+	case !ok:
+		return false, nil // still queued
 	}
 	if inFlight == "" {
 		return true, nil
 	}
 	betweenSpoolStats()
-	switch _, err := os.Stat(inFlight); {
-	case err == nil:
-		return false, nil // claimed: being built right now
-	case !errors.Is(err, fs.ErrNotExist):
+	switch ok, err := gone(inFlight); {
+	case err != nil:
 		return false, err
+	case !ok:
+		return false, nil // claimed: being built right now
 	}
-	return true, nil
+	betweenSpoolStats()
+	return gone(record)
 }
 
 // spoolWaitCopy is the wording awaitSpool cannot supply: what a refusal and a timeout

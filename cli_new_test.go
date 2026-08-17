@@ -947,3 +947,58 @@ func TestAwaitSpoolReportsAStatErrorThatNeverClears(t *testing.T) {
 	assert.NotContains(t, err.Error(), "no atrium picked it up",
 		"a bad data dir must not be reported as a TUI that did not answer")
 }
+
+// TestSpoolSettledSurvivesARequeueMidSample is the mirror of the test above, and the
+// case record-first ordering alone loses.
+//
+// outbox.Claim renames record→claim, which is what the record-first argument is built
+// against. outbox.Requeue renames the other way, claim→record — the startup reconcile
+// handing an interrupted build back to the drain — and against THAT rename record-first
+// is exactly as wrong as claim-first is against Claim: the record reads absent (it is
+// still a claim), Requeue renames, the claim reads absent too, and a request that is
+// queued and about to be built normally is reported to `atrium new --wait` as a created
+// session. waitForCreate then finds no row and aborts with a message about a session
+// that is seconds from existing.
+//
+// The re-read of the record is what closes it, so this test stages the rename in the
+// window the re-read looks across.
+func TestSpoolSettledSurvivesARequeueMidSample(t *testing.T) {
+	sandboxDataDir(t)
+	path, err := outbox.WriteCreate(outbox.Request{Title: "fix-auth", Path: tempRepo(t)})
+	require.NoError(t, err)
+	require.NoError(t, outbox.Claim(path, outbox.ClaimMeta{At: time.Now()}))
+
+	// In the FIRST window — between the record stat and the claim stat — which is where
+	// this rename has to land to hide the file from both. Fired later it would be
+	// harmless: the claim stat would still see the claim and end the sample.
+	calls := 0
+	betweenSpoolStats = func() {
+		calls++
+		if calls == 1 {
+			require.NoError(t, outbox.Requeue(path, true))
+		}
+	}
+	t.Cleanup(func() { betweenSpoolStats = func() {} })
+
+	settled, statErr := spoolSettled(path, outbox.ClaimPath(path))
+	require.NoError(t, statErr)
+	assert.False(t, settled, "a request re-queued mid-sample is queued, not created")
+	assert.Equal(t, 2, calls, "reached only by re-reading the record, which is the fix")
+	assert.FileExists(t, path, "and the record really is back, so 'not settled' is the true answer")
+}
+
+// TestSpoolSettledStillReportsATrulySettledRecord is the negative control for the
+// re-read: an implementation that answered "not settled" unconditionally, or that
+// re-read some other path, would pass every ordering test above and never terminate a
+// real wait.
+func TestSpoolSettledStillReportsATrulySettledRecord(t *testing.T) {
+	sandboxDataDir(t)
+	path, err := outbox.WriteCreate(outbox.Request{Title: "fix-auth", Path: tempRepo(t)})
+	require.NoError(t, err)
+	require.NoError(t, outbox.Claim(path, outbox.ClaimMeta{At: time.Now()}))
+	require.NoError(t, outbox.DiscardCreate(path))
+
+	settled, statErr := spoolSettled(path, outbox.ClaimPath(path))
+	require.NoError(t, statErr)
+	assert.True(t, settled, "both files gone with nothing racing is the settled state")
+}
