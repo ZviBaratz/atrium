@@ -693,10 +693,20 @@ func init() {
 		"Block until a running Atrium has queued the prompt, e.g. --wait 10s")
 	sendCmd.Flags().StringVar(&sendPathFlag, "path", "", "Repo path, to disambiguate a title used in more than one repo")
 
+	newCmd.Flags().StringVar(&newPathFlag, "path", "", "Repo to create the session in (default: the current directory)")
+	newCmd.Flags().StringVar(&newProgramFlag, "program", "", "Program to run in the session (default: Atrium's configured program)")
+	newCmd.Flags().StringVar(&newProfileFlag, "profile", "", "Named profile whose program to run, instead of --program")
+	newCmd.Flags().StringVar(&newBranchFlag, "branch", "", "Existing base branch to start the session on")
+	newCmd.Flags().BoolVar(&newForceFlag, "force", false,
+		"Create even past host capacity, or on a fully rate-limited account pool")
+	newCmd.Flags().DurationVar(&newWaitFlag, "wait", 0,
+		"Block until a running Atrium has created the session, e.g. --wait 60s")
+
 	profilesCmd.AddCommand(profilesDetectCmd)
 	rootCmd.AddCommand(lsCmd)
 	rootCmd.AddCommand(peekCmd)
 	rootCmd.AddCommand(sendCmd)
+	rootCmd.AddCommand(newCmd)
 	rootCmd.AddCommand(debugCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(resetCmd)

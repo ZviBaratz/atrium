@@ -5,7 +5,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +18,7 @@ import (
 
 	"github.com/ZviBaratz/atrium/cmd/cmd_test"
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/internal/outbox"
 	"github.com/ZviBaratz/atrium/internal/undo"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/git"
@@ -215,4 +218,152 @@ func TestRunReset_SurvivesARepositoryThatMoved(t *testing.T) {
 	stored, err := undo.Load()
 	require.NoError(t, err)
 	assert.Empty(t, stored, "the record goes even when its repository cannot be reached")
+}
+
+// TestRunReset_ClearsQueuedCreateRequests: a queued `atrium new` request is the one
+// piece of state that can *create* after the wipe. Everything else reset does is
+// ordered so nothing survives to re-persist a deleted session; a create request
+// defeats that from outside the lock by design, and with no session left to collide
+// with, every gate it meets on the next launch passes. So the next TUI would silently
+// build a worktree, a branch and an agent from a request made before the reset.
+func TestRunReset_ClearsQueuedCreateRequests(t *testing.T) {
+	sandboxDataDir(t)
+	create, err := outbox.WriteCreate(outbox.Request{Title: "fix-auth", Path: t.TempDir()})
+	require.NoError(t, err)
+	msg, err := outbox.Write(outbox.Message{Title: "s", Path: t.TempDir(), Text: "hi"})
+	require.NoError(t, err)
+
+	require.NoError(t, runReset(context.Background(), noopExec()))
+
+	assert.NoFileExists(t, create, "a queued create must not outlive the state it would rebuild")
+	assert.NoFileExists(t, msg)
+	entries, err := outbox.ListCreates()
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+}
+
+// TestRunReset_RefusedResetLeavesTheSpoolAlone: the refusal is "nothing was deleted",
+// and the spool is state like any other. A reset that bailed on a live TUI but had
+// already eaten a queued request would lose work the user never asked it to touch.
+func TestRunReset_RefusedResetLeavesTheSpoolAlone(t *testing.T) {
+	sandboxDataDir(t)
+	create, err := outbox.WriteCreate(outbox.Request{Title: "fix-auth", Path: t.TempDir()})
+	require.NoError(t, err)
+
+	lockPath, err := tuiLockPath()
+	require.NoError(t, err)
+	release, err := acquireTUILock(lockPath)
+	require.NoError(t, err)
+	defer release()
+
+	require.Error(t, runReset(context.Background(), noopExec()))
+	assert.FileExists(t, create, "a refused reset must not touch the spool either")
+}
+
+// TestRunReset_ClearsTheSpoolEvenWhenALaterStepFails is the ordering half of the test
+// above. `outbox.Clear` used to run last, which made the protection conditional on every
+// earlier step succeeding: `tmux.CleanupSessions` returns an error for anything but a
+// clean "no server" (an uninstalled or broken tmux qualifies), and `runReset` returns
+// there with state.json already emptied. The queued create then outlives the reset — and
+// with no session left for its title to collide with, the next TUI builds the worktree,
+// branch and agent the reset existed to erase. The reset still fails, and must; what it
+// must not do is fail leaving the one record that can undo it.
+func TestRunReset_ClearsTheSpoolEvenWhenALaterStepFails(t *testing.T) {
+	sandboxDataDir(t)
+	create, err := outbox.WriteCreate(outbox.Request{Title: "fix-auth", Path: t.TempDir()})
+	require.NoError(t, err)
+
+	brokenTmux := cmd_test.MockCmdExec{
+		RunFunc:    func(cmd *exec.Cmd) error { return nil },
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return nil, errors.New("tmux: command not found") },
+	}
+
+	require.Error(t, runReset(context.Background(), brokenTmux), "the reset itself still fails")
+	assert.NoFileExists(t, create, "but the request that could rebuild a session is gone")
+	reason, rejected := outbox.Rejection(create)
+	require.True(t, rejected, "and its caller is told why rather than reading the unlink as success")
+	assert.Contains(t, reason, "reset")
+}
+
+// captureResetOutput runs fn with os.Stdout and os.Stderr redirected, returning what
+// each received. runReset prints straight to the process streams rather than to injected
+// writers, so this is the only way to read what the operator was actually told.
+func captureResetOutput(t *testing.T, fn func()) (stdout, stderr string) {
+	t.Helper()
+	outR, outW, err := os.Pipe()
+	require.NoError(t, err)
+	errR, errW, err := os.Pipe()
+	require.NoError(t, err)
+
+	origOut, origErr := os.Stdout, os.Stderr
+	os.Stdout, os.Stderr = outW, errW
+	defer func() { os.Stdout, os.Stderr = origOut, origErr }()
+
+	// Drained concurrently: a reset writes more than a pipe buffer holds on some
+	// platforms, and a blocked write would deadlock the test rather than fail it.
+	outC, errC := make(chan string, 1), make(chan string, 1)
+	go func() { b, _ := io.ReadAll(outR); outC <- string(b) }()
+	go func() { b, _ := io.ReadAll(errR); errC <- string(b) }()
+
+	fn()
+	require.NoError(t, outW.Close())
+	require.NoError(t, errW.Close())
+	return <-outC, <-errC
+}
+
+// TestRunReset_DoesNotClaimAClearItCouldNotMake: outbox.Clear is best-effort, and its
+// error used to reach the file log alone while stdout printed "Outbox has been cleared"
+// and the command exited 0.
+//
+// That is the one line here that must not be optimistic. A record the reset could not
+// unlink is a queued create that outlives it — and, with every session deleted, one whose
+// title now collides with nothing, so the next Atrium builds the worktree, branch and
+// agent this whole step exists to prevent. Telling the operator it was prevented is worse
+// than telling them nothing: it is the exact outcome the step is for, reported as its
+// opposite, to the only person who could still go and delete the file.
+//
+// The reset itself still succeeds (exit 0), because it did: what failed is a spool the
+// operator can now be pointed at.
+func TestRunReset_DoesNotClaimAClearItCouldNotMake(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions, so the unlink cannot be made to fail")
+	}
+	sandboxDataDir(t)
+	_, err := outbox.WriteCreate(outbox.Request{Title: "fix-auth", Path: t.TempDir()})
+	require.NoError(t, err)
+
+	dir, err := outbox.CreateDir()
+	require.NoError(t, err)
+	require.NoError(t, os.Chmod(dir, 0o500)) // readable, so Clear lists it; not writable, so unlink fails
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	var resetErr error
+	stdout, stderr := captureResetOutput(t, func() {
+		resetErr = runReset(context.Background(), noopExec())
+	})
+
+	require.NoError(t, resetErr, "the reset's own work succeeded")
+	assert.NotContains(t, stdout, "Outbox has been cleared",
+		"a failed clear must not be reported as a completed one")
+	assert.Contains(t, stdout, "could NOT be fully cleared")
+	assert.Contains(t, stderr, "queued request left behind",
+		"and the operator is told what that means, on stderr")
+}
+
+// The control, and the reason the assertion above is about the CLAIM rather than about
+// any output at all: an ordinary reset still prints the completion line. Without this,
+// deleting the success branch entirely would pass.
+func TestRunReset_ReportsAClearThatSucceeded(t *testing.T) {
+	sandboxDataDir(t)
+	_, err := outbox.WriteCreate(outbox.Request{Title: "fix-auth", Path: t.TempDir()})
+	require.NoError(t, err)
+
+	var resetErr error
+	stdout, stderr := captureResetOutput(t, func() {
+		resetErr = runReset(context.Background(), noopExec())
+	})
+
+	require.NoError(t, resetErr)
+	assert.Contains(t, stdout, "Outbox has been cleared; 1 spooled record discarded")
+	assert.NotContains(t, stderr, "queued request left behind")
 }

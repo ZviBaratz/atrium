@@ -428,9 +428,26 @@ func changedFiles(content string) []string {
 	return files
 }
 
-// maxNameLen mirrors the 32-char cap the new-session/rename title input enforces
-// (see ui/overlay newTitleInput), so a generated name fits the same field.
-const maxNameLen = 32
+// MaxTitleLen is the 32-rune cap on a session title, and the definition every site that
+// ENFORCES the cap cites rather than repeats: the new-session/rename input sets its
+// CharLimit from this constant (ui/overlay newTitleInput), so a generated name fits the
+// same field by construction rather than by agreement, and both `atrium new` and the
+// create drain measure against it.
+//
+// Enforcement is the whole scope of that. Three sites still spell the number out to a
+// MODEL, because they are asking for a length rather than checking one, and a number
+// interpolated into English is not a citation: namingInstruction and nameSystemPrompt,
+// both near the top of this file rather than below this constant, and
+// session/dispatch.go's title instruction. Two more spell it out to a READER — SlugTitle's
+// doc just below, and app/prefill.go's word-count comment. All five are what a change
+// here has to be carried to by hand; the three prompts are the ones where getting it
+// wrong changes behaviour rather than only documentation.
+//
+// It lives here, and is exported, because it is a rule about titles rather than about
+// generated names, and `atrium new` has to enforce it too (#703): a CLI title has no
+// input field to stop at 32, and a session created past the cap could not be renamed to
+// its own name.
+const MaxTitleLen = 32
 
 // SlugTitle turns a raw line into a clean, bounded session title using the same
 // rules (and 32-char cap) the new-session/rename inputs enforce, returning "" when
@@ -446,7 +463,7 @@ func SlugTitle(raw string) string {
 
 // sanitizeName turns a model's raw response into a clean, bounded display name.
 // It keeps only the first line, strips surrounding quotes and trailing
-// punctuation, collapses internal whitespace, and truncates to maxNameLen on a
+// punctuation, collapses internal whitespace, and truncates to MaxTitleLen on a
 // word boundary. It returns an error when nothing usable remains, so callers can
 // fail loudly rather than apply an empty or junk name.
 func sanitizeName(raw string) (string, error) {
@@ -477,8 +494,8 @@ func sanitizeName(raw string) (string, error) {
 		}
 	}
 
-	if runes := []rune(name); len(runes) > maxNameLen {
-		truncated := string(runes[:maxNameLen])
+	if runes := []rune(name); len(runes) > MaxTitleLen {
+		truncated := string(runes[:MaxTitleLen])
 		// Back off to the last word boundary so we don't cut a word mid-way.
 		if idx := strings.LastIndex(truncated, " "); idx > 0 {
 			truncated = truncated[:idx]

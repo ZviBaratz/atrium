@@ -29,7 +29,7 @@ func poolHome(t *testing.T) *home {
 func startDirect(t *testing.T, h *home, sel *overlay.AccountSelection) *session.Instance {
 	t.Helper()
 	before := h.list.NumInstances()
-	_, err := h.startNewSession("s", t.TempDir(), true, false, "echo", "", "", sel, false, nil)
+	_, _, err := h.startNewSession("s", t.TempDir(), true, false, "echo", "", "", sel, spawnInteractive, nil)
 	require.NoError(t, err)
 	require.Equal(t, before+1, h.list.NumInstances())
 	return h.list.GetInstances()[h.list.NumInstances()-1]

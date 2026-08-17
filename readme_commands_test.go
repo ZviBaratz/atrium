@@ -90,16 +90,29 @@ func TestEveryCommandHasAShortDescription(t *testing.T) {
 	}
 }
 
-// TestHeadlessCommandsTakeNoTUILock pins the property that makes the headless
-// surface usable at all: `ls`, `peek`, `send` and `reap` must run while the TUI is
-// up. Only the bare atrium and reset may take tui.lock, so a subcommand that started
-// acquiring it would refuse exactly when a user most wants it.
+// TestHeadlessCommandsRunWhileTheTUIHoldsItsLock pins the property that makes the
+// headless surface usable at all: `ls`, `peek`, `send`, `new` and `reap` must run while
+// the TUI is up. Only the bare atrium and reset may *hold* tui.lock; a subcommand that
+// held it would refuse exactly when a user most wants it.
+//
+// Holding is the property, not touching. `send` and `new` do acquire the lock — briefly,
+// non-blockingly, and after they have already spooled — because that try-acquire is how
+// tuiRunning answers "is anyone there to deliver this?" for the warning they print. That
+// is why this asserts each command *succeeds* against a held lock rather than asserting
+// it never calls acquireTUILock: the second would be false, and the first is what a
+// caller actually depends on.
 //
 // `reap` is the sharpest case rather than one more of the same. It exists for a tmux
 // server that outlived its run and is eating memory now, which is a thing a user
 // discovers *while* mid-session — a lock would make it refuse in precisely the
 // situation it was written for.
-func TestHeadlessCommandsTakeNoTUILock(t *testing.T) {
+//
+// `new` is the one whose lock would be most tempting to take, since its effect is the
+// heaviest — a worktree, a branch and a running agent, where `send`'s is a queued
+// prompt and `reap`'s a dead tmux server. It must not: none of that happens here. The
+// work happens in the TUI that already holds the lock, so taking it would make `atrium
+// new` work only when there is nothing to execute the request (#703).
+func TestHeadlessCommandsRunWhileTheTUIHoldsItsLock(t *testing.T) {
 	sandboxDataDir(t)
 
 	// Hold the lock, standing in for a running TUI.
@@ -115,6 +128,9 @@ func TestHeadlessCommandsTakeNoTUILock(t *testing.T) {
 
 	_, _, err = send(t, "fix-auth", "", "hello", 0)
 	require.NoError(t, err, "send must work while a TUI holds the lock")
+
+	_, _, err = newSession(t, newRequest{title: "another", path: tempRepo(t)})
+	require.NoError(t, err, "new must work while a TUI holds the lock")
 
 	f := &fakeTmux{content: "pane\n"}
 	require.NoError(t, runPeek(context.Background(), io.Discard, f.exec(), "fix-auth", "", 0, false),

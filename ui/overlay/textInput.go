@@ -5,6 +5,8 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
+	"github.com/ZviBaratz/atrium/session"
 )
 
 // TextInputOverlay represents a text input overlay with state management. A single type
@@ -121,12 +123,15 @@ func newTextarea(initialValue string) textarea.Model {
 	return ti
 }
 
-// newTitleInput builds the single-line session-title field, capped at 32 characters to
-// match the inline-naming limit enforced in the quick `n` flow.
+// newTitleInput builds the single-line session-title field, capped at the same length
+// non-interactive callers are held to. The cap is session.MaxTitleLen rather than a
+// literal because it is one rule with two enforcers — this field for what a human can
+// type, `atrium new` for what a script can spool — and a field that quietly accepted
+// more would derive names the rest of the tree is sized against.
 func newTitleInput() textinput.Model {
 	in := textinput.New()
 	in.Prompt = ""
-	in.CharLimit = 32
+	in.CharLimit = session.MaxTitleLen
 	in.Placeholder = "name this session"
 	return in
 }

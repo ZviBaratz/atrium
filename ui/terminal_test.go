@@ -596,7 +596,7 @@ func TestEnsureSessionReapsLegacyTermSession(t *testing.T) {
 	defer func() { _ = instance.Kill() }()
 
 	// The shell session exactly as the pre-upgrade code minted it.
-	legacy := tmux.NewSession(context.Background(), "term_"+instance.Title, "sleep 300")
+	legacy := tmux.NewSession(context.Background(), termLegacyName(instance.Title), "sleep 300")
 	require.NoError(t, legacy.Start(t.TempDir()))
 	t.Cleanup(func() { _ = legacy.Close() })
 
@@ -606,7 +606,7 @@ func TestEnsureSessionReapsLegacyTermSession(t *testing.T) {
 
 	// EnsureSession is the create path — it now runs on the app's capture
 	// goroutine rather than inside UpdateContent, so drive it directly.
-	key, err := tp.EnsureSession(instance)
+	key, err := tp.EnsureSession(instance, instance.Title)
 	require.NoError(t, err)
 	require.NotEmpty(t, key)
 
@@ -617,15 +617,28 @@ func TestEnsureSessionReapsLegacyTermSession(t *testing.T) {
 	require.False(t, legacy.DoesSessionExist(), "the orphaned legacy term_ session must be reaped")
 }
 
-// shellOnSocket reports whether the instance's <key>_term shell is alive on
-// Atrium's tmux socket, and registers a cleanup that reaps it either way. The
-// cache map cannot answer this: the whole of #701 is a shell that exists on the
-// socket while no entry names it.
-func shellOnSocket(t *testing.T, inst *session.Instance) bool {
+// shellNamed reports whether a tmux session of exactly that name is alive on Atrium's
+// socket, and registers a cleanup that reaps it either way. The cache map cannot answer
+// this: the whole of #701 is a shell that exists on the socket while no entry names it,
+// and #708 is the same shell reached by a rename.
+//
+// By name rather than by instance because the names that matter most are the ones the
+// instance no longer computes — the shell a rename left behind, probed against the key
+// captured before it.
+func shellNamed(t *testing.T, name string) bool {
 	t.Helper()
-	probe := tmux.NewSessionWithName(context.Background(), terminalKey(inst)+"_term", "probe", "/bin/sh")
+	require.NotEmpty(t, name, "a shell probe needs a name")
+	probe := tmux.NewSessionWithName(context.Background(), name, "probe", "/bin/sh")
 	t.Cleanup(func() { _ = probe.Close() })
 	return probe.DoesSessionExist()
+}
+
+// shellOnSocket is shellNamed for the shell an instance currently names. terminalKey IS
+// that name — the shell's own tmux session name, owned by the instance rather than derived
+// from its agent session's (see terminalKey).
+func shellOnSocket(t *testing.T, inst *session.Instance) bool {
+	t.Helper()
+	return shellNamed(t, terminalKey(inst))
 }
 
 // A pause or kill completing while EnsureSession is still in its tmux round trip
@@ -649,7 +662,7 @@ func TestEnsureSessionDropsAShellReapedMidCreate(t *testing.T) {
 	// closes nothing and only its generation bump records that it ran.
 	tp.beforeInstall = func() { tp.CloseForInstance(instance) }
 
-	key, err := tp.EnsureSession(instance)
+	key, err := tp.EnsureSession(instance, instance.Title)
 	require.NoError(t, err)
 
 	// assert, not require, deliberately: the socket check below is the one that is
@@ -684,7 +697,7 @@ func TestEnsureSessionDropsAShellWhoseInstancePausedMidCreate(t *testing.T) {
 	// fails if the status arm is dropped even though the reap arm survives.
 	tp.beforeInstall = func() { instance.SetStatus(session.Paused) }
 
-	key, err := tp.EnsureSession(instance)
+	key, err := tp.EnsureSession(instance, instance.Title)
 	require.NoError(t, err)
 
 	tp.mu.Lock()
@@ -710,7 +723,7 @@ func TestEnsureSessionInstallsAnUnraceedShell(t *testing.T) {
 	tp.SetSize(80, 30)
 	t.Cleanup(tp.Close)
 
-	key, err := tp.EnsureSession(instance)
+	key, err := tp.EnsureSession(instance, instance.Title)
 	require.NoError(t, err)
 	require.Equal(t, terminalKey(instance), key)
 
@@ -723,7 +736,7 @@ func TestEnsureSessionInstallsAnUnraceedShell(t *testing.T) {
 
 // The generation is per key because the abort path CLOSES the session it was about
 // to install, and that session is not always one this call created: the branch above
-// the install adopts a <key>_term already alive on the socket — left by a crashed or
+// the install adopts a shell already alive on the key — left by a crashed or
 // SIGKILLed run, or by a CloseForInstance whose own Close() errored and only dropped
 // the map entry. Aborting that adoption for an unrelated instance's teardown does not
 // cost a retry, it kills the user's shell and everything running in it.
@@ -743,7 +756,7 @@ func TestEnsureSessionKeepsAnAdoptedShellWhileAnotherInstanceIsReaped(t *testing
 	// Round one creates the shell. Dropping the cache entry without closing the
 	// session reproduces what a crashed run leaves on the socket: alive, and named
 	// by nothing in this process.
-	key, err := tp.EnsureSession(instance)
+	key, err := tp.EnsureSession(instance, instance.Title)
 	require.NoError(t, err)
 	require.NotEmpty(t, key)
 	tp.mu.Lock()
@@ -753,7 +766,7 @@ func TestEnsureSessionKeepsAnAdoptedShellWhileAnotherInstanceIsReaped(t *testing
 	// Round two adopts it, with an unrelated instance's teardown landing in the
 	// same window the guards above use.
 	tp.beforeInstall = func() { tp.CloseForInstance(bystander) }
-	key, err = tp.EnsureSession(instance)
+	key, err = tp.EnsureSession(instance, instance.Title)
 	require.NoError(t, err)
 
 	// The socket first: it is the assertion about the consequence.
@@ -784,7 +797,7 @@ func TestEnsureSessionDropsAShellWhoseWholePaneClosedMidCreate(t *testing.T) {
 
 	tp.beforeInstall = tp.Close
 
-	key, err := tp.EnsureSession(instance)
+	key, err := tp.EnsureSession(instance, instance.Title)
 	require.NoError(t, err)
 
 	tp.mu.Lock()

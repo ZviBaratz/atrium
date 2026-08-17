@@ -407,3 +407,66 @@ func TestDrainClearsSpoolEvenIfPersistFails(t *testing.T) {
 	assert.Equal(t, 1, inst.QueueLen(), "the prompt is still queued in memory")
 	assert.Zero(t, spoolCount(t), "and the spool file is cleared rather than left to re-queue")
 }
+
+// TestRejectionSweepIsThrottled: the receipt GC enforces a 24-hour horizon and used to
+// run on every ~500ms metadata tick, walking both spool directories each time — 172,800
+// ticks a day, so ~350k directory reads, to collect a file that can wait. It must still run once per
+// launch, because a receipt left by a previous run for a producer that never came back
+// is exactly what it exists to collect.
+func TestRejectionSweepIsThrottled(t *testing.T) {
+	h := drainHome(t)
+	path, err := outbox.WriteCreate(outbox.Request{Title: "gone", Path: t.TempDir()})
+	require.NoError(t, err)
+	require.NoError(t, outbox.Reject(path, "a reason nobody read"))
+	stale := path + ".rejected"
+	require.NoError(t, os.Chtimes(stale, time.Now().Add(-2*outbox.TTL), time.Now().Add(-2*outbox.TTL)))
+
+	// A second receipt, aged the same way, to prove the second sweep is what is
+	// skipped rather than the collection being a one-shot.
+	other, err := outbox.WriteCreate(outbox.Request{Title: "gone-too", Path: t.TempDir()})
+	require.NoError(t, err)
+	require.NoError(t, outbox.Reject(other, "another"))
+
+	h.drainOutbox() // the first tick of the run sweeps
+	assert.NoFileExists(t, stale, "a receipt past the horizon is collected on the first tick")
+
+	require.NoError(t, os.Chtimes(other+".rejected",
+		time.Now().Add(-2*outbox.TTL), time.Now().Add(-2*outbox.TTL)))
+	h.drainOutbox()
+	assert.FileExists(t, other+".rejected", "and the next tick does not walk the spools again")
+
+	// The control: past the interval it sweeps again, so the throttle is a delay and
+	// not a one-shot.
+	h.lastRejectionSweep = time.Now().Add(-2 * rejectionSweepInterval)
+	h.drainOutbox()
+	assert.NoFileExists(t, other+".rejected")
+}
+
+// TestRejectionSweepRunsEvenWhenThePromptSpoolIsUnreadable pins the ordering. The sweep
+// collects receipts from BOTH spools and the create spool has no other collector —
+// drainCreateRequests deliberately does not sweep, on the grounds that this runs first
+// on the same tick. Below drainOutbox's early return that stops being true: one
+// unreadable prompt directory strands the sweep for the life of the process, and every
+// refused `atrium new` then leaks a receipt with nothing left to collect it.
+//
+// Asserted on lastRejectionSweep rather than on a collected file, because making the
+// parent directory unreadable necessarily takes the nested create spool with it — the
+// question here is only whether the sweep was reached.
+func TestRejectionSweepRunsEvenWhenThePromptSpoolIsUnreadable(t *testing.T) {
+	h := drainHome(t)
+	dir, err := outbox.Dir()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.Chmod(dir, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	// A real precondition, not drainOutbox's nil: it returns nil for an empty spool too,
+	// so asserting that would pass whether or not the read actually failed — and the
+	// mutation this test exists to catch would survive.
+	_, listErr := outbox.List()
+	require.Error(t, listErr, "precondition: the prompt spool must be unreadable")
+
+	require.Nil(t, h.drainOutbox(), "the drain bails on the unreadable spool")
+	assert.False(t, h.lastRejectionSweep.IsZero(),
+		"the receipt GC must not be gated behind the prompt spool being readable")
+}

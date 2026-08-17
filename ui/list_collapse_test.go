@@ -126,7 +126,7 @@ func TestCollapse_IgnoredWhenDownToSingleRepo(t *testing.T) {
 
 	// Kill repoB, leaving only repoA.
 	l.SetSelectedInstance(1)
-	_ = l.Kill()
+	_ = l.KillInstance(l.GetSelectedInstance())
 
 	out := l.String()
 	require.Contains(t, out, "alpha", "the lone surviving group must be visible")
@@ -160,7 +160,7 @@ func TestCollapsedRepos_PrunesVanishedRepos(t *testing.T) {
 	require.ElementsMatch(t, []string{"repoA", "repoB"}, l.CollapsedRepos())
 
 	l.SetSelectedInstance(1) // repoB
-	_ = l.Kill()
+	_ = l.KillInstance(l.GetSelectedInstance())
 	require.Equal(t, []string{"repoA"}, l.CollapsedRepos(), "repoB's stale key is pruned")
 }
 
@@ -172,7 +172,7 @@ func TestKill_AnchorOfCollapsedGroupKeepsSelectionVisible(t *testing.T) {
 	require.True(t, l.Collapse()) // collapse repoA (2 members)
 
 	l.SetSelectedInstance(0) // anchor
-	_ = l.Kill()
+	_ = l.KillInstance(l.GetSelectedInstance())
 	require.False(t, l.isHidden(l.selectedIdx), "selection must rest on a visible item after kill")
 }
 
@@ -234,4 +234,123 @@ func TestExpand_FromHeaderKeepsSelectionOnAnchor(t *testing.T) {
 	require.True(t, l.Expand())
 	require.Equal(t, 0, l.selectedIdx, "selection stays on the anchor after expanding")
 	require.False(t, l.isHidden(1), "the group's members are visible again")
+}
+
+// A fold is inert below two groups (effectiveCollapsed), so the row that reactivates
+// one is the *first* row of a NEW repo — a group AddInstanceKeepingFolds never touches.
+// The cursor is what wins there: rather than let a stale fold hide the row a human left
+// the cursor on, the call drops that one fold.
+//
+// Both alternatives are the same hazard wearing different clothes. Leaving the fold and
+// clamping moves the selection to a DIFFERENT *session.Instance, which the app then
+// repoints preview, diff and menu at; leaving the fold and not clamping parks the cursor
+// on a row nobody can see. Every destructive key targets the selection, so either one
+// means a background create can arrange for the next keypress to land somewhere the user
+// did not put it. Hence require.Same on the instance, not an index: an index that
+// happens to match after a shift would prove nothing about which session is selected.
+func TestAddInstanceKeepingFolds_NewRepoKeepsTheCursorRatherThanTheFold(t *testing.T) {
+	l := newGroupList(t, "/x/repoA", "/x/repoA", "/x/repoB")
+	l.SetSize(80, 40)
+
+	// Fold repoA while two groups exist — Collapse refuses below that.
+	l.SetSelectedInstance(0)
+	require.True(t, l.Collapse())
+
+	// Kill repoB's only session. RemoveInstance never prunes l.collapsed, so the fold
+	// key survives while effectiveCollapsed makes it inert at one group.
+	l.RemoveInstance(l.items[2])
+	require.True(t, l.collapsed["repoA"], "the fold key survives the removal")
+	require.False(t, l.effectiveCollapsed("repoA"), "and is inert with one group left")
+
+	// Every repoA row is drawn, so the cursor can rest on a non-anchor member.
+	l.SetSelectedInstance(1)
+	require.False(t, l.isHidden(1), "precondition: the row is visible")
+	parked := l.GetSelectedInstance()
+	require.NotSame(t, l.items[0], parked, "precondition: not already on the anchor")
+
+	// A background create lands the first row of a third repo, taking the list back
+	// over two groups — which would reactivate repoA's fold underneath the cursor.
+	inst, err := session.NewInstance(session.InstanceOptions{Title: "bg", Path: "/x/repoC", Program: "echo"})
+	require.NoError(t, err)
+	l.AddInstanceKeepingFolds(inst)
+
+	require.Same(t, parked, l.GetSelectedInstance(),
+		"a background create must not move the cursor to another session")
+	require.False(t, l.isHidden(l.selectedIdx), "nor leave it on a row nobody can see")
+	require.False(t, l.effectiveCollapsed("repoA"),
+		"the one fold that would have hidden the cursor is the one that yields")
+}
+
+// The fold that yields above is exactly one: a fold on a group the cursor is NOT in
+// survives being reactivated, because nothing about it hides the selection. Without
+// this, "drop the fold that hides the cursor" and "drop every fold" pass the same
+// assertions, and the second is just AddInstance.
+func TestAddInstanceKeepingFolds_NewRepoKeepsAFoldTheCursorIsNotIn(t *testing.T) {
+	l := newGroupList(t, "/x/repoA", "/x/repoA", "/x/repoB")
+	l.SetSize(80, 40)
+
+	l.SetSelectedInstance(0)
+	require.True(t, l.Collapse()) // fold repoA
+	l.RemoveInstance(l.items[2])  // drop repoB; repoA's fold goes inert
+
+	// The cursor sits on repoA's ANCHOR this time, which a live fold leaves visible.
+	l.SetSelectedInstance(0)
+	anchored := l.GetSelectedInstance()
+
+	inst, err := session.NewInstance(session.InstanceOptions{Title: "bg", Path: "/x/repoC", Program: "echo"})
+	require.NoError(t, err)
+	l.AddInstanceKeepingFolds(inst)
+
+	require.Same(t, anchored, l.GetSelectedInstance(), "the cursor still did not move")
+	require.True(t, l.effectiveCollapsed("repoA"),
+		"and repoA stays folded, because folding it hides no row the cursor is on")
+	require.True(t, l.isHidden(1), "its non-anchor member is folded away as asked")
+}
+
+// The plainest case, and the one the two above are variations on: a list with no fold to
+// reactivate keeps its cursor exactly where it was. Fold SURVIVAL is not what this pins —
+// nothing here is folded — that is
+// TestAddInstanceKeepingFolds_NewRepoKeepsAFoldTheCursorIsNotIn's job.
+func TestAddInstanceKeepingFolds_LeavesASettledCursorAlone(t *testing.T) {
+	l := newGroupList(t, "/x/repoA", "/x/repoA", "/x/repoB")
+	l.SetSize(80, 40)
+	l.SetSelectedInstance(2) // repoB's row, visible throughout
+	settled := l.GetSelectedInstance()
+
+	inst, err := session.NewInstance(session.InstanceOptions{Title: "bg", Path: "/x/repoA", Program: "echo"})
+	require.NoError(t, err)
+	l.AddInstanceKeepingFolds(inst)
+
+	// By identity, not by index: the insert lands above repoB, so AddInstance shifts
+	// the index to keep pointing at the same row. What must not happen is the clamp
+	// moving the cursor to a *different* session.
+	require.Same(t, settled, l.GetSelectedInstance(), "the clamp does not move a visible selection")
+	require.False(t, l.isHidden(l.selectedIdx))
+}
+
+// While a filter is active, a hidden selection is hidden because it does not MATCH:
+// isHidden gates on the filter ahead of folds and returns there, so no fold change can
+// reveal the row. Dropping the fold anyway would destroy persisted state the user set and
+// buy nothing — an easy over-correction, since the "is the selection hidden?" test reads
+// true in both cases and only the reason differs.
+func TestAddInstanceKeepingFolds_FilterHiddenSelectionKeepsTheFold(t *testing.T) {
+	l := newGroupList(t, "/x/repoA", "/x/repoA", "/x/repoB")
+	l.SetSize(80, 40)
+
+	l.SetSelectedInstance(0)
+	require.True(t, l.Collapse()) // fold repoA
+	l.RemoveInstance(l.items[2])  // drop repoB; repoA's fold goes inert
+	l.SetSelectedInstance(1)
+
+	// A filter nothing matches (every fixture instance is titled "x").
+	l.SetFilter("zzz-matches-nothing")
+	require.True(t, l.Filtering())
+	require.True(t, l.isHidden(l.selectedIdx), "precondition: hidden, but by the filter")
+
+	inst, err := session.NewInstance(session.InstanceOptions{Title: "bg", Path: "/x/repoC", Program: "echo"})
+	require.NoError(t, err)
+	l.AddInstanceKeepingFolds(inst)
+
+	require.True(t, l.collapsed["repoA"],
+		"a fold must not be spent on a selection the filter is hiding")
 }

@@ -1,16 +1,29 @@
-// Package outbox implements the durable message spool that carries prompts from
-// an external `atrium send` process to the running TUI.
+// Package outbox implements the durable spools that carry work from an external
+// atrium process to the running TUI: prompts from `atrium send` (this file) and
+// session-create requests from `atrium new` (create.go).
 //
-// The spool exists because state.json has exactly one writer at any instant. The
+// The spools exist because state.json has exactly one writer at any instant. The
 // interactive TUI holds tui.lock for its whole life and rewrites the file whole
 // on every save (issue #230), and the autoyes daemon does the same from a
 // snapshot taken at its own startup. A second process appending a queued prompt
 // directly would be clobbered by either — by a concurrent TUI save, or by the
 // daemon's exit save replaying a snapshot that predates the append. So
 // `atrium send` never writes state.json: it drops a message here, and whichever
-// process legitimately owns the write drains it.
+// process legitimately owns the write drains it. `atrium new` is the same
+// producer shape for a session that does not exist yet (#703).
 //
-// Readers need no lock. Every message is committed by rename
+// The two record types live in separate directories rather than sharing one with
+// a kind field, because their identity semantics are opposites — a message's
+// (Title, Path) must name an existing session, a request's must not — so a reader
+// that got a discriminator wrong would type a first prompt into whatever session
+// happens to share the title. Separate directories make that mis-route
+// unrepresentable: a request is not in the directory List reads, and the only
+// trace of it there is the "create" directory entry, which listFiles rejects both
+// for being a directory and for not matching the record name format — so no
+// atrium, however old, can read one spool as the other. See create.go for the
+// versioning half of that argument.
+//
+// Readers need no lock. Every record is committed by rename
 // (config.WriteFileAtomic), so a file is either absent or complete, never torn —
 // the same contract the hidden `atrium hook` subcommand relies on for its own
 // cross-process handoff.
@@ -67,14 +80,25 @@ type Message struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// Expired reports whether m is past the TTL horizon as of now. A message with no
-// timestamp is never expired: treating a zero time as infinitely old would
-// silently discard anything written by a future version that omits the field.
+// Expired reports whether m is past the TTL horizon as of now.
 func (m Message) Expired(now time.Time) bool {
-	if m.CreatedAt.IsZero() {
+	return expired(m.CreatedAt, now)
+}
+
+// expired is the TTL rule both spools apply, in one place so a record type cannot
+// acquire its own. A record with no timestamp is never expired: treating a zero
+// time as infinitely old would silently discard anything written by a future
+// version that omits the field.
+//
+// That branch is defence in depth rather than a live path today — read and
+// readCreate both reject an unrecognised version before anything calls this, so a
+// future version's record never reaches here through List or ListCreates. The
+// versioning story deliberately does not lean on it (see create.go).
+func expired(createdAt, now time.Time) bool {
+	if createdAt.IsZero() {
 		return false
 	}
-	return now.Sub(m.CreatedAt) > TTL
+	return now.Sub(createdAt) > TTL
 }
 
 // Entry is one file found in the spool. Err is set when the file could not be
@@ -97,11 +121,6 @@ func Dir() (string, error) {
 
 // Write commits m to the spool and returns the path it was written to. It stamps
 // Version and, unless the caller supplied one, CreatedAt.
-//
-// The filename is the creation timestamp in zero-padded nanoseconds plus a random
-// nonce. Zero padding is what makes the lexicographic order os.ReadDir returns
-// identical to chronological order: without it a timestamp with fewer digits
-// sorts after a longer one, and messages would drain out of order.
 func Write(m Message) (string, error) {
 	if m.Title == "" || m.Path == "" || m.Text == "" {
 		return "", errors.New("outbox: a message needs a title, a path and text")
@@ -115,6 +134,24 @@ func Write(m Message) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	data, err := json.Marshal(m)
+	if err != nil {
+		return "", fmt.Errorf("outbox: encode message: %w", err)
+	}
+	return writeRecord(dir, "message", m.CreatedAt, data)
+}
+
+// writeRecord commits one spool record to dir and returns the path it was written
+// to. noun names the record in a write failure, which reaches the user as the
+// producing command's error.
+//
+// The filename is the creation timestamp in zero-padded nanoseconds plus a random
+// nonce. Zero padding is what makes the lexicographic order os.ReadDir returns
+// identical to chronological order: without it a timestamp with fewer digits
+// sorts after a longer one, and records would drain out of order. Both spools
+// share this so the rule — and the padding the ordering depends on — has one
+// definition, and so isMessageFile keeps matching whatever either of them writes.
+func writeRecord(dir, noun string, createdAt time.Time, data []byte) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("outbox: create spool dir: %w", err)
 	}
@@ -123,14 +160,10 @@ func Write(m Message) (string, error) {
 	if _, err := rand.Read(nonce); err != nil {
 		return "", fmt.Errorf("outbox: generate nonce: %w", err)
 	}
-	data, err := json.Marshal(m)
-	if err != nil {
-		return "", fmt.Errorf("outbox: encode message: %w", err)
-	}
 
-	path := filepath.Join(dir, fmt.Sprintf("%019d-%s.json", m.CreatedAt.UnixNano(), hex.EncodeToString(nonce)))
+	path := filepath.Join(dir, fmt.Sprintf("%019d-%s.json", createdAt.UnixNano(), hex.EncodeToString(nonce)))
 	if err := config.WriteFileAtomic(path, data, 0o644); err != nil {
-		return "", fmt.Errorf("outbox: write message: %w", err)
+		return "", fmt.Errorf("outbox: write %s: %w", noun, err)
 	}
 	return path, nil
 }
@@ -148,6 +181,26 @@ func List() ([]Entry, error) {
 	if err != nil {
 		return nil, err
 	}
+	paths, err := listFiles(dir)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]Entry, 0, len(paths))
+	for _, p := range paths {
+		entries = append(entries, read(p))
+	}
+	return entries, nil
+}
+
+// listFiles returns the spool records in dir, oldest first — the paths of every
+// file matching the name format this package writes, and nothing else.
+//
+// It is also where the create spool stays invisible to the prompt one, since the
+// former is a subdirectory of the latter. Two independent guards reject that
+// entry — IsDir, and a name the record format does not match — and neither is
+// load-bearing alone. Pinned by TestListIgnoresTheCreateSubdirectory, which
+// asserts the property rather than either mechanism.
+func listFiles(dir string) ([]string, error) {
 	dirEntries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -157,14 +210,14 @@ func List() ([]Entry, error) {
 	}
 
 	// os.ReadDir sorts by filename, which the filename format makes chronological.
-	entries := make([]Entry, 0, len(dirEntries))
+	paths := make([]string, 0, len(dirEntries))
 	for _, de := range dirEntries {
 		if de.IsDir() || !isMessageFile(de.Name()) {
 			continue
 		}
-		entries = append(entries, read(filepath.Join(dir, de.Name())))
+		paths = append(paths, filepath.Join(dir, de.Name()))
 	}
-	return entries, nil
+	return paths, nil
 }
 
 // Remove discards a drained or undeliverable message. A file that is already
@@ -180,7 +233,8 @@ func Remove(path string) error {
 // zero-padded nanoseconds, a hyphen, and the hex nonce.
 var messageFileRe = regexp.MustCompile(`^\d{19}-[0-9a-f]+\.json$`)
 
-// isMessageFile screens the spool down to files this package wrote.
+// isMessageFile screens a spool directory down to files this package wrote. Both
+// spools use it, because writeRecord gives both the same name format.
 //
 // Matching the full filename shape rather than just a ".json" suffix matters
 // because List hands undecodable files to the caller to delete: anything that
@@ -208,19 +262,23 @@ func read(path string) Entry {
 	return Entry{Path: path, Message: m}
 }
 
-// rejectedSuffix names the receipt left behind when a message could not be
-// delivered. It exists so `atrium send --wait` can tell "delivered" from
-// "discarded": the drain removes the message file either way, so the file's
-// disappearance alone says only that some Atrium consumed it, not that any
-// session received it.
+// rejectedSuffix names the receipt left behind when a record could not be acted
+// on. It exists so a waiting `--wait` can tell "done" from "discarded": the drain
+// removes the record either way, so the file's disappearance alone says only that
+// some Atrium consumed it, not that any session received the prompt or that any
+// session was created.
+//
+// Reject, Rejection and ClearRejection take a path and know nothing about the
+// record behind it, which is why the create spool reuses them rather than growing
+// a second copy of the write-the-receipt-before-the-unlink ordering below.
 const rejectedSuffix = ".rejected"
 
-// Reject records why a message could not be delivered and then removes it.
+// Reject records why a record could not be acted on and then removes it.
 //
-// The receipt is written before the message is unlinked so a waiting sender
-// cannot observe the gap as a successful delivery. If the receipt cannot be
-// written the message is still removed: an unreported failure is better than a
-// message that is re-read, re-rejected, and never cleared.
+// The receipt is written before the record is unlinked so a waiting producer
+// cannot observe the gap as a success. If the receipt cannot be written the
+// record is still removed: an unreported failure is better than a record that is
+// re-read, re-rejected, and never cleared.
 func Reject(path, reason string) error {
 	if err := config.WriteFileAtomic(path+rejectedSuffix, []byte(reason), 0o644); err != nil {
 		return errors.Join(fmt.Errorf("outbox: write rejection receipt: %w", err), Remove(path))
@@ -228,7 +286,7 @@ func Reject(path, reason string) error {
 	return Remove(path)
 }
 
-// Rejection returns the recorded reason a message was discarded, if there is one.
+// Rejection returns the recorded reason a record was discarded, if there is one.
 func Rejection(path string) (string, bool) {
 	data, err := os.ReadFile(path + rejectedSuffix)
 	if err != nil {
@@ -242,20 +300,97 @@ func ClearRejection(path string) error {
 	return Remove(path + rejectedSuffix)
 }
 
-// SweepRejections deletes receipts past the TTL horizon. A receipt is only ever
-// read by a sender still blocked in --wait, so one this old has no reader left
-// and would otherwise accumulate for the life of the data dir.
+// SweepRejections deletes receipts past the TTL horizon, in both spools. A
+// receipt is only ever read by a producer still blocked in --wait, so one this
+// old has no reader left and would otherwise accumulate for the life of the data
+// dir.
+//
+// Both, not just the prompt spool: `atrium new --wait` reads its receipts through
+// the same Rejection call, so a create spool swept by nobody would leak one file
+// per refused request forever.
 //
 // Age is the receipt file's own mtime, not the timestamp in its name. That name
-// carries the *message's* CreatedAt, which for a receipt written because the
-// message expired is already a full TTL in the past — keying off it would delete
-// the receipt on the very next drain tick, seconds after Reject wrote it and long
-// before a waiting sender could read the failure.
+// carries the *record's* CreatedAt, which for a receipt written because the record
+// expired is already a full TTL in the past — keying off it would delete the
+// receipt on the very next drain tick, seconds after Reject wrote it and long
+// before a waiting producer could read the failure.
 func SweepRejections(now time.Time) {
-	dir, err := Dir()
-	if err != nil {
-		return
+	for _, resolve := range []func() (string, error){Dir, CreateDir} {
+		dir, err := resolve()
+		if err != nil {
+			continue
+		}
+		sweepReceipts(dir, now)
 	}
+}
+
+// clearReason is what a producer blocked in --wait is told when `atrium reset` takes
+// its queued record away. It has to be a refusal rather than a silent unlink: the
+// record vanishing is the signal --wait reads as "done".
+const clearReason = "atrium reset discarded every queued request"
+
+// Clear discards every queued record in both spools, returning how many it removed.
+// For `atrium reset`, which wipes Atrium's state and must not leave behind a create
+// request that would rebuild some of it on the next launch.
+//
+// It goes through Reject rather than unlinking, for the reason Reject exists: a
+// producer blocked in `--wait` cannot tell a discard from a delivery except by the
+// receipt, so a bare os.Remove here would have `atrium reset` report itself to a
+// waiting `atrium new --wait` as a successful creation — exit 0, and a CI job
+// proceeding against a session that does not exist.
+//
+// Existing receipts are therefore left alone rather than swept: a receipt is the only
+// record of a refusal its producer may not have read yet, and deleting it is the same
+// false success one step earlier. They are bounded already — SweepRejections drops
+// them at the TTL horizon.
+//
+// It touches only files this package wrote (the record name format), never the
+// directories, and never a stray file some other process put there. The count is of
+// records discarded cleanly: one whose receipt could not be written is reported through
+// the returned error and not counted, even though Reject removes it regardless — an
+// unreported failure being better than a record that is re-read and re-rejected
+// forever.
+func Clear() (int, error) {
+	var removed int
+	var firstErr error
+	for _, resolve := range []func() (string, error){Dir, CreateDir} {
+		dir, err := resolve()
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			if !errors.Is(err, fs.ErrNotExist) && firstErr == nil {
+				firstErr = fmt.Errorf("outbox: read spool dir: %w", err)
+			}
+			continue
+		}
+		for _, de := range entries {
+			name := de.Name()
+			// Both guards, as in listFiles, and most of all here: this is the walk that
+			// destroys what it matches. The name check alone already rejects the nested
+			// create/ entry, so IsDir is redundant today — which is exactly the claim
+			// listFiles makes about the pair, and a claim the package should be able to
+			// make about every walk rather than about one of three.
+			if de.IsDir() || !isMessageFile(name) {
+				continue // a receipt, a nested spool dir, or not ours at all
+			}
+			if err := Reject(filepath.Join(dir, name), clearReason); err != nil {
+				if firstErr == nil {
+					firstErr = fmt.Errorf("outbox: discard %s: %w", name, err)
+				}
+				continue
+			}
+			removed++
+		}
+	}
+	return removed, firstErr
+}
+
+func sweepReceipts(dir string, now time.Time) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
@@ -263,7 +398,7 @@ func SweepRejections(now time.Time) {
 	for _, de := range entries {
 		name := de.Name()
 		base, ok := strings.CutSuffix(name, rejectedSuffix)
-		if !ok || !isMessageFile(base) {
+		if de.IsDir() || !ok || !isMessageFile(base) {
 			continue
 		}
 		info, err := de.Info()

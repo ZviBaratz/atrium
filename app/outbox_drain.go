@@ -25,6 +25,25 @@ import (
 // successive ticks instead of blocking the UI goroutine on one of them.
 const outboxDrainBudget = 50
 
+// rejectionSweepInterval is how often the receipt GC actually walks the spools. The
+// horizon it enforces is 24 hours, so running it on every ~500ms metadata tick — and
+// twice per tick now that there are two spools to walk — spends around 350k directory
+// reads a day (2/s × 2 dirs × 86400) to delete a file that may sit an extra minute
+// (#546 is the standing reason idle work in this loop is worth a constant).
+const rejectionSweepInterval = time.Minute
+
+// sweepRejectionsOccasionally runs the receipt GC at most once per
+// rejectionSweepInterval. The zero lastRejectionSweep makes the first tick after launch
+// sweep, which is the one that matters: it is where a receipt left by a previous run,
+// for a producer that never came back to read it, is finally collected.
+func (m *home) sweepRejectionsOccasionally(now time.Time) {
+	if now.Sub(m.lastRejectionSweep) < rejectionSweepInterval {
+		return
+	}
+	m.lastRejectionSweep = now
+	outbox.SweepRejections(now)
+}
+
 // drainOutbox delivers spooled prompts to their sessions and returns a command
 // surfacing what happened, or nil when the spool was empty.
 //
@@ -42,14 +61,20 @@ const outboxDrainBudget = 50
 // That prompt stays visible and cancelable: the queue overlay lists it, and
 // `atrium ls` reports it as queued_prompts.
 func (m *home) drainOutbox() tea.Cmd {
+	// Before the read, not after it. The sweep collects receipts from BOTH spools, and
+	// the create spool has no other collector — drainCreateRequests deliberately does
+	// not sweep, on the grounds that this runs first on the same tick. Below the early
+	// return that stops being true: one unreadable prompt directory would strand the
+	// sweep for the life of the process while the create drain kept working normally,
+	// leaking a receipt per refused `atrium new` with nothing left to collect them.
+	now := time.Now()
+	m.sweepRejectionsOccasionally(now)
+
 	entries, err := outbox.List()
 	if err != nil {
 		log.ErrorLog.Printf("failed to read the outbox: %v", err)
 		return nil
 	}
-
-	now := time.Now()
-	outbox.SweepRejections(now)
 
 	var spent, queued int
 	var delivered []string
@@ -132,7 +157,9 @@ func (m *home) drainOutbox() tea.Cmd {
 // once per launch, which is the lesser of the two.
 func (m *home) discardSpoolFile(path string, remove func() error) {
 	if err := remove(); err != nil {
-		log.ErrorLog.Printf("could not clear a drained outbox message, ignoring it for the rest of this run: %v", err)
+		// "record", not "message": both spools come through here, and a create request
+		// reported as a message sends whoever reads the log to the wrong directory.
+		log.ErrorLog.Printf("could not clear a drained outbox record, ignoring it for the rest of this run: %v", err)
 		if m.outboxPoisoned == nil {
 			m.outboxPoisoned = make(map[string]bool)
 		}

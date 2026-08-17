@@ -44,6 +44,10 @@ const paneFrameInterval = 100 * time.Millisecond
 // on one at all — armFrameCapture declines to arm and the loop ends, to be
 // revived by the 100ms preview tick as soon as there is something to capture
 // again.
+//
+// It is compared with == (handlePaneFrame's re-arm decision, and framegate's quietRun),
+// so every field is part of the target's identity and adding one narrows what counts as
+// "the same target". See termTitle for what that cost on the field added for #718.
 type frameTarget struct {
 	// instance is the session whose agent pane to capture (preview tab).
 	instance *session.Instance
@@ -55,6 +59,26 @@ type frameTarget struct {
 	termKey  string
 	// termInstance is the instance the shell belongs to, needed to create it.
 	termInstance *session.Instance
+	// termTitle is termInstance's Title, snapshotted HERE on the update thread for the
+	// same reason termKey is computed here: Instance.Title is a plain exported field with
+	// no mutex, AdoptRename writes it on this thread, and EnsureSession reads it on the
+	// capture goroutine — an unsynchronised pair, and a torn string header rather than
+	// merely a stale value (#718).
+	//
+	// It buys correctness at the cost of freshness: a rename landing between this
+	// resolution and the create makes the shell's tmux window name, and the legacy reap
+	// name, use the OLD title. TerminalPane.EnsureSession's doc decides that per use — for
+	// the legacy reap the older title is the more correct one, and the window name is
+	// frozen at creation anyway.
+	//
+	// Because frameTarget is compared by value, this field also joins the target's
+	// identity, which has one deliberate consequence: a rename landing while a terminal
+	// capture is in flight now makes handlePaneFrame's re-arm see a changed target and
+	// re-capture with no delay. That is one capture ~100ms early, once per rename — the
+	// next round's own target carries the new title and matches again. The quiet-run
+	// comparisons in framegate.go are unaffected: both writers build preview-tab targets
+	// (frameTarget{instance: …}), where termTitle is always "".
+	termTitle string
 }
 
 // empty reports a target with nothing to capture.
@@ -126,7 +150,7 @@ func (m *home) resolveFrameTarget() frameTarget {
 		if sess == nil && m.shellStartRefused(selected) {
 			return frameTarget{}
 		}
-		return frameTarget{terminal: sess, termKey: key, termInstance: selected}
+		return frameTarget{terminal: sess, termKey: key, termInstance: selected, termTitle: selected.Title}
 	default:
 		// The diff tab renders from cached git metadata and captures nothing.
 		return frameTarget{}
@@ -204,7 +228,7 @@ func captureFrameCmd(ctx context.Context, target frameTarget, delay time.Duratio
 func captureTerminalFrame(target frameTarget, ensure terminalEnsurer) paneFrameMsg {
 	sess := target.terminal
 	if sess == nil {
-		created, err := ensure(target.termInstance)
+		created, err := ensure(target.termInstance, target.termTitle)
 		if err != nil {
 			return paneFrameMsg{target: target, err: err, at: time.Now()}
 		}
@@ -218,7 +242,18 @@ func captureTerminalFrame(target frameTarget, ensure terminalEnsurer) paneFrameM
 		// TerminalPane.UpdateContent reads as "a frame has arrived", painting an
 		// empty pane instead of the fallback. The next round captures it — the
 		// target has changed, so it is armed with no delay.
-		return paneFrameMsg{target: frameTarget{termInstance: target.termInstance}, at: time.Now()}
+		//
+		// termTitle rides along because this target is still the target: it is the snapshot
+		// this call was given, carried forward rather than re-read (this runs on the capture
+		// goroutine, where reading it would be the #718 defect). Nothing reads the VALUE —
+		// the handler applies nothing on this target, since instance is nil and termKey is
+		// empty. It does take part in the struct comparison there, like every other field,
+		// but cannot change its outcome: an empty termKey already makes this target unequal
+		// to any freshly resolved one.
+		return paneFrameMsg{
+			target: frameTarget{termInstance: target.termInstance, termTitle: target.termTitle},
+			at:     time.Now(),
+		}
 	}
 	text, err := sess.CapturePaneContent()
 	return paneFrameMsg{
@@ -232,7 +267,11 @@ func captureTerminalFrame(target frameTarget, ensure terminalEnsurer) paneFrameM
 // terminalEnsurer creates the shell session for an instance and returns its cache
 // key. It is a function rather than a direct call so captureFrameCmd stays free of
 // the ui type — and so a test can drive the create path without a pane.
-type terminalEnsurer func(*session.Instance) (string, error)
+//
+// The title is a parameter rather than something the implementation reads off the
+// instance, because it runs on the capture goroutine and Title is unguarded (#718). See
+// frameTarget.termTitle.
+type terminalEnsurer func(inst *session.Instance, title string) (string, error)
 
 // armFrameCapture dispatches the next capture, or lets the chain end when there
 // is nothing to capture.

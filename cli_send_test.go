@@ -252,3 +252,19 @@ func TestSendWaitClearsConsumedReceipt(t *testing.T) {
 	require.NoError(t, gErr)
 	assert.Empty(t, left, "a reported receipt must be cleared")
 }
+
+// TestSendRefusesANegativeWait: the guard `new` already has, on the command it was
+// derived from. Cobra parses "--wait -5s" happily, and left to the `wait > 0` test it
+// would silently mean "do not wait" — so a CI job scripted to gate on `send --wait`
+// would be told "queued for X", exit 0, and move on having never waited for the
+// delivery it was gating on. Refused before anything is spooled, so a bad flag is a
+// clean no-op rather than a queued prompt nobody is watching.
+func TestSendRefusesANegativeWait(t *testing.T) {
+	sandboxDataDir(t)
+	seedInstances(t, inst("fix-auth", "/repo/web"))
+
+	_, _, err := send(t, "fix-auth", "", "rebase on main", -5*time.Second)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "negative")
+	assert.Empty(t, spooled(t), "a bad flag spools nothing")
+}
