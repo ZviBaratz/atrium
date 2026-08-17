@@ -32,9 +32,7 @@ func moduleRoot(t *testing.T) string {
 // config/readme_config_test.go and keys/readme_drift_test.go.
 func moduleFile(t *testing.T, name string) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(moduleRoot(t), name))
-	require.NoError(t, err)
-	return string(data)
+	return readFile(t, filepath.Join(moduleRoot(t), name))
 }
 
 // TestReadmeDocumentsEveryCommand is the third README drift guard, alongside
