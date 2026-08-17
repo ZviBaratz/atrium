@@ -145,29 +145,50 @@ func isBoxWallLine(line string) bool {
 // and it accepts a box's own interior divider "├────┤", which means the lower half of the box
 // is missing and the frame is torn or mid-repaint. Both used to anchor bottomBoxBlock.
 //
-// Only the left corner is required. All four driven rungs carry both, so the evidence cannot
-// separate the two conditions; the weaker one is chosen because everything narrow in these
-// captures is cut from the RIGHT (the option rows at width 20), so a right-truncated frame is
-// the more plausible unseen shape. TestBottomBoxBlockNeedsABottomCornerNotAnyRule.
+// BOTH corners are required, and an earlier draft required only the left one on the reasoning
+// that everything narrow in these captures is cut from the RIGHT (the option rows at width 20),
+// so a right-truncated frame is the more plausible unseen shape. That rationale was self-
+// defeating: truncation cuts every row at the same column, so a frame missing its right corner
+// is missing its right WALL too, and isBoxWallLine requires both walls. bottomBoxBlock would
+// find such a border, walk up, match no wall, and return (nil, false) — the loose corner bought
+// the anchor nothing on the one shape it was loosened for. Measured before the change:
+// isBoxBottomBorder(" ╰──────") true, isBoxWallLine(" │ ● 1. Trust folder (repo)") false, block
+// lost. Requiring both corners is therefore inert for bottomBoxBlock, its only caller, and it
+// stops the pair documenting two different beliefs about what a truncated box looks like.
+// Reaching a right-truncated frame needs isBoxWallLine loosened in the same commit, with a
+// driven capture of one — no rung has produced one yet.
+// TestBottomBoxBlockNeedsABottomCornerNotAnyRule, TestBoxPredicatesAgreeOnATruncatedFrame.
 func isBoxBottomBorder(line string) bool {
 	if !isHorizontalRule(line) {
 		return false
 	}
-	first, _ := utf8.DecodeRuneInString(strings.TrimSpace(line))
-	return first == '╰' || first == '└'
+	trimmed := strings.TrimSpace(line)
+	first, _ := utf8.DecodeRuneInString(trimmed)
+	last, _ := utf8.DecodeLastRuneInString(trimmed)
+	return (first == '╰' || first == '└') && (last == '╯' || last == '┘')
 }
 
-// trailingBelowBoxCap is how many rendered lines may sit BELOW a box's bottom border while
-// that box still counts as the pane's live bottom-most element.
+// trailingBelowBoxCap is how many pane ROWS may sit BELOW a box's bottom border while that box
+// still counts as the pane's live bottom-most element.
 //
-// It is 1 because a dialog that overflows its pane draws exactly one line under itself, and
-// because 0 shipped #713 a second time. gemini's FolderTrustDialog wraps its blurb in a
-// MaxSizedBox capped at max(4, terminalHeight-12) and renders a sibling <ShowMoreLines> when
-// that overflows; the component is a single <Text wrap="truncate"> — one line, never wrapped,
-// truncated instead ("Press Ctrl+O to s…" at width 24). So the overflow hint cannot be two
-// lines, and a cap of 1 admits it exactly. Its two sibling notices (isRestarting, exiting) can
-// wrap and are NOT admitted, which is correct: both render only after the dialog is answered
-// or escaped, where the gate going down is the right answer.
+// ROWS, not rendered content: a blank row spends the budget exactly as a written one does,
+// because bottomBoxBlock walks array positions up from the last non-empty line. That is
+// deliberate and it is the half of this constant with teeth, so it is stated before the count.
+// gemini's FolderTrustDialog renders three siblings below its box, and the blank row is what
+// tells them apart. <ShowMoreLines> is wrapped in a Box carrying paddingX and marginBottom and
+// NO marginTop, so the overflow hint lands on the row directly beneath the border. Its two
+// siblings — the isRestarting and exiting notices — each carry marginTop: 1, so each renders
+// with a blank row above it (all three read off the FolderTrustDialog render in
+// interactiveCli-*.js). Counting non-empty rows instead would step over that blank and hold the
+// gate UP on a dialog the user has just ANSWERED, which is the #342 direction on a real gemini
+// screen. TestBottomBoxBlockSpendsTheAllowanceOnABlankRow.
+//
+// The count is 1 because a dialog that overflows its pane draws exactly one row under itself,
+// and because 0 shipped #713 a second time. The blurb sits in a MaxSizedBox capped at
+// max(4, terminalHeight-12), and <ShowMoreLines> renders when that overflows; the component
+// returns null otherwise and is otherwise a single <Text wrap="truncate"> — one line, never
+// wrapped, truncated instead ("Press Ctrl+O to s…" at width 24). So the overflow hint cannot be
+// two rows, and a cap of 1 admits it exactly.
 //
 // The zero-line form was measured against 12 natively-driven gemini 0.55.1 panes and missed
 // the gate on 7 — every geometry where the dialog overflows, including the 45x19 agent pane a
