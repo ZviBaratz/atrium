@@ -43,8 +43,24 @@ type ChildProc struct {
 // running tmux against the socket, so "the probe said nothing is there" and "the
 // probe could not run" are different facts with opposite safety consequences: with
 // tmux off PATH nothing can be probed *and* the live server cannot be excluded, so
-// every live session's server would look unreachable. Only ReachableKnown &&
-// !Reachable is positive proof of an orphan nothing can address.
+// every live session's server would look unreachable. ReachableKnown && !Reachable is
+// what the default kill target set is built from (reapTargets), so what is allowed to
+// set that pair is the safety question this type turns on.
+//
+// "Could not run" is wider than tmux being absent, and reading it narrowly is what
+// #730 was. A connect() that never opened the socket asks no server anything — a mode
+// bit, a path component that stopped being a directory — and tmux reports it with the
+// same non-zero exit as a real answer. Classified as an answer it became pid 0, and a
+// live server holding live agents was selected for SIGKILL by default.
+// classifyPIDProbe is where the two are now told apart.
+//
+// What is deliberately NOT claimed: that this pair is positive proof of an orphan.
+// This type used to say so, and it was only ever true of the causes someone had
+// enumerated. A tmux failure that is neither a connect diagnostic nor a recognised
+// message — a usage error, a subcommand a version below the floor lacks — still
+// classifies as an answer and still reaches this pair. That is #734's shape on this
+// path and is not fixed here, so the honest reading is that the connect failures are
+// excluded, not that nothing else gets in.
 type OrphanServer struct {
 	PID int
 	// Socket is the socket name: the base of SocketPath. It is never taken from the
@@ -67,11 +83,21 @@ type OrphanServer struct {
 	// both answer nothing when probed by path (#614).
 	//
 	// It is positive evidence rather than absence of proof, which is what makes acting on
-	// it safe in the direction that matters: an unreachable row's socket file is gone, and
-	// connect(2) needs that path, so no connection can be *made* to one — every connection
-	// counted on an unreachable server necessarily predates the unlink, and a real orphan,
-	// whose clients died with the run that made them, counts zero. Asserted against a real
-	// tmux server in TestOrphanedServerIsFoundAndKillableAfterItsSocketRootIsDeleted.
+	// it safe in the direction that matters: an unreachable row is one its own path no
+	// longer routes to — the file was unlinked, or something else now holds that name — and
+	// connect(2) resolves that path, so no connection can be *made* to one. Every connection
+	// counted on an unreachable server therefore predates the moment it stopped being
+	// addressable, and a real orphan, whose clients died with the run that made them, counts
+	// zero. Asserted against a real tmux server in
+	// TestOrphanedServerIsFoundAndKillableAfterItsSocketRootIsDeleted.
+	//
+	// The row where the path DOES still route here — the socket is present and bound by this
+	// very server, merely unopenable — is what would break that argument, and since #730 it
+	// is not in this class at all: it classifies as reachability unknown, which reapTargets
+	// drops before any kill consults this count. (The report still prints the count for such
+	// a row, deliberately — renderOrphanServer withholds the deleted-socket sentence there,
+	// not the number.) The carve-out is what makes the sentence above true rather than
+	// merely usually true.
 	//
 	// What it counts is connections, not attachments: a `tmux -S <path> ls` holds one for
 	// as long as it runs, so a reachable row can in principle be counted while nobody is
@@ -112,12 +138,20 @@ type ScanGaps struct {
 	// undercounted Children list, since children are attributed from the same partial
 	// table.
 	ProcTableTruncated bool
-	// LiveServerUnknown: the ambient probe was never answered — tmux absent, or its share
-	// of the budget spent — so which server this Atrium is running on was not established
-	// at all. Nothing can then be excluded by pid, so the live server may itself be one of
-	// the rows below. It answers its own socket, so it arrives classified Reachable: never
-	// a default kill target, but `--all` targets reachable servers by design, and the
-	// report's remedy for a reachable server is a `kill-server` aimed straight at it.
+	// LiveServerUnknown: the ambient probe was never answered — tmux absent, its share of
+	// the budget spent, or (since #730) tmux run but unable to open the socket — so which
+	// server this Atrium is running on was not established at all. Nothing can then be
+	// excluded by pid, so the live server may itself be one of the rows below.
+	//
+	// How it arrives there depends on which cause fired, and the two need different care.
+	// Under the first two the socket answers probes, so the live server is classified
+	// Reachable: never a default kill target, but `--all` targets reachable servers by
+	// design, and the report's remedy for a reachable server is a `kill-server` aimed
+	// straight at it — which is what the `--all` guard and renderOrphanServer's withheld
+	// remedy exist for. Under the third the same unopenable socket that silenced the
+	// ambient probe also silences the row's own probe, so it arrives !ReachableKnown and is
+	// out of every target set already; the guard is then belt to a brace rather than the
+	// only thing standing there.
 	//
 	// Not an inventory gap, so IncompleteInventory does not count it. Its consequences
 	// are handled where they apply: the `--all` guard in cli_reap.go, and the remedy
@@ -186,15 +220,16 @@ func (g ScanGaps) IncompleteInventory() bool { return g.SocketTableUnread || g.P
 // this Atrium's own tmux server. It exists so that "identified" means one thing — a live pid
 // was positively determined, and so excluded — wherever that question is asked.
 //
-// Its two causes reach an identical state: the exclusion in assembleServers matched
-// nothing, while a live server answers its own socket and so arrives Reachable. Neither is
-// an inventory gap, which is why IncompleteInventory() counts neither.
+// Its two causes share the one state this predicate is about: the exclusion in
+// assembleServers matched nothing, so no row is proven not to be the fleet. Neither is an
+// inventory gap, which is why IncompleteInventory() counts neither. How such a row is then
+// classified is not shared — ScanGaps.LiveServerUnknown's doc has that — and nothing here
+// depends on it.
 //
 // Which callers use this, and which do not, follows from what each one has to say. The
 // `--all` guard asks only whether it may act, so it keys on this (cli_reap.go). The report
-// has to word a remedy, and the two causes take different ones — a re-run fixes an
-// unanswered probe and cannot fix a wrong-place answer — so renderOrphanServer branches on
-// the fields themselves instead.
+// has to word a remedy, and the two causes take different ones, so renderOrphanServer
+// branches on the fields themselves instead.
 func (g ScanGaps) LiveServerUnidentified() bool {
 	return g.LiveServerUnknown || g.EmptyFleetUnproven
 }
@@ -306,10 +341,11 @@ func probeAmbient(ctx context.Context) (pid int, known bool) {
 // known is the whole reason this is exported rather than reimplemented. "tmux ran and
 // there is no server on that socket" is a determined answer and a safe one; "tmux could
 // not be asked" — the binary absent, the probe's budget spent, a fork that failed under
-// memory pressure — establishes nothing. A caller that collapses the two reports an
-// empty fleet on a host that has a live one. That was #599 here, and it was still true
-// in internal/doctor's OOM section afterwards, which ran its own copy of this probe with
-// the classification left out.
+// memory pressure, or (since #730) a connect() that never opened the socket, which is
+// tmux running and still asking nobody — establishes nothing. A caller that collapses the
+// two reports an empty fleet on a host that has a live one. That was #599 here, and it
+// was still true in internal/doctor's OOM section afterwards, which ran its own copy of
+// this probe with the classification left out.
 //
 // One home for the rule is the point: classifyPIDProbe's doc comment argues that a rule
 // about what counts as evidence is the last thing that should be able to drift between
@@ -425,8 +461,9 @@ type StaleSocket struct {
 // a claim of health manufactured out of having seen nothing (#598).
 //
 // The two fields are independent because the remedies differ: an unlistable directory
-// is an existence or permission problem, while unrunnable probes mean tmux could not be
-// executed. Unlike ScanGaps neither makes any caller refuse to act, because nothing
+// is an existence or permission problem, while a file that reached a probe and was not
+// classified has its own set of causes, which Unprobed's doc below owns and this one does
+// not restate. Unlike ScanGaps neither makes any caller refuse to act, because nothing
 // acts on this list — reap only prints it, and the remedy is an `rm --` line the user
 // runs. These gaps cost the accuracy of a report and nothing else.
 type StaleGaps struct {
@@ -434,11 +471,14 @@ type StaleGaps struct {
 	// contents is known — not "no stale files" but "no answer".
 	DirUnread bool
 	// Unprobed counts the socket files that were listed and belong to Atrium but could
-	// not be classified: the owner probe did not run, because tmux is off PATH or the
-	// scan's budget expired. Absence of an answer is not evidence of an absent server,
-	// so those files stay off the list. Renderers must not name one of those causes as
-	// though it were the only one — a remedy that says "check PATH" is wrong advice on a
-	// host whose PATH is fine and whose budget ran out.
+	// not be classified. Three causes, and the third is not the same shape as the other
+	// two: the probe did not run at all (tmux off PATH), it ran and was cut short (the
+	// scan's budget expired), or — since #730 — it ran, reached the socket, and could not
+	// open it. Absence of an answer is not evidence of an absent server, so those files
+	// stay off the list. Renderers must not name one of those causes as though it were the
+	// only one: "check PATH" is wrong advice on a host whose PATH is fine and whose budget
+	// ran out, and both of those are wrong advice on a socket whose mode bits are the
+	// problem, where the file named in the list above is the thing to go and look at.
 	//
 	// A count rather than a bool so a caller can tell a directory whose every file is
 	// unproven from a list that is merely one file short; a bool has to hedge both the
@@ -552,11 +592,11 @@ func probeSocketPath(ctx context.Context) (path string, ok bool) {
 }
 
 // liveSocketPath asks the server on Atrium's socket where that socket is. ok is false
-// when there is no server to ask and when tmux could not be run at all: both mean the
-// same thing to SocketDir, which is that there is no server's answer to use. The two
-// are worth no more than this because neither says anything about the *directory* —
-// only about whether a server was there to name it. What the *caller* may then claim is
-// narrower than "nothing is running", and renderStaleSockets says so.
+// whenever no answer came back. The reasons are not enumerated here, because none of
+// them says anything about the *directory* — only about whether a server was there to
+// name it. This is a plain `err != nil`, not classifyPIDProbe's split, and it stays one:
+// the caller needs "no answer", never which kind (#730). What the *caller* may then claim
+// is narrower than "nothing is running", and renderStaleSockets says so.
 func liveSocketPath(ctx context.Context) (path string, ok bool) {
 	out, err := tmuxCommand(ctx, "display-message", "-p", "#{socket_path}").Output()
 	if err != nil {
@@ -665,8 +705,12 @@ func (s OrphanServer) OnAnAmbientSocket() bool {
 // ScanGaps.EmptyFleetUnproven is what the check reports: nothing downstream may read pid 0
 // as an empty fleet without it (#603).
 //
-// A non-zero exit means tmux ran and made a determination ("no server running on …");
-// anything else — tmux absent, the probe's budget spent — leaves the question open.
+// A non-zero exit means tmux ran and made a determination ("no server running on …"),
+// unless the diagnostic says it never opened the socket; that and anything else — tmux
+// absent, the probe's budget spent — leaves the question open. classifyPIDProbe draws the
+// line, and it matters here too: an unopenable ambient socket used to answer "pid 0,
+// determined", i.e. an empty fleet, which excludes nothing and leaves the live server in
+// the candidate list unmarked. It now raises ScanGaps.LiveServerUnknown instead.
 func ambientServerPID(ctx context.Context) (pid int, known bool) {
 	out, err := tmuxCommand(ctx, "display-message", "-p", "#{pid}").Output()
 	return classifyPIDProbe(ctx, out, err)
@@ -677,23 +721,33 @@ func ambientServerPID(ctx context.Context) (pid int, known bool) {
 // rule exists once: they had identical copies, and a rule about what counts as evidence
 // is the last thing that should be able to drift between two call sites.
 //
-// A non-zero exit means tmux ran and made a determination — "no server running on …",
-// "error connecting to …" — which is evidence, and answers pid 0. Anything else means
-// tmux never got to answer: it is absent, or the probe's budget was spent. That is not
-// evidence, and known is false.
+// A non-zero exit means tmux ran, which is not the same as tmux having answered. It is an
+// answer — pid 0 — when the determination is about a server: "no server running on …", or
+// "error connecting to … (No such file or directory)", where the path itself is gone and
+// so is any route to whatever was behind it. It is NOT an answer when tmux never opened
+// the socket to ask: "(Permission denied)" and its siblings report a server this process
+// cannot address, not a server that is absent, and the difference is a live agent's work.
+// socketUnreachableMessage draws that line, and it is the same rule socketUnreachable
+// applies for the poll, held to the same captured fixture table (close_test.go) so the
+// two cannot drift. Anything else means tmux never got to run at all: absent, or the
+// budget spent.
+//
+// Why the asymmetry is safe in exactly one direction, and why it must not be relaxed:
+// pid 0 with known=true is what assembleServers turns into ReachableKnown/!Reachable, and
+// reapTargets selects that pair as a kill target by default, with the `--yes` refusal
+// unable to catch it (it fires on ConnectedClients > 0, and a detached Atrium session has
+// none). So an over-broad "answer" costs a live server and every agent in it, while an
+// over-broad "unknown" costs a real orphan going unreaped until the condition clears.
+// #730 chose the second, and the errno-tail predicate is written as "any errno but the one
+// that means gone" so an unlisted one lands there too.
 //
 // Close answers a similar question textually (sessionAlreadyGone) and must keep doing so.
 // The reason is the command, not the guard — the ctx check below covers a killed probe
 // either way: display-message fails essentially only when nothing is on the socket to
-// answer, while kill-session exits non-zero for plenty of reasons that are not "gone" (a
-// wedged server above all), and reading one of those as a clean teardown would prune state
-// for a session still running (#723).
-//
-// A wrong answer here is not cheap either, so do not relax it: pid 0 with known=true is
-// what assembleServers turns into ReachableKnown/!Reachable, and reapTargets selects that
-// pair as a kill target by default. An unopenable socket ("(Permission denied)") reaches
-// it through the ExitError branch — Atrium cannot address that server, but the agent
-// inside it may be working (#730).
+// answer or the socket cannot be opened, while kill-session exits non-zero for plenty of
+// reasons that are neither (a wedged server above all), and reading one of those as a clean
+// teardown would prune state for a session still running (#723). The two now share the
+// connect-failure half of that classification and differ only on the rest.
 func classifyPIDProbe(ctx context.Context, out []byte, err error) (pid int, known bool) {
 	// Checked first: a killed-by-deadline process also surfaces as an ExitError, which
 	// would otherwise be read as tmux having reported an empty socket.
@@ -703,6 +757,35 @@ func classifyPIDProbe(ctx context.Context, out []byte, err error) (pid int, know
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
+			// tmux ran and exited non-zero, but that is a determination only when it is a
+			// determination ABOUT a server. A connect() that never opened the socket asked
+			// nobody anything: the server may be running fine behind a mode bit, holding
+			// agents and their unpushed work. Reading it as an answer makes it pid 0, which
+			// assembleServers turns into ReachableKnown && !Reachable — the pair reapTargets
+			// selects as a kill target by default (#730).
+			//
+			// The diagnostic is read from ExitError.Stderr, which Output() populates only
+			// because both probes here leave cmd.Stderr nil. A future call site that captured
+			// stderr itself would empty this and silently restore the old reading — so that
+			// precondition belongs to the CALLERS, and what holds each of them differs:
+			//
+			//   - probeSocketOwner: end to end, by a real tmux server behind a real
+			//     unopenable socket (TestALiveServerBehindAnUnopenableSocketIsNotAReapTarget).
+			//     Errno, diagnostic, stream and field are all measured there.
+			//   - ambientServerPID: NOT covered for this branch. It does run for real in the
+			//     tests above — they leave the ambientPID seam alone — but what they make
+			//     unopenable is the FOREIGN socket under their own root, never the ambient one
+			//     this probe addresses, so it answers normally throughout and the connect
+			//     failure below is never taken through it. Its wiring is one line, in the same
+			//     shape as probeSocketOwner's; "the same shape" is an inference, which is what
+			//     this note keeps visible rather than settles.
+			//
+			// TestOutputPopulatesExitErrorStderr holds the stdlib half — Output() populates
+			// Stderr when cmd.Stderr is nil — to a syscall rather than to a reading of the
+			// docs. That is a fact about os/exec, not about either call site.
+			if socketUnreachableMessage(string(exitErr.Stderr)) {
+				return 0, false
+			}
 			return 0, true
 		}
 		return 0, false
@@ -726,10 +809,13 @@ func classifyPIDProbe(ctx context.Context, out []byte, err error) (pid int, know
 // cannot resolve anywhere but the path given, while `-L` resolves against
 // TMUX_TMPDIR and falls back to /tmp when that is empty or missing.
 //
-// known distinguishes "tmux ran and could not reach a server there" from "tmux could
-// not run at all". Only the first is evidence. A non-zero exit means tmux ran and
-// made a determination ("no server running on …", "error connecting to …"); anything
-// else — tmux absent, the context expired — leaves the question open.
+// known distinguishes "tmux ran and could not reach a server there" from "tmux never got
+// to ask". Only the first is evidence. A non-zero exit is a determination when it is about
+// a server — "no server running on …", or a connect failure naming the path's absence —
+// but a connect failure that is not the path's absence establishes nothing: the socket is
+// there, bound by this very server, and only unopenable. Anything else — tmux absent, the
+// context expired — leaves the question open too. classifyPIDProbe owns that split for
+// both probes; the doc there is where it is argued.
 func probeSocketOwner(ctx context.Context, path string) (pid int, known bool) {
 	out, err := exec.CommandContext(ctx, "tmux", "-S", path, "display-message", "-p", "#{pid}").Output()
 	return classifyPIDProbe(ctx, out, err)

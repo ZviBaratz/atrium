@@ -37,9 +37,11 @@ var (
 			"It never kills anything you have not been shown first. These servers hold live\n" +
 			"agents, and an agent may hold work that was never pushed, so each server is named\n" +
 			"with every process that dies with it and confirmed one at a time (--yes skips the\n" +
-			"prompt, for scripts). A server whose reachability could not be determined — tmux\n" +
-			"missing, a probe that could not run — is never killed, with or without --all,\n" +
-			"because nothing about it has been established.\n\n" +
+			"prompt, for scripts). A server whose reachability could not be determined is never\n" +
+			"killed, with or without --all, because nothing about it has been established. That\n" +
+			"covers tmux missing or a probe that could not run, and also a socket that is there\n" +
+			"but cannot be opened: a server behind one is unreachable to Atrium and may be\n" +
+			"perfectly healthy, so it is listed and left alone rather than treated as empty.\n\n" +
 			"An unreachable server can also be a live fleet whose socket file was deleted, and\n" +
 			"the scan counts the clients connected to each one to tell those apart: once the\n" +
 			"file is gone nothing can connect, so a client still on it was there before, while\n" +
@@ -285,9 +287,12 @@ func connectedClientSummary(n int) string {
 // a file test, that default is sound.
 //
 // A server whose reachability is unknown is excluded even under --all. Nothing has
-// been established about it, and absence of an answer must never mean "safe to act":
-// when tmux cannot be run, the ambient live server cannot be excluded either, so the
-// unknown rows may be the running fleet.
+// been established about it, and absence of an answer must never mean "safe to act".
+// A live server reaches this state — most plainly when its socket exists and cannot be
+// opened (#730), where the row that looks like an orphan is a fleet with agents working in
+// it. This one field is the whole guard: nothing downstream re-checks it, which is why
+// classifyPIDProbe has to get the classification right rather than leave it to a later
+// refusal.
 func reapTargets(servers []tmux.OrphanServer, all bool) []tmux.OrphanServer {
 	var targets []tmux.OrphanServer
 	for _, s := range servers {
@@ -305,15 +310,20 @@ func reapTargets(servers []tmux.OrphanServer, all bool) []tmux.OrphanServer {
 // unidentifiedLiveServerReason words the --all refusal for the cause at hand.
 //
 // The two causes leave the *reaper* in one position — no selected row is proven not to be
-// the live fleet — but not the user. An unanswered probe is fixed by re-running. A probe
-// that answered about the wrong socket answers the same way every time, so "re-run once the
-// probe works" would send a user whose tmux works fine to re-run until they stopped
-// reading; what fits that case is the reachable row itself, which can be inspected and
-// stopped by name. LiveServerUnknown is tested first: when nothing was established, the
-// weaker claim is the true one.
+// the live fleet — but not the user. A probe that answered about the wrong socket answers
+// the same way every time, so a re-run would send a user whose tmux works fine to re-run
+// until they stopped reading; what fits that case is the reachable row itself, which can be
+// inspected and stopped by name. LiveServerUnknown is tested first: when nothing was
+// established, the weaker claim is the true one.
+//
+// An unanswered probe is *usually* fixed by re-running, and this message used to say so
+// flatly ("re-run once the probe works"). #730 added a cause it is false for: an ambient
+// socket that exists and cannot be opened raises LiveServerUnknown on every run, so the
+// re-run leads and the thing that actually clears it follows, rather than the user being
+// left with the one instruction this branch cannot make good on.
 func unidentifiedLiveServerReason(g tmux.ScanGaps) string {
 	if g.LiveServerUnknown {
-		return fmt.Sprintf("this %s's own tmux server could not be identified, so a reachable server here may be it — re-run once the probe works, or drop --all to kill only the unreachable ones", binName)
+		return fmt.Sprintf("this %s's own tmux server could not be identified, so a reachable server here may be it — re-run, and if that keeps happening check that tmux runs and that this %s's own socket can be opened; or drop --all to kill only the unreachable ones", binName, binName)
 	}
 	return fmt.Sprintf("nothing answered on this run's own %s socket, yet a reachable server here answers its own — so the fleet may be running under another TMUX_TMPDIR or brand, and this row may be it. Check it with `tmux -S <path> ls` and stop it with the kill-server the listing above prints, or drop --all to kill only the unreachable ones", binName)
 }

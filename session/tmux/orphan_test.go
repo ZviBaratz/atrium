@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -349,6 +350,117 @@ func TestClassifyPIDProbeSeparatesAnEmptySocketFromAnUnaskedQuestion(t *testing.
 			pid, known := classifyPIDProbe(tc.ctx, []byte(tc.out), tc.err)
 			require.Equal(t, tc.wantKnown, known)
 			require.Equal(t, tc.wantPID, pid)
+		})
+	}
+}
+
+// exitErrorCarrying is the fixture the classification table below is driven from: an
+// *exec.ExitError whose Stderr holds tmux's diagnostic, which is the only part of it
+// classifyPIDProbe reads.
+//
+// A literal, and an earlier version of this file said that was impossible — that
+// ExitError's embedded *os.ProcessState has no exported constructor and the zero value
+// panics on Error(), so only a real subprocess would do. The first half is true and the
+// second is not: (*os.ProcessState).String has a nil-receiver branch and returns "<nil>".
+// Nothing here calls Error() anyway. The subprocess it justified is gone; what that
+// subprocess genuinely proved has its own test below, where it is about os/exec rather
+// than smuggled into seven table rows.
+func exitErrorCarrying(msg string) error {
+	return &exec.ExitError{Stderr: []byte(msg)}
+}
+
+// TestOutputPopulatesExitErrorStderr pins the standard-library mechanism the whole
+// classification rests on, with a syscall rather than a reading of the docs: Output()
+// fills ExitError.Stderr only when the caller left cmd.Stderr nil, which is what both
+// probes do (ambientServerPID, probeSocketOwner). A call site that captured stderr itself
+// would empty the field classifyPIDProbe reads and silently return it to treating every
+// failure as an answer — the #730 bug, restored by a refactor that looks unrelated. Both
+// directions of that os/exec rule are pinned, so neither half of it can quietly change
+// meaning underneath the classification.
+//
+// What it does NOT prove is that either probe still leaves cmd.Stderr nil; that is a
+// property of the call sites, and only probeSocketOwner has it measured end to end
+// (TestALiveServerBehindAnUnopenableSocketIsNotAReapTarget). See classifyPIDProbe's doc,
+// which names the gap rather than letting this test look like it closes it.
+func TestOutputPopulatesExitErrorStderr(t *testing.T) {
+	const msg = "error connecting to /tmp/sock (Permission denied)"
+	const script = "printf '%s\\n' \"$1\" >&2; exit 1"
+
+	cmd := exec.CommandContext(t.Context(), "sh", "-c", script, "sh", msg)
+	_, err := cmd.Output()
+
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, err, &exitErr, "a command that exits non-zero must produce an ExitError")
+	require.Contains(t, string(exitErr.Stderr), msg,
+		"Output() must populate ExitError.Stderr when cmd.Stderr is nil — the classification reads nothing else")
+
+	// The conditional half. The assertion above says the field is filled; on its own it
+	// never says the nil precondition is what fills it, so it would hold just as well if
+	// Output() ignored cmd.Stderr entirely. This says the field comes back empty when the
+	// caller takes the stream — the mechanism by which a probe that started capturing
+	// stderr for its own logging would return #730 without touching #730's code. This test
+	// cannot see such a probe; that gap is the one disclosed above. What it pins is the rule
+	// a reader of classifyPIDProbe would otherwise have to take from the os/exec docs.
+	var captured bytes.Buffer
+	withStderr := exec.CommandContext(t.Context(), "sh", "-c", script, "sh", msg)
+	withStderr.Stderr = &captured
+	_, err = withStderr.Output()
+
+	var capturedErr *exec.ExitError
+	require.ErrorAs(t, err, &capturedErr)
+	require.Empty(t, capturedErr.Stderr,
+		"a caller that sets cmd.Stderr takes the diagnostic for itself and leaves ExitError.Stderr empty")
+	require.Contains(t, captured.String(), msg,
+		"and the diagnostic is not lost — it went to the caller's buffer, which is what makes this silent")
+}
+
+// TestClassifyPIDProbeTreatsAnUnopenableSocketAsNoAnswer is the destructive half of the
+// rule above, and the fix for #730.
+//
+// A non-zero exit is tmux reporting something, but it is a determination *about a server*
+// only when tmux reached one. connect() failing on the socket asks nothing of anybody: the
+// server may be running fine behind a mode bit, holding agents, with unpushed work. Read
+// as an answer it becomes pid 0, which assembleServers turns into
+// ReachableKnown && !Reachable — the exact pair reapTargets selects as a kill target BY
+// DEFAULT, no --all (cli_reap.go). The `--yes` refusal cannot catch it either: it fires on
+// ConnectedClients > 0, and zero connected clients is the normal state for an Atrium
+// session, whose TUI attaches only while someone is looking at it.
+//
+// Driven from the two package tables so this is a third consumer of the fixtures Close and
+// liveness already share, rather than a private copy of them. That matters here for the
+// reason it mattered in #727: a message covered on one caller's path and uncovered on
+// another's reads as covered, and narrowing the predicate then leaves a green suite.
+//
+// The gone list is asserted too, and it is not a restatement of the row above — but only
+// one of its four entries earns that, and saying "the gone list" credited all four.
+// Measured, in review of #739: widen socketUnreachableMessage to a bare "error connecting
+// to" and exactly the
+//
+//	error connecting to /tmp/sock (No such file or directory)
+//
+// row goes red. That row is the #547 orphan, the one thing `reap` exists to find, so it is
+// the whole over-correction guard. The other three are not connect diagnostics at all;
+// they hold the branch to firing only on connect failures — a predicate widened to swallow
+// "no server running on …" reddens them — but a classifier that hardcoded known=true would
+// satisfy all three. They are the weaker half of this table and are worth stating as such,
+// because a count of green subtests is not a count of guards.
+func TestClassifyPIDProbeTreatsAnUnopenableSocketAsNoAnswer(t *testing.T) {
+	for _, msg := range unreachableSocketMessages {
+		t.Run("no answer: "+msg, func(t *testing.T) {
+			pid, known := classifyPIDProbe(t.Context(), nil, exitErrorCarrying(msg))
+			require.False(t, known,
+				"tmux could not open the socket, so it asked no server anything; reading that as an "+
+					"answer makes a live server a default kill target (#730)")
+			require.Zero(t, pid)
+		})
+	}
+	for _, msg := range alreadyGoneMessages {
+		t.Run("answered: "+msg, func(t *testing.T) {
+			pid, known := classifyPIDProbe(t.Context(), nil, exitErrorCarrying(msg))
+			require.True(t, known,
+				"tmux reached a determination here; classifying it as no-answer would put the #547 "+
+					"orphan — a live server whose socket file was deleted — out of the reaper's reach")
+			require.Zero(t, pid)
 		})
 	}
 }

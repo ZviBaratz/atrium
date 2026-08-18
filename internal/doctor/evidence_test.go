@@ -319,7 +319,9 @@ func evidenceCases() []evidenceCase {
 			},
 			forbids: []string{"kill-server", "UNREACHABLE"},
 			names:   []string{"reachability unknown"},
-			why:     "only ReachableKnown && !Reachable is positive proof of an orphan nothing can address",
+			why: "an unanswered probe establishes nothing, and this class holds a live server whose " +
+				"socket is merely unopenable as well as a host where tmux could not run (#730) — so " +
+				"neither the orphan verdict nor a remedy aimed at one may be printed for it",
 		},
 		{
 			name:   "socket directory unlistable",
