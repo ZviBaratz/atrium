@@ -1425,6 +1425,20 @@ const (
 // restated a third time. What is measured is the AwaitingInput conjunction, and that is all
 // this argues from.
 //
+// AND IT IS STILL THERE NEXT DOOR. geminiTrustGateVisible carries the identical clause, and
+// the argument above transfers to it verbatim — with a worse consequence, since Enter on that
+// dialog writes ~/.gemini/trustedFolders.json permanently, granting the trust runGeminiHeadless
+// spends twenty lines describing. It is not deleted here because reachability differs by what
+// each dialog renders: a confirmation renders tool ARGUMENTS, so a row beginning "> " is
+// ordinary in one, while the trust dialog renders a folder path and fixed prose. Both panes
+// that demonstrate the shape are synthesized, not driven, and #736 has no budget left to drive
+// the second. #757 carries it, including the option neither matcher has taken: vetoing only at
+// block index 0 keeps the 0.27 rejection and fixes the miss, because the walled composer's box
+// has its input-box row at index 0 while a dialog's quoted row sits below the tool header at
+// index 1. Every driven rung here has that header first — all seven are the `exec` branch, so
+// whether `edit`'s diff leaves index 0 alone is not among the things this file has measured.
+// footerVisibleInSegments is the in-tree precedent for the shape.
+//
 // Deleting it trades an unsafe direction for a safe one. What comes back is a 0.27-shaped
 // boxed composer quoting both labels now matching — an over-fire, which is NoAutoTap ->
 // PanePromptManual -> NeedsInput with the prompt withheld, the direction #342 named acceptable
