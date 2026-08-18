@@ -1,12 +1,16 @@
 package app
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/git"
+	"github.com/ZviBaratz/atrium/ui/overlay"
 
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -21,28 +25,136 @@ import (
 // on the UI thread) lives on pauseConfirmMessage.
 func TestPauseConfirmMessage(t *testing.T) {
 	require.Equal(t,
-		"Pause 3 active sessions? (commits any work in progress, then removes each "+
+		"Pause 3 active sessions? (stops each agent, commits any work in progress, then removes each "+
 			"worktree — gitignored files like .env or build caches are deleted for good)",
 		pauseConfirmMessage("active", 3))
 	require.Equal(t,
-		"Pause 1 marked session? (commits any work in progress, then removes each "+
+		"Pause 1 marked session? (stops each agent, commits any work in progress, then removes each "+
 			"worktree — gitignored files like .env or build caches are deleted for good)",
 		pauseConfirmMessage("marked", 1))
 }
 
-// The batch-resume question names what resume rebuilds. It says "reattaches" because
-// pause only detaches tmux (session/pause.go): the agent process is normally still
-// alive and keeps its conversation, so "restarts" would frighten the user off a
-// non-destructive action. The worktree half is qualified ("each removed worktree") and
-// the agent half is not, because a batch can hold sessions Resume rebuilds nothing for
-// — a parked direct session, a commit-failure park — while every path reattaches.
+// The batch-resume question names what resume rebuilds. It says "relaunches" because
+// pause closes the tmux session (session/pause.go), ending the agent with it, so there
+// is nothing left to reattach — and it names the conversation because that is what the
+// old "reattaches" was really reassuring the user about.
+//
+// The worktree half is qualified ("each removed worktree") because a batch can hold
+// sessions Resume rebuilds nothing for — a parked direct session, a commit-failure
+// park. The conversation half is qualified for a different reason: only claude has a
+// transcript adapter, so for every other agent Atrium genuinely does not know, and a
+// flat promise would be a guess printed as a fact.
 func TestResumeConfirmMessage(t *testing.T) {
 	require.Equal(t,
-		"Resume 3 paused sessions? (rebuilds each removed worktree and reattaches every agent)",
+		"Resume 3 paused sessions? (rebuilds each removed worktree and relaunches each agent, "+
+			"resuming its conversation where the agent supports it)",
 		resumeConfirmMessage("paused", 3))
 	require.Equal(t,
-		"Resume 1 marked session? (rebuilds each removed worktree and reattaches every agent)",
+		"Resume 1 marked session? (rebuilds each removed worktree and relaunches each agent, "+
+			"resuming its conversation where the agent supports it)",
 		resumeConfirmMessage("marked", 1))
+}
+
+// A copy change is a height change, and this is the one box where nothing else would
+// notice. PlaceOverlay CLIPS rather than overflows, so a confirmation that outgrows the
+// terminal still renders exactly 24×80 and TestViewFitsTerminalBounds stays green while
+// the user loses the bottom border and the "Press y …" line — the only thing in the box
+// telling them how to answer it. These are the app's longest confirmations, and they are
+// hand-written prose, so the height is whatever the last edit made it.
+func TestConfirmationsFitTheSmallestSupportedTerminal(t *testing.T) {
+	// The narrowest size TestViewFitsTerminalBounds sweeps, and the smallest terminal
+	// anything here is written for.
+	const minWidth, minHeight = 80, 24
+	// Both fields come from the functions that build the real dialog, composed the way
+	// the real dialog composes them — a fixture assembled out of the same words would
+	// measure a box the app never renders, and the pieces are shorter than the whole in
+	// both directions here: resumeInstances appends resumeCapClause (not the bare
+	// hostCapacityLine it wraps) to this same box rather than opening a second one
+	// (#463), and both dialogs set a counted confirm label, which is longer than any
+	// stand-in and is itself part of what has to fit.
+	//
+	// Two fleet sizes, because every one of those parts is count-dependent and the dialog
+	// wraps: the message, the cap clause and the label all carry numbers that grow, so a
+	// single small n measures the shortest form of a box whose length is the subject. The
+	// large case is a three-digit host running a batch of the same order — the widest
+	// these numbers realistically print.
+	//
+	// The property the second size is here for is that the height does not move with the
+	// count, and it is asserted rather than written down: each case returns the height it
+	// measured per dialog, and the two are required to agree. An absolute number in a
+	// comment would be a claim no test reads — and would be wrong per-dialog anyway, since
+	// the two dialogs are not the same height as each other.
+	heights := map[string]map[string]int{}
+	for _, f := range []struct {
+		name           string
+		limit, live, n int
+	}{
+		{"small fleet", 4, 2, 3},
+		{"large fleet", 128, 99, 112},
+	} {
+		t.Run(f.name, func(t *testing.T) {
+			heights[f.name] = runConfirmationHeightCase(t, minWidth, minHeight, f.limit, f.live, f.n)
+		})
+	}
+	require.Len(t, heights, 2, "both fleet sizes must have measured, or the comparison below is vacuous")
+	for dialog, small := range heights["small fleet"] {
+		assert.Equal(t, small, heights["large fleet"][dialog],
+			"the %s dialog's height moved with the fleet size: a three-digit count crossed a wrap "+
+				"boundary, so the box this test measures at one size is not the one users see at the other", dialog)
+	}
+}
+
+// runConfirmationHeightCase renders both confirmations at one fleet size and returns the
+// line count of each, keyed by dialog, so the caller can compare across sizes.
+func runConfirmationHeightCase(t *testing.T, minWidth, minHeight, limit, live, n int) map[string]int {
+	t.Helper()
+	measured := map[string]int{}
+	cases := map[string]struct{ msg, label string }{
+		"pause": {
+			pauseConfirmMessage("active", n),
+			fmt.Sprintf("pause %d session%s", n, plural(n)),
+		},
+		"resume": {
+			resumeConfirmMessage("paused", n) + "\n" + resumeCapClause(limit, live, n),
+			fmt.Sprintf("resume %d session%s", n, plural(n)),
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newCreateFormHome(t)
+			h.state = stateConfirm
+			h.confirmationOverlay = overlay.NewConfirmationOverlay(tc.msg)
+			h.confirmationOverlay.SetConfirmLabel(tc.label)
+			h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: minWidth, Height: minHeight})
+
+			// The consequence first, then the mechanism, and neither fatal: a require
+			// on the height would abort the subtest and the failure output would never
+			// name what the user actually loses.
+			//
+			// The box's own bottom border, not the hint text: at this width the hint
+			// wraps mid-phrase ("…n or esc to" / "cancel"), so a contiguous match for it
+			// reports a clip on a box that fits perfectly well — which is what the real
+			// confirm label, longer than any stand-in, turned up. The border is the last
+			// line of the box either way, and the bottom is the end PlaceOverlay clips,
+			// so it goes before the hint does.
+			box := strings.Split(xansi.Strip(h.confirmationOverlay.Render()), "\n")
+			bottom := box[len(box)-1]
+			// Contains("") is true of every string, so a render that came back empty —
+			// a zero width reaching SetWidth, an overlay left unarmed — would satisfy
+			// both assertions below while measuring nothing at all. Pin the line to the
+			// shape of a real bottom border first, so this subtest cannot pass vacuously.
+			require.NotEmpty(t, strings.TrimSpace(bottom), "the overlay rendered no box to measure")
+			require.Greater(t, lipgloss.Width(bottom), minWidth/2,
+				"the last line is too narrow to be the box's bottom border: %q", bottom)
+
+			assert.Contains(t, xansi.Strip(h.View().Content), bottom,
+				"the bottom of the confirmation was clipped away, taking the line that says how to answer it")
+			assert.LessOrEqual(t, len(box), minHeight,
+				"the confirmation box is taller than the smallest supported terminal, so it will be clipped")
+			measured[name] = len(box)
+		})
+	}
+	return measured
 }
 
 // The host-capacity fact is one sentence shared by the create confirmation and the

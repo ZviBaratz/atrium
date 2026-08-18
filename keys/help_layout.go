@@ -89,7 +89,7 @@ func HelpGroups() []HelpGroup {
 			// Atrium's open key rewrite advice about a key the agent never sees.
 			{Keys: []KeyName{KeyApprove}, Desc: "approve the agent's prompt (enter picks its default); on idle claude, accept the suggested prompt"},
 			{Keys: []KeyName{KeyRunCommand}, Desc: "start / stop the repo's run_command (dev server) on this session's port"},
-			{Keys: []KeyName{KeyPause}, Desc: "pause: commit changes + free the worktree"},
+			{Keys: []KeyName{KeyPause}, Desc: "pause: stop the agent, commit changes, free the worktree"},
 			{Keys: []KeyName{KeyPauseAll}, Desc: "pause all active sessions in the current view"},
 			{Keys: []KeyName{KeySubmit}, Desc: "commit & push branch"},
 			{Keys: []KeyName{KeyCreate}, Desc: "create a PR for the pushed branch (gh)"},

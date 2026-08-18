@@ -106,11 +106,7 @@ func TestRecoverLostSessionTransitionsToPaused(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, wt.Setup())
 
-	deadExec := cmd_test.MockCmdExec{
-		RunFunc:    func(*exec.Cmd) error { return fmt.Errorf("no such session") },
-		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, fmt.Errorf("dead") },
-	}
-	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", tmux.MakePtyFactory(), deadExec)
+	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", tmux.MakePtyFactory(), deadExec())
 	inst := &Instance{Title: "sess", status: Running, started: true, gitWorktree: wt, tmuxSession: ts}
 
 	require.False(t, inst.TmuxAlive())

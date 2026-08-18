@@ -590,6 +590,145 @@ func TestOrphanedServerIsFoundAndKillableAfterItsSocketRootIsDeleted(t *testing.
 	require.False(t, stillThere, "a killed orphan must stop being reported")
 }
 
+// TestALiveServerBehindAnUnopenableSocketIsNotAReapTarget is #730 against a real tmux
+// server, and the sibling of the test above: same inventory, opposite verdict.
+//
+// The two differ in one byte of state. There the socket file is DELETED, so nothing can
+// ever connect to that path again and the server behind it is unaddressable by anything —
+// the class-(c) orphan `reap` exists for. Here the file is still there and merely cannot be
+// OPENED, which is not a fact about the server at all: it is running, holding its child,
+// and one chmod away from being reachable again. tmux reports both as a non-zero exit, and
+// classifyPIDProbe used to read every non-zero exit as an answer — so this server arrived
+// ReachableKnown && !Reachable, the exact pair reapTargets admits BY DEFAULT (cli_reap.go),
+// and `atrium reap --kill --yes` SIGKILLed it and every agent in it. The `--yes` refusal
+// could not catch it: that fires on ConnectedClients > 0, and a detached Atrium session
+// normally has none.
+//
+// Only a real tmux server can prove this end to end. The unit table (orphan_test.go) pins
+// the classification against captured strings, but nothing there shows that the string tmux
+// actually emits for this state is one of them, nor that it arrives where the classifier
+// reads it. That whole chain — errno to diagnostic to stream to field — is what is under
+// test here, which is why the precondition below is asserted rather than assumed.
+func TestALiveServerBehindAnUnopenableSocketIsNotAReapTarget(t *testing.T) {
+	testutil.RequireTmux(t)
+	if os.Geteuid() == 0 {
+		// The premise, not the assertion, is what fails as root: CAP_DAC_OVERRIDE ignores
+		// the mode bits, so the socket stays openable and there is no unreachable state to
+		// classify. Skipping is honest; asserting would test nothing and pass.
+		t.Skip("root bypasses the permission check this test makes the socket unopenable with")
+	}
+
+	// Short root under /tmp for sun_path's budget, and a per-run random socket NAME so no
+	// `-L` here or in a later edit of this file can resolve onto a socket the live fleet
+	// binds. Same reasoning as the sibling tests and config_parse_test.go.
+	tmuxTmp, err := os.MkdirTemp("/tmp", "atr")
+	require.NoError(t, err)
+	sock := fmt.Sprintf("atrium-permtest-%d", rand.Int31())
+	sockPath := filepath.Join(tmuxTmp, fmt.Sprintf("tmux-%d", os.Getuid()), sock)
+
+	// Teardown is armed before anything starts, in two layers, in the order
+	// TestOrphanedServerIsFoundAndKillableAfterItsSocketRootIsDeleted established: the pid
+	// layer is registered SECOND so it runs FIRST.
+	//
+	// That order is not cosmetic here. Signalling a pid after a successful kill-server aims
+	// SIGKILL at a pid the server has already released — the reuse window `atrium reap`
+	// itself refuses to stand in, re-verifying ProcessStartTime before it signals — and this
+	// runs on a developer's machine under `just test`. Killing first closes it: the pid is
+	// live when the signal lands, and the socket layer that follows is a no-op belt.
+	//
+	// The socket layer restores the mode FIRST, because every way of stopping this server by
+	// socket path is blocked by the very state the test creates, so a cleanup that went
+	// straight to kill-server would leak the server it could not reach — the defect this
+	// file is about.
+	//
+	// The pane's own process is recorded too, not just the server's. `sleep 600` outlives a
+	// failed teardown by ten minutes, and a leaked child is what this file exists to prevent
+	// as much as a leaked server.
+	//
+	// Children are signalled BEFORE the server, for the same reason the pid layer precedes
+	// the socket one. SIGKILLing the server closes the pty master, which hands the pane's
+	// foreground group a SIGHUP and takes `sleep 600` down with it — so a loop that started
+	// at the server would reach the pane pid after the kernel had already released it, which
+	// is the window this ordering exists to close, reopened inside the layer that closes it.
+	// A leaf has no such effect on its parent: tmux tears the pane down through its event
+	// loop, several turns after the signal lands.
+	t.Cleanup(func() {
+		_ = os.Chmod(sockPath, 0o700)
+		_ = exec.CommandContext(context.Background(), "tmux", "-S", sockPath, "kill-server").Run()
+		_ = os.RemoveAll(tmuxTmp)
+	})
+	var serverPID int
+	var childPIDs []int
+	t.Cleanup(func() {
+		for _, pid := range append(append([]int{}, childPIDs...), serverPID) {
+			if pid > 0 {
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+			}
+		}
+	})
+
+	// TMUX_TMPDIR on cmd.Env, never os.Setenv: TestMain installed one for the whole binary
+	// and reassigning it process-wide moves every other test's sockets out from under the
+	// teardown that reaps them (#581).
+	env := append(os.Environ(), "TMUX_TMPDIR="+tmuxTmp)
+	start := exec.CommandContext(t.Context(), "tmux", "-L", sock, "new-session", "-d", "sleep 600")
+	start.Env = env
+	out, err := start.CombinedOutput()
+	require.NoError(t, err, "start the server: %s", out)
+
+	pidOut, err := runWithEnv(t, env, "tmux", "-L", sock, "display-message", "-p", "#{pid}")
+	require.NoError(t, err)
+	serverPID, err = strconv.Atoi(strings.TrimSpace(pidOut))
+	require.NoError(t, err)
+	require.FileExists(t, sockPath)
+
+	// The pane's pid goes to the teardown now, while the socket still opens — deliberately
+	// not read from the scan's Children later. A backstop that depended on the thing under
+	// test would be missing in exactly the runs that need it: if ScanServers fails to find
+	// this server, that is both the interesting failure and the one that leaks a `sleep 600`.
+	paneOut, err := runWithEnv(t, env, "tmux", "-L", sock, "list-panes", "-F", "#{pane_pid}")
+	require.NoError(t, err)
+	panePID, err := strconv.Atoi(strings.TrimSpace(paneOut))
+	require.NoError(t, err)
+	childPIDs = append(childPIDs, panePID)
+
+	// ---- the state: the socket cannot be opened, and the server does not care ----
+	require.NoError(t, os.Chmod(sockPath, 0o000))
+	require.FileExists(t, sockPath, "the file is still there — that is what separates this from #547")
+	require.True(t, processAliveForTest(serverPID), "the server is alive behind it, holding its child")
+
+	// ---- the precondition, captured rather than assumed ----
+	//
+	// Everything below is about how a diagnostic is classified, so a run in which tmux
+	// emitted no diagnostic — a kernel or filesystem that let the connect through, an
+	// unlisted errno, a future tmux that reworded this — would assert its way to a green
+	// that means nothing. The message is therefore proven to exist, proven to be the shape
+	// the classifier keys on, and printed when it is not.
+	probeErr := exec.CommandContext(t.Context(), "tmux", "-S", sockPath, "display-message", "-p", "#{pid}")
+	var probeStderr strings.Builder
+	probeErr.Stderr = &probeStderr
+	require.Error(t, probeErr.Run(), "an unopenable socket must not answer a probe")
+	diagnostic := strings.TrimSpace(probeStderr.String())
+	require.True(t, socketUnreachableMessage(diagnostic),
+		"this test classifies tmux's diagnostic, so it has to be one: got %q", diagnostic)
+
+	// ---- the verdict ----
+	servers, supported, gaps := ScanServers(t.Context())
+	require.True(t, supported)
+	require.False(t, gaps.IncompleteInventory(), "a gap would make the find below unprovable: %+v", gaps)
+
+	found, ok := findServer(servers, serverPID)
+	require.True(t, ok, "the scan must still SEE it (pid %d); it found %v — a server it cannot classify "+
+		"is not a server it may hide", serverPID, pidsOf(servers))
+	require.Equal(t, sockPath, found.SocketPath)
+	require.False(t, found.ReachableKnown,
+		"tmux could not open the socket, so nothing was established about this server — and "+
+			"ReachableKnown is the single field reapTargets keys on to spare it, under --all included "+
+			"(TestReapKillTargetsOnlyProvenUnreachableServers). Before #730 this read true, and `reap "+
+			"--kill --yes` took a live server and every agent in it")
+	require.False(t, found.Reachable, "and it did not answer, which is the half that was always true")
+}
+
 // TestAServerWhoseSocketFileIsGoneStillReportsItsAttachedClient reproduces #614 against
 // a real tmux server, which is the only place the whole chain can be checked at once:
 // tmux's own accept()ed sockets, the /proc/net/unix rows they produce, and the count

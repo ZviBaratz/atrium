@@ -107,9 +107,9 @@ func TestMultiSelect_PauseConfirmsPausableSubset(t *testing.T) {
 	require.Equal(t, stateConfirm, h.state, "p opens a confirmation")
 	require.NotNil(t, h.confirmationOverlay)
 	rendered := flattenOverlay(h.confirmationOverlay.Render())
-	assert.Contains(t, rendered,
-		"Pause 2 marked sessions? (commits any work in progress, then removes each "+
-			"worktree — gitignored files like .env or build caches are deleted for good)")
+	// The literal itself is pinned once, in dialog_voice_test.go; what this test is
+	// about is that `p` opened the pause dialog over the right kind and count.
+	assert.Contains(t, rendered, pauseConfirmMessage("marked", 2))
 	assert.Contains(t, rendered, "Press y to pause 2 sessions, n or esc to cancel")
 }
 
@@ -127,8 +127,7 @@ func TestMultiSelect_ResumeConfirmsPausedSubset(t *testing.T) {
 
 	require.Equal(t, stateConfirm, h.state)
 	rendered := flattenOverlay(h.confirmationOverlay.Render())
-	assert.Contains(t, rendered,
-		"Resume 1 marked session? (rebuilds each removed worktree and reattaches every agent)")
+	assert.Contains(t, rendered, resumeConfirmMessage("marked", 1))
 	assert.Contains(t, rendered, "Press y to resume 1 session, n or esc to cancel")
 }
 

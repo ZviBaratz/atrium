@@ -6,7 +6,7 @@ Per-flow screencasts for the README, generated from committed [vhs](https://gith
 |------|------|
 | `create-attach-detach.tape` | make a session → attach → detach |
 | `diff-review.tape` | review a session's change in the Diff tab |
-| `pause-resume.tape` | pause (commit + free the worktree) → resume |
+| `pause-resume.tape` | pause (stop the agent, commit, free the worktree) → resume |
 
 ## Rendering
 

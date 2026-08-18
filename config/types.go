@@ -199,12 +199,11 @@ type RepoScript struct {
 	// sessions can run the same dev server at once without a collision to resolve by
 	// hand.
 	//
-	// A port is held for as long as the session's PANE is: allocated when the worktree
-	// is materialized (create, and again on resume), kept across a pause — tmux freezes
-	// a session's environment at birth and a resume only re-attaches, so the parked
-	// shell still exports the number — and released on kill. Empty means this repo has
-	// no managed port, which is the pre-feature behavior and what every unconfigured
-	// repo gets.
+	// A port is held for as long as the SESSION is: allocated when the worktree is
+	// materialized (create, and again on resume), kept across a pause — so the dev
+	// server a resume restarts comes back on the number a browser tab is already
+	// aimed at — and released on kill. Empty means this repo has no managed port,
+	// which is the pre-feature behavior and what every unconfigured repo gets.
 	PortRange string `json:"port_range,omitempty"`
 }
 

@@ -350,7 +350,7 @@ in-app keymap and this section ever drift apart, so it stays complete.
 | `H` | claude sessions: list the checkpoints it took before each prompt, then attach to rewind one (`Esc Esc`) — see [Checkpoints](#checkpoints) |
 | `a` | approve the agent's prompt (`↵` picks its default); on idle claude, accept the suggested prompt |
 | `d` | start / stop the repo's `run_command` (dev server) on this session's port (see [Run commands](#run-commands)) |
-| `p` | pause: commit changes + free the worktree |
+| `p` | pause: stop the agent, commit changes, free the worktree |
 | `ctrl-p` | pause all active sessions in the current view |
 | `P` | commit & push branch |
 | `c` | create a PR for the pushed branch (gh) |
@@ -1074,18 +1074,17 @@ So `npm run dev -- --port $ATRIUM_PORT` in the agent's own shell does the right 
 for whichever session it is typed in, and the row shows `:3001` — a link, on a terminal
 that supports them, to `http://localhost:3001`.
 
-A session keeps its port for as long as its pane lives: allocated when the worktree is
-materialized, kept across a pause, released on kill. It survives an Atrium restart too,
-so a server you started stays reachable at the number the row shows.
+A session keeps its port for as long as the session itself lasts: allocated when the
+worktree is materialized, kept across a pause, released on kill. It survives an Atrium
+restart too, so a server you started stays reachable at the number the row shows.
 
 That a *paused* session still holds its port is deliberate, and it is the one place the
-design costs you something. tmux fixes a session's environment when the pane is created
-and a resume re-attaches rather than relaunching, so the shell you type in exports the
-port it was born with, whatever Atrium decides later. Handing that number to the next
-session created — which is what releasing it on pause would do — leaves two sessions
-aimed at one port, and the parked one finds out when you resume it. So a parked session
-occupies a port until it is killed. Size the range for the sessions you park as well as
-the ones you run.
+design costs you something. The number is what your browser tab, your bookmark and any
+template that rendered it are already aimed at, and a resume restarts the session's dev
+server on it — so handing it to the next session created would mean the resumed session
+either comes back on a number nobody was told about or lands on one another session now
+owns. So a parked session occupies a port until it is killed. Size the range for the
+sessions you park as well as the ones you run.
 
 Two sessions are never handed the same port: Atrium tracks what its own sessions hold
 and, separately, refuses a port anything else is already listening on. That second check
@@ -1093,7 +1092,8 @@ is a snapshot — a port free when the session is created can be taken before yo
 binds it — so it is a filter against what is already running, not a reservation.
 
 If nothing in the range is free the session still starts, without `$ATRIUM_PORT`, and
-says so in a modal. Widen the range or free a port by pausing another session.
+says so in a modal. Widen the range or free a port by killing another session — pausing
+one will not, for the reason two paragraphs up.
 
 While the script runs the session's row says so, and the preview names it in place of
 the generic "Setting up workspace…" it shows for every other session that has not come

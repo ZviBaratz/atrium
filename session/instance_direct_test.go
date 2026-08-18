@@ -82,7 +82,8 @@ func TestDirectSession_KillKeepsDirectory(t *testing.T) {
 
 // TestDirectSession_PauseRefused verifies user-initiated Pause is disabled for a direct
 // session: it returns an error, leaves the session Running, and never touches the
-// directory. (Pausing would only detach a still-running agent while claiming it parked.)
+// directory. (Pausing would stop the agent standing in the user's own checkout and
+// reclaim nothing in exchange — there is no worktree to free.)
 func TestDirectSession_PauseRefused(t *testing.T) {
 	dir := t.TempDir()
 	inst := &Instance{Title: "d", status: Running, started: true, direct: true, Path: dir, tmuxSession: directTmux("d")}

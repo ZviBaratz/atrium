@@ -329,34 +329,29 @@ func TestReleasePort_ReturnsThePortToTheRange(t *testing.T) {
 	assert.Equal(t, base, second.Port(), "the freed port is the next session's")
 }
 
-// A pause must NOT renumber the session, because the agent's pane cannot be
-// renumbered with it: tmux freezes $ATRIUM_PORT at `new-session -e` and a resume
-// re-attaches (tmux.Session.Restore is attach-session, nothing more), so the shell the
-// user types in keeps the number it was born with for the life of that pane.
+// A pause must NOT renumber the session. The pause closes the pane, so nothing is
+// left exporting the old number — this is a promise rather than a collision guard:
+// the session's dev server is stopped by the pause and restarted by the resume, and
+// the number is what a browser tab, a bookmark or a rendered template is already
+// aimed at.
 //
-// Releasing on pause and re-allocating on resume produced exactly the collision the
-// port exists to prevent: park A (holding 3000), create C — which is handed 3000,
-// lowest-free — then resume A onto 3002. A's row, templates and setup script all say
-// 3002 while its pane still exports 3000, so `npm run dev -- --port $ATRIUM_PORT` in A
-// binds the port C's server owns.
-func TestPauseResume_KeepsThePortWhileThePaneLives(t *testing.T) {
+// Releasing on pause and re-allocating on resume is what that promise forbids: park A
+// (holding 3000), create C — which is handed 3000, lowest-free — then resume A onto
+// 3002. A's row, templates and setup script all say 3002, the tab the user left open
+// says 3000, and A's server comes back on a number nobody was told about.
+func TestPauseResume_KeepsThePort(t *testing.T) {
 	isolatePorts(t)
 	base := freePort(t)
 	wt := newTestWorktree(t)
 	writeRepoScriptConfig(t, config.RepoScript{Name: "any", PortRange: fmt.Sprintf("%d-%d", base, base)})
-	aliveExec := cmd_test.MockCmdExec{
-		RunFunc:    func(*exec.Cmd) error { return nil },
-		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
-	}
-	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", newRecordingPtyFactory(t, nil), aliveExec)
-	inst := &Instance{Title: "sess", status: Running, started: true, gitWorktree: wt, tmuxSession: ts}
+	inst := pausableInstance(t, wt)
 	_, ok := inst.resolveSetupRun(wt.GetWorktreePath())
 	require.True(t, ok)
 	require.Equal(t, base, inst.Port())
 
 	require.NoError(t, inst.Pause())
 
-	assert.Equal(t, base, inst.Port(), "a parked session still owns the port its pane exports")
+	assert.Equal(t, base, inst.Port(), "a parked session still owns its port")
 	other := &Instance{Title: "other", Path: wt.GetRepoPath()}
 	_, ok = other.resolveSetupRun(wt.GetWorktreePath())
 	require.True(t, ok)
@@ -364,13 +359,16 @@ func TestPauseResume_KeepsThePortWhileThePaneLives(t *testing.T) {
 
 	require.NoError(t, inst.Resume())
 
-	assert.Equal(t, base, inst.Port(), "so a resume finds the number its pane already has")
+	assert.Equal(t, base, inst.Port(), "so a resume comes back on the number it left with")
 }
 
-// When the pane is gone the port goes with it: there is no frozen environment left to
-// contradict, and the next launch is a `new-session -e` that will carry whatever it is
-// given. This is the path RecoverLostSession takes when tmux died under a session.
-func TestPause_ReleasesThePortWhenThePaneIsGone(t *testing.T) {
+// A park whose pane was ALREADY gone keeps the port too, which is the half that used
+// to be wrong. RecoverLostSession parks a session precisely because tmux died under
+// it, and pause released the port on that branch — so a session the user never chose
+// to park lost its number, silently, and got a different one on resume. Kill remains
+// the only release (see TestKill_ReleasesThePort, the control that keeps this from
+// being satisfied by never releasing at all).
+func TestPause_KeepsThePortWhenThePaneIsGone(t *testing.T) {
 	isolatePorts(t)
 	base := freePort(t)
 	dir := writeRepoScriptConfig(t, config.RepoScript{Name: "any", PortRange: fmt.Sprintf("%d-%d", base, base)})
@@ -386,11 +384,11 @@ func TestPause_ReleasesThePortWhenThePaneIsGone(t *testing.T) {
 
 	_ = inst.RecoverLostSession()
 
-	assert.Zero(t, inst.Port(), "a session with no pane holds no port")
+	assert.Equal(t, base, inst.Port(), "a park does not take the session's number away from it")
 	next := &Instance{Title: "next", Path: dir}
 	_, ok = next.resolveSetupRun(dir)
 	require.True(t, ok)
-	assert.Equal(t, base, next.Port())
+	assert.Zero(t, next.Port(), "and no other session may be handed it while the park stands")
 }
 
 // Kill releases it too, so a killed session's number is immediately reusable rather
