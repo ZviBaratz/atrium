@@ -75,6 +75,15 @@ func runClaudeHeadless(ctx context.Context, executor cmd.Executor, claudePath, w
 // is the bug: it would restore the world-writable chain silently, on the path where
 // something about the data dir was already wrong. A failed naming call costs a default
 // session title, which is the direction session/naming.go already degrades in.
+//
+// WHAT MOVING OUT OF /tmp COSTS, disclosed rather than left to be found: nothing sweeps
+// this root. The caller's deferred RemoveAll covers a normal return and a panic, and the
+// old location was reaped by the OS when it did not — so a kill during a naming call now
+// leaks an entry here permanently, where doctor cannot see it and no reap knows the path.
+// It is one EMPTY directory per abnormally-terminated call (gemini writes its own state
+// under GEMINI_CLI_HOME, not into the cwd), which is why this is a disclosure and not a
+// sweeper: every sweep that could run here races an in-flight call from another process,
+// and the TUI and the daemon both name sessions.
 func geminiHeadlessWorkspace() (string, error) {
 	configDir, err := config.GetConfigDir()
 	if err != nil {
