@@ -105,6 +105,25 @@ func runGeminiHeadless(ctx context.Context, executor cmd.Executor, geminiPath, p
 // runAgyHeadless runs `agy -p` from a freshly created empty workspace dir
 // (like gemini) and returns the bare stdout text. Shared by the agy
 // naming and dispatch paths.
+//
+// WHY THIS ONE DOES NOT SET A TRUST VARIABLE, and what that is and is not
+// evidence of. It is the same shape as runGeminiHeadless, which #744 had to fix
+// because 0.55.x gemini refuses an untrusted cwd — so the question is fair and
+// the answer is only partial.
+//
+// agy is a Go binary, not the gemini-cli JS bundle, so #744's specific mechanism
+// cannot apply: its string table carries none of GEMINI_CLI_TRUST_WORKSPACE,
+// trustedFolders, isWorkspaceTrusted, or "not running in a trusted directory".
+// That negative is worth something only because the instrument is calibrated on
+// the same binary — the identical grep DOES find agy's own "Yes, I trust this
+// folder" and "esc to cancel", both of which it demonstrably renders, so the
+// table is reachable and the absences are real absences.
+//
+// But agy HAS a trust concept of its own ("Do you trust the contents of this
+// project?") and its own print-mode path ("slash command is not available in
+// print mode"). Whether `agy -p` refuses an untrusted cwd the way gemini does is
+// UNTESTED — it needs one headless agy run from a temp dir, which #752 tracks.
+// Absence of gemini's mechanism is not presence of agy's permissiveness.
 func runAgyHeadless(ctx context.Context, executor cmd.Executor, agyPath, promptArg, stdin string) (string, error) {
 	workDir, err := os.MkdirTemp("", "cs-headless-agy-")
 	if err != nil {
