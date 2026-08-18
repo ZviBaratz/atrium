@@ -1405,7 +1405,7 @@ const (
 // push both labels" is true of the code path getOptions takes, and conditionally four of the
 // dialog a user can be sitting in front of. Their headers are distinctive but sit at the TOP
 // of a box that can outgrow a 19-row preview pane, which is the shape this package has twice
-// found unusable. Filed rather than guessed at.
+// found unusable, and reaching one costs an API turn per state. Tracked as #753.
 func geminiConfirmationVisible(content string) bool {
 	block, ok := bottomBoxBlock(content)
 	if !ok {
