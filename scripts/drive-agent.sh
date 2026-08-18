@@ -421,12 +421,19 @@ load_cap_env() {
 # credentials directory. Same call emit already makes when it redacts email addresses.
 cap_env_names() {
 	[[ -s "$RUN/cap-env" ]] || return 0
-	# Blank and '#' lines are skipped HERE TOO, and that is the point rather than tidiness:
-	# this is the third reader of one file, and what it prints goes into a fixture's doc
-	# comment as the environment the capture was driven under. A reader that counts a line
-	# the other two skip stamps a header claiming an isolation the session never had —
-	# which is the single failure this whole mechanism exists to prevent.
-	awk -F= '/^[[:space:]]*$/ || /^#/ {next} {printf "%s%s", sep, $1; sep=", "} END{if (n) print ""} {n=1}' "$RUN/cap-env"
+	# VALIDATED before it is reported, because matching skip predicates turned out not to be
+	# enough. emit and status reach this without going through load_cap_env, so an entry the
+	# bash readers refuse was still printed here: ' #NAME=VALUE', one leading space, is not
+	# '#'* to bash, so validate_cap_env dies on it as a non-identifier — while awk's /^#/ did
+	# not match it either and printed ' #NAME'. emit then stamped a variable into a committed
+	# fixture header that no session could ever have carried, which is the single failure this
+	# whole mechanism exists to prevent. A skip predicate cannot fix that; only sharing the
+	# refusal can.
+	validate_cap_env <"$RUN/cap-env"
+	# Spelled like validate_cap_env's and load_cap_env's now rather than nearly like them.
+	# With the refusal above this is unreachable for the divergent cases, and a predicate that
+	# is only correct because something else dies first is the kind that stops being correct.
+	awk -F= '/^$/ || /^#/ {next} {printf "%s%s", sep, $1; sep=", "} END{if (n) print ""} {n=1}' "$RUN/cap-env"
 }
 
 # ── tmux ─────────────────────────────────────────────────────────────────────────
@@ -622,6 +629,17 @@ write_capture() {
 }
 
 # ── verbs ────────────────────────────────────────────────────────────────────────
+
+# fresh_preflight is what `up` checks, re-checked by the one other verb that destroys
+# something. It is a named function rather than two lines inside cmd_fresh so the test harness
+# can stub it: `command -v` resolves against the RUNNER's PATH, and the agent binaries this
+# script drives are not installed on CI.
+fresh_preflight() {
+	preflight
+	local bin0="${PROGRAM%% *}"
+	command -v "$bin0" >/dev/null 2>&1 ||
+		die "not on PATH: $bin0 — \`fresh\` runs in its own process, so this shell's PATH is not the one \`up\` resolved it with"
+}
 
 preflight() {
 	local bin
@@ -971,6 +989,13 @@ cmd_fresh() {
 	# cost an API turn to reach. This is load_cap_env's own file check and validation call,
 	# both pure reads, so running it twice costs nothing and duplicates no message.
 	load_cap_env
+	# And the same argument for the things `up` checked and this verb never did. Each verb is
+	# its own process, so `fresh` does NOT inherit `up`'s PATH: a mise/nvm/npm switch between
+	# them, or simply running it from another shell, leaves $PROGRAM unresolvable. Without
+	# these two the reap and the rm -rf below still ran, and the failure landed inside
+	# start_session — throwing away a dialog that cost an API turn to reach, which is the exact
+	# cost the load_cap_env hoist above exists to prevent. Both are pure checks.
+	fresh_preflight
 	reap "$SOCK"
 	[[ -e "$workdir" ]] && rm -rf "$workdir"
 	new_workspace "$workdir"

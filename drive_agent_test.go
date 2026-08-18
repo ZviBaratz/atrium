@@ -29,6 +29,7 @@ set -- ; source "$SCRIPT" >/dev/null 2>&1
 RUN="$TMP"
 load_run() { source "$RUN/meta.env"; }
 reap() { :; }
+fresh_preflight() { :; }
 new_workspace() { mkdir -p "$1"; }
 start_session() { PANE=%9; WINDOW=@9; }
 note() { :; }
@@ -37,16 +38,24 @@ assert_under_run_root() { :; }
 
 func runDriveAgent(t *testing.T, script, tmp, snippet string) (string, error) {
 	t.Helper()
+	return runDriveAgentWith(t, script, tmp, driveAgentHarness, snippet)
+}
+
+// runDriveAgentWith is runDriveAgent over an explicit harness, for the one test that needs a
+// stub REMOVED. Everything the harness fakes is faked because it would touch tmux or a real
+// filesystem; fresh_preflight is faked because `command -v` resolves against the runner's
+// PATH and CI has no agent binaries installed — so the test that covers it has to put it back.
+func runDriveAgentWith(t *testing.T, script, tmp, harness, snippet string) (string, error) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "bash", "-c", driveAgentHarness+snippet)
+	cmd := exec.CommandContext(ctx, "bash", "-c", harness+snippet)
 	cmd.Env = append(os.Environ(), "SCRIPT="+script, "TMP="+tmp)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
 
-// writeMetaEnv seeds a run directory the way `up` leaves one.
 // writeMetaEnv makes dir look like a run directory `up` created — which means BOTH files.
 // cap-env is written here rather than per-test because cmd_fresh validates it before it
 // reaps, so every verb that goes through `fresh` now needs it, and a test that omits it dies
@@ -214,6 +223,7 @@ assert_geometry() { :; }
 settle() { :; }
 pane() { printf 'painted\n'; }
 reap() { :; }
+fresh_preflight() { :; }
 new_workspace() { mkdir -p "$1"; }
 note() { :; }
 die() { printf '%s\n' "$*" >&2; exit 1; }
@@ -600,4 +610,55 @@ t() { printf '[t %s]\n' "$*"; }
 		recordKeys+`NOENTER=1 cmd_send "$(printf 'a\nb')"`)
 	require.Error(t, err, "a newline under NOENTER submits anyway; output:\n%s", out)
 	require.Contains(t, out, "refuses a text containing a newline", "output:\n%s", out)
+}
+
+// The seam exists to be stubbed on CI, so the one test that exercises it takes the harness
+// back apart. Without that, the fix is unguarded: every other cmd_fresh test stubs
+// fresh_preflight away, so deleting the call from cmd_fresh outright leaves them all green.
+//
+// What is asserted is the ORDER, not the message. `fresh` reaping a session and rm -rf'ing a
+// workspace before discovering the agent is unreachable throws away a dialog that cost an API
+// turn — the same cost the load_cap_env hoist beside it exists to prevent, which is why the
+// two checks sit together. Each verb is its own process, so `fresh` does not inherit `up`'s
+// PATH and this is reachable without anyone editing anything.
+func TestDriveAgentFreshChecksTheProgramBeforeItReaps(t *testing.T) {
+	script := filepath.Join(moduleRoot(t), "scripts", "drive-agent.sh")
+	dir := t.TempDir()
+	writeMetaEnv(t, dir)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "meta.env"), []byte(strings.Join([]string{
+		"PROGRAM=atrium-no-such-agent-736", "BIN=atrium-no-such-agent-736", "VERSION=0",
+		"CAPTURED=2026-08-17", "WIDTH=120", "HEIGHT=40", "PANE=%1", "WINDOW=@1", "",
+	}, "\n")), 0o644))
+
+	unstubbed := strings.Replace(driveAgentHarness, "fresh_preflight() { :; }\n", "", 1)
+	require.NotEqual(t, driveAgentHarness, unstubbed, "the premise: the stub was actually removed")
+
+	out, err := runDriveAgentWith(t, script, dir, unstubbed,
+		"reap() { echo REAPED; }\ncmd_fresh 45 19")
+	require.Error(t, err, "an unresolvable program must stop the verb; output:\n%s", out)
+	require.Contains(t, out, "not on PATH: atrium-no-such-agent-736")
+	require.NotContains(t, out, "REAPED",
+		"and it must stop BEFORE the reap, or the check costs the capture it exists to save; output:\n%s", out)
+}
+
+// The third reader of cap-env shares the other two's refusal, asserted on the entry that
+// proved a matching skip predicate is not enough on its own. " #NAME=VALUE" — one leading
+// space — is not a '#'-prefixed line to bash, so validate_cap_env dies on it as a
+// non-identifier; awk's /^#/ did not match it either, and printed " #NAME". emit and status
+// reach cap_env_names without going through load_cap_env, so that name was stamped into a
+// committed fixture header as an environment the session never carried.
+func TestDriveAgentCapEnvNamesRefuseWhatTheBashReadersRefuse(t *testing.T) {
+	script := filepath.Join(moduleRoot(t), "scripts", "drive-agent.sh")
+	dir := t.TempDir()
+	writeMetaEnv(t, dir)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "cap-env"),
+		[]byte(" #GEMINI_CLI_HOME=/iso\n"), 0o600))
+
+	// stderr discarded, so what is left is exactly what emit would consume. The refusal names
+	// the offending line on stderr — that is how you find it — and asserting against the
+	// combined streams would have been asserting the diagnostic away.
+	out, err := runDriveAgent(t, script, dir, "load_run; cap_env_names 2>/dev/null")
+	require.Error(t, err, "a line the bash readers refuse must not be reportable; output:\n%s", out)
+	require.Empty(t, strings.TrimSpace(out),
+		"nothing may reach stdout, where emit would stamp it into a fixture header; got:\n%s", out)
 }
