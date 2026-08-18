@@ -1321,10 +1321,10 @@ const (
 // BOTH halves of the conjunction are branch-invariant, not just the one that is easier to
 // reason about — with one exception inside edit that the NOT COVERED note below carries, since
 // edit's pushes are the only conditional ones. That is read off the 0.55.1 bundle, and this
-// file's standing rule is that bundle presence is necessary and NOT sufficient. If edit (which renders a diff above its
-// options) or any of the other three renumbers, rewords or re-nests EITHER row — a
-// conjunction is only as reachable as its rarer term — this misses there and nothing here
-// would notice.
+// file's standing rule is that bundle presence is necessary and NOT sufficient. If edit
+// (which renders a diff above its options) or any of the other three renumbers, rewords or
+// re-nests EITHER row — a conjunction is only as reachable as its rarer term — this misses
+// there and nothing here would notice.
 //
 // The block is read LINE-WISE and unflattened, so two adjacent wrapped rows cannot synthesise
 // a phrase neither renders — the trap flattenChrome sprang on the trust gate (#713).
