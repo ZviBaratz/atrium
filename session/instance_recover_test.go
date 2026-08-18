@@ -141,9 +141,14 @@ func writeClaudeTranscript(t *testing.T, root, cwd string) {
 
 // deadExec fails every tmux command, so DoesSessionExist() reports false and the
 // duplicate-name guard in start() does not block the PTY launch.
+// The failure text is tmux's own, not a paraphrase. Session.Close classifies a
+// kill-session failure by that wording (sessionAlreadyGone) to tell "the session was
+// already dead" — the teardown goal, met — from a real failure it must report. A fake
+// that invents its own message makes every teardown over a dead session return an
+// error, which is a property of the fake and of nothing else.
 func deadExec() cmd_test.MockCmdExec {
 	return cmd_test.MockCmdExec{
-		RunFunc:    func(*exec.Cmd) error { return fmt.Errorf("no such session") },
+		RunFunc:    func(*exec.Cmd) error { return fmt.Errorf("can't find session: sess") },
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, fmt.Errorf("dead") },
 	}
 }
@@ -369,7 +374,10 @@ func TestResume_BranchCheckedOutReturnsTypedError(t *testing.T) {
 		context.Background(),
 		repoPath, filepath.Join(t.TempDir(), "wt"),
 		"sess", "session/sess", "", "main", true, "session/")
-	inst := &Instance{Title: "sess", status: Paused, started: true, gitWorktree: wt}
+	// A parked session, not a nil one: Resume closes what the park left behind before it
+	// checks the branch, so this refusal is now reached with the close already done.
+	ts, _ := parkedTmux(t)
+	inst := &Instance{Title: "sess", status: Paused, started: true, gitWorktree: wt, tmuxSession: ts}
 
 	err := inst.Resume()
 	require.Error(t, err)

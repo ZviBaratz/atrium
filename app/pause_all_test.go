@@ -31,9 +31,9 @@ func TestPauseAll_OpensCountConfirmation(t *testing.T) {
 	require.Equal(t, stateConfirm, h.state, "ctrl+p must open the confirmation overlay")
 	require.NotNil(t, h.confirmationOverlay)
 	rendered := flattenOverlay(h.confirmationOverlay.Render())
-	assert.Contains(t, rendered,
-		"Pause 2 active sessions? (commits any work in progress, then removes each "+
-			"worktree — gitignored files like .env or build caches are deleted for good)")
+	// The literal itself is pinned once, in dialog_voice_test.go; what this test is
+	// about is that ctrl+p opened the pause dialog over the right kind and count.
+	assert.Contains(t, rendered, pauseConfirmMessage("active", 2))
 	assert.Contains(t, rendered, "Press y to pause 2 sessions, n or esc to cancel")
 }
 
@@ -45,9 +45,7 @@ func TestPauseAll_SingularMessage(t *testing.T) {
 	_, _ = h.handleKeyPress(keyMsg("ctrl+p"))
 
 	require.Equal(t, stateConfirm, h.state)
-	assert.Contains(t, flattenOverlay(h.confirmationOverlay.Render()),
-		"Pause 1 active session? (commits any work in progress, then removes each "+
-			"worktree — gitignored files like .env or build caches are deleted for good)")
+	assert.Contains(t, flattenOverlay(h.confirmationOverlay.Render()), pauseConfirmMessage("active", 1))
 }
 
 // ctrl+p with nothing active must not open a confirmation; it explains itself

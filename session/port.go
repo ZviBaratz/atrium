@@ -2,16 +2,21 @@
 // repo declares, so two sessions of one repo can run the same server at once.
 //
 // The port is exported as $ATRIUM_PORT and {{.Session.Port}} through the same channel
-// session_env rides, and is held for exactly as long as the session's PANE is:
-// allocated where the worktree is materialized (create, and again on resume), KEPT
-// across a pause, and released on kill — or on a park that finds the pane already gone
-// (releasePortIfPaneGone).
+// session_env rides, and is held for as long as the SESSION is: allocated where the
+// worktree is materialized (create, and again on resume, both through reservePort),
+// KEPT across a pause, and released on kill — or by a config edit that stops routing this
+// repo to a range, which is the one release that is not a teardown and is noticed at two
+// points, not one: resolveSetupRun, when nothing routes the repo any more, and reservePort
+// itself, when the entry that does route it has stopped declaring a port_range.
+// releasePort's own doc is the authority on that set.
 //
-// The pane, not the worktree, is the thing it is tied to, and that was learned the hard
-// way. tmux fixes a session's environment at `new-session -e` and a resume only
-// re-attaches, so a parked session's shell still exports the number it was born with;
-// releasing on pause handed that number to the next create, and the parked session found
-// out on resume. The cost is that a parked session occupies a port until it is killed.
+// Keeping it across a pause is a promise, not a collision guard. A pause closes the
+// tmux session, so nothing is left exporting the old number — but the session's dev
+// server comes back on resume, and the number is what a browser tab, a bookmark or a
+// rendered template already points at. Handing it to the next create would mean the
+// resume either renumbers (breaking those) or lands on a port another session now owns.
+// The cost is that a parked session occupies a port until it is killed, so a range has
+// to be sized for the sessions parked as well as the ones running.
 
 package session
 
@@ -24,7 +29,6 @@ import (
 
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/repocfg"
-	"github.com/ZviBaratz/atrium/session/tmux"
 )
 
 // portRegistry is the set of ports Atrium's own sessions hold.
@@ -192,9 +196,12 @@ func (i *Instance) reservePort(s repocfg.Script) {
 		// Not fatal: the session starts without a port, exactly as a repo with no
 		// port_range does. Said out loud because the symptom otherwise is a dev server
 		// command that silently runs with an empty --port.
+		// The remedy says "killing", not "killing or pausing": a park KEEPS its number
+		// (see the file header), so telling the user to pause would send them round a
+		// loop that cannot end.
 		i.setPortProblem(fmt.Sprintf(
 			"No port was free in %s for %q.\n\nThe session is running without $ATRIUM_PORT. "+
-				"Free one by killing or pausing another session in this repo, or widen port_range in config.json.",
+				"Free one by killing another session in this repo, or widen port_range in config.json.",
 			rng, i.Title))
 		log.WarningLog.Printf("port_range %s is exhausted; %q starts without a port", rng, i.Title)
 		return
@@ -202,25 +209,13 @@ func (i *Instance) reservePort(s repocfg.Script) {
 	i.setPort(port)
 }
 
-// releasePortIfPaneGone gives up the port only when the session's tmux pane is already
-// gone — the one condition under which no frozen $ATRIUM_PORT is left to contradict.
+// releasePort gives up the session's port, and does nothing when it holds none.
 //
-// It is the pause-time test. A pause detaches rather than closes, so the usual answer
-// is "the pane lives, keep the port"; the exception is RecoverLostSession, which parks a
-// session precisely because tmux died under it, and whose next launch will be a
-// `new-session -e` carrying whatever it is given.
-func (i *Instance) releasePortIfPaneGone(ts *tmux.Session) {
-	if i.Port() == 0 {
-		return
-	}
-	if ts != nil && ts.DoesSessionExist() {
-		return
-	}
-	i.releasePort()
-}
-
-// releasePort gives up the session's port, and does nothing when it holds none. Called
-// where the pane goes away: kill, and a pause that finds it already gone.
+// Three callers, and only one of them is a teardown. Kill, where the session is gone.
+// resolveSetupRun, when nothing routes this repo any more. And reservePort above, when
+// the entry that does route it has stopped declaring a port_range. The last two are one
+// idea — a config edit took the range away — reached at the two points that can notice
+// it. A park is deliberately not among them; see the file header for why.
 func (i *Instance) releasePort() {
 	i.mu.Lock()
 	port := i.port

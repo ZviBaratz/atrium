@@ -22,6 +22,14 @@ import (
 // hit on the query "p" identical to pause's own — the real tie that put it above
 // pause in the live keymap. Without it the exact-key rule looks like it works
 // while doing nothing: every other row's p is mid-word and loses on score alone.
+//
+// The pause row's Detail is a fixture, not a copy of the shipped keymap entry, and two
+// of its properties are load-bearing for TestPaletteDropsProseBeforeTheVerb: it must not
+// contain the verb "pause" (or the assertion that the verb survives a narrow box is
+// satisfied by the prose column alone), and the word that test asserts is ABSENT must be
+// its FIRST — a stub truncation already loses every later word, so a middle word cannot
+// tell "dropped" from "truncated". Keeping it in step with the real pause description
+// broke both at once; the fixture's job is to discriminate, not to match production.
 func paletteFixture() []PaletteAction {
 	return []PaletteAction{
 		{Key: "shift-tab", Label: "prev tab", Detail: "next / prev pane", Group: "Navigate"},

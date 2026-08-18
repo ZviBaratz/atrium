@@ -109,21 +109,15 @@ func TestRecoverInPlace_ArmsReadySuppression(t *testing.T) {
 // Resume without git plumbing.
 func TestResume_ArmsReadySuppression(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	pty := newRecordingPtyFactory(t, nil)
-	calls := 0
-	liveExec := cmd_test.MockCmdExec{
-		// Resume's own DoesSessionExist and the launch's duplicate-name guard must
-		// both report "gone" so the recreate proceeds; the poll after must see it alive.
-		RunFunc: func(*exec.Cmd) error {
-			calls++
-			if calls <= 2 {
-				return fmt.Errorf("not yet")
-			}
-			return nil
-		},
-		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
-	}
-	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, liveExec)
+	// Keyed on the tmux verb, not on how many commands have gone past. The count this
+	// used to carry ("the first two report gone") was Resume's own DoesSessionExist plus
+	// the launch's duplicate-name guard — a transcript of the direct branch's call order
+	// rather than the fact that a park leaves no session behind. It is the same shape as
+	// the aliveExec mock that let #710 ship, and it survives only while that branch keeps
+	// probing exactly twice: change its probe count and the "gone" answer lands on the
+	// wrong command, silently.
+	srv := newParkedTmuxServer(t)
+	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", srv, srv.exec())
 	inst := &Instance{Title: "sess", status: Paused, started: true, direct: true, Path: t.TempDir(), tmuxSession: ts}
 
 	require.NoError(t, inst.Resume())

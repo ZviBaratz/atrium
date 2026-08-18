@@ -2,13 +2,10 @@ package session
 
 import (
 	"context"
-	"fmt"
-	"os/exec"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/ZviBaratz/atrium/cmd/cmd_test"
 	"github.com/ZviBaratz/atrium/session/tmux"
 )
 
@@ -22,28 +19,18 @@ import (
 // write a transcript into it to make the conversation resumable, or leave it empty
 // to make it not.
 //
-// goneFor is how many leading has-session probes must report the session as gone
-// before it comes up. Each entry point asks a different number of times:
-// recoverInPlace asks once (the duplicate-name guard in Start), Resume asks twice
-// (its own "did the session survive the pause?" check, then that same guard). One
-// too few and the launch is refused as a duplicate; the probe after them all has
-// to see the session alive, or the launch is judged to have failed.
-func relaunchableInstance(t *testing.T, program, cfgDir string, goneFor int) *Instance {
+// The fake answers by VERB, and it used to answer by call count — a `goneFor` knob
+// saying how many leading commands to fail, tuned per entry point because each asks a
+// different number of times. That is a fixture keyed on the order of an implementation's
+// calls rather than on what it asked, so reordering Resume's teardown (closing the parked
+// session before touching the worktree, rather than probing for one first) fed the "gone"
+// answer to a kill-session and aborted every resume built on it. The session's liveness is
+// a fact about the session; the fake now holds it as one.
+func relaunchableInstance(t *testing.T, program, cfgDir string) *Instance {
 	t.Helper()
 	wt := newTestWorktree(t)
-	pty := newRecordingPtyFactory(t, nil)
-	calls := 0
-	liveExec := cmd_test.MockCmdExec{
-		RunFunc: func(*exec.Cmd) error {
-			calls++
-			if calls <= goneFor {
-				return fmt.Errorf("not yet")
-			}
-			return nil
-		},
-		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
-	}
-	ts := tmux.NewSessionWithDeps(context.Background(), "sess", program, pty, liveExec)
+	srv := newParkedTmuxServer(t)
+	ts := tmux.NewSessionWithDeps(context.Background(), "sess", program, srv, srv.exec())
 	return &Instance{
 		Title: "sess", status: Running, Program: program,
 		claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts,
@@ -55,7 +42,7 @@ func relaunchableInstance(t *testing.T, program, cfgDir string, goneFor int) *In
 // came back.
 func TestResumedConversationRecordsThatTheConversationCameBack(t *testing.T) {
 	cfgDir := t.TempDir()
-	inst := relaunchableInstance(t, "claude", cfgDir, 1)
+	inst := relaunchableInstance(t, "claude", cfgDir)
 	writeClaudeTranscript(t, cfgDir, inst.gitWorktree.GetWorktreePath())
 
 	inst.recoverInPlace()
@@ -69,7 +56,7 @@ func TestResumedConversationRecordsThatTheConversationCameBack(t *testing.T) {
 // startResuming launches blank. This is the case the notice exists to report: the
 // session comes back but its conversation does not.
 func TestResumedConversationRecordsThatTheAgentStartedFresh(t *testing.T) {
-	inst := relaunchableInstance(t, "claude", t.TempDir(), 1) // deliberately no transcript
+	inst := relaunchableInstance(t, "claude", t.TempDir()) // deliberately no transcript
 
 	inst.recoverInPlace()
 
@@ -83,7 +70,7 @@ func TestResumedConversationRecordsThatTheAgentStartedFresh(t *testing.T) {
 // learns which way it went. Reporting either answer would be a guess printed as a
 // fact, so the restore must be able to tell "fresh" from "cannot tell".
 func TestResumedConversationIsUnknownWithoutATranscriptAdapter(t *testing.T) {
-	inst := relaunchableInstance(t, "codex", t.TempDir(), 1)
+	inst := relaunchableInstance(t, "codex", t.TempDir())
 
 	inst.recoverInPlace()
 
@@ -97,7 +84,7 @@ func TestResumedConversationIsUnknownWithoutATranscriptAdapter(t *testing.T) {
 // session's tmux session is gone). If that route ever stopped recording, the
 // restore notice would go quiet and every test above would stay green.
 func TestResumeRecordsTheConversationOutcome(t *testing.T) {
-	inst := relaunchableInstance(t, "claude", t.TempDir(), 2) // no transcript: came back fresh
+	inst := relaunchableInstance(t, "claude", t.TempDir()) // no transcript: came back fresh
 	inst.started = true
 	inst.SetStatus(Paused)
 
@@ -111,7 +98,7 @@ func TestResumeRecordsTheConversationOutcome(t *testing.T) {
 // TestResumedConversationIsUnknownBeforeAnyResume — an instance that has not been
 // relaunched has nothing to report, so the notice must not claim it started fresh.
 func TestResumedConversationIsUnknownBeforeAnyResume(t *testing.T) {
-	inst := relaunchableInstance(t, "claude", t.TempDir(), 1)
+	inst := relaunchableInstance(t, "claude", t.TempDir())
 
 	_, known := inst.ResumedConversation()
 	require.False(t, known, "nothing has resumed yet, so there is no answer to report")
