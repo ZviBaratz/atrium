@@ -615,7 +615,7 @@ var geminiConfirmLadder = []paneCapture{
 var geminiBusyLadder = []paneCapture{
 	{name: "geminiBusyPane33", width: 33, note: "composer placeholder splits; marker 9 non-empty lines up", pane: geminiBusyPane33},
 	{name: "geminiBusyPane34", width: 34, note: "composer placeholder splits; marker 9 non-empty lines up", pane: geminiBusyPane34},
-	{name: "geminiBusyPane40", width: 40, note: "footer on one row; marker 8 up", pane: geminiBusyPane40},
+	{name: "geminiBusyPane40", width: 40, note: "hint and placeholder both one row; marker 8 up", pane: geminiBusyPane40},
 	{name: "geminiBusyPane45x19", width: 45, note: "19 rows, marker inside the window", pane: geminiBusyPane45x19},
 	{name: "geminiBusyPane120", width: 120, note: "the wide LoadingIndicator layout", pane: geminiBusyPane120},
 }
@@ -787,8 +787,16 @@ func TestGeminiConfirmationStillFiresOnAQuotedDialogEndingThePane(t *testing.T) 
 			"the dialog without a per-branch header literal, and four branches are undriven")
 }
 
-// The composer veto's PREMISE. geminiConfirmationVisible returns false on any block line that
-// reads as a composer, which is only meaningful while no confirmation rung contains one.
+// What the veto's removal did NOT cost, which is why this guard outlived the clause it was
+// written for. It used to be the veto's premise — geminiConfirmationVisible rejected any block
+// line reading as a composer, meaningful only while no rung contained one. That clause is gone
+// (registry.go's THERE IS NO COMPOSER VETO HERE), so nothing here can take the matcher down
+// any more.
+//
+// It still measures something the matcher depends on, in the other direction: a driven rung
+// whose box holds a "> " row is a rung where InputBoxVisible answers TRUE on a live dialog,
+// which is Session.AwaitingInput's third term. No rung does today. When one does, this reddens
+// and TestGeminiConfirmationFiresOnADialogRowThatLooksLikeAComposer is the pane to read next.
 func TestGeminiConfirmCapturesRenderNoComposerGlyphInsideTheDialog(t *testing.T) {
 	for _, c := range geminiConfirmLadder {
 		t.Run(c.label(), func(t *testing.T) {
@@ -796,7 +804,8 @@ func TestGeminiConfirmCapturesRenderNoComposerGlyphInsideTheDialog(t *testing.T)
 			require.True(t, ok, "every rung must anchor, or the matcher is measuring nothing")
 			for _, line := range block {
 				require.False(t, isInputBoxLine(line, defaultPrompts),
-					"a composer glyph inside the dialog would take the matcher down: %q", line)
+					"a driven rung whose box reads as a composer makes InputBoxVisible true on a "+
+						"live dialog; read the note above before re-pinning this: %q", line)
 			}
 		})
 	}
@@ -1103,5 +1112,67 @@ func TestGeminiDrivenIdlePaneIsQuietOnEverySurface(t *testing.T) {
 	for _, line := range strings.Split(pane, "\n") {
 		require.False(t, isBoxWallLine(line),
 			"no composer row may read as box interior: %q", line)
+	}
+}
+
+// The mechanism behind MarkerWindow, COMPUTED rather than described — because the sentence in
+// registry.go that describes it has now been wrong twice. The first draft credited the extra
+// row to a footer wrap; its replacement credited it entirely to the composer placeholder,
+// which is false at 20, where the placeholder takes three rows.
+//
+// Two things below the loading row grow, at different widths: the " Shift+Tab to accept edits"
+// hint and the " >   Type your message or @path/to/file" placeholder. The workspace/branch
+// footer does not — it drops columns with an ellipsis. So the marker's depth is the base plus
+// one row for each extra row those two take, and that is an arithmetic identity a new rung
+// cannot be added in violation of.
+//
+// Both lists are walked. Splitting them is what let one half be fixed while the other stayed
+// uncovered, so a guard over the mechanism has to see the uncovered half too.
+func TestGeminiBusyDepthIsTheSumOfItsTwoGrowthSites(t *testing.T) {
+	nonEmpty := func(pane string) []string {
+		var out []string
+		for _, l := range strings.Split(strings.TrimRight(pane, "\n"), "\n") {
+			if strings.TrimSpace(l) != "" {
+				out = append(out, l)
+			}
+		}
+		return out
+	}
+	// rows counts the block starting at the line containing want and running to the next
+	// block-glyph rule, which is how gemini bounds the composer at 0.55.1.
+	rows := func(lines []string, want string) int {
+		for i, l := range lines {
+			if strings.Contains(l, want) {
+				n := 1
+				for i+n < len(lines) && !strings.HasPrefix(lines[i+n], "▄") && !strings.HasPrefix(lines[i+n], "▀") {
+					n++
+				}
+				return n
+			}
+		}
+		return 0
+	}
+	depth := func(lines []string) int {
+		for i := len(lines) - 1; i >= 0; i-- {
+			if strings.Contains(lines[i], "(esc") {
+				return len(lines) - i
+			}
+		}
+		return 0
+	}
+
+	const baseDepth = 8
+	for _, c := range append(append([]paneCapture{}, geminiBusyLadder...), geminiBusyTruncatedRungs...) {
+		t.Run(c.label(), func(t *testing.T) {
+			lines := nonEmpty(c.pane)
+			hint := rows(lines, "Shift+Tab")
+			placeholder := rows(lines, "Type your")
+			require.NotZero(t, hint, "the premise: every driven rung renders the accept-edits hint")
+			require.NotZero(t, placeholder, "the premise: and the composer placeholder")
+
+			require.Equal(t, baseDepth+(hint-1)+(placeholder-1), depth(lines),
+				"marker depth is the base plus one row per EXTRA row the two growth sites take; "+
+					"hint=%d placeholder=%d at width %d", hint, placeholder, c.width)
+		})
 	}
 }

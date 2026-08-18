@@ -919,12 +919,18 @@ var gemini = &Adapter{
 
 	BusyMarkers: []string{"esc to cancel"},
 	// Like codex, the loading row renders above the input box, so what decides whether the
-	// window reaches it is how many rows the composer and footer below it occupy. It is the
-	// COMPOSER that grows: the footer is two rows at every driven width and drops columns with
-	// an ellipsis rather than wrapping, while the composer's " >   Type your message or
-	// @path/to/file" placeholder splits in two at 34 and below. An earlier draft of this
-	// comment credited the extra row to a footer wrap, in five places; the bytes it cited
-	// disprove it.
+	// window reaches it is how many rows everything below it occupies. TWO things grow, which
+	// is the correction: an earlier draft credited the extra row to a footer wrap in five
+	// places, and its replacement credited it entirely to the composer placeholder — both
+	// under-count, and the second is false at 20.
+	//
+	// The workspace/branch footer really is two rows at every driven width, dropping columns
+	// with an ellipsis rather than wrapping. The two that grow are the " Shift+Tab to accept
+	// edits" hint and the " >   Type your message or @path/to/file" placeholder, and they grow
+	// at different widths. The counts are read off the bytes rather than restated here, and
+	// TestGeminiBusyDepthIsTheSumOfItsTwoGrowthSites computes the depth from them — so a new
+	// rung cannot be added with a note that disagrees with its own bytes, which is how this
+	// paragraph was wrong twice.
 	//
 	// 9 is the maximum across the rungs this can COVER, not across the driven set, and the
 	// distinction is the whole reason 9 is safe to stop at. 24 and 20 sit deeper — 10 and 11 —
@@ -1393,11 +1399,25 @@ const (
 //
 // That miss is worse than a miss. isInputBoxLine with defaultPrompts is the SAME predicate
 // InputBoxVisible anchors on, and gemini declares no InputBoxPrompts of its own, so the one
-// row that vetoed the match also answered InputBoxVisible TRUE. Measured on the pane
-// TestGeminiConfirmationFiresOnADialogRowThatLooksLikeAComposer holds: DetectPrompt false,
-// GateUp false, InputBoxVisible true — Session.AwaitingInput exactly, on a live dialog, in
-// gemini's DEFAULT configuration where no composer exists to absorb what gets typed. This file
-// already calls that mechanism the worse of the two for the IDE nudge and made it #717.
+// row that vetoed the match also answered InputBoxVisible TRUE. WITH THE VETO IN PLACE that
+// pane measured DetectPrompt false, GateUp false, InputBoxVisible true — Session.AwaitingInput
+// exactly, on a live dialog. This file already calls that mechanism the worse of the two for
+// the IDE nudge, and made it #717.
+//
+// Read that as the counterfactual it is. TestGeminiConfirmationFiresOnADialogRowThatLooksLikeAComposer
+// pins the state AFTER the removal — it asserts DetectPrompt TRUE and the conjunction FALSE,
+// and restoring the veto is what reddens it. An earlier draft cited it for the three verdicts
+// above without marking the tense, so a reader following the citation found the named test
+// disproving two of them.
+//
+// WHAT GETS TYPED THERE IS NOT DESCRIBED, in the default configuration any more than in the
+// drawer-open one. "No composer is rendered" is not "nothing absorbs the keystrokes", and an
+// earlier draft slid between the two: the bundle has isInputActive true during
+// "waiting_for_confirmation", which is a fact about the state machine rather than about
+// whether the drawer is drawn, so it applies here as well and points the other way. That is
+// the third attempt at this one sentence, so per CLAUDE.md the claim is deleted rather than
+// restated a third time. What is measured is the AwaitingInput conjunction, and that is all
+// this argues from.
 //
 // Deleting it trades an unsafe direction for a safe one. What comes back is a 0.27-shaped
 // boxed composer quoting both labels now matching — an over-fire, which is NoAutoTap ->
