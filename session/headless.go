@@ -71,15 +71,28 @@ func runClaudeHeadless(ctx context.Context, executor cmd.Executor, claudePath, w
 // see runGeminiHeadless for the .env walk that makes that the property which matters,
 // rather than the mode of the leaf MkdirTemp already sets to 0700.
 //
-// An error here fails the call rather than falling back to os.TempDir(). The fallback
-// is the bug: it would restore the world-writable chain silently, on the path where
-// something about the data dir was already wrong. A failed naming call costs a default
-// session title, which is the direction session/naming.go already degrades in.
+// An error here fails the call rather than falling back to os.TempDir(). The fallback is the
+// bug: it would restore the world-writable chain silently, on the path where something about
+// the data dir was already wrong.
+//
+// WHAT THAT FAILURE COSTS, corrected — an earlier draft priced it as "a default session title,
+// the direction session/naming.go already degrades in", and GenerateName's own docstring says
+// the opposite: it "returns an error (rather than a fallback name) on any failure so the caller
+// can surface it and leave the session's name untouched". There is no default-title path. The
+// naming caller leaves the name alone; the dispatch caller (generateDispatchGemini, via
+// GenerateDispatch) packs the error into the message the UI shows, so with $HOME unset or an
+// unwritable data dir a user sees a mkdir error from smart dispatch. That is a real second
+// consequence, on a path the old os.MkdirTemp("") did not need $HOME for at all — priced here
+// rather than left to be discovered, because it is the cost of rooting the workspace in the
+// data dir.
 //
 // WHAT MOVING OUT OF /tmp COSTS, disclosed rather than left to be found: nothing sweeps
 // this root. The caller's deferred RemoveAll covers a normal return and a panic, and the
-// old location was reaped by the OS when it did not — so a kill during a naming call now
-// leaks an entry here permanently, where doctor cannot see it and no reap knows the path.
+// old location was reaped by the OS when it did not — so any exit that does not unwind this
+// defer now leaks an entry here permanently, where doctor cannot see it (its only data-dir
+// contact is a statfs, which lists nothing) and no reap knows the path. Not just a kill: the
+// TUI returns from p.Run() without waiting on in-flight tea.Cmd goroutines, and naming runs in
+// one, so pressing q during a naming call is enough.
 // It is one directory per abnormally-terminated call, and normally an empty one: gemini
 // keeps its own state under its home dir, which this path leaves at the ambient default
 // (it appends GEMINI_CLI_TRUST_WORKSPACE and nothing else), so the cwd is not where the
@@ -89,8 +102,14 @@ func runClaudeHeadless(ctx context.Context, executor cmd.Executor, claudePath, w
 // 0.55.1 has --approval-mode plan for that, unset here because the pin was probed
 // without it; #754 carries the trade.
 //
-// A sweeper is the wrong remedy either way: every sweep that could run here races an
-// in-flight call from another process, and the TUI and the daemon both name sessions.
+// NOT SWEPT HERE, and the reason first given for that was wrong. It was "every sweep races an
+// in-flight call from another process, and the TUI and the daemon both name sessions" — but the
+// daemon never names: GenerateName and GenerateDispatch are reached only from app_session.go,
+// nothing under daemon/ calls either, and the per-data-dir tui.lock enforces one TUI. So a
+// sweep at TUI startup, or in runReset which already holds that lock while it clears worktrees
+// and tmux sessions, would race nothing. It is unswept because that is a placement decision
+// with its own blast radius, not because it cannot be done; #756 carries it, along with the
+// mode this function does not set on a root that already exists.
 func geminiHeadlessWorkspace() (string, error) {
 	configDir, err := config.GetConfigDir()
 	if err != nil {
