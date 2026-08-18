@@ -60,8 +60,10 @@ func parkedTitles(d DeferredRecovery) []string {
 // The exec mock keys off the pty rather than counting calls, the way the recoverInPlace
 // fixtures do: `has-session` must report gone until the agent has actually been
 // launched — the liveness probe asks, and so does the duplicate-name guard inside
-// start(), and a later Resume asks twice more — so a fixed call count would encode the
-// path under test rather than the fact. Once a pty exists the session is real and every
+// start(), and a later Resume asks again through that same guard — so a fixed call count
+// would encode the path under test rather than the fact. Counting is what breaks when the
+// path changes: Resume used to add a probe of its own here and now closes instead, which
+// moves every later answer along by one. Once a pty exists the session is real and every
 // command succeeds.
 func recoverableInstance(t *testing.T, title string) (*Instance, *recordingPtyFactory) {
 	t.Helper()

@@ -79,9 +79,12 @@ func TestConfirmationsFitTheSmallestSupportedTerminal(t *testing.T) {
 	// large case is a three-digit host running a batch of the same order — the widest
 	// these numbers realistically print.
 	//
-	// Measured, both currently render 13 lines: three digits do not push this copy over a
-	// wrap boundary. The case is here so that stays a measurement rather than an
-	// assumption, since the next edit to any of the three parts can change it.
+	// The property the second size is here for is that the height does not move with the
+	// count, and it is asserted rather than written down: each case returns the height it
+	// measured per dialog, and the two are required to agree. An absolute number in a
+	// comment would be a claim no test reads — and would be wrong per-dialog anyway, since
+	// the two dialogs are not the same height as each other.
+	heights := map[string]map[string]int{}
 	for _, f := range []struct {
 		name           string
 		limit, live, n int
@@ -90,13 +93,22 @@ func TestConfirmationsFitTheSmallestSupportedTerminal(t *testing.T) {
 		{"large fleet", 128, 99, 112},
 	} {
 		t.Run(f.name, func(t *testing.T) {
-			runConfirmationHeightCase(t, minWidth, minHeight, f.limit, f.live, f.n)
+			heights[f.name] = runConfirmationHeightCase(t, minWidth, minHeight, f.limit, f.live, f.n)
 		})
+	}
+	require.Len(t, heights, 2, "both fleet sizes must have measured, or the comparison below is vacuous")
+	for dialog, small := range heights["small fleet"] {
+		assert.Equal(t, small, heights["large fleet"][dialog],
+			"the %s dialog's height moved with the fleet size: a three-digit count crossed a wrap "+
+				"boundary, so the box this test measures at one size is not the one users see at the other", dialog)
 	}
 }
 
-func runConfirmationHeightCase(t *testing.T, minWidth, minHeight, limit, live, n int) {
+// runConfirmationHeightCase renders both confirmations at one fleet size and returns the
+// line count of each, keyed by dialog, so the caller can compare across sizes.
+func runConfirmationHeightCase(t *testing.T, minWidth, minHeight, limit, live, n int) map[string]int {
 	t.Helper()
+	measured := map[string]int{}
 	cases := map[string]struct{ msg, label string }{
 		"pause": {
 			pauseConfirmMessage("active", n),
@@ -139,8 +151,10 @@ func runConfirmationHeightCase(t *testing.T, minWidth, minHeight, limit, live, n
 				"the bottom of the confirmation was clipped away, taking the line that says how to answer it")
 			assert.LessOrEqual(t, len(box), minHeight,
 				"the confirmation box is taller than the smallest supported terminal, so it will be clipped")
+			measured[name] = len(box)
 		})
 	}
+	return measured
 }
 
 // The host-capacity fact is one sentence shared by the create confirmation and the

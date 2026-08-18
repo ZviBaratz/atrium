@@ -170,11 +170,15 @@ func TestResumeAfterPauseCanReadAndWriteItsWorktree(t *testing.T) {
 		"resume must leave no (paused) commit in history")
 }
 
-// TestResumeClosesASessionLeftByAnOlderPause covers the upgrade path, and it is the
-// only reason Resume still probes for a live session at all: an Atrium that paused
-// by detaching leaves exactly this state behind — Paused, worktree removed, tmux
+// TestResumeClosesASessionLeftByAnOlderPause covers the upgrade path: an Atrium that
+// paused by detaching leaves exactly this state behind — Paused, worktree removed, tmux
 // session and agent still alive — and the first resume under the new build must not
 // reattach it. Restoring here is what #710 actually was.
+//
+// It is the only case in which Resume's close has a live session to kill. That is why the
+// close is unconditional rather than gated on a liveness probe: the state this test builds
+// is indistinguishable, to a probe that cannot reach its server, from the ordinary park
+// every other resume starts from.
 //
 // The pre-fix pause is reproduced by its parts rather than by an old binary, so the
 // test states the state under test instead of depending on how it was reached.

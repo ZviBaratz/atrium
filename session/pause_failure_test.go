@@ -16,10 +16,11 @@ import (
 // a park leaves behind: gone until the relaunch's new-session brings it back, classified
 // by verb rather than by how many commands have gone past (see relaunchableInstance for
 // what that cost).
-func resumableInstance(t *testing.T, wt *git.Worktree) *Instance {
+func resumableInstance(t *testing.T, wt *git.Worktree) (*Instance, *fakeTmuxServer) {
 	t.Helper()
+	ts, srv := parkedTmux(t)
 	return &Instance{Title: "sess", status: Paused, started: true, Program: "claude",
-		gitWorktree: wt, tmuxSession: parkedTmux(t)}
+		gitWorktree: wt, tmuxSession: ts}, srv
 }
 
 // TestResume_StampsStartedAtForLaunchCrashDetection guards the #270 fix that
@@ -30,7 +31,7 @@ func resumableInstance(t *testing.T, wt *git.Worktree) *Instance {
 // death — dropping the diagnostic modal exactly when the user needs it.
 func TestResume_StampsStartedAtForLaunchCrashDetection(t *testing.T) {
 	wt := newTestWorktree(t)
-	inst := resumableInstance(t, wt)
+	inst, _ := resumableInstance(t, wt)
 	// A stale timestamp from the original Start, well outside the launch window.
 	inst.startedAt = time.Now().Add(-time.Hour)
 
@@ -99,21 +100,25 @@ func TestPause_RemoveFailureFallsBackToParkedPaused(t *testing.T) {
 }
 
 // TestResume_ReusesInPlaceWorktreePreservingWIP guards the resume half of the
-// commit-failure park (#270): a Paused instance whose worktree is still
-// materialized on disk (with uncommitted WIP) must be resumable — Resume must
-// reuse it in place rather than treat its own worktree as a foreign branch
-// checkout (BranchCheckoutPath) and refuse, or rebuild it via Setup and discard
-// the WIP. Without the fix the "press r to resume" guidance would be a dead end.
+// commit-failure park (#270): a Paused instance whose worktree is still materialized on
+// disk (with uncommitted WIP) must be resumable, by reusing that worktree in place.
+//
+// The failure it can actually catch is the refusal, not a rebuild. Resume reaches Setup
+// only inside its !valid branch, and BranchCheckoutPath guards the head of that branch —
+// so a Resume that stopped recognising its own worktree would see the branch checked out
+// in it, return BranchCheckedOutError, and never get as far as discarding anything. That
+// is what the mutant does: forcing the !valid branch fails this test on the resume's
+// error, not on the file. FileExists is therefore a postcondition of reuse rather than an
+// independent guard against Setup — worth asserting, not worth reading as coverage of it.
+// Without the fix the "press r to resume" guidance would be a dead end.
 func TestResume_ReusesInPlaceWorktreePreservingWIP(t *testing.T) {
 	wt := newTestWorktree(t)
 	wipPath := filepath.Join(wt.GetWorktreePath(), "wip.txt")
 	require.NoError(t, os.WriteFile(wipPath, []byte("uncommitted work\n"), 0o644))
 
-	// The park left no session behind, so the close is a no-op and the launch's
-	// duplicate-name guard sees nothing; new-session then brings it up.
-	srv := newParkedTmuxServer(t)
-	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", srv, srv.exec())
-	inst := &Instance{Title: "sess", status: Paused, started: true, Program: "claude", gitWorktree: wt, tmuxSession: ts}
+	// The park left no session behind, so the close forgives an already-gone session and
+	// the launch's duplicate-name guard sees nothing; new-session then brings it up.
+	inst, srv := resumableInstance(t, wt)
 
 	require.NoError(t, inst.Resume(), "a valid in-place worktree must be resumable")
 	require.Equal(t, Running, inst.GetStatus())

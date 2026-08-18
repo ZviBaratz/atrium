@@ -376,7 +376,8 @@ func TestResume_BranchCheckedOutReturnsTypedError(t *testing.T) {
 		"sess", "session/sess", "", "main", true, "session/")
 	// A parked session, not a nil one: Resume closes what the park left behind before it
 	// checks the branch, so this refusal is now reached with the close already done.
-	inst := &Instance{Title: "sess", status: Paused, started: true, gitWorktree: wt, tmuxSession: parkedTmux(t)}
+	ts, _ := parkedTmux(t)
+	inst := &Instance{Title: "sess", status: Paused, started: true, gitWorktree: wt, tmuxSession: ts}
 
 	err := inst.Resume()
 	require.Error(t, err)

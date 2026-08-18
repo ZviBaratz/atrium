@@ -304,6 +304,13 @@ func (i *Instance) Resume() error {
 	// still right: a direct session's directory is the user's own checkout, which no
 	// pause ever removed, so its agent's cwd is exactly where it always was. That is
 	// the whole difference from the worktree branch below.
+	//
+	// "Reattaches" is what this branch does when the probe ANSWERS. DoesSessionExist is
+	// liveness() == sessionAlive, so an indeterminate answer relaunches instead, and a
+	// session that was in fact alive then fails the launch on Start's duplicate-name
+	// guard. The worktree branch below stopped gating on that predicate for a hazard this
+	// branch does not share; the residual here is a loud failure rather than a pane over a
+	// deleted directory, so it is filed as #748 rather than changed alongside the fix.
 	if wt == nil {
 		if ts.DoesSessionExist() {
 			if err := ts.Restore(); err != nil {
@@ -327,22 +334,42 @@ func (i *Instance) Resume() error {
 	}
 
 	// Stop the session this park left behind — BEFORE anything below materializes or
-	// rewrites the worktree. This is the branch where the worktree was removed and
-	// re-added, so a session that survived that has an agent whose cwd is the inode the
-	// removal unlinked: restoring the PTY would hand the user a pane printing the right
-	// $PWD over a directory it can neither read nor write (#710). That hazard is exactly
-	// "the worktree was removed and re-added", which is why the direct branch above still
-	// reattaches and this one never may. A live session here is one an older, detach-only
-	// pause left behind, so this is both the fix's belt-and-braces and its upgrade path;
-	// after a park this build made there is nothing left to kill, and Close reports that
-	// as the goal already met (sessionAlreadyGone).
+	// rewrites the worktree. Unconditional, and deliberately above the valid-worktree
+	// block, so it governs every park that reaches here rather than only the usual one.
+	//
+	// The worst case is the park that removed the worktree, which is the ordinary one: a
+	// session that survived that has an agent whose cwd is the inode the removal
+	// unlinked, so restoring the PTY would hand the user a pane printing the right $PWD
+	// over a directory it can neither read nor write (#710). That is the hazard the
+	// direct branch above does not have — its directory is the user's own checkout, which
+	// no pause ever removed — and it is why that branch may still reattach and this one
+	// never may. For the parks that left the worktree standing (the block below names
+	// them) the deleted-cwd reasoning does not apply at all; closing is still right there,
+	// for closeParkedSession's reason instead — Paused means no agent process, and the
+	// relaunch below is what brings one back. A live session on either path is one an
+	// older, detach-only pause left behind, so this is both the fix's belt-and-braces and
+	// its upgrade path; after a park this build made there is nothing left to kill, and
+	// Close reports that as the goal already met (sessionAlreadyGone).
 	//
 	// NOT gated on DoesSessionExist, and that is the substance rather than a tidy-up: it
 	// reports liveness() == sessionAlive, so every INDETERMINATE answer — a socket that
 	// cannot be opened for any reason but ENOENT, a probe the context cancelled — reads
 	// as "no session" and would skip the close for precisely the servers that cannot be
 	// killed. Close forgives an already-gone session on its own, so the guard bought
-	// nothing except that hole and a second has-session round trip.
+	// nothing except that hole and a second has-session round trip. (The direct branch
+	// above still carries that gate. It is not the same hazard — a missed close there
+	// costs a duplicate-name launch failure, not a pane over a deleted directory — and
+	// changing it is filed as #748 rather than done inside this one.)
+	//
+	// Detach before close, the pairing closeParkedSession owns and for its reason: Close
+	// kills the session and closes ptmx but never clears attachCh, cancels the context or
+	// disables the stdout pump, so closing without detaching would strand the goroutines
+	// of an attach it raced (#701). Nothing can be attached to a Paused instance today
+	// (attachSelected refuses one), which makes this a no-op — detachSafelyLocked returns
+	// immediately on a nil attachCh — rather than a redundancy: the ordering holds here by
+	// construction instead of by a fact about a gate in another package. It cannot reuse
+	// closeParkedSession itself, whose contract is the opposite of this one: a park may
+	// never abort, and this must.
 	//
 	// A failure ABORTS the resume rather than being logged and walked past, and it runs
 	// here so the abort has nothing to undo. Walking past it reaches recreateSession,
@@ -351,7 +378,10 @@ func (i *Instance) Resume() error {
 	// remove -f` and `git branch -D`, the KILL teardown, with no retention ref, because
 	// only Kill records one. Ordered above the block below, a park is still a park when
 	// this returns — the worktree is wherever the pause left it, the branch holds every
-	// commit, and no auto-commit has been unwound — so a retry is simply a second Resume.
+	// commit, and no auto-commit has been unwound — so retrying costs nothing and is
+	// simply a second Resume. That is a statement about the state left behind, not a
+	// promise the retry will fare better: a socket that is unreachable rather than empty
+	// fails the same way every time, which is why the error names where the work is.
 	// (An ordinary launch failure still reaches that rollback. That route pre-dates this
 	// and is filed as #741.)
 	//
@@ -359,10 +389,25 @@ func (i *Instance) Resume() error {
 	// resetPaneID run before the kill that failed, so a session still alive here has lost
 	// its hook directory. Nothing is reading it — the instance stays Paused, which the
 	// poll loop skips — and a later successful resume re-arms one under a freshly frozen
-	// name (freezeHookName). No error is logged here: Close records its own through
-	// teardown.Errors, and the wrap below carries it to the caller.
+	// name (freezeHookName). The close's error is not logged here — Close records its own
+	// through teardown.Errors, and the wrap below carries it to the caller — while the
+	// detach's is, because nothing else would: it is deliberately not folded into the
+	// returned error, since a detach that failed on an already-dead attach must not be
+	// what refuses a resume. That is the same Record/Wrap split closeParkedSession makes,
+	// spelled out here because this site cannot use teardown.Errors to make it.
+	if err := ts.DetachSafely(); err != nil {
+		log.ErrorLog.Printf("failed to detach the session %s was parked with: %v", i.Title, err)
+	}
 	if err := ts.Close(); err != nil {
-		return fmt.Errorf("failed to close the session %s was parked with: %w", i.Title, err)
+		// One line, no newlines: a batch resume renders each failure as a bullet in a
+		// summary modal (batchResumeDoneMsg.summary), so a wrapped remedy would break the
+		// list it sits in. The remedy is named because this failure can be permanent —
+		// an unreachable socket fails identically on every retry — and `atrium doctor`
+		// is the reader that can see it, reporting servers no socket lookup reaches
+		// (doctor.CheckOrphans).
+		return fmt.Errorf("failed to close the session %s was parked with: %w "+
+			"(it stays paused, with its work on branch %s; run `atrium doctor` to check the "+
+			"tmux server, then resume again)", i.Title, err, wt.GetBranchName())
 	}
 
 	// If our own worktree is still materialized on disk, something parked this session

@@ -22,12 +22,20 @@ import (
 // hit on the query "p" identical to pause's own — the real tie that put it above
 // pause in the live keymap. Without it the exact-key rule looks like it works
 // while doing nothing: every other row's p is mid-word and loses on score alone.
+//
+// The pause row's Detail is a fixture, not a copy of the shipped keymap entry, and two
+// of its properties are load-bearing for TestPaletteDropsProseBeforeTheVerb: it must not
+// contain the verb "pause" (or the assertion that the verb survives a narrow box is
+// satisfied by the prose column alone), and the word that test asserts is ABSENT must be
+// its FIRST — a stub truncation already loses every later word, so a middle word cannot
+// tell "dropped" from "truncated". Keeping it in step with the real pause description
+// broke both at once; the fixture's job is to discriminate, not to match production.
 func paletteFixture() []PaletteAction {
 	return []PaletteAction{
 		{Key: "shift-tab", Label: "prev tab", Detail: "next / prev pane", Group: "Navigate"},
 		{Key: "↑/k", Label: "up", Detail: "move selection", Group: "Navigate"},
 		{Key: "r", Label: "resume", Detail: "resume a paused session", Group: "Handoff"},
-		{Key: "p", Label: "pause", Detail: "pause: stop the agent, commit changes, free the worktree", Group: "Handoff"},
+		{Key: "p", Label: "pause", Detail: "commit changes + free the worktree", Group: "Handoff"},
 		{Key: "m", Label: "merge PR", Detail: "merge the session's PR (squash)", Group: "Handoff"},
 	}
 }

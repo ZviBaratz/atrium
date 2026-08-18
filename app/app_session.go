@@ -724,12 +724,6 @@ func (m *home) resumeAll() tea.Cmd {
 // and by reattach for a direct session that is somehow still running, where the
 // conversation the hedge below is about is trivially still there.
 //
-// That second case is not only the historical one. A direct session parked by an older,
-// detach-only pause is the obvious producer, but this build makes more: closeParkedSession
-// deliberately lets neither the detach nor the close abort a park, so a park whose
-// kill-session fails also ends Paused with its agent alive. Both land on Resume's direct
-// branch, which reattaches.
-//
 // It says *relaunches* because pause closes the tmux session, ending the agent with
 // it (session.Instance.pause), so there is no process left to reattach. It used to say
 // "reattaches", on the grounds that "restarts" would read as losing the conversation —

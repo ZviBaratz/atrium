@@ -84,14 +84,21 @@ func (s *fakeTmuxServer) exec() cmd_test.MockCmdExec {
 		RunFunc: func(cmd *exec.Cmd) error {
 			switch {
 			case tmuxVerb(cmd, "kill-session"):
+				if !s.alive.Load() {
+					// A kill answers like a probe, and it has to: Resume now closes
+					// unconditionally, so EVERY resume from an ordinary park kills a
+					// session that is already gone. sessionAlreadyGone forgiving that
+					// is what lets the resume proceed, which makes it load-bearing on
+					// a path no tmux-free test would otherwise drive. Returning nil
+					// here mocked the forgiveness instead of exercising it: narrow
+					// sessionAlreadyGone and every fixture below would stay green
+					// while every real resume aborted.
+					return errSessionGone
+				}
 				s.alive.Store(false)
 			case tmuxVerb(cmd, "has-session"):
 				if !s.alive.Load() {
-					// tmux's own wording, and it has to be: Session.Close and liveness
-					// both classify a kill/probe failure by this text
-					// (sessionAlreadyGone), so a fake that invented its own message
-					// would read as a real teardown failure rather than a dead session.
-					return errors.New("can't find session: sess")
+					return errSessionGone
 				}
 			}
 			return nil
@@ -99,6 +106,12 @@ func (s *fakeTmuxServer) exec() cmd_test.MockCmdExec {
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
 	}
 }
+
+// errSessionGone is tmux's own wording for a session that is not there, and it has to
+// be its own wording: Session.Close and liveness both classify a kill/probe failure by
+// this text (sessionAlreadyGone), so a fake that invented its own message would read as
+// a real teardown failure rather than a dead session.
+var errSessionGone = errors.New("can't find session: sess")
 
 // tmuxVerb reports whether cmd is the given tmux subcommand. tmuxCommand builds
 // `tmux -L <socket> [-f conf] <verb> …`, so the verb is one argv element among
@@ -108,24 +121,29 @@ func tmuxVerb(cmd *exec.Cmd, verb string) bool {
 }
 
 // newParkedTmuxServer returns a fake whose session is already gone — the state a park
-// leaves behind, and the one every resume path starts from.
+// leaves behind, and the one every resume path starts from. It is newFakeTmuxServer with
+// the one bit that differs flipped, rather than a second copy of the shape.
 func newParkedTmuxServer(t *testing.T) *fakeTmuxServer {
 	t.Helper()
-	s := &fakeTmuxServer{pty: newRecordingPtyFactory(t, nil)}
+	s := newFakeTmuxServer(t)
 	s.alive.Store(false)
 	return s
 }
 
-// parkedTmux wraps that server in the tmux.Session a parked instance holds.
+// parkedTmux is the fake a parked instance holds, with the server it runs on.
 //
 // Any fixture that reaches Resume needs one. Resume closes the parked session before it
 // looks at the worktree, so a nil tmuxSession now panics where it used to be reached only
 // after several early returns — and nil is a shape production cannot produce: Start and
 // FromInstanceData both set the field, and Resume refuses an instance that is not started.
-func parkedTmux(t *testing.T) *tmux.Session {
+//
+// The server comes back alongside the session because a caller that wants to assert on the
+// launch needs its pty, and returning the session alone is what made those callers rebuild
+// this pair by hand.
+func parkedTmux(t *testing.T) (*tmux.Session, *fakeTmuxServer) {
 	t.Helper()
 	srv := newParkedTmuxServer(t)
-	return tmux.NewSessionWithDeps(context.Background(), "sess", "claude", srv, srv.exec())
+	return tmux.NewSessionWithDeps(context.Background(), "sess", "claude", srv, srv.exec()), srv
 }
 
 // pausableInstance wires a Running instance around a real worktree and a fake tmux
