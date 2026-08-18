@@ -80,10 +80,17 @@ func runClaudeHeadless(ctx context.Context, executor cmd.Executor, claudePath, w
 // this root. The caller's deferred RemoveAll covers a normal return and a panic, and the
 // old location was reaped by the OS when it did not — so a kill during a naming call now
 // leaks an entry here permanently, where doctor cannot see it and no reap knows the path.
-// It is one EMPTY directory per abnormally-terminated call (gemini writes its own state
-// under GEMINI_CLI_HOME, not into the cwd), which is why this is a disclosure and not a
-// sweeper: every sweep that could run here races an in-flight call from another process,
-// and the TUI and the daemon both name sessions.
+// It is one directory per abnormally-terminated call, and normally an empty one: gemini
+// keeps its own state under its home dir, which this path leaves at the ambient default
+// (it appends GEMINI_CLI_TRUST_WORKSPACE and nothing else), so the cwd is not where the
+// CLI writes. Normally, not never — runClaudeHeadless disables tools outright with an
+// empty --tools, and this call has no equivalent, so a write into the cwd is what the
+// naming prompt makes overwhelmingly unlikely rather than what the invocation forbids.
+// 0.55.1 has --approval-mode plan for that, unset here because the pin was probed
+// without it; #754 carries the trade.
+//
+// A sweeper is the wrong remedy either way: every sweep that could run here races an
+// in-flight call from another process, and the TUI and the daemon both name sessions.
 func geminiHeadlessWorkspace() (string, error) {
 	configDir, err := config.GetConfigDir()
 	if err != nil {
