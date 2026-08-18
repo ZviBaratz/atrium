@@ -1626,3 +1626,39 @@ func TestGeminiTrustGateIsDownOnEveryNonGatePane(t *testing.T) {
 		})
 	}
 }
+
+// The trust gate's composer veto, measured rather than argued about. geminiTrustGateVisible
+// still rejects any block line reading as a composer — the clause #736 deleted from
+// geminiConfirmationVisible as unsafe, kept here and disclosed rather than removed (#757).
+//
+// What makes that deferral safe is this, and only this: the veto fires on NO driven trust
+// capture, at any of the four widths or either overflow rung. So GateUp is true on every
+// dialog this repo has bytes for, and Session.AwaitingInput is false — the unattended-approval
+// path the removal argument is about is not reachable on a trust dialog today.
+//
+// The day a capture arrives whose box carries a "> " row, this reddens, and #757 stops being a
+// deferral. That is the whole point of pinning it: a disclosure nothing watches is indistinguishable
+// from an oversight.
+//
+// Both block shapes are walked, because the overflow rungs have no top border on screen and
+// bottomBoxBlock will not resolve them — reading only the closed ones would leave the two
+// tallest dialogs, the ones most likely to push an unexpected row into view, unmeasured.
+func TestGeminiTrustGateCapturesRenderNoComposerGlyphInsideTheDialog(t *testing.T) {
+	for _, c := range geminiEveryCapture() {
+		t.Run(c.label(), func(t *testing.T) {
+			block, ok := bottomBoxBlock(c.pane)
+			if !ok {
+				block, ok = openBottomBoxBlock(c.pane)
+			}
+			require.True(t, ok, "the premise: every trust capture resolves to a box block")
+			require.NotEmpty(t, block, "the premise: and that block has rows to examine")
+
+			for _, line := range block {
+				require.False(t, isInputBoxLine(line, defaultPrompts),
+					"a trust dialog row reading as a composer vetoes the gate, which makes "+
+						"AwaitingInput true on a live folder-trust dialog — read #757 before "+
+						"re-pinning this: %q", line)
+			}
+		})
+	}
+}

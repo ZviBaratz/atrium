@@ -1429,10 +1429,15 @@ const (
 // the argument above transfers to it verbatim — with a worse consequence, since Enter on that
 // dialog writes ~/.gemini/trustedFolders.json permanently, granting the trust runGeminiHeadless
 // spends twenty lines describing. It is not deleted here because reachability differs by what
-// each dialog renders: a confirmation renders tool ARGUMENTS, so a row beginning "> " is
-// ordinary in one, while the trust dialog renders a folder path and fixed prose. Both panes
-// that demonstrate the shape are synthesized, not driven, and #736 has no budget left to drive
-// the second. #757 carries it, including the option neither matcher has taken: vetoing only at
+// each dialog renders, and that is MEASURED rather than reasoned about:
+// TestGeminiTrustGateCapturesRenderNoComposerGlyphInsideTheDialog walks every driven trust
+// capture — four widths plus both overflow rungs — and the veto fires on none of them. So
+// GateUp is true on every trust dialog this repo has bytes for, and AwaitingInput is false;
+// the unattended-approval path is not reachable there today. It is reachable on a confirmation
+// because that dialog renders tool ARGUMENTS, where a row beginning "> " is ordinary.
+//
+// That guard is what makes deferring this safe rather than merely stated: the day a trust
+// capture carries such a row, it reddens. #757 carries the fix, including the option neither matcher has taken: vetoing only at
 // block index 0 keeps the 0.27 rejection and fixes the miss, because the walled composer's box
 // has its input-box row at index 0 while a dialog's quoted row sits below the tool header at
 // index 1. Every driven rung here has that header first — all seven are the `exec` branch, so
