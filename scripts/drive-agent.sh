@@ -368,6 +368,25 @@ validate_cap_env() {
 		[[ "$line" != *$'\r'* ]] ||
 			die "ATR_CAP_ENV entry contains a carriage return: $name"
 	done
+	# The one CROSS-entry rule, and the only refusal here that is about a pair rather than a
+	# line. GEMINI_FORCE_FILE_STORAGE routes credentials through the file store, and
+	# migrateFromFileStorage reads homedir()/.gemini/oauth_creds.json and then DELETES it —
+	# where homedir() falls back to the REAL $HOME whenever GEMINI_CLI_HOME is unset. So the
+	# half-applied pair does not merely lose isolation, it points the deletion at the
+	# developer's own refresh token. The recipe `help` prints IS that pair, and the file it
+	# writes invites hand-editing, so commenting out one line is the whole distance to it.
+	#
+	# Refused on PRESENCE rather than on a truthy value: the bundle's own coercion is not
+	# worth reimplementing here, and GEMINI_FORCE_FILE_STORAGE=false has no use this harness
+	# needs to support.
+	case "$seen" in
+	*" GEMINI_FORCE_FILE_STORAGE "*)
+		case "$seen" in
+		*" GEMINI_CLI_HOME "*) ;;
+		*) die "ATR_CAP_ENV sets GEMINI_FORCE_FILE_STORAGE without GEMINI_CLI_HOME — that points gemini's credential migration at your REAL ~/.gemini/oauth_creds.json, which it deletes. Set both or neither (see \`help\`)." ;;
+		esac
+		;;
+	esac
 }
 
 # write_cap_env records the validated entries beside meta.env. ALWAYS written, empty

@@ -450,8 +450,14 @@ func TestDriveAgentCapEnvCommentsAreSkippedByEveryReader(t *testing.T) {
 	script := filepath.Join(moduleRoot(t), "scripts", "drive-agent.sh")
 	dir := t.TempDir()
 	writeMetaEnv(t, dir)
+	// The commented-out half used to be GEMINI_CLI_HOME with GEMINI_FORCE_FILE_STORAGE left
+	// live below it, and this test then asserted that surviving entry was correctly APPLIED —
+	// pinning as expected behaviour the exact state that makes gemini delete the developer's
+	// real oauth_creds.json. validate_cap_env refuses that pair now, and
+	// TestDriveAgentCapEnvRefusesForceFileStorageWithoutCliHome owns it. What THIS test is
+	// about is comment skipping, so its fixture uses a variable with no blast radius.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "cap-env"),
-		[]byte("# the sandbox home, commented out by hand\n#GEMINI_CLI_HOME=/iso\nGEMINI_FORCE_FILE_STORAGE=true\n"), 0o600))
+		[]byte("# the sandbox home, commented out by hand\n#GEMINI_CLI_HOME=/iso\nGEMINI_SANDBOX=false\n"), 0o600))
 
 	out, argv, err := runDriveAgentTmux(t, script, dir, "",
 		`start_session "$TMP/repo" 45 19 gemini
@@ -459,14 +465,14 @@ func TestDriveAgentCapEnvCommentsAreSkippedByEveryReader(t *testing.T) {
 		 printf 'REPORTED='; cap_env_names`)
 	require.NoError(t, err, "a commented line must not be an error, just absent; output:\n%s", out)
 
-	require.Contains(t, out, "APPLIED=GEMINI_FORCE_FILE_STORAGE=true\n",
+	require.Contains(t, out, "APPLIED=GEMINI_SANDBOX=false\n",
 		"load_cap_env must apply the uncommented entry and only that; output:\n%s", out)
-	require.Contains(t, out, "REPORTED=GEMINI_FORCE_FILE_STORAGE\n",
+	require.Contains(t, out, "REPORTED=GEMINI_SANDBOX\n",
 		"and emit must stamp exactly what was applied — a header naming a commented-out "+
 			"variable claims an isolation the pane never had; output:\n%s", out)
 	require.NotContains(t, argv, "#GEMINI_CLI_HOME=/iso",
 		"and nothing '#'-prefixed may reach new-session; argv:\n%s", argv)
-	require.Contains(t, argv, "[-e]\n[GEMINI_FORCE_FILE_STORAGE=true]\n", "argv:\n%s", argv)
+	require.Contains(t, argv, "[-e]\n[GEMINI_SANDBOX=false]\n", "argv:\n%s", argv)
 }
 
 // cmd_fresh validates the cap-env file BEFORE it reaps. start_session re-validates too, but
@@ -688,4 +694,34 @@ func TestDriveAgentStartSessionRefusesAMissingCapEnv(t *testing.T) {
 	require.Contains(t, out, "predates ATR_CAP_ENV")
 	require.Empty(t, argv,
 		"and the refusal must land before new-session, not after; argv:\n%s", argv)
+}
+
+// The one refusal about a PAIR rather than a line, and the only one whose failure destroys
+// something outside the run directory. GEMINI_FORCE_FILE_STORAGE routes credentials through
+// the file store, and gemini's migrateFromFileStorage reads homedir()/.gemini/oauth_creds.json
+// and then deletes it — where homedir() falls back to the real $HOME whenever GEMINI_CLI_HOME
+// is unset. `help` prints the two together as one recipe and writes them to a file it invites
+// you to hand-edit, so commenting out one line is the whole distance to deleting your own
+// refresh token.
+//
+// Both directions are asserted. Refusing the half-set pair proves nothing on its own if the
+// harness would refuse the full pair too — that would be a script nobody can isolate with.
+func TestDriveAgentCapEnvRefusesForceFileStorageWithoutCliHome(t *testing.T) {
+	script := filepath.Join(moduleRoot(t), "scripts", "drive-agent.sh")
+
+	out, err := runDriveAgent(t, script, t.TempDir(),
+		`validate_cap_env <<<"GEMINI_FORCE_FILE_STORAGE=true"`)
+	require.Error(t, err, "the half-set pair must be refused; output:\n%s", out)
+	require.Contains(t, out, "without GEMINI_CLI_HOME")
+
+	// The premise: the pair the recipe actually prints still passes.
+	out, err = runDriveAgent(t, script, t.TempDir(),
+		`validate_cap_env <<<$'GEMINI_CLI_HOME=/iso\nGEMINI_FORCE_FILE_STORAGE=true'`)
+	require.NoError(t, err, "the documented pair must still be accepted; output:\n%s", out)
+
+	// And the other half alone is fine — isolation without forcing the file store is the
+	// weaker but non-destructive configuration.
+	out, err = runDriveAgent(t, script, t.TempDir(),
+		`validate_cap_env <<<"GEMINI_CLI_HOME=/iso"`)
+	require.NoError(t, err, "output:\n%s", out)
 }
