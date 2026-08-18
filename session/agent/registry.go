@@ -1276,12 +1276,22 @@ func geminiTrustGateVisible(content string) bool {
 	return found
 }
 
-// geminiAllowRow and geminiCancelRow are the two option labels geminiConfirmationVisible
-// keys on. They are constants rather than literals in the predicate because the matcher's
-// floor is a property of geminiAllowRow's LENGTH — a 19-column pane, per the header below —
-// and a test that restates that number instead of measuring it against this symbol is
-// constant-vs-constant and cannot fail. TestGeminiConfirmationFloorIsSetByTheAllowRow reads
-// these, so shortening either literal moves the floor and reddens the measurement.
+// geminiAllowRow and geminiCancelRow are the two option labels geminiConfirmationVisible keys
+// on. They are constants rather than literals in the predicate so the guards can measure
+// against the symbol the matcher reads: the floor is a property of geminiAllowRow's LENGTH — a
+// 19-column pane, per the header below — and a test restating that number instead of reading
+// this symbol is constant-vs-constant and cannot fail.
+//
+// THE TWO ARE NOT GUARDED ALIKE, and an earlier draft of this comment claimed they were.
+// Shortening geminiAllowRow moves the floor and reddens
+// TestGeminiConfirmationFloorIsSetByTheAllowRow. Shortening geminiCancelRow reddens NOTHING:
+// a conjunction's floor is its widest term, so the cancel prefix does not bind it, and a
+// shorter prefix still finds its row at every driven rung. Set it to "No," and the package
+// stays green while the conjunction widens to fire on any bottom-most box containing "No,".
+//
+// So its length is a judgement, not a measurement, and it is the one thing here a guard cannot
+// hold. What is asserted instead is that it stays a PREFIX of shippedCancelLabel, which catches
+// the other drift — a term gemini never renders.
 const (
 	geminiAllowRow  = "Allow once"
 	geminiCancelRow = "No, sug"

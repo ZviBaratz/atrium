@@ -683,6 +683,11 @@ func TestGeminiConfirmationDropsOnceDismissed(t *testing.T) {
 		"and so is the cancel label")
 }
 
+// shippedCancelLabel is the full cancel row as gemini 0.55.1 draws it — the literal #736
+// proposed keying on. It lives here, above both tests that need it, so the label and the
+// prefix the matcher actually reads are compared against ONE spelling rather than two.
+const shippedCancelLabel = "No, suggest changes (esc)"
+
 // The measurement that overrides the issue. #736 proposes keeping "No, suggest changes (esc)"
 // as the in-box content; driven, that literal is absent below width 34 — above every width
 // Atrium's preview pane routinely produces. Keying on it would have re-shipped #713's mistake
@@ -691,7 +696,7 @@ func TestGeminiConfirmationDropsOnceDismissed(t *testing.T) {
 // Both halves are asserted. Without the second, the test would pass while the matcher keyed on
 // something no narrow pane renders.
 func TestGeminiConfirmationCancelRowTruncatesBelowWidth34(t *testing.T) {
-	const shipped = "No, suggest changes (esc)"
+	const shipped = shippedCancelLabel
 	for _, c := range geminiConfirmLadder {
 		t.Run(c.label(), func(t *testing.T) {
 			if c.width >= 34 {
@@ -701,8 +706,8 @@ func TestGeminiConfirmationCancelRowTruncatesBelowWidth34(t *testing.T) {
 			}
 			// What the matcher actually keys on must be present at EVERY rung, or the
 			// assertion above is measuring a literal nothing reads.
-			require.Contains(t, c.pane, "Allow once", "the first option row survives every driven width")
-			require.Contains(t, c.pane, "No, sug", "the cancel prefix survives every driven width")
+			require.Contains(t, c.pane, geminiAllowRow, "the first option row survives every driven width")
+			require.Contains(t, c.pane, geminiCancelRow, "the cancel prefix survives every driven width")
 		})
 	}
 }
@@ -731,7 +736,7 @@ func TestGeminiConfirmationFloorIsSetByTheAllowRow(t *testing.T) {
 	require.NotEmpty(t, allow, "the premise: the narrowest driven rung still renders the allow row")
 	require.NotContains(t, allow, "…", "the binding literal is NOT elided at width 20 — it fits, barely")
 
-	cancel := labelCol(geminiConfirmPane20, "No, sug")
+	cancel := labelCol(geminiConfirmPane20, geminiCancelRow)
 	require.Contains(t, cancel, "…",
 		"the other literal IS elided here, which is why 7 cells of headroom on it says nothing "+
 			"about the matcher's floor")
@@ -751,6 +756,15 @@ func TestGeminiConfirmationFloorIsSetByTheAllowRow(t *testing.T) {
 			"rung — which is what makes 19 the floor, and 20 the last rung that proves anything")
 	require.Contains(t, allow, geminiAllowRow,
 		"and it is THIS literal the driven row carries, so the two cannot drift apart")
+
+	// The cancel term gets the one guard it can have, which is NOT a length. Nothing measurable
+	// here bounds its specificity: shortening it to "No," keeps every assertion above green —
+	// it still finds the row, still fits the elided field, and cannot move a floor it does not
+	// bind. What a measurement DOES catch is drift to a string gemini never renders, so that is
+	// what is asserted. Read the const's own comment before shortening it; the cost is an
+	// over-broad conjunction, not a red test.
+	require.True(t, strings.HasPrefix(shippedCancelLabel, geminiCancelRow),
+		"the cancel term must be a prefix of the row gemini actually draws, got %q", geminiCancelRow)
 }
 
 // The residual of #736's own class, pinned rather than left to be rediscovered. The box clause
@@ -968,12 +982,17 @@ func TestGeminiConfirmationOverFiresOnA027BoxedComposer(t *testing.T) {
 // Why the veto had to go, measured on the pane it used to reject. isInputBoxLine with
 // defaultPrompts is the same predicate InputBoxVisible anchors on and gemini declares no
 // InputBoxPrompts of its own, so the single-walled "> " row that vetoed the match also
-// answered InputBoxVisible TRUE — and gemini's DEFAULT configuration renders no composer
-// during an approval, so there is nothing to absorb what Atrium then types.
+// answered InputBoxVisible TRUE. What Atrium then types reaches a pane holding an unanswered
+// approval; what gemini DOES with those keystrokes is registry.go's to not state, and it
+// does not state it.
 //
-// Both halves are asserted. The match alone would pass with the veto restored and some other
-// clause rejecting the pane; it is Session.AwaitingInput going FALSE that says the
-// auto-approval is closed.
+// ORDER IS THE ASSERTION HERE, and an earlier draft got it backwards. The verdict is the
+// AwaitingInput conjunction, so it runs FIRST: with require.True(prompted) above it, !prompted
+// is false by construction, Go short-circuits before InputBoxVisible is called, and the
+// conjunction can never be true — a guard that cannot fail. It is not two independent halves
+// either, which is what that draft claimed: given !gated and InputBoxVisible, "AwaitingInput
+// is false" and "prompted is true" are the same fact. The decomposition below it exists to say
+// WHICH term moved when the verdict fails, not to add coverage.
 func TestGeminiConfirmationFiresOnADialogRowThatLooksLikeAComposer(t *testing.T) {
 	withQuote := strings.Join([]string{
 		"╭────────────────────────────────────────╮",
@@ -992,18 +1011,21 @@ func TestGeminiConfirmationFiresOnADialogRowThatLooksLikeAComposer(t *testing.T)
 	require.True(t, gemini.InputBoxVisible(withQuote),
 		"the premise: so the adapter sees an input box on a pane holding a LIVE dialog")
 
-	_, prompted := gemini.DetectPrompt(withQuote)
-	require.True(t, prompted, "the dialog must be detected despite that row")
-
-	// Session.AwaitingInput, verbatim. False here is the auto-approval being closed: with the
-	// drawer collapsed — the default — Enter would land on the RadioButtonSelect whose
-	// highlighted row is "Allow once" by default — or, under
-	// security.autoAddToPolicyByDefault, the row that persists the approval to
+	// Session.AwaitingInput, verbatim, and evaluated before anything can FailNow. False here
+	// is the auto-approval being closed: with the drawer collapsed — the default — Enter would
+	// land on the RadioButtonSelect whose highlighted row is "Allow once" by default — or,
+	// under security.autoAddToPolicyByDefault, the row that persists the approval to
 	// ~/.gemini/policies/auto-saved.toml. Either way a tap approves something.
 	_, gated := gemini.GateUp(withQuote)
+	_, prompted := gemini.DetectPrompt(withQuote)
 	require.False(t, !gated && !prompted && gemini.InputBoxVisible(withQuote),
 		"AwaitingInput must be false on a live approval dialog, or Atrium types the queued "+
 			"first prompt into it and submits")
+
+	// Which term carried it, so a future failure names itself instead of reporting a false
+	// conjunction. Neither adds coverage over the assertion above.
+	require.False(t, gated, "the dialog is not a Gate; it must be a prompt that closes this")
+	require.True(t, prompted, "and it is the confirmation matcher that has to do it")
 }
 
 // The configuration this matcher cannot see, pinned as a MISS rather than left to be
