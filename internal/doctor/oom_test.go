@@ -66,6 +66,11 @@ func TestRenderOOM_UnaskedLiveServerIsNotAnEmptyFleet(t *testing.T) {
 	if !strings.Contains(out, "+300") {
 		t.Errorf("render = %q, want the configured margin still shown", out)
 	}
+	// The re-run alone is a loop on #730's cause: an unopenable socket answers the same way
+	// every time, so the check that can clear it has to be named beside the re-run.
+	if !strings.Contains(out, "Atrium's own socket can be opened (ls -l)") {
+		t.Errorf("render = %q, want the check a re-run cannot substitute for", out)
+	}
 }
 
 func TestRenderOOM_MarginOffIsLabelled(t *testing.T) {

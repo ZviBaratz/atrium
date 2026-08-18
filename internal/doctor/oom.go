@@ -33,14 +33,17 @@ type OOMAgent struct {
 //
 // ServerFound and LiveServerUnknown are separate, and reading ServerFound alone is the
 // bug this pair exists to prevent: it is false both when tmux reported that no server is
-// on Atrium's socket and — before LiveServerUnknown existed — when tmux could not be run
-// at all. Only LiveServerUnknown == false makes !ServerFound evidence of an empty fleet.
+// on Atrium's socket and — before LiveServerUnknown existed — when the probe never
+// answered, whether because tmux could not be run at all or, since #730, because it ran
+// and could not open the socket. Only LiveServerUnknown == false makes !ServerFound
+// evidence of an empty fleet.
 type OOMResult struct {
 	Supported bool
 	Margin    int
 	// LiveServerUnknown reports that the probe for which server is on Atrium's socket
-	// was never answered: tmux absent, or the probe's budget spent. It is not "no server
-	// is running", which is a determined answer and safe.
+	// was never answered: tmux absent, the probe's budget spent, or (since #730) tmux run
+	// and unable to open the socket. It is not "no server is running", which is a
+	// determined answer and safe.
 	//
 	// Named for the same fact as tmux.ScanGaps.LiveServerUnknown on purpose — one
 	// spelling for one question, so a reader who met it in the orphan section does not
@@ -244,11 +247,13 @@ func RenderOOM(r OOMResult) string {
 	if r.LiveServerUnknown {
 		b.WriteString("  live server not established — tmux could not be asked which server is on\n")
 		b.WriteString("  Atrium's socket, so this is not an empty fleet, only an unanswered question\n")
-		// The re-run leads and PATH comes second, as in renderStaleGaps: the probe fails
-		// when tmux is off PATH *and* when its budget was spent, and naming only PATH
-		// sends a user whose PATH is fine to check it.
+		// The re-run leads and the checks come second, as in renderStaleGaps: the probe
+		// fails when tmux is off PATH, when its budget was spent, and — since #730 — when
+		// Atrium's own socket exists and cannot be opened. Naming only PATH sends a user
+		// whose PATH is fine to check it, and the third cause answers identically on every
+		// re-run, so it needs the check named or this line is a loop.
 		b.WriteString("         → re-run to get the live ranking; if it persists, check that tmux is\n")
-		b.WriteString("           on PATH\n")
+		b.WriteString("           on PATH and that Atrium's own socket can be opened (ls -l)\n")
 		return b.String()
 	}
 	if !r.ServerFound {

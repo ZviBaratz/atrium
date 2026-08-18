@@ -133,9 +133,13 @@ func TestReapWithoutKillSignalsNothing(t *testing.T) {
 // TestReapKillTargetsOnlyProvenUnreachableServers.
 //
 // Reachable servers are recoverable with the tmux command doctor prints, so they are
-// left alone without --all. Unknown-reachability servers are never targeted at all:
-// when tmux cannot be run nothing was established, and the ambient live server could
-// not be excluded either — so those rows may be the running fleet.
+// left alone without --all. Unknown-reachability servers are never targeted at all, under
+// either flag, because a live server reaches that state — most plainly when its socket
+// exists and cannot be opened, where Atrium cannot address the server but its agents are
+// working (#730). This
+// assertion is the second half of that fix — session/tmux proves the field comes back
+// false for such a server (TestALiveServerBehindAnUnopenableSocketIsNotAReapTarget), and
+// this proves the field is what spares it.
 func TestReapKillTargetsOnlyProvenUnreachableServers(t *testing.T) {
 	unreachable := orphan(10)
 	reachable := orphan(20)
@@ -441,10 +445,16 @@ func TestReapKillAllRefusesWhenTheLiveServerIsUnknown(t *testing.T) {
 		require.Empty(t, procs.sent,
 			"--all must signal nothing when the live server could not be told apart from these rows")
 		require.True(t, procs.alive[1952486], "the live server must survive")
-		// This cause, and only this one, is the one a re-run fixes: the probe was never
+		// This cause, and only this one, is the one a re-run can fix: the probe was never
 		// answered. Pinned here because the sibling test pins the opposite for the other
 		// cause, and one message serving both would be wrong advice for one of them.
-		require.Contains(t, err.Error(), "re-run once the probe works")
+		//
+		// "Can", not "does". Since #730 an unopenable ambient socket also raises this flag
+		// and answers the same way on every run, which is why the message names what to
+		// check when the re-run does not help — asserted so that half cannot be dropped.
+		require.Contains(t, err.Error(), "re-run")
+		require.Contains(t, err.Error(), "own socket can be opened",
+			"the cause a re-run never clears has to be named, or this advice is a loop")
 	})
 
 	t.Run("the default path still kills the unreachable one", func(t *testing.T) {
@@ -516,9 +526,9 @@ func TestReapKillAllRefusesWhenTheEmptyFleetAnswerIsUnproven(t *testing.T) {
 		require.True(t, procs.alive[1952486], "the live server must survive")
 
 		// The remedy has to fit the cause. This probe answered, and re-running it asks the
-		// same wrong socket again, so "re-run once the probe works" would be advice that
-		// cannot work — the row is reachable and can be inspected instead.
-		require.NotContains(t, err.Error(), "re-run once the probe works")
+		// same wrong socket again, so any re-run advice would be advice that cannot work —
+		// the row is reachable and can be inspected instead.
+		require.NotContains(t, err.Error(), "re-run")
 		require.Contains(t, err.Error(), "tmux -S <path> ls")
 	})
 

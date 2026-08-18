@@ -74,9 +74,9 @@ func staleSocketFixture(t *testing.T) string {
 }
 
 // TestStaleSocketsInCountsEveryUnprobeableFile is route 3 of #598, the reachable one:
-// with tmux off PATH — or the scan's budget spent — no file can be classified, every
-// one is skipped, and the pass returns the same empty list a genuinely clean directory
-// does. The section then reported "none in <dir>" having probed nothing.
+// with tmux off PATH — or the scan's budget spent, or the files themselves unopenable
+// (#730) — no file can be classified, every one is skipped, and the pass returns the
+// same empty list a genuinely clean directory does. The section then reported "none in <dir>" having probed nothing.
 //
 // The count is asserted exactly, not merely as non-zero. Only a file that reached a
 // probe may be counted: `default` belongs to another tool and `atrium-notasocket` is a

@@ -927,19 +927,37 @@ func errWithStderr(err error, stderr string) error {
 // hosting a server this process cannot address, which may be running the very session
 // being killed. socketUnreachable is that other half.
 //
-// Residual, accepted and tracked in #730: a missing socket FILE is not proof the server
-// is gone. Unlink a live server's socket and the server and its panes keep running while
-// every tmux command aimed at that path reports ENOENT, so Close reports a clean kill and
-// TerminalPane.CloseForInstance releases the shell's owned name. Holding the name instead
-// recovers nothing — the path is unaddressable in both directions — and would reserve the
-// instance's title forever in the far commoner case #723 is about, no server running at
-// all. Proving a server absent takes orphan.go's /proc scan, not a fifth string.
+// Residual, accepted, and re-examined in #730 rather than merely tracked: a missing socket
+// FILE is not proof the server is gone. Unlink a live server's socket and the server and
+// its panes keep running while every tmux command aimed at that path reports ENOENT, so
+// Close reports a clean kill and TerminalPane.CloseForInstance releases the shell's owned
+// name. Holding the name instead recovers nothing — the path is unaddressable in both
+// directions — and would reserve the instance's title forever in the far commoner case #723
+// is about, no server running at all.
 //
-// Deliberately textual, where orphan.go's classifyPIDProbe answers a similar question
-// structurally (any *exec.ExitError means tmux ran and made a determination). The
-// asymmetry is in the commands, not in the guards: kill-session exits non-zero for plenty
-// of reasons that are not "gone", while the display-message probe there essentially only
-// fails when nothing is on the socket to answer.
+// What #730 added is the scope of that state, and it argues for accepting the residual more
+// strongly than the paragraph above did. The socket a shell is killed on is not its own: a
+// terminal shell is a session on the FLEET-WIDE ambient socket, because Close goes through
+// tmuxCommand, which prepends `-L socketName()` (command.go). So ENOENT here cannot mean
+// "this shell's server vanished" — it means the file every agent session is served through
+// is gone, and every one of them is orphaned with it. Holding one shell's name protects
+// nothing the unlink has not already taken, and `atrium reap` is what recovers the server,
+// by the /proc scan in orphan.go.
+//
+// Note which no-server cases land on which message, because the residual is only one of
+// three. tmux never unlinks a socket when its server dies (see StaleSocket in orphan.go),
+// so a server that exited during this boot leaves its file behind and the probe reports
+// "no server running". ENOENT means the file is genuinely absent, which is #723's common
+// case — a boot that cleared /tmp, a deleted root — and there really is nothing to hold a
+// name for. The residual is the third: unlinked out from under a server still running.
+//
+// Textual here, and the reason is the command rather than the guard: kill-session exits
+// non-zero for plenty of reasons that are not "gone", so the messages have to be read.
+// orphan.go's classifyPIDProbe is not the purely structural counterpart it once was — since
+// #730 it reads the connect diagnostic too, through the same socketUnreachableMessage this
+// predicate's other half uses, because on that path an unopenable socket must not be read as
+// an empty one. What is still structural there is the rest: any other non-zero exit from
+// display-message is taken as an answer.
 func sessionAlreadyGone(err error, stderr string) bool {
 	hay := strings.ToLower(err.Error() + " " + stderr)
 	socketMissing := strings.Contains(hay, "error connecting to") &&
@@ -956,9 +974,20 @@ func sessionAlreadyGone(err error, stderr string) bool {
 // asked of any server, so liveness must keep the prior status rather than read it as a
 // death. The ENOENT exclusion is what makes that split correct, and it is checked here
 // rather than left to call order: sessionAlreadyGone owns the one connect failure that does
-// mean gone, and at liveness's single call site it has already matched and returned before
-// this runs, so the conjunct is unreachable there — it is depth for the next caller, whose
-// order nothing here can promise.
+// mean gone, and at liveness's call site it has already matched and returned before this
+// runs, so the conjunct is dead weight there.
+//
+// It stopped being dead weight when #730 arrived — the "next caller, whose order nothing
+// here can promise" that this comment used to anticipate. classifyPIDProbe consults the
+// rule through socketUnreachableMessage with no sessionAlreadyGone ahead of it, because on
+// the reap path the two connect failures must land on OPPOSITE sides: the absent path is
+// the #547 orphan the reaper exists to find, and the unopenable one is a live server it
+// must not touch. Delete the conjunct and the two ENOENT tests in orphan_linux_test.go go
+// red — TestOrphanedServerIsFoundAndKillableAfterItsSocketRootIsDeleted and
+// TestAServerWhoseSocketFileIsGoneStillReportsItsAttachedClient — which is what
+// "load-bearing" now means here rather than "depth". Named rather than counted because
+// there are three tmux-backed orphan tests and the third, the unopenable-socket one, keeps
+// passing under that mutant: widening the rule cannot change a verdict it already reaches.
 //
 // The errno tail is open-ended (tmux formats it with strerror) and, for a connect() failure,
 // so is the set of errnos a given kernel picks — the messages in unreachableSocketMessages
@@ -978,10 +1007,32 @@ func sessionAlreadyGone(err error, stderr string) bool {
 // server — the rare case degrades quietly here, rather than the common one destructively.
 // (The cancelled-probe case is NOT an argument for this branch; it is caught by the ctx
 // guard two cases earlier and never produces a connect diagnostic at all.) Neither outcome
-// is honest, because "I cannot reach the socket" is not a session state; giving it one needs
-// #730's /proc check, which can answer what neither branch here can.
+// is honest, because "I cannot reach the socket" is not a session state. #730 did not change
+// that and could not: what it fixed is the reap path, where the same confusion had a
+// destructive consequence and a structural answer — the row leaves the kill set. Here there
+// is no third status to move to, so the trade above stands as written.
 func socketUnreachable(err error, stderr string) bool {
-	hay := strings.ToLower(err.Error() + " " + stderr)
+	return socketUnreachableMessage(err.Error() + " " + stderr)
+}
+
+// socketUnreachableMessage is the rule above over tmux's diagnostic alone, for the two
+// callers that hold the text rather than an error: classifyPIDProbe, which has already
+// unwrapped its *exec.ExitError to reach Stderr, and the precondition assertion in
+// TestALiveServerBehindAnUnopenableSocketIsNotAReapTarget, which has captured a real
+// diagnostic and no error at all.
+//
+// Convenience, not necessity, and the earlier version of this comment claimed otherwise:
+// it said a bare &exec.ExitError{} panics on Error() because its ProcessState is nil, so
+// classifyPIDProbe could not call socketUnreachable. That is false — (*os.ProcessState).String
+// has a nil-receiver branch and returns "<nil>" — and it was measured, not reasoned, in
+// review of #739. socketUnreachable(exitErr, string(exitErr.Stderr)) would work; it would
+// just fold "exit status 1" into the haystack for nothing. One implementation, two entry
+// points, no claim about panics.
+//
+// Callers pass whatever they have; the fold happens here so no caller can get the case
+// handling wrong.
+func socketUnreachableMessage(hay string) bool {
+	hay = strings.ToLower(hay)
 	return strings.Contains(hay, "error connecting to") &&
 		!strings.Contains(hay, "no such file or directory")
 }
