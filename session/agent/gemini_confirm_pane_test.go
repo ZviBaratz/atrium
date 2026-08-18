@@ -280,6 +280,22 @@ const geminiConfirmPane20 = `  README.md file
 ╰──────────────────╯
 `
 
+// geminiConfirmDismissedPane is the one capture in this file the header's "one fresh session
+// per rung, NOT a resize ladder" does not describe, and the exception is in its own bytes: it
+// is a 120-column pane whose scrollback holds 40-, 28- and 24-wide dialog frames and a torn
+// 20-column fragment. gemini's dialog box is width: mainAreaWidth, so at 120 columns it draws
+// the ~116-wide frame near the bottom; the narrow ones can only be residue from the widths the
+// terminal held earlier. It is the same session one keystroke later, and that session had been
+// resized across the drive.
+//
+// Kept, and kept HERE rather than re-driven, because the residue cannot flatter the assertion
+// it backs. TestGeminiConfirmationDropsOnceDismissed requires that NOTHING matches; three
+// extra dialog frames in the scrollback can only make a false positive likelier, never hide
+// one. A rung would be a different matter — that is what the header's rule is about — but a
+// negative control that is harder than the real thing is still a negative control.
+//
+// What a re-drive must not do is go looking for the fresh 120-column session that produced
+// this. There wasn't one.
 const geminiConfirmDismissedPane = `│                                                                                                                      │
 
 ╭──────────────────────────────────────╮
@@ -639,10 +655,10 @@ func TestGeminiConfirmationIgnoresAComposerQuotingTheLiteral(t *testing.T) {
 	require.False(t, ok, "a quoted literal in the composer is not a live confirmation")
 }
 
-// The other control, and the one that separates an OPEN dialog from an answered one: the same
-// session one keystroke later. Escape dismissed the dialog, the composer came back, and
-// nothing here may still read as a prompt — a dialog left matching forever is what keeps a
-// queued first prompt undelivered.
+// The other control, and the one that separates an OPEN dialog from an answered one. Escape
+// dismissed the dialog, the composer came back, and nothing here may still read as a prompt —
+// a dialog left matching forever is what keeps a queued first prompt undelivered. Read
+// geminiConfirmDismissedPane's own note on where those bytes came from before re-driving it.
 func TestGeminiConfirmationDropsOnceDismissed(t *testing.T) {
 	_, ok := gemini.DetectPrompt(geminiConfirmDismissedPane)
 	require.False(t, ok, "the dialog is gone; nothing may still classify as a prompt")
@@ -881,6 +897,75 @@ func TestGeminiConfirmationVetoesABoxedComposer(t *testing.T) {
 
 	require.False(t, geminiConfirmationVisible(boxedComposer),
 		"a composer glyph inside the block means the user is typing, not approving")
+}
+
+// The configuration this matcher cannot see, pinned as a MISS rather than left to be
+// rediscovered (#746). gemini's ui.collapseDrawerDuringApproval defaults true and every rung
+// above was driven that way; set it false and the composer renders below a LIVE dialog.
+//
+// Two things are asserted, and the second is why this test exists. The miss alone would be a
+// documented limit. The conjunction below it is Session.AwaitingInput's exact expression, and
+// it going TRUE on a pane holding an unanswered approval is Atrium typing the queued first
+// prompt into a RadioButtonSelect whose highlighted default is "Allow once", then submitting.
+//
+// The composer rows are the real 0.55.1 ones, taken from geminiConfirmDismissedPane, so the
+// shape is driven even though the configuration was not.
+func TestGeminiConfirmationMissesWhenTheDrawerStaysOpen(t *testing.T) {
+	composer := strings.Join([]string{
+		"",
+		"▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+		" >   Type your message or @path/to/file",
+		"▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+		" workspace (/directory)          branch",
+	}, "\n")
+	pane := strings.TrimRight(geminiConfirmPane40, "\n") + "\n" + composer + "\n"
+
+	require.Contains(t, pane, "Allow once", "the premise: the dialog is still on screen")
+	// Not "the literal is somewhere in the pane" — the matcher this replaced read the
+	// flattened bottom WindowPrompt lines, so the regression claim is only true if the row
+	// lands inside that window. It does, which is what makes this a regression rather than a
+	// gap both matchers shared.
+	require.Contains(t, flattenChrome(pane, WindowPrompt), "No, suggest changes (esc)",
+		"the premise: the flat matcher #736 replaced DID fire on this pane")
+
+	_, prompted := gemini.DetectPrompt(pane)
+	require.False(t, prompted, "#746: the drawer is open, so the dialog's border no longer ends the pane")
+
+	// Session.AwaitingInput, verbatim. True here means the queued prompt is typed AT the dialog.
+	_, gated := gemini.GateUp(pane)
+	require.True(t, !gated && !prompted && gemini.InputBoxVisible(pane),
+		"#746 is a live regression, not a theoretical one: if this goes false, the bug is fixed and the disclosure in geminiConfirmationVisible must go with it")
+	require.False(t, gemini.HasBusyMarker(pane),
+		"and nothing else catches it — showLoadingIndicator requires !hasPendingActionRequired")
+}
+
+// The composer veto's cost, in the direction it actually lands at 0.55.1. The veto cannot FIRE
+// on a 0.55.1 pane — that shape is TestGeminiConfirmationVetoesABoxedComposer's composed 0.27
+// box — so the only thing it can do here is miss: any row inside the dialog's own outer box
+// that survives the trim and starts with "> " takes the whole match down.
+//
+// The driven rungs escape only because the echoed command sits in a NESTED box whose double
+// wall isInputBoxLine does not strip. A branch that renders single-walled content in the outer
+// box — the edit branch's diff, an mcp or info body — puts a live dialog one line away from
+// invisible. Held as evidence for whether the clause keeps earning its place, not as a bug.
+func TestGeminiConfirmationVetoCostsAMissOnASingleWalledRow(t *testing.T) {
+	withQuote := strings.Join([]string{
+		"╭────────────────────────────────────────╮",
+		"│ ? Shell  cat notes.md                  │",
+		"│ > a quoted line from the file          │",
+		"│ Allow execution of [Shell]?            │",
+		"│ ● 1. Allow once                        │",
+		"│   3. No, suggest changes (esc)         │",
+		"╰────────────────────────────────────────╯",
+	}, "\n")
+
+	block, ok := bottomBoxBlock(withQuote)
+	require.True(t, ok, "the premise: the dialog is live and bottom-most")
+	require.Contains(t, strings.Join(block, "\n"), "Allow once",
+		"the premise: both option rows are present, so only the veto can reject this")
+
+	require.False(t, geminiConfirmationVisible(withQuote),
+		"one single-walled \"> \" row inside the dialog's own box defeats the match")
 }
 
 // The first DRIVEN gemini idle pane this repo has held, and a negative control for all three

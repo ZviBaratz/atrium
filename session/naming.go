@@ -156,25 +156,22 @@ func generateName(ctx context.Context, executor cmd.Executor, claudePath, workDi
 // written: one line of bare text on stdout, warnings on stderr (the probe's own
 // stderr carried "Ripgrep is not available. Falling back to GrepTool."), no
 // envelope. That probe is why the adapter's VerifiedVersion could finally move
-// off 0.27 — this function was the fourth of its four surfaces.
+// off 0.27 — this function was the last of the five surfaces the adapter declares.
+// Five, not the four drift_fields_test.go asked for by name: #717 added a second
+// Gate after that sentence was written.
 //
-// The INVOCATION is a different claim, and at 0.55.1 it is broken. gemini now
-// refuses to run in an untrusted directory: without a trusted cwd it exits 55
-// with EMPTY stdout and "Gemini CLI is not running in a trusted directory" on
-// stderr. runGeminiHeadless deliberately runs from a fresh os.MkdirTemp, which
-// can never appear in the user's trustedFolders.json, so every naming call from
-// a 0.55.x install takes that path. Measured both ways in the same run: the same
-// call with GEMINI_CLI_TRUST_WORKSPACE=true returned "Anchor Confirmation
-// Matcher" and exit 0.
+// The INVOCATION was a separate claim and at 0.55.1 it was broken (#744): gemini
+// refuses to run in an untrusted directory, exiting 55 with EMPTY stdout, and
+// runGeminiHeadless runs from a fresh os.MkdirTemp that can never appear in the
+// user's trustedFolders.json — so every naming call from a 0.55.x install took
+// that path. It failed toward a LOST title rather than a wrong one, since Output
+// returns the non-zero exit as an error and the empty stdout never reaches
+// sanitizeName. runGeminiHeadless now sets GEMINI_CLI_TRUST_WORKSPACE=true, which
+// is where the reasoning about why that is safe lives.
 //
-// It fails toward a lost title rather than a wrong one — Output returns the
-// non-zero exit as an error, so the empty stdout never reaches sanitizeName —
-// which is why #736 disclosed it rather than folding a behaviour change into a
-// matcher fix. Tracked as #744; the fix is GEMINI_CLI_TRUST_WORKSPACE=true on
-// runGeminiHeadless's command, not a contract change here. Note what #736 also
-// took away while filing it: the adapter's pin moved past 0.55.1, and doctor
-// warns only when installed > verified, so a 0.55.x install that used to read
-// "drifted" now reads "ok" with naming still broken.
+// Fixed here rather than filed because #736 moved this adapter's pin past 0.55.1,
+// and doctor warns only when installed > verified: leaving the break would have
+// turned a 0.55.x user's "drifted" into "ok" with naming still down.
 func generateNameGemini(ctx context.Context, executor cmd.Executor, geminiPath, prompt string, stats *git.DiffStats) (string, error) {
 	sessionContext := buildContext(prompt, stats)
 	if sessionContext == "" {

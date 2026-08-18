@@ -839,15 +839,16 @@ var codex = &Adapter{
 // That is the whole adapter, which is why VerifiedVersion moved to 0.55.1 below. It took a
 // real turn per rung plus an isolated config dir to buy.
 //
-// ONE OF THOSE FIVE IS VERIFIED AND STILL BROKEN, and moving the pin is what makes saying so
-// here necessary. generateNameGemini's output CONTRACT holds exactly as documented; its
-// INVOCATION does not, because runGeminiHeadless runs `gemini -p` from a fresh os.MkdirTemp
-// and 0.55.x refuses an untrusted cwd (#744). Until #744 lands, session naming is broken for
-// every 0.55.x install — and this pin is why `atrium doctor` no longer says anything at all
-// about those installs, since it reports drift only when installed > verified. The pin was
-// never a naming check and its old "drifted" said nothing about titles, but it was the only
-// amber a 0.55.x user saw, and this change takes it away. #744 is the fix; this is the
-// disclosure that it is now unaccompanied.
+// ONE OF THOSE FIVE WAS VERIFIED AND BROKEN, and moving the pin is what forced fixing it here
+// rather than later. generateNameGemini's output CONTRACT holds exactly as documented; its
+// INVOCATION did not, because runGeminiHeadless runs `gemini -p` from a fresh os.MkdirTemp and
+// 0.55.x refuses an untrusted cwd, so session naming was broken for every 0.55.x install
+// (#744). The pin is why that could not be left standing: doctor reports drift only when
+// installed > verified, so moving to 0.55.1 turns a 0.55.x user's "drifted" into "ok". The pin
+// was never a naming check and its old amber said nothing about titles, but it was the only
+// amber those users saw — taking it away while the break was live would have been a silent
+// downgrade. runGeminiHeadless now sets GEMINI_CLI_TRUST_WORKSPACE=true, measured at 0.55.1 in
+// the same drive.
 //
 // WHAT THE DRIVE COST AND WHY IT HAD NOT BEEN PAID. Reaching anything past the trust dialog
 // needs an authenticated session, and drive-agent.sh drove against the real ~/.gemini, so a
@@ -1273,13 +1274,36 @@ func geminiTrustGateVisible(content string) bool {
 // ONE BRANCH DRIVEN, four grepped, and that gap is the one #713 charges for. Every rung of
 // geminiConfirmLadder is an `exec` confirmation (`rm -f README.md`). "Allow once" leads the
 // option list in all five option-bearing branches of getOptions — edit, sandbox_expansion,
-// exec, info, mcp — but that is read off the 0.55.1 bundle, and this file's standing rule is
-// that bundle presence is necessary and NOT sufficient. If edit (which renders a diff above
-// its options) or any of the other three renumbers, rewords or re-nests its first row, this
-// misses there and nothing here would notice.
+// exec, info, mcp — and so does the cancel row: getOptions ends each of those five branches
+// with the same options2.push carrying the identical "No, suggest changes (esc)" label, so
+// BOTH halves of the conjunction are branch-invariant, not just the one that is easier to
+// reason about. That is read off the 0.55.1 bundle, and this file's standing rule is that
+// bundle presence is necessary and NOT sufficient. If edit (which renders a diff above its
+// options) or any of the other three renumbers, rewords or re-nests EITHER row — a
+// conjunction is only as reachable as its rarer term — this misses there and nothing here
+// would notice.
 //
 // The block is read LINE-WISE and unflattened, so two adjacent wrapped rows cannot synthesise
 // a phrase neither renders — the trap flattenChrome sprang on the trust gate (#713).
+//
+// THE CONFIGURATION THIS CANNOT SEE, and the worst thing in this file.
+// ui.collapseDrawerDuringApproval defaults true, which is what makes the box clause work at
+// all: with the drawer collapsed, a live dialog's bottom border ends the pane. It is a
+// documented settings.json key that the in-app settings dialog does not offer, so setting it
+// false is a hand edit — and then gemini renders the composer AND footer below a LIVE dialog.
+// bottomBoxBlock anchors on the composer, this returns false, GateUp is false, HasBusyMarker
+// is false because showLoadingIndicator requires !hasPendingActionRequired, and
+// InputBoxVisible is TRUE. Session.AwaitingInput is the conjunction of exactly those, so
+// Atrium reads the pane as ready, types the session's queued first prompt into the dialog's
+// RadioButtonSelect — highlighted default "Allow once" — and submits it. The flat literal this
+// replaced DID match there, so in that configuration this is a regression, and it runs the
+// command the dialog was asking about rather than merely withholding a prompt.
+//
+// Disclosed rather than fixed because no predicate here can fix it. With the drawer open an
+// ANSWERED dialog stays in scrollback above the returning composer, so live and dismissed
+// render the same structure; the only difference gemini leaves is the transcript line
+// "Request cancelled", and keying on quotable content is the bug this whole change removes.
+// Tracked as #746, and TestGeminiConfirmationMissesWhenTheDrawerStaysOpen pins the miss.
 //
 // WHAT THE BOX CLAUSE NARROWS AND DOES NOT CLOSE. It is not a guarantee that the block is a
 // dialog, only that it is the pane's last box: any bottom-most box carrying both rows fires,
@@ -1299,7 +1323,10 @@ func geminiTrustGateVisible(content string) bool {
 // only because the echoed command sits in a NESTED box, whose double wall isInputBoxLine does
 // not strip. Kept because 0.27 DID wall the composer and the pin now covers 0.55.1 forward
 // while the doctor stays silent below it (see the adapter header), but it is a trade, not a
-// free clause.
+// free clause — and the cost side is asserted, not just described, by
+// TestGeminiConfirmationVetoCostsAMissOnASingleWalledRow. That guard is what a later reader
+// needs to decide whether the clause still earns its place: it holds the miss at exactly one
+// single-walled row, so the day the trade stops being worth it, the evidence is already here.
 //
 // NOT COVERED, and disclosed rather than quietly half-covered: the ask_user and exit_plan_mode
 // confirmation types return options: [] and render no option row at all, so no literal from

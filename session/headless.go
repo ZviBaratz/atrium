@@ -69,6 +69,20 @@ func runClaudeHeadless(ctx context.Context, executor cmd.Executor, claudePath, w
 // and the context clean) and returns the bare stdout text — gemini emits no JSON
 // envelope, so the caller parses the raw reply directly. Shared by the gemini
 // naming and dispatch paths.
+//
+// GEMINI_CLI_TRUST_WORKSPACE is what makes the empty dir usable at all from 0.55
+// on (#744). The CLI refuses to run in a directory its trustedFolders.json does
+// not list, and a dir created by MkdirTemp on this call can never be listed —
+// so without this the command exits 55 with empty stdout and "Gemini CLI is not
+// running in a trusted directory" on stderr, and every gemini session title falls
+// back. Measured both ways at 0.55.1 during #736's drive: the same call with the
+// variable set returned a title and exit 0. The CLI's own error names this
+// variable as the remedy for headless use (docs/cli/trusted-folders.md).
+//
+// Trusting it is safe precisely because of what the dir is: this function created
+// it, empty, milliseconds earlier, and removes it on return. Trust governs whether
+// gemini will load a workspace's GEMINI.md, settings and extensions — there are
+// none here to load, and nothing else can put any there.
 func runGeminiHeadless(ctx context.Context, executor cmd.Executor, geminiPath, promptArg, stdin string) (string, error) {
 	workDir, err := os.MkdirTemp("", "cs-headless-gemini-")
 	if err != nil {
@@ -79,6 +93,7 @@ func runGeminiHeadless(ctx context.Context, executor cmd.Executor, geminiPath, p
 	c := exec.CommandContext(ctx, geminiPath, "-p", promptArg)
 	c.Dir = workDir
 	c.Stdin = strings.NewReader(stdin)
+	c.Env = append(os.Environ(), "GEMINI_CLI_TRUST_WORKSPACE=true")
 
 	out, err := executor.Output(c)
 	if err != nil {

@@ -187,11 +187,14 @@ var paneCoverage = map[string][]paneCapture{
 	"codex/gate/trust":      codexTrustGateLadder,
 	"codex/prompt/approval": codexApprovalLadder,
 
-	// #713. The first gemini entry in this table, and the only gemini surface any pane has
-	// rendered — its busy and confirmation matchers stay exempt below. The ladder stops at 24
-	// on purpose: 20 was driven too and is a MISS, held as negative evidence in
-	// gemini_pane_test.go rather than dropped, because a table that silently omits the rung
-	// it fails at is the #648 defect one level up.
+	// #713. The first gemini entry in this table, and for two releases the only one: the busy
+	// and confirmation matchers sat in paneCoverageExempt because reaching either needed an
+	// authenticated session and a real turn. Both of those are now history — #717 added the
+	// ide-nudge gate below, #736 drove the other two, and gemini has no exempt entry left.
+	//
+	// The ladder stops at 24 on purpose: 20 was driven too and is a MISS, held as negative
+	// evidence in gemini_pane_test.go rather than dropped, because a table that silently
+	// omits the rung it fails at is the #648 defect one level up.
 	// Both ladders: the width rungs (height 40) and the height rungs (19 and 24), which are
 	// separate captures rather than a second table because #713 shipped twice — once on each
 	// axis — and a coverage map that held only one of them called the gate covered while it
@@ -350,9 +353,12 @@ var wantRungs = map[string][]int{
 	// kept. The 33/34 pair is the interesting one: it brackets the width at which the literal
 	// #736 proposed keeping stops being on screen.
 	"gemini/prompt/confirmation": {20, 24, 24, 33, 34, 40, 45, 120},
-	// Three rungs where seven were driven. The floor is not 40 because nothing narrower was
-	// captured — it is 40 because 34 and 33 render the marker outside MarkerWindow and 24 and
-	// 20 do not render it at all.
+	// Five rungs where seven were driven, and the two absences have different causes. 24 and
+	// 20 truncate the marker off the row, which no window reaches. 33 and 34 render it, nine
+	// non-empty lines up because the footer wraps one row wider — a miss MarkerWindow could
+	// close, and did: #736 moved it 8 -> 9 on the strength of these two captures, which is why
+	// they are rungs here rather than misses. TestGeminiBusyMarkerSitsAtTheEdgeOfItsWindow
+	// holds the depths, and geminiBusyTruncatedRungs holds the other two as negative evidence.
 	"gemini/busy": {33, 34, 40, 45, 120},
 
 	"agy/gate/trust":          {24, 28, 120},

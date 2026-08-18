@@ -397,6 +397,56 @@ func TestDriveAgentCapEnvIsRevalidatedOnLoad(t *testing.T) {
 		"the refusal must land before new-session, not after; argv:\n%s", argv)
 }
 
+// A cap-env whose LAST line has no trailing newline. `read` returns non-zero at EOF even
+// though it assigned the line, so a bare `while IFS= read -r line` drops it — in BOTH loops
+// that walk this file. The two halves of the damage fail in opposite directions, so each is
+// asserted on its own:
+//
+//   - The refusal is skipped. TMUX_TMPDIR is the entry validate_cap_env exists to refuse, and
+//     a check that never sees the line cannot refuse it.
+//   - The applied set and the REPORTED set disagree. cap_env_names is awk, which does read a
+//     final unterminated line, so emit stamps a name into the fixture's doc comment that the
+//     session was never started with. For the recipe `help` actually prints, that is
+//     GEMINI_CLI_HOME dropped while GEMINI_FORCE_FILE_STORAGE still applies — the pair whose
+//     own help text warns that gemini then reads the developer's real oauth_creds.json and
+//     deletes it, under a fixture claiming it was driven in a sandbox.
+//
+// The second has no upper bound on its damage, so it is asserted as an equality between the
+// two readers rather than as a property of either one.
+func TestDriveAgentCapEnvReadsAFinalLineWithNoNewline(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not on PATH")
+	}
+	script := filepath.Join(moduleRoot(t), "scripts", "drive-agent.sh")
+
+	t.Run("the refusal still fires", func(t *testing.T) {
+		dir := t.TempDir()
+		writeMetaEnv(t, dir)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "cap-env"),
+			[]byte("GEMINI_CLI_HOME=/iso\nTMUX_TMPDIR=/tmp"), 0o600)) // no trailing newline
+
+		out, argv, err := runDriveAgentTmux(t, script, dir, "",
+			`start_session "$TMP/repo" 45 19 gemini`)
+		require.Error(t, err, "an unterminated TMUX_TMPDIR must stop the run; output:\n%s", out)
+		require.Contains(t, out, "belongs to the harness")
+		require.NotContains(t, argv, "TMUX_TMPDIR", "argv:\n%s", argv)
+	})
+
+	t.Run("what emit reports is what load applies", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "cap-env"),
+			[]byte("GEMINI_FORCE_FILE_STORAGE=true\nGEMINI_CLI_HOME=/iso"), 0o600)) // no trailing newline
+
+		out, _, err := runDriveAgentTmux(t, script, dir, "",
+			`load_cap_env; printf 'APPLIED=%s\n' "${CAP_ENV_BARE[*]}"; printf 'REPORTED='; cap_env_names`)
+		require.NoError(t, err, "output:\n%s", out)
+		require.Contains(t, out, "APPLIED=GEMINI_FORCE_FILE_STORAGE=true GEMINI_CLI_HOME=/iso",
+			"the last entry must survive the read; output:\n%s", out)
+		require.Contains(t, out, "REPORTED=GEMINI_FORCE_FILE_STORAGE, GEMINI_CLI_HOME",
+			"emit's names must match what was applied; output:\n%s", out)
+	})
+}
+
 // emit stamps the fixture header, and a capture taken under a non-default agent config is not
 // the same artifact as one taken under the default. NAMES only — a value here is a path into
 // someone's home, and one of them points at a credentials directory.

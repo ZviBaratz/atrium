@@ -332,7 +332,13 @@ load_run() {
 # and a hand-edited TMUX_TMPDIR in the pane points a nested tmux at the live fleet.
 validate_cap_env() {
 	local line name seen=""
-	while IFS= read -r line; do
+	# `|| [[ -n "$line" ]]` because read returns non-zero on a final line with no trailing
+	# newline while still having assigned it. Without it a hand-edited cap-env whose last
+	# line lacks the newline loses that entry HERE and again in load_cap_env, so the entry
+	# is neither refused nor applied — while cap_env_names (awk) still reports it, and emit
+	# stamps it into the fixture header. That is a fixture claiming an isolation it was not
+	# driven under, which is the one thing this whole mechanism exists to prevent.
+	while IFS= read -r line || [[ -n "$line" ]]; do
 		[[ -n "$line" && "$line" != '#'* ]] || continue
 		[[ "$line" == *=* ]] ||
 			die "ATR_CAP_ENV entry is not an assignment: $line"
@@ -367,6 +373,8 @@ validate_cap_env() {
 # write_cap_env records the validated entries beside meta.env. ALWAYS written, empty
 # when ATR_CAP_ENV is unset, so load_cap_env can tell "no extra environment" from "a
 # run directory written before this existed".
+# The loop below needs no `|| [[ -n "$line" ]]` — unlike its two siblings it reads a
+# herestring, and <<< always terminates its input with a newline.
 write_cap_env() {
 	local line
 	: >"$RUN/cap-env"
@@ -391,8 +399,10 @@ load_cap_env() {
 	validate_cap_env <"$RUN/cap-env"
 	local line
 	# Redirected, never piped: a `while read` on the right of a pipe runs in a subshell
-	# and the arrays would not survive it.
-	while IFS= read -r line; do
+	# and the arrays would not survive it. `|| [[ -n "$line" ]]` for the reason
+	# validate_cap_env carries it: a file whose last line has no newline would otherwise
+	# drop that entry silently.
+	while IFS= read -r line || [[ -n "$line" ]]; do
 		[[ -n "$line" ]] || continue
 		CAP_ENV_ARGS+=(-e "$line")
 		CAP_ENV_BARE+=("$line")
@@ -1074,10 +1084,16 @@ cmd_send() {
 	# several CLIs debounce a fast burst into a collapsed paste chip, and submitting
 	# inside that window loses it — which is also why the guard runs BEFORE the text
 	# is typed: by the time Enter is due, the composer has redrawn over the dialog.
-	noenter_check "$text" || guard_enter
+	# Decided ONCE, before a byte is delivered. noenter_check is fatal on a text it
+	# refuses, so calling it again after the text is already in the pane could only die
+	# too late to matter — and $text and $NOENTER cannot have changed, so a second call
+	# could only repeat this verdict anyway.
+	local skip_enter=0
+	noenter_check "$text" && skip_enter=1
+	((skip_enter)) || guard_enter
 	t send-keys -t "$PANE" -l -- "$text"
 	settle
-	noenter_check "$text" && return 0
+	((skip_enter)) && return 0
 	t send-keys -t "$PANE" Enter
 	settle
 }
@@ -1093,11 +1109,17 @@ cmd_paste() {
 	# "[Pasted text #1]" chip rather than the literal characters (#319), so a fixture
 	# driven by `send` shows a composer production would never produce for that prompt.
 	# Use `paste` when the fixture is about the composer; `send` when it is not.
-	noenter_check "$text" || guard_enter
+	# Decided ONCE, before a byte is delivered. noenter_check is fatal on a text it
+	# refuses, so calling it again after the text is already in the pane could only die
+	# too late to matter — and $text and $NOENTER cannot have changed, so a second call
+	# could only repeat this verdict anyway.
+	local skip_enter=0
+	noenter_check "$text" && skip_enter=1
+	((skip_enter)) || guard_enter
 	t set-buffer -b atrium-capture -- "$text"
 	t paste-buffer -d -p -b atrium-capture -t "$PANE"
 	settle
-	noenter_check "$text" && return 0
+	((skip_enter)) && return 0
 	t send-keys -t "$PANE" Enter
 	settle
 }

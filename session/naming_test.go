@@ -97,6 +97,27 @@ func TestGenerateName(t *testing.T) {
 		require.Error(t, err)
 	})
 
+	// #744. From 0.55 on, gemini refuses to run in a directory its trustedFolders.json does
+	// not list, and runGeminiHeadless's workspace is an os.MkdirTemp that can never be listed
+	// — so without the env var the call exits 55 with EMPTY stdout and every gemini session
+	// title falls back. That failure is invisible to the two cases above, because a mock
+	// executor is trusted by nothing and refuses nothing.
+	//
+	// Both halves are asserted. The variable alone would pass while c.Env replaced the
+	// ambient environment outright, which would strip PATH from a command resolved through it.
+	t.Run("gemini is told to trust the workspace it was given", func(t *testing.T) {
+		var got []string
+		probe := cmd_test.MockCmdExec{
+			OutputFunc: func(c *exec.Cmd) ([]byte, error) { got = c.Env; return []byte("Title\n"), nil },
+		}
+		_, err := generateNameGemini(context.Background(), probe, "gemini", "add retry", nil)
+		require.NoError(t, err)
+		require.Contains(t, got, "GEMINI_CLI_TRUST_WORKSPACE=true",
+			"without it the real CLI exits 55 on the temp workspace this function creates")
+		require.Subset(t, got, os.Environ(),
+			"the variable must be ADDED to the ambient environment, not substituted for it")
+	})
+
 	t.Run("refuses to name an empty session without calling claude", func(t *testing.T) {
 		called := false
 		probe := cmd_test.MockCmdExec{

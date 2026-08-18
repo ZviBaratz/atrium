@@ -20,8 +20,10 @@ func TestAdaptersExposesSeededVersions(t *testing.T) {
 		// joining the two gates #713 and #717 had already driven at 0.55.1. registry.go's
 		// gemini header lists each surface with its capture, including the two things the
 		// drive found that a bundle grep could not: both literals are PRESENT and neither is
-		// reachable at every width. It also records what this pin now hides — #744, a live
-		// 0.55.x naming break that doctor stopped flagging the moment the pin passed it.
+		// reachable at every width. Moving the pin also forced #744: doctor flags drift only
+		// when installed > verified, so passing 0.55.1 would have silenced the only amber a
+		// 0.55.x user saw while headless naming was still broken for them. Fixed in the same
+		// change rather than filed, in runGeminiHeadless.
 		//
 		// The other route this comment offered is still open and still better — a per-surface
 		// pin (#721), which would have let #713 move the one surface it drove instead of
