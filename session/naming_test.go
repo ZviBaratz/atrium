@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ZviBaratz/atrium/cmd/cmd_test"
+	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/session/agent"
 	"github.com/ZviBaratz/atrium/session/git"
 
@@ -95,6 +96,57 @@ func TestGenerateName(t *testing.T) {
 		}
 		_, err := generateNameGemini(context.Background(), failExec, "gemini", "add retry", nil)
 		require.Error(t, err)
+	})
+
+	// #744. From 0.55 on, gemini refuses to run in a directory its trustedFolders.json does
+	// not list, and runGeminiHeadless's workspace is an os.MkdirTemp that can never be listed
+	// — so without the env var the call exits 55 with EMPTY stdout and every gemini session
+	// title falls back. That failure is invisible to the two cases above, because a mock
+	// executor is trusted by nothing and refuses nothing.
+	//
+	// Both halves are asserted. The variable alone would pass while c.Env replaced the
+	// ambient environment outright, which would strip PATH from a command resolved through it.
+	// The other half of #744's trust variable, and the reason it needs a guard of its own.
+	// Trust makes gemini's findEnvFile walk apply EVERY key of the first .env it finds
+	// between the cwd and "/", unsanitized, instead of four whitelisted ones — so the cwd's
+	// ancestors become part of the call's attack surface, and os.MkdirTemp("") roots them in
+	// a world-writable /tmp. See runGeminiHeadless.
+	//
+	// What is asserted is the mechanism, not the consequence: that the workspace is inside
+	// Atrium's data dir. "no ancestor is world-writable" is the property that actually
+	// matters and it cannot be asserted here — testutil.SandboxHomeMain puts $HOME under the
+	// system temp dir, so the sandbox's own chain fails a check the real one passes.
+	t.Run("gemini's workspace is rooted in the data dir, not the system temp dir", func(t *testing.T) {
+		var dir string
+		probe := cmd_test.MockCmdExec{
+			OutputFunc: func(c *exec.Cmd) ([]byte, error) { dir = c.Dir; return []byte("Title\n"), nil },
+		}
+		_, err := generateNameGemini(context.Background(), probe, "gemini", "add retry", nil)
+		require.NoError(t, err)
+
+		configDir, err := config.GetConfigDir()
+		require.NoError(t, err)
+		require.NotEmpty(t, dir, "the premise: the call ran with an explicit working directory")
+		require.True(t, strings.HasPrefix(dir, configDir+string(os.PathSeparator)),
+			"the headless workspace must live under %q, got %q", configDir, dir)
+
+		info, err := os.Stat(filepath.Dir(dir))
+		require.NoError(t, err)
+		require.Equal(t, os.FileMode(0o700), info.Mode().Perm(),
+			"the root Atrium creates for these must be owner-only")
+	})
+
+	t.Run("gemini is told to trust the workspace it was given", func(t *testing.T) {
+		var got []string
+		probe := cmd_test.MockCmdExec{
+			OutputFunc: func(c *exec.Cmd) ([]byte, error) { got = c.Env; return []byte("Title\n"), nil },
+		}
+		_, err := generateNameGemini(context.Background(), probe, "gemini", "add retry", nil)
+		require.NoError(t, err)
+		require.Contains(t, got, "GEMINI_CLI_TRUST_WORKSPACE=true",
+			"without it the real CLI exits 55 on the temp workspace this function creates")
+		require.Subset(t, got, os.Environ(),
+			"the variable must be ADDED to the ambient environment, not substituted for it")
 	})
 
 	t.Run("refuses to name an empty session without calling claude", func(t *testing.T) {

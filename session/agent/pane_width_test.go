@@ -187,11 +187,14 @@ var paneCoverage = map[string][]paneCapture{
 	"codex/gate/trust":      codexTrustGateLadder,
 	"codex/prompt/approval": codexApprovalLadder,
 
-	// #713. The first gemini entry in this table, and the only gemini surface any pane has
-	// rendered — its busy and confirmation matchers stay exempt below. The ladder stops at 24
-	// on purpose: 20 was driven too and is a MISS, held as negative evidence in
-	// gemini_pane_test.go rather than dropped, because a table that silently omits the rung
-	// it fails at is the #648 defect one level up.
+	// #713. The first gemini entry in this table, and for two releases the only one: the busy
+	// and confirmation matchers sat in paneCoverageExempt because reaching either needed an
+	// authenticated session and a real turn. Both of those are now history — #717 added the
+	// ide-nudge gate below, #736 drove the other two, and gemini has no exempt entry left.
+	//
+	// The ladder stops at 24 on purpose: 20 was driven too and is a MISS, held as negative
+	// evidence in gemini_pane_test.go rather than dropped, because a table that silently
+	// omits the rung it fails at is the #648 defect one level up.
 	// Both ladders: the width rungs (height 40) and the height rungs (19 and 24), which are
 	// separate captures rather than a second table because #713 shipped twice — once on each
 	// axis — and a coverage map that held only one of them called the gate covered while it
@@ -206,6 +209,17 @@ var paneCoverage = map[string][]paneCapture{
 	// fire on the nudge. That is the silent half-coverage the discriminator exists to
 	// refuse, caught on its first use.
 	"gemini/gate/ide-nudge": geminiIdeNudgeLadder,
+
+	// #736. The first gemini panes in this package taken PAST the trust dialog: reaching a
+	// tool confirmation needs an authenticated session and a real turn, which is why these
+	// two keys sat in paneCoverageExempt until now. See gemini_confirm_pane_test.go for the
+	// isolation the drive needed and for the auth type it was driven under.
+	"gemini/prompt/confirmation": geminiConfirmLadder,
+	// Deliberately SHORTER than the confirmation ladder taken in the same sessions. gemini's
+	// busy marker misses two of the seven driven widths — the loading row truncates there, so
+	// no window reaches it — and those rungs are held next door as negative evidence rather
+	// than dropped: geminiBusyTruncatedRungs.
+	"gemini/busy": geminiBusyLadder,
 
 	"agy/gate/trust": {
 		{name: "agyTrustGatePane", width: 120, note: "", pane: agyTrustGatePane},
@@ -253,13 +267,13 @@ var paneCoverageExempt = map[string]string{
 	"claude/prompt/selection": "pinned only against hand-composed panes (TestClaudePrompts), never a capture",
 	"codex/busy":              "pinned only against a hand-composed pane (TestCodexBusyMarker), never a capture",
 
-	// gemini/gate left this map in #713 — driven at 80/40/24, plus a 20 that misses. The two
-	// below did not, and the distinction is the point: reaching either needs auth and a real
-	// turn, where the gate needed only a startup screen. Their literals are present in the
-	// 0.55.1 bundle, which is exactly the evidence the gate's own literal had before it was
-	// found to have rotted, so read these as unverified rather than as fine.
-	"gemini/busy":                "still bundle-grep only at 0.55.1; the loading row needs a live streaming turn",
-	"gemini/prompt/confirmation": "still bundle-grep only at 0.55.1; the dialog needs a live tool confirmation",
+	// gemini has no entry here any more. gemini/gate/trust left in #713, gemini/gate/ide-nudge
+	// arrived covered in #717, and gemini/busy and gemini/prompt/confirmation left in #736 —
+	// the drive that finally paid for an authenticated session. What the last two cost is
+	// worth recording where the next person meets it: an isolated config dir
+	// (drive-agent.sh's ATR_CAP_ENV) so the run could authenticate without touching the
+	// developer's ~/.gemini, and an API key, because oauth-personal returns
+	// IneligibleTierError at 0.55.1 and cannot reach any of these screens at all.
 
 	// Not because aider is width-immune — it is not, and saying so would be the kind of
 	// comfortable claim this file exists to stop. aiderConfirmVisible requires the
@@ -333,6 +347,21 @@ var wantRungs = map[string][]int{
 	// directory name that pushes them past the cut at 20, while the nudge's rows are fixed
 	// strings. Two gates, two floors, which is why floors are per-KEY and not per-adapter.
 	"gemini/gate/ide-nudge": {20, 24, 40, 80},
+
+	// Two rungs at 24 because the confirmation was driven at 24x40 and 24x19 — the height
+	// axis this table cannot express, kept for the reason the trust gate's overflow rungs are
+	// kept. The 33/34 pair is the interesting one: it brackets the width at which the literal
+	// #736 proposed keeping stops being on screen.
+	"gemini/prompt/confirmation": {20, 24, 24, 33, 34, 40, 45, 120},
+	// Five rungs where seven were driven, and the two absences have different causes. 24 and
+	// 20 truncate the marker off the row: the row is on screen, deeper than any of these, and
+	// no window value reaches a phrase that is not there. 33 and 34 render it in full, nine
+	// non-empty lines up because the COMPOSER's placeholder splits in two at those widths — a
+	// miss MarkerWindow could close, and did: #736 moved it 8 -> 9 on the strength of these two
+	// captures, which is why they are rungs here rather than misses.
+	// TestGeminiBusyMarkerSitsAtTheEdgeOfItsWindow holds all seven depths, and
+	// geminiBusyTruncatedRungs holds the other two as negative evidence.
+	"gemini/busy": {33, 34, 40, 45, 120},
 
 	"agy/gate/trust":          {24, 28, 120},
 	"agy/busy":                {20, 24, 28, 40, 120, 120},
