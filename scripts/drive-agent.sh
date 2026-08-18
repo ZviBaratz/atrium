@@ -1554,8 +1554,9 @@ ENV
   NOENTER=1      `send`/`paste` deliver the text and DO NOT submit. For a fixture of an
                  unsubmitted composer (#735). Refuses a text containing a newline.
                  Spent once: geminiComposerQuotingTheLiteralPane is a driven
-                 capture of an unsubmitted composer, which no other verb here
-                 can produce.
+                 capture of an unsubmitted composer. `keys` can also leave one —
+                 send-keys with no Enter — but only one tmux key name at a time,
+                 which is not a way to type a line that wraps.
 
 ISOLATING AN AGENT'S CONFIG DIR
   By default this harness does NOT isolate it, and that is deliberate — driving a live,

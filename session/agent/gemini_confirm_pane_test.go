@@ -339,6 +339,14 @@ const geminiConfirmDismissedPane = `│                                         
  /tmp/atrium-capture/gemini/repo                      main                       no sandbox                        Auto
 `
 
+// The pane #736 is ABOUT, driven rather than composed: a user typing a message that quotes the
+// decline label, captured under gemini 0.55.1 with NOENTER=1 so the text sits in the composer
+// unsubmitted. It is the only capture in this file taken that way, and the only one that
+// justifies NOENTER existing at all — see drive-agent.sh's help. Its box rules measure 45
+// columns; the row count is not recoverable from the bytes, so it is not claimed here.
+//
+// Provenance is stated here because it is the fixture the whole issue turns on and it was the
+// one const in this file without a header. The old flat matcher fires on it; nothing may.
 const geminiComposerQuotingTheLiteralPane = `
 
 

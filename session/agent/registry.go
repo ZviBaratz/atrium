@@ -887,9 +887,12 @@ var codex = &Adapter{
 //
 // The asymmetry that kept the pin at 0.27 through six review rounds still holds and is worth
 // keeping written down: a wrong "drifted" is noise, dismissed in a keystroke; a wrong "ok" is
-// silent and self-concealing. What changes here is not the principle but the evidence — there
-// is no longer an ungraded surface for the pin to be lying about. Splitting it per-surface is
-// still the better shape, and still #721.
+// silent and self-concealing. What changes here is not the principle but the evidence — every
+// surface the drive could reach now has a live capture. NOT every surface: ResumeProbe is
+// still ungraded, exactly as the NOT DRIVEN list above says, so the pin does cover one thing
+// nobody drove. An earlier draft wrote "there is no longer an ungraded surface", which reads
+// as the opposite of that list two paragraphs up. Splitting the pin per-surface is what would
+// actually close it, and that is still #721.
 //
 // The OLDER direction is silent by construction, and that is not specific to gemini: doctor
 // reports drift only when installed > verified (internal/doctor/compare.go, driftExceeds), so
@@ -909,9 +912,12 @@ var gemini = &Adapter{
 	// Moved 0.27 -> 0.55.1 by #736, which is the first change entitled to move it: the pin
 	// is a claim about the WHOLE adapter, and #736 drove the surfaces #713 and #717 had left
 	// ungraded (confirmation, busy) plus generateNameGemini's contract, in the same
-	// authenticated sessions. Every surface below now has a live 0.55.1 capture behind it —
-	// which is NOT the same as every rendered variant of one: the confirmation was driven in
-	// its `exec` branch only, and geminiConfirmationVisible says what that leaves grepped.
+	// authenticated sessions. Every HEURISTIC surface below now has a live 0.55.1 capture
+	// behind it — not every surface: ResumeProbe has none, and the header's NOT DRIVEN list
+	// is where that is argued. "Every surface below" was the earlier spelling and it made
+	// this comment contradict that list. Nor is a capture per surface the same as one per
+	// rendered variant: the confirmation was driven in its `exec` branch only, and
+	// geminiConfirmationVisible says what that leaves grepped.
 	// Minor granularity: the confirmation wording tracks minor releases; pure patch bumps
 	// within a minor don't warrant a warning.
 	VerifiedVersion:  "0.55.1",

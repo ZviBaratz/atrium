@@ -277,6 +277,10 @@ func TestDriveAgentCapEnvIsInertWhenUnset(t *testing.T) {
 	script := filepath.Join(moduleRoot(t), "scripts", "drive-agent.sh")
 	dir := t.TempDir()
 	writeMetaEnv(t, dir)
+	// Removed so the existence assertion below MEANS something. writeMetaEnv creates cap-env,
+	// so leaving it in place made "must be written even when ATR_CAP_ENV is unset" a check on
+	// the fixture rather than on write_cap_env; only the emptiness assertion was live.
+	require.NoError(t, os.Remove(filepath.Join(dir, "cap-env")))
 
 	out, argv, err := runDriveAgentTmux(t, script, dir, "",
 		`write_cap_env; start_session "$TMP/repo" 45 19 gemini`)
@@ -661,4 +665,27 @@ func TestDriveAgentCapEnvNamesRefuseWhatTheBashReadersRefuse(t *testing.T) {
 	require.Error(t, err, "a line the bash readers refuse must not be reportable; output:\n%s", out)
 	require.Empty(t, strings.TrimSpace(out),
 		"nothing may reach stdout, where emit would stamp it into a fixture header; got:\n%s", out)
+}
+
+// start_session's OWN missing-file refusal, which stopped being covered the moment cmd_fresh
+// grew one of its own. TestDriveAgentCapEnvMissingFileIsFatal goes through cmd_fresh, so the
+// new pre-reap load_cap_env now fires first and that test passes without start_session ever
+// being reached — mutation-verified during review: deleting load_cap_env from start_session
+// left it green. start_session is reachable directly, so the refusal is asserted there.
+//
+// It matters because start_session is what `up` calls. A run whose cap-env has been deleted
+// by hand would otherwise start a session carrying no isolation at all, and every capture
+// taken in it would claim one in its header.
+func TestDriveAgentStartSessionRefusesAMissingCapEnv(t *testing.T) {
+	script := filepath.Join(moduleRoot(t), "scripts", "drive-agent.sh")
+	dir := t.TempDir()
+	writeMetaEnv(t, dir)
+	require.NoError(t, os.Remove(filepath.Join(dir, "cap-env")))
+
+	out, argv, err := runDriveAgentTmux(t, script, dir, "",
+		`start_session "$TMP/repo" 45 19 gemini`)
+	require.Error(t, err, "a run directory with no cap-env must not start a session; output:\n%s", out)
+	require.Contains(t, out, "predates ATR_CAP_ENV")
+	require.Empty(t, argv,
+		"and the refusal must land before new-session, not after; argv:\n%s", argv)
 }
