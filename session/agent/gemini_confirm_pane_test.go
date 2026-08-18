@@ -289,10 +289,12 @@ const geminiConfirmPane20 = `  README.md file
 // resized across the drive.
 //
 // Kept, and kept HERE rather than re-driven, because the residue cannot flatter the assertion
-// it backs. TestGeminiConfirmationDropsOnceDismissed requires that NOTHING matches; three
-// extra dialog frames in the scrollback can only make a false positive likelier, never hide
-// one. A rung would be a different matter — that is what the header's rule is about — but a
-// negative control that is harder than the real thing is still a negative control.
+// it backs. An earlier draft said it made the control HARDER; measured, it does neither. The
+// frames are unreachable — this pane's last two non-empty lines are the footer, neither is a
+// box bottom border, and trailingBelowBoxCap is 1, so bottomBoxBlock returns false before
+// reading anything above them — and they carry neither label to raise a false positive with.
+// Inert, not adversarial. What makes this a real negative control is the two facts below it:
+// no bottom-most box, and no option row anywhere on the pane.
 //
 // What a re-drive must not do is go looking for the fresh 120-column session that produced
 // this. There wasn't one.
@@ -611,8 +613,8 @@ var geminiConfirmLadder = []paneCapture{
 // at 34 and 33, so the window moved 8 -> 9 and those two rungs are covered here. The other
 // half is below, and no window reaches it.
 var geminiBusyLadder = []paneCapture{
-	{name: "geminiBusyPane33", width: 33, note: "footer wraps; marker 9 non-empty lines up", pane: geminiBusyPane33},
-	{name: "geminiBusyPane34", width: 34, note: "footer wraps; marker 9 non-empty lines up", pane: geminiBusyPane34},
+	{name: "geminiBusyPane33", width: 33, note: "composer placeholder splits; marker 9 non-empty lines up", pane: geminiBusyPane33},
+	{name: "geminiBusyPane34", width: 34, note: "composer placeholder splits; marker 9 non-empty lines up", pane: geminiBusyPane34},
 	{name: "geminiBusyPane40", width: 40, note: "footer on one row; marker 8 up", pane: geminiBusyPane40},
 	{name: "geminiBusyPane45x19", width: 45, note: "19 rows, marker inside the window", pane: geminiBusyPane45x19},
 	{name: "geminiBusyPane120", width: 120, note: "the wide LoadingIndicator layout", pane: geminiBusyPane120},
@@ -664,6 +666,21 @@ func TestGeminiConfirmationDropsOnceDismissed(t *testing.T) {
 	require.False(t, ok, "the dialog is gone; nothing may still classify as a prompt")
 	_, gated := gemini.GateUp(geminiConfirmDismissedPane)
 	require.False(t, gated)
+
+	// WHY it drops, stated as two separate facts, because the verdict above holds for a
+	// structural reason while the interesting one is about content.
+	//
+	// The second is what refuted #746's first disclosure. That draft argued no predicate could
+	// tell a live dialog from an answered one because an answered dialog lingers in scrollback
+	// looking the same. It does not: gemini replaces the entire dialog with a two-row tool
+	// RESULT box, and neither option label is anywhere on the pane. Any predicate keyed on the
+	// pair therefore separates live from answered on its own.
+	_, boxed := bottomBoxBlock(geminiConfirmDismissedPane)
+	require.False(t, boxed, "the pane ends in the composer's footer, so there is no bottom-most box")
+	require.NotContains(t, geminiConfirmDismissedPane, geminiAllowRow,
+		"an answered dialog keeps no option row: the allow label is gone")
+	require.NotContains(t, geminiConfirmDismissedPane, geminiCancelRow,
+		"and so is the cancel label")
 }
 
 // The measurement that overrides the issue. #736 proposes keeping "No, suggest changes (esc)"
@@ -726,9 +743,14 @@ func TestGeminiConfirmationFloorIsSetByTheAllowRow(t *testing.T) {
 	label := strings.TrimSuffix(strings.TrimPrefix(strings.Trim(cancel, "│"), "   3. "), " ")
 	require.Equal(t, width-9, len([]rune(label)),
 		"the label column is paneWidth-9; measured %q", label)
-	require.Equal(t, width-9-1, len([]rune("Allow once")),
-		"and the binding literal fills all but ONE cell of it at the narrowest driven rung — "+
-			"which is what makes 19 the floor, and 20 the last rung that proves anything")
+	// Against the matcher's own symbol, not against a second spelling of it. `width-9-1 ==
+	// len("Allow once")` is 10 == 10 with nothing from the package on either side: shortening
+	// the binding literal moves the floor from 19 to 18 and that assertion still passes.
+	require.Equal(t, width-9-1, len([]rune(geminiAllowRow)),
+		"the binding literal fills all but ONE cell of the label column at the narrowest driven "+
+			"rung — which is what makes 19 the floor, and 20 the last rung that proves anything")
+	require.Contains(t, allow, geminiAllowRow,
+		"and it is THIS literal the driven row carries, so the two cannot drift apart")
 }
 
 // The residual of #736's own class, pinned rather than left to be rediscovered. The box clause
@@ -813,12 +835,21 @@ func TestGeminiBusyMarkerMissesAtNarrowWidths(t *testing.T) {
 	}
 }
 
-// The window budget, as a number rather than a sentence, and the measurement MarkerWindow is
+// The window budget, as numbers rather than a sentence, and the measurement MarkerWindow is
 // fitted to. gemini's loading row sits directly above the composer, so what decides whether
-// the window reaches it is how many non-empty rows the composer and footer occupy — and that
-// grows by one when the footer wraps. 8 is exactly enough at 40 and one short at 34, which is
-// why the constant is 9 and why 9 buys no margin at all: it is the deepest rung driven, not a
-// bound anything derives. A rung whose footer wrapped twice would need 10 and is not covered.
+// the window reaches it is how many non-empty rows the composer and footer occupy.
+//
+// It is the COMPOSER that grows, not the footer. An earlier draft of this comment said "the
+// footer wraps", in five places across three files; the driven bytes say the footer is two
+// rows at 120, 45, 40, 34, 33, 24 and 20 alike and drops columns with an ellipsis, while the
+// composer's " >   Type your message or @path/to/file" placeholder splits in two at 34 and
+// below. Two rows becoming three is why 8 was one short there.
+//
+// All seven driven rungs are held, not the five the window covers, because "9 is the maximum"
+// was the other thing that draft got wrong: 24 and 20 are DEEPER, at 10 and 11, and are out of
+// reach for a different reason — gemini truncates the phrase itself off the row, so no window
+// value reaches them. 9 is the deepest rung whose marker text survives. A rung deeper than
+// that which still renders the phrase reddens this.
 func TestGeminiBusyMarkerSitsAtTheEdgeOfItsWindow(t *testing.T) {
 	depth := func(pane string) int {
 		var nonEmpty []string
@@ -834,9 +865,41 @@ func TestGeminiBusyMarkerSitsAtTheEdgeOfItsWindow(t *testing.T) {
 		}
 		return -1
 	}
-	require.Equal(t, 8, depth(geminiBusyPane40), "footer on one row")
-	require.Equal(t, 9, depth(geminiBusyPane34), "one row deeper — the footer wrapped")
-	require.Equal(t, 9, depth(geminiBusyPane33), "same wrap, same depth")
+	// The loading ROW's depth, located by the spinner's surviving prefix rather than by the
+	// marker phrase: at 24 and 20 the phrase is cut mid-word and only "(esc" is left, so the
+	// closure above returns -1 for both and cannot say how deep the row actually sits.
+	rowDepth := func(pane string) int {
+		var nonEmpty []string
+		for _, l := range strings.Split(strings.TrimRight(pane, "\n"), "\n") {
+			if strings.TrimSpace(l) != "" {
+				nonEmpty = append(nonEmpty, l)
+			}
+		}
+		for i := len(nonEmpty) - 1; i >= 0; i-- {
+			if strings.Contains(nonEmpty[i], "(esc") {
+				return len(nonEmpty) - i
+			}
+		}
+		return -1
+	}
+	depth24, depth20 := rowDepth(geminiBusyPane24), rowDepth(geminiBusyPane20)
+	require.Equal(t, -1, depth(geminiBusyPane24), "the premise: the phrase itself is gone at 24")
+	require.Equal(t, -1, depth(geminiBusyPane20), "and at 20")
+
+	require.Equal(t, 8, depth(geminiBusyPane120), "composer placeholder on one row")
+	require.Equal(t, 8, depth(geminiBusyPane45x19), "same, at the preview pane's real width")
+	require.Equal(t, 8, depth(geminiBusyPane40), "same — 40 is the last width it fits on one row")
+	require.Equal(t, 9, depth(geminiBusyPane34), "one row deeper — the placeholder split in two")
+	require.Equal(t, 9, depth(geminiBusyPane33), "same split, same depth")
+
+	// Deeper than the window, and NOT what the window is short for. Both render the loading row
+	// on screen; both have the phrase cut out of it, which is why they are in
+	// geminiBusyTruncatedRungs rather than here.
+	require.Equal(t, 10, depth24, "24 renders the row deeper still, at 10")
+	require.Equal(t, 11, depth20, "and 20 at 11")
+	require.Greater(t, depth24, gemini.MarkerWindow,
+		"so widening the window to reach 34/33 could never have reached these two")
+
 	require.Equal(t, 9, gemini.MarkerWindow,
 		"the constant IS the deepest rung above: it buys zero margin, and moving either "+
 			"without the other silently changes which widths detect as busy")
@@ -873,15 +936,16 @@ func TestGeminiConfirmationNeedsBothLiterals(t *testing.T) {
 		"the decline prefix alone must not carry the match either")
 }
 
-// The composer veto, which no driven pane can exercise at 0.55.1: the composer is bounded by
-// "▄▄▄"/"▀▀▀" block rules with no side walls, so it can never appear inside a bottomBoxBlock.
-// The clause is kept anyway because gemini HAS shipped a walled composer — 0.27 drew a rounded
-// box around the "> " row, which is what geminiIdlePane still records — and this is that
-// shape, carrying both literals so that nothing but the veto can reject it.
+// The cost of having NO composer veto, asserted rather than described. The loop used to reject
+// any block line that read as an input box; at 0.27 the composer was a walled box, so a
+// composer holding both labels was the shape that clause existed for. Without it that pane
+// matches.
 //
-// Without this test the veto is unexercised, and an unexercised defensive clause is how #717
-// shipped a predicate that was false on every pane it was written for.
-func TestGeminiConfirmationVetoesABoxedComposer(t *testing.T) {
+// This is the trade being made, in the direction the package prefers: an over-fire is
+// NoAutoTap -> PanePromptManual -> NeedsInput with the queued prompt withheld (#342), while
+// the miss the clause bought in exchange was Session.AwaitingInput going true on a live dialog
+// (the test below). Pinned so that restoring the veto has to argue with a measurement.
+func TestGeminiConfirmationOverFiresOnA027BoxedComposer(t *testing.T) {
 	boxedComposer := strings.Join([]string{
 		"✦ The matcher keys on Allow once and No, suggest changes (esc).",
 		"",
@@ -891,12 +955,55 @@ func TestGeminiConfirmationVetoesABoxedComposer(t *testing.T) {
 	}, "\n")
 
 	block, ok := bottomBoxBlock(boxedComposer)
-	require.True(t, ok, "the premise: this IS a live box, so only the veto can reject it")
-	require.Contains(t, strings.Join(block, "\n"), "Allow once",
-		"the premise: both literals are inside that box")
+	require.True(t, ok, "the premise: this IS a live box")
+	joined := strings.Join(block, "\n")
+	require.Contains(t, joined, geminiAllowRow, "the premise: the allow label is inside that box")
+	require.Contains(t, joined, geminiCancelRow, "the premise: and so is the cancel label")
 
-	require.False(t, geminiConfirmationVisible(boxedComposer),
-		"a composer glyph inside the block means the user is typing, not approving")
+	require.True(t, geminiConfirmationVisible(boxedComposer),
+		"a 0.27-shaped boxed composer quoting both labels now matches — the over-fire the "+
+			"veto's removal buys, and the safe direction to fail in")
+}
+
+// Why the veto had to go, measured on the pane it used to reject. isInputBoxLine with
+// defaultPrompts is the same predicate InputBoxVisible anchors on and gemini declares no
+// InputBoxPrompts of its own, so the single-walled "> " row that vetoed the match also
+// answered InputBoxVisible TRUE — and gemini's DEFAULT configuration renders no composer
+// during an approval, so there is nothing to absorb what Atrium then types.
+//
+// Both halves are asserted. The match alone would pass with the veto restored and some other
+// clause rejecting the pane; it is Session.AwaitingInput going FALSE that says the
+// auto-approval is closed.
+func TestGeminiConfirmationFiresOnADialogRowThatLooksLikeAComposer(t *testing.T) {
+	withQuote := strings.Join([]string{
+		"╭────────────────────────────────────────╮",
+		"│ ? Shell  cat notes.md                  │",
+		"│ > a quoted line from the file          │",
+		"│ Allow execution of [Shell]?            │",
+		"│ ● 1. Allow once                        │",
+		"│   3. No, suggest changes (esc)         │",
+		"╰────────────────────────────────────────╯",
+	}, "\n")
+
+	// The premise, and the reason this pane is the interesting one: that middle row IS an
+	// input-box line to the predicate InputBoxVisible uses.
+	require.True(t, isInputBoxLine("│ > a quoted line from the file          │", defaultPrompts),
+		"the premise: one dialog row survives the single-\"│\" trim and reads as a composer")
+	require.True(t, gemini.InputBoxVisible(withQuote),
+		"the premise: so the adapter sees an input box on a pane holding a LIVE dialog")
+
+	_, prompted := gemini.DetectPrompt(withQuote)
+	require.True(t, prompted, "the dialog must be detected despite that row")
+
+	// Session.AwaitingInput, verbatim. False here is the auto-approval being closed: with the
+	// drawer collapsed — the default — Enter would land on the RadioButtonSelect whose
+	// highlighted row is "Allow once" by default — or, under
+	// security.autoAddToPolicyByDefault, the row that persists the approval to
+	// ~/.gemini/policies/auto-saved.toml. Either way a tap approves something.
+	_, gated := gemini.GateUp(withQuote)
+	require.False(t, !gated && !prompted && gemini.InputBoxVisible(withQuote),
+		"AwaitingInput must be false on a live approval dialog, or Atrium types the queued "+
+			"first prompt into it and submits")
 }
 
 // The configuration this matcher cannot see, pinned as a MISS rather than left to be
@@ -906,10 +1013,16 @@ func TestGeminiConfirmationVetoesABoxedComposer(t *testing.T) {
 // Two things are asserted, and the second is why this test exists. The miss alone would be a
 // documented limit. The conjunction below it is Session.AwaitingInput's exact expression, and
 // it going TRUE on a pane holding an unanswered approval is Atrium typing the queued first
-// prompt into a RadioButtonSelect whose highlighted default is "Allow once", then submitting.
+// prompt into a RadioButtonSelect whose highlighted row approves — "Allow once" by default,
+// and a persistent policy write under security.autoAddToPolicyByDefault.
 //
-// The composer rows are the real 0.55.1 ones, taken from geminiConfirmDismissedPane, so the
-// shape is driven even though the configuration was not.
+// The composer tail is COMPOSED, not lifted. Only the " >   Type your message or
+// @path/to/file" row is verbatim from a driven capture; the block-glyph runs are cut to 40
+// columns and the two footer rows of the real 120-column tail are re-spaced into one. Saying
+// it was "taken from geminiConfirmDismissedPane" was the sentence that licenses a
+// hand-composed fixture as evidence, so it is worth being exact: the three verdicts below were
+// re-measured against that capture's real eight-row tail spliced in unaltered and came out
+// identical, which is what the shape claim actually rests on.
 func TestGeminiConfirmationMissesWhenTheDrawerStaysOpen(t *testing.T) {
 	composer := strings.Join([]string{
 		"",
@@ -937,35 +1050,6 @@ func TestGeminiConfirmationMissesWhenTheDrawerStaysOpen(t *testing.T) {
 		"#746 is a live regression, not a theoretical one: if this goes false, the bug is fixed and the disclosure in geminiConfirmationVisible must go with it")
 	require.False(t, gemini.HasBusyMarker(pane),
 		"and nothing else catches it — showLoadingIndicator requires !hasPendingActionRequired")
-}
-
-// The composer veto's cost, in the direction it actually lands at 0.55.1. The veto cannot FIRE
-// on a 0.55.1 pane — that shape is TestGeminiConfirmationVetoesABoxedComposer's composed 0.27
-// box — so the only thing it can do here is miss: any row inside the dialog's own outer box
-// that survives the trim and starts with "> " takes the whole match down.
-//
-// The driven rungs escape only because the echoed command sits in a NESTED box whose double
-// wall isInputBoxLine does not strip. A branch that renders single-walled content in the outer
-// box — the edit branch's diff, an mcp or info body — puts a live dialog one line away from
-// invisible. Held as evidence for whether the clause keeps earning its place, not as a bug.
-func TestGeminiConfirmationVetoCostsAMissOnASingleWalledRow(t *testing.T) {
-	withQuote := strings.Join([]string{
-		"╭────────────────────────────────────────╮",
-		"│ ? Shell  cat notes.md                  │",
-		"│ > a quoted line from the file          │",
-		"│ Allow execution of [Shell]?            │",
-		"│ ● 1. Allow once                        │",
-		"│   3. No, suggest changes (esc)         │",
-		"╰────────────────────────────────────────╯",
-	}, "\n")
-
-	block, ok := bottomBoxBlock(withQuote)
-	require.True(t, ok, "the premise: the dialog is live and bottom-most")
-	require.Contains(t, strings.Join(block, "\n"), "Allow once",
-		"the premise: both option rows are present, so only the veto can reject this")
-
-	require.False(t, geminiConfirmationVisible(withQuote),
-		"one single-walled \"> \" row inside the dialog's own box defeats the match")
 }
 
 // The first DRIVEN gemini idle pane this repo has held, and a negative control for all three

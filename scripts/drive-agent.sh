@@ -402,8 +402,15 @@ load_cap_env() {
 	# and the arrays would not survive it. `|| [[ -n "$line" ]]` for the reason
 	# validate_cap_env carries it: a file whose last line has no newline would otherwise
 	# drop that entry silently.
+	# The blank/comment skip must MATCH validate_cap_env's, above. It did not: this loop
+	# dropped only blanks, so a '#' line passed validation by being skipped there and was
+	# then forwarded verbatim as `-e '#NAME=VALUE'` — which tmux accepts, exit 0, leaving
+	# the pane without the variable the line was commenting out. The recipe `help` prints
+	# is a PAIR, and commenting out its GEMINI_CLI_HOME half leaves
+	# GEMINI_FORCE_FILE_STORAGE live, which is the state drive-agent.sh warns makes gemini
+	# read the developer's real oauth_creds.json and delete it.
 	while IFS= read -r line || [[ -n "$line" ]]; do
-		[[ -n "$line" ]] || continue
+		[[ -n "$line" && "$line" != '#'* ]] || continue
 		CAP_ENV_ARGS+=(-e "$line")
 		CAP_ENV_BARE+=("$line")
 	done <"$RUN/cap-env"
@@ -414,7 +421,12 @@ load_cap_env() {
 # credentials directory. Same call emit already makes when it redacts email addresses.
 cap_env_names() {
 	[[ -s "$RUN/cap-env" ]] || return 0
-	awk -F= '{printf "%s%s", sep, $1; sep=", "} END{if (NR) print ""}' "$RUN/cap-env"
+	# Blank and '#' lines are skipped HERE TOO, and that is the point rather than tidiness:
+	# this is the third reader of one file, and what it prints goes into a fixture's doc
+	# comment as the environment the capture was driven under. A reader that counts a line
+	# the other two skip stamps a header claiming an isolation the session never had —
+	# which is the single failure this whole mechanism exists to prevent.
+	awk -F= '/^[[:space:]]*$/ || /^#/ {next} {printf "%s%s", sep, $1; sep=", "} END{if (n) print ""} {n=1}' "$RUN/cap-env"
 }
 
 # ── tmux ─────────────────────────────────────────────────────────────────────────
@@ -952,6 +964,13 @@ cmd_fresh() {
 	# Belt as well as braces: the regex above already makes an escape impossible, so
 	# this asserts the property rather than trusting the derivation to preserve it.
 	assert_under_run_root "$workdir"
+	# The cap-env file is validated HERE, before anything is destroyed, for the same reason
+	# the width above is. start_session re-validates it too — but start_session runs after
+	# the reap and the rm -rf below, so a hand-edited TMUX_TMPDIR was answered with the
+	# session already gone and the workspace already deleted, throwing away a dialog that
+	# cost an API turn to reach. This is load_cap_env's own file check and validation call,
+	# both pure reads, so running it twice costs nothing and duplicates no message.
+	load_cap_env
 	reap "$SOCK"
 	[[ -e "$workdir" ]] && rm -rf "$workdir"
 	new_workspace "$workdir"
@@ -1509,7 +1528,9 @@ ENV
   FORCE=1        allow `keys Enter` at a persist-to-settings dialog
   NOENTER=1      `send`/`paste` deliver the text and DO NOT submit. For a fixture of an
                  unsubmitted composer (#735). Refuses a text containing a newline.
-                 Unspent: no committed fixture is driven with it yet.
+                 Spent once: geminiComposerQuotingTheLiteralPane is a driven
+                 capture of an unsubmitted composer, which no other verb here
+                 can produce.
 
 ISOLATING AN AGENT'S CONFIG DIR
   By default this harness does NOT isolate it, and that is deliberate — driving a live,

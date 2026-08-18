@@ -45,9 +45,10 @@ func statusFor(results []Result, k agent.Key) Status {
 // It is a 0.55 patch because the pin is 0.55.1, NOT because that is what anyone has installed.
 // This value has now moved three times and every move was forced by this guard rather than
 // noticed by hand: 0.27.4 originally, 0.55.9 while #713 briefly carried the pin at 0.55.1,
-// back to 0.27.4 when #713 reverted it, and 0.55.9 again now that #736 has driven all five
-// gemini surfaces and moved the pin for real — five because #717 added a second Gate, which
-// registry.go's gemini header enumerates. Each time the alternative was a row that stayed
+// back to 0.27.4 when #713 reverted it, and 0.55.9 again now that #736 has moved the pin for
+// real on the strength of five driven gemini surfaces. Five, not all of them, and #736 did not
+// drive all five: registry.go's gemini header is the one place that enumerates which surface
+// each issue paid for, and it credits two of the five to #713 and #717. Each time the alternative was a row that stayed
 // green while silently testing the older-than branch instead.
 const geminiWithinPin = "0.55.9"
 

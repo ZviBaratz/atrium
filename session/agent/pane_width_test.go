@@ -354,11 +354,13 @@ var wantRungs = map[string][]int{
 	// #736 proposed keeping stops being on screen.
 	"gemini/prompt/confirmation": {20, 24, 24, 33, 34, 40, 45, 120},
 	// Five rungs where seven were driven, and the two absences have different causes. 24 and
-	// 20 truncate the marker off the row, which no window reaches. 33 and 34 render it, nine
-	// non-empty lines up because the footer wraps one row wider — a miss MarkerWindow could
-	// close, and did: #736 moved it 8 -> 9 on the strength of these two captures, which is why
-	// they are rungs here rather than misses. TestGeminiBusyMarkerSitsAtTheEdgeOfItsWindow
-	// holds the depths, and geminiBusyTruncatedRungs holds the other two as negative evidence.
+	// 20 truncate the marker off the row: the row is on screen, deeper than any of these, and
+	// no window value reaches a phrase that is not there. 33 and 34 render it in full, nine
+	// non-empty lines up because the COMPOSER's placeholder splits in two at those widths — a
+	// miss MarkerWindow could close, and did: #736 moved it 8 -> 9 on the strength of these two
+	// captures, which is why they are rungs here rather than misses.
+	// TestGeminiBusyMarkerSitsAtTheEdgeOfItsWindow holds all seven depths, and
+	// geminiBusyTruncatedRungs holds the other two as negative evidence.
 	"gemini/busy": {33, 34, 40, 45, 120},
 
 	"agy/gate/trust":          {24, 28, 120},

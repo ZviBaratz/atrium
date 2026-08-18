@@ -47,12 +47,18 @@ func runDriveAgent(t *testing.T, script, tmp, snippet string) (string, error) {
 }
 
 // writeMetaEnv seeds a run directory the way `up` leaves one.
+// writeMetaEnv makes dir look like a run directory `up` created — which means BOTH files.
+// cap-env is written here rather than per-test because cmd_fresh validates it before it
+// reaps, so every verb that goes through `fresh` now needs it, and a test that omits it dies
+// on the wrong message. TestDriveAgentCapEnvMissingFileIsFatal deletes it back out to model a
+// run directory that predates the feature.
 func writeMetaEnv(t *testing.T, dir string) {
 	t.Helper()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "meta.env"), []byte(strings.Join([]string{
 		"PROGRAM=gemini", "BIN=gemini", "VERSION=0.55.1", "CAPTURED=2026-08-17",
 		"WIDTH=120", "HEIGHT=40", "PANE=%1", "WINDOW=@1", "",
 	}, "\n")), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "cap-env"), []byte("GEMINI_CLI_HOME=/iso\n"), 0o600))
 }
 
 // `fresh <width>` — the documented form, the one the cost-saver section tells you to reach
@@ -178,6 +184,10 @@ func TestDriveAgentFreshFailsLoudlyOnAStaleMetaEnv(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "meta.env"), []byte(strings.Join([]string{
 		"PROGRAM=gemini", "WIDTH=120", "PANE=%1", "WINDOW=@1", "",
 	}, "\n")), 0o644))
+	// A cap-env file so the run gets PAST cmd_fresh's pre-reap validation, which is a
+	// different failure with a different message. Without it this test passes on the wrong
+	// die and stops saying anything about the meta.env rewrite.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "cap-env"), []byte("GEMINI_CLI_HOME=/iso\n"), 0o600))
 
 	out, err := runDriveAgent(t, script, dir, `cmd_fresh 45 19`)
 	require.Error(t, err, "a meta.env the rewrite cannot land in must be fatal; output:\n%s", out)
@@ -297,6 +307,8 @@ func TestDriveAgentCapEnvMissingFileIsFatal(t *testing.T) {
 	script := filepath.Join(moduleRoot(t), "scripts", "drive-agent.sh")
 	dir := t.TempDir()
 	writeMetaEnv(t, dir)
+	// The premise, made explicit: a run directory from before ATR_CAP_ENV existed.
+	require.NoError(t, os.Remove(filepath.Join(dir, "cap-env")))
 
 	out, _, err := runDriveAgentTmux(t, script, dir, "", `cmd_fresh 45 19`)
 	require.Error(t, err, "output:\n%s", out)
@@ -357,8 +369,12 @@ func TestDriveAgentCapEnvKeepsProvenanceOffTheEnvWrapper(t *testing.T) {
 		"if this stops holding the wart is gone and this guard should be retired, not deleted")
 
 	// And the fix: the program string is untouched, so the same derivation yields the agent.
-	// start_session is in the snippet because the last assertion reads the recorded argv —
-	// without it argv is the empty string and NotContains passes against nothing.
+	//
+	// Asserted as what new-session RECEIVES, positively. `NotContains(argv, "[env]")` was the
+	// spelling here and it cannot fail: tmux_boot logs one [%s] line per argv ELEMENT and
+	// start_session passes the whole program string as ONE element, so an env-wrapped program
+	// records `[env GEMINI_CLI_HOME=/iso gemini]` and never the token `[env]`. The element
+	// being exactly the agent binary is the property, and it is the one an env prefix breaks.
 	dir := t.TempDir()
 	writeMetaEnv(t, dir)
 	out, argv, err := runDriveAgentTmux(t, script, dir, "GEMINI_CLI_HOME=/iso",
@@ -370,7 +386,10 @@ func TestDriveAgentCapEnvKeepsProvenanceOffTheEnvWrapper(t *testing.T) {
 	require.Contains(t, out, "BARE=GEMINI_CLI_HOME=/iso",
 		"probe_version needs the bare form, or the recorded version is a differently-configured binary's")
 	require.NotEmpty(t, argv, "the premise: start_session recorded an argv for the next assertion to read")
-	require.NotContains(t, argv, "[env]", "argv:\n%s", argv)
+	require.Contains(t, argv, "[-e]\n[GEMINI_CLI_HOME=/iso]\n",
+		"the variable reaches new-session as its own pair; argv:\n%s", argv)
+	require.Contains(t, argv, "[gemini]\n",
+		"and the program element is the bare binary, not an env-prefixed string; argv:\n%s", argv)
 }
 
 // The refusal list and the argv builder must be one code path. validate_cap_env runs at `up`
@@ -393,8 +412,79 @@ func TestDriveAgentCapEnvIsRevalidatedOnLoad(t *testing.T) {
 		`start_session "$TMP/repo" 45 19 gemini`)
 	require.Error(t, err, "a hand-edited TMUX_TMPDIR must stop the run; output:\n%s", out)
 	require.Contains(t, out, "belongs to the harness")
-	require.NotContains(t, argv, "TMUX_TMPDIR",
-		"the refusal must land before new-session, not after; argv:\n%s", argv)
+	// Empty, not "does not contain TMUX_TMPDIR". The refusal happens inside start_session
+	// before tmux_boot is ever called, so argv.log does not exist and argv is "" — a
+	// NotContains against it passes for any needle and states nothing about the ordering.
+	require.Empty(t, argv, "the refusal must land before new-session, not after; argv:\n%s", argv)
+}
+
+// Three readers, one file, one answer. validate_cap_env skips '#' lines, load_cap_env used to
+// skip only blanks, and cap_env_names (awk) skipped neither — so a '#' line passed validation
+// by being ignored, was forwarded to new-session verbatim as `-e '#NAME=VALUE'` (which tmux
+// accepts, exit 0), and was still stamped into the fixture header as an applied name.
+//
+// The damage is not the stray argument. `help` names $RUN/cap-env by path and the file invites
+// hand-editing, and the recipe it prints is a PAIR: commenting out GEMINI_CLI_HOME leaves
+// GEMINI_FORCE_FILE_STORAGE applied, which drive-agent.sh's own help warns makes gemini read
+// the developer's real oauth_creds.json and delete it — under a header claiming the sandbox.
+//
+// Asserted on all three readers, because agreeing with one of the other two is not agreement.
+func TestDriveAgentCapEnvCommentsAreSkippedByEveryReader(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not on PATH")
+	}
+	script := filepath.Join(moduleRoot(t), "scripts", "drive-agent.sh")
+	dir := t.TempDir()
+	writeMetaEnv(t, dir)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "cap-env"),
+		[]byte("# the sandbox home, commented out by hand\n#GEMINI_CLI_HOME=/iso\nGEMINI_FORCE_FILE_STORAGE=true\n"), 0o600))
+
+	out, argv, err := runDriveAgentTmux(t, script, dir, "",
+		`start_session "$TMP/repo" 45 19 gemini
+		 printf 'APPLIED=%s\n' "${CAP_ENV_BARE[*]}"
+		 printf 'REPORTED='; cap_env_names`)
+	require.NoError(t, err, "a commented line must not be an error, just absent; output:\n%s", out)
+
+	require.Contains(t, out, "APPLIED=GEMINI_FORCE_FILE_STORAGE=true\n",
+		"load_cap_env must apply the uncommented entry and only that; output:\n%s", out)
+	require.Contains(t, out, "REPORTED=GEMINI_FORCE_FILE_STORAGE\n",
+		"and emit must stamp exactly what was applied — a header naming a commented-out "+
+			"variable claims an isolation the pane never had; output:\n%s", out)
+	require.NotContains(t, argv, "#GEMINI_CLI_HOME=/iso",
+		"and nothing '#'-prefixed may reach new-session; argv:\n%s", argv)
+	require.Contains(t, argv, "[-e]\n[GEMINI_FORCE_FILE_STORAGE=true]\n", "argv:\n%s", argv)
+}
+
+// cmd_fresh validates the cap-env file BEFORE it reaps. start_session re-validates too, but
+// start_session runs after `reap` has taken the live session and `rm -rf` has taken the
+// workspace — so the refusal for the one case the re-validation exists for, a hand-edited
+// file, arrived with the dialog it was protecting already gone. That dialog costs an API turn
+// to reach and a once-per-path gate cannot be re-reached at all.
+//
+// It is the ordering that is asserted, by making the stub reap announce itself. Asserting only
+// that the run dies would pass with the check in either place, which is how this shipped:
+// TestDriveAgentCapEnvIsRevalidatedOnLoad calls start_session directly and structurally cannot
+// see the difference.
+func TestDriveAgentFreshValidatesCapEnvBeforeItReaps(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not on PATH")
+	}
+	script := filepath.Join(moduleRoot(t), "scripts", "drive-agent.sh")
+	dir := t.TempDir()
+	writeMetaEnv(t, dir)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "cap-env"),
+		[]byte("GEMINI_CLI_HOME=/iso\nTMUX_TMPDIR=/tmp\n"), 0o600))
+
+	out, _, err := runDriveAgentTmux(t, script, dir, "",
+		`reap() { printf 'REAPED\n'; }
+		 new_workspace() { printf 'WORKSPACE-REBUILT\n'; mkdir -p "$1"; }
+		 cmd_fresh 45 19`)
+	require.Error(t, err, "a hand-edited TMUX_TMPDIR must stop the run; output:\n%s", out)
+	require.Contains(t, out, "belongs to the harness", "output:\n%s", out)
+	require.NotContains(t, out, "REAPED",
+		"the refusal must land before the session is reaped; output:\n%s", out)
+	require.NotContains(t, out, "WORKSPACE-REBUILT",
+		"and before the workspace is rebuilt; output:\n%s", out)
 }
 
 // A cap-env whose LAST line has no trailing newline. `read` returns non-zero at EOF even
@@ -404,12 +494,18 @@ func TestDriveAgentCapEnvIsRevalidatedOnLoad(t *testing.T) {
 //
 //   - The refusal is skipped. TMUX_TMPDIR is the entry validate_cap_env exists to refuse, and
 //     a check that never sees the line cannot refuse it.
+//
 //   - The applied set and the REPORTED set disagree. cap_env_names is awk, which does read a
 //     final unterminated line, so emit stamps a name into the fixture's doc comment that the
-//     session was never started with. For the recipe `help` actually prints, that is
-//     GEMINI_CLI_HOME dropped while GEMINI_FORCE_FILE_STORAGE still applies — the pair whose
-//     own help text warns that gemini then reads the developer's real oauth_creds.json and
-//     deletes it, under a fixture claiming it was driven in a sandbox.
+//     session was never started with.
+//
+//     WHICH line is dropped is the last one, and for the recipe `help` actually prints —
+//     GEMINI_CLI_HOME first, GEMINI_FORCE_FILE_STORAGE second — that drops the file-storage
+//     half and leaves the isolation applied, which is the harmless direction. An earlier draft
+//     of this comment claimed the opposite and its fixture below was written in the reverse
+//     order to make the sentence come out true. The fixture keeps that order, now labelled as
+//     the adversarial case it is: it is the ordering that costs the most, and a guard should
+//     hold the worst arrangement of a hazard rather than the shipped one.
 //
 // The second has no upper bound on its damage, so it is asserted as an equality between the
 // two readers rather than as a property of either one.
@@ -429,11 +525,14 @@ func TestDriveAgentCapEnvReadsAFinalLineWithNoNewline(t *testing.T) {
 			`start_session "$TMP/repo" 45 19 gemini`)
 		require.Error(t, err, "an unterminated TMUX_TMPDIR must stop the run; output:\n%s", out)
 		require.Contains(t, out, "belongs to the harness")
-		require.NotContains(t, argv, "TMUX_TMPDIR", "argv:\n%s", argv)
+		require.Empty(t, argv, "nothing reached new-session; argv:\n%s", argv)
 	})
 
 	t.Run("what emit reports is what load applies", func(t *testing.T) {
 		dir := t.TempDir()
+		// Deliberately the REVERSE of the recipe `help` prints, so the entry an unterminated
+		// final line would drop is GEMINI_CLI_HOME — the isolation itself, the arrangement in
+		// which the bug costs the most rather than the one it ships in.
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "cap-env"),
 			[]byte("GEMINI_FORCE_FILE_STORAGE=true\nGEMINI_CLI_HOME=/iso"), 0o600)) // no trailing newline
 

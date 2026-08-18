@@ -156,9 +156,9 @@ func generateName(ctx context.Context, executor cmd.Executor, claudePath, workDi
 // written: one line of bare text on stdout, warnings on stderr (the probe's own
 // stderr carried "Ripgrep is not available. Falling back to GrepTool."), no
 // envelope. That probe is why the adapter's VerifiedVersion could finally move
-// off 0.27 — this function was the last of the five surfaces the adapter declares.
-// Five, not the four drift_fields_test.go asked for by name: #717 added a second
-// Gate after that sentence was written.
+// off 0.27 — this function was the last of the five surfaces that drive covered.
+// Whether five is all of them is registry.go's gemini header to say, and it says
+// not quite: ResumeProbe is declared there and was never driven.
 //
 // The INVOCATION was a separate claim and at 0.55.1 it was broken (#744): gemini
 // refuses to run in an untrusted directory, exiting 55 with EMPTY stdout, and

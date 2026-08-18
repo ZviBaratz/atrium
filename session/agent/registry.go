@@ -823,9 +823,10 @@ var codex = &Adapter{
 // different evidence tiers, and #713 is what the difference costs — say which is which
 // rather than let one word cover both.
 //
-// DRIVEN at 0.55.1 — every heuristic surface this adapter declares, which is five, not the
-// four drift_fields_test.go's comment asked for by name: #717 added the second Gate after that
-// sentence was written.
+// DRIVEN at 0.55.1 — five surfaces, which is not the same claim as "every surface this adapter
+// declares" and an earlier draft ran the two together. drift_fields_test.go's comment asked for
+// four by name; #717 added the second Gate after that sentence was written, making five. The
+// sixth is below.
 //
 //   - the folder-trust Gate — width ladder in gemini_pane_test.go (#713), re-confirmed byte
 //     for byte in #736's run;
@@ -836,8 +837,17 @@ var codex = &Adapter{
 //   - generateNameGemini's `gemini -p` output contract (session/naming.go), probed in the
 //     same run: bare text on stdout, warnings on stderr, no JSON envelope.
 //
-// That is the whole adapter, which is why VerifiedVersion moved to 0.55.1 below. It took a
-// real turn per rung plus an isolated config dir to buy.
+// NOT DRIVEN, and the reason this list stops short of "the whole adapter" — the phrase the
+// codex adapter's header uses, counting its own ResumeProbe among the surfaces it claims.
+// gemini declares Resume and ResumeProbe too, and ResumeProbe is a live heuristic: tmux runs
+// binHelpContains(bin, a.ResumeProbe) and silently disables resume, with only an InfoLog line,
+// when the needle is absent from `<bin> --help`. #736 never probed it. It was checked by hand
+// at 0.55.1 — `gemini --help` still lists "-r, --resume" with "latest" — so nothing is broken
+// today; what is wrong is a pin certifying a surface nobody drove, in the direction this header
+// calls self-concealing. Splitting it out is #721's job.
+//
+// The five above are why VerifiedVersion moved to 0.55.1 below. They took a real turn per rung
+// plus an isolated config dir to buy.
 //
 // ONE OF THOSE FIVE WAS VERIFIED AND BROKEN, and moving the pin is what forced fixing it here
 // rather than later. generateNameGemini's output CONTRACT holds exactly as documented; its
@@ -866,13 +876,14 @@ var codex = &Adapter{
 //     pane, because the option label truncates. The old flat matcher missed real dialogs at
 //     every width Atrium's preview pane produces. See geminiConfirmationVisible.
 //   - "esc to cancel" is present in the bundle and was reachable at only three of the seven
-//     driven widths — off the screen at 24 and 20, and outside MarkerWindow at 34 and 33
-//     because the footer wraps one row wider there. The header used to reason that locating
-//     the render site in the bundle "still does not say what a live pane puts on screen around
-//     it"; this is what it puts there, and the two halves have different remedies. The
-//     out-of-window half is fixed: MarkerWindow moved 8 -> 9, the depth measured at those two
-//     rungs. The truncated half cannot be, by any window, and stays as negative evidence in
-//     geminiBusyTruncatedRungs.
+//     driven widths. The header used to reason that locating the render site in the bundle
+//     "still does not say what a live pane puts on screen around it"; this is what it puts
+//     there, and the two halves have different remedies. At 34 and 33 the row renders in full
+//     and sat outside MarkerWindow, which is fixed: the constant moved 8 -> 9, the depth
+//     measured at those two rungs. At 24 and 20 the row is ON SCREEN — deeper still, at 10 and
+//     11 — but gemini has truncated the phrase itself to "(esc to c" and "(esc", so no window
+//     reaches it and none would. TestGeminiBusyMarkerSitsAtTheEdgeOfItsWindow holds all seven
+//     depths; geminiBusyTruncatedRungs holds the truncation.
 //
 // The asymmetry that kept the pin at 0.27 through six review rounds still holds and is worth
 // keeping written down: a wrong "drifted" is noise, dismissed in a keystroke; a wrong "ok" is
@@ -907,21 +918,41 @@ var gemini = &Adapter{
 	DriftGranularity: GranularityMinor,
 
 	BusyMarkers: []string{"esc to cancel"},
-	// Like codex, the loading row renders above the input box — so what decides whether the
-	// window reaches it is how many rows the composer and the footer below it occupy, and
-	// that grows by one when the footer wraps. 8 was enough at every width anyone had driven;
-	// #736 drove 34 and 33, where it is one short and a streaming session reads Ready.
+	// Like codex, the loading row renders above the input box, so what decides whether the
+	// window reaches it is how many rows the composer and footer below it occupy. It is the
+	// COMPOSER that grows: the footer is two rows at every driven width and drops columns with
+	// an ellipsis rather than wrapping, while the composer's " >   Type your message or
+	// @path/to/file" placeholder splits in two at 34 and below. An earlier draft of this
+	// comment credited the extra row to a footer wrap, in five places; the bytes it cited
+	// disprove it.
 	//
-	// 9 is the measured maximum across the driven set, NOT a derived bound: a second footer
-	// wrap would push the row out again, and the two rungs where the marker is off-screen
-	// entirely are past the reach of any window. TestGeminiBusyMarkerSitsAtTheEdgeOfItsWindow
-	// holds the depths this number is fitted to, so moving it reddens the measurement.
+	// 9 is the maximum across the rungs this can COVER, not across the driven set, and the
+	// distinction is the whole reason 9 is safe to stop at. 24 and 20 sit deeper — 10 and 11 —
+	// and are unreachable for an unrelated reason: gemini truncates the phrase off the row, so
+	// widening to 11 would buy nothing. Every rung whose marker text survives is at 9 or less.
+	// TestGeminiBusyMarkerSitsAtTheEdgeOfItsWindow holds all seven depths and the two
+	// truncations, so a rung deeper than 9 that still renders the phrase reddens it.
+	//
+	// The cost side, which a review round deleted rather than replaced: MarkerWindow is a
+	// live-detection budget for every gemini pane, not just a dialog's. Each row it grows is
+	// one more row of transcript in which a quoted "esc to cancel" reads as streaming — Running
+	// with no completion ding, and promptDeliveryReady holding the queued prompt until its
+	// timeout. geminiIdlePane055's composer chrome is exactly 8 non-empty rows, so 9 is chrome
+	// plus one transcript row: the budget is already spent.
 	MarkerWindow: 9,
 
 	Prompts: []PromptMatcher{
 		// NoAutoTap: Enter on a real confirmation runs the shell command or writes the
-		// file, and the highlighted default is "Allow once" (#347). Autoyes users who
-		// want the taps have gemini's own --yolo / --approval-mode.
+		// file (#347). Autoyes users who want the taps have gemini's own --yolo /
+		// --approval-mode.
+		//
+		// WHICH row Enter lands on is not fixed, and the variable case is the worse one.
+		// initialIndex is 0 — "Allow once" — unless the folder is trusted, permanent
+		// approval is allowed, the type is info/edit/mcp and security.autoAddToPolicyByDefault
+		// is set, in which case gemini pre-highlights the row that writes the approval to
+		// ~/.gemini/policies/auto-saved.toml. A tap there does not approve once; it makes
+		// the approval permanent. Anywhere below that says "the highlighted default is
+		// Allow once" is describing the default configuration only.
 		//
 		// Anchored on the dialog's box rather than on a bottom-N window (#736). This
 		// entry used to be a flat All match on "No, suggest changes (esc)", excused on
@@ -1245,12 +1276,23 @@ func geminiTrustGateVisible(content string) bool {
 	return found
 }
 
+// geminiAllowRow and geminiCancelRow are the two option labels geminiConfirmationVisible
+// keys on. They are constants rather than literals in the predicate because the matcher's
+// floor is a property of geminiAllowRow's LENGTH — a 19-column pane, per the header below —
+// and a test that restates that number instead of measuring it against this symbol is
+// constant-vs-constant and cannot fail. TestGeminiConfirmationFloorIsSetByTheAllowRow reads
+// these, so shortening either literal moves the floor and reddens the measurement.
+const (
+	geminiAllowRow  = "Allow once"
+	geminiCancelRow = "No, sug"
+)
+
 // geminiConfirmationVisible reports gemini's tool-confirmation dialog (#736): the first and
 // last option rows of ToolConfirmationQueue's RadioButtonSelect, both inside a box whose
-// bottom border ends the pane. Three clauses — the box says the dialog is LIVE, the pair says
-// WHICH dialog, and the composer veto says it is not the user's own typing. The first two
-// carry every driven rung; the third is inert at 0.55.1 and is kept for the older shape, which
-// is worth reading before trusting it (both caveats are spelled out further down).
+// bottom border ends the pane. Two clauses — the box says the dialog is LIVE, the pair says
+// WHICH dialog — and both carry every driven rung. There used to be a third, a composer veto;
+// what it cost and why it went is spelled out further down, along with the two things these
+// two clauses do not close.
 //
 // WHY NOT "No, suggest changes (esc)", the literal #736 proposes keeping. It is 25 cells and
 // the label column is paneWidth-9, so it needs a 34-column pane; driven, it is present at 34
@@ -1277,8 +1319,9 @@ func geminiTrustGateVisible(content string) bool {
 // exec, info, mcp — and so does the cancel row: getOptions ends each of those five branches
 // with the same options2.push carrying the identical "No, suggest changes (esc)" label, so
 // BOTH halves of the conjunction are branch-invariant, not just the one that is easier to
-// reason about. That is read off the 0.55.1 bundle, and this file's standing rule is that
-// bundle presence is necessary and NOT sufficient. If edit (which renders a diff above its
+// reason about — with one exception inside edit that the NOT COVERED note below carries, since
+// edit's pushes are the only conditional ones. That is read off the 0.55.1 bundle, and this
+// file's standing rule is that bundle presence is necessary and NOT sufficient. If edit (which renders a diff above its
 // options) or any of the other three renumbers, rewords or re-nests EITHER row — a
 // conjunction is only as reachable as its rarer term — this misses there and nothing here
 // would notice.
@@ -1286,24 +1329,40 @@ func geminiTrustGateVisible(content string) bool {
 // The block is read LINE-WISE and unflattened, so two adjacent wrapped rows cannot synthesise
 // a phrase neither renders — the trap flattenChrome sprang on the trust gate (#713).
 //
-// THE CONFIGURATION THIS CANNOT SEE, and the worst thing in this file.
-// ui.collapseDrawerDuringApproval defaults true, which is what makes the box clause work at
-// all: with the drawer collapsed, a live dialog's bottom border ends the pane. It is a
-// documented settings.json key that the in-app settings dialog does not offer, so setting it
-// false is a hand edit — and then gemini renders the composer AND footer below a LIVE dialog.
-// bottomBoxBlock anchors on the composer, this returns false, GateUp is false, HasBusyMarker
-// is false because showLoadingIndicator requires !hasPendingActionRequired, and
-// InputBoxVisible is TRUE. Session.AwaitingInput is the conjunction of exactly those, so
-// Atrium reads the pane as ready, types the session's queued first prompt into the dialog's
-// RadioButtonSelect — highlighted default "Allow once" — and submits it. The flat literal this
-// replaced DID match there, so in that configuration this is a regression, and it runs the
-// command the dialog was asking about rather than merely withholding a prompt.
+// THE CONFIGURATION THIS CANNOT SEE. ui.collapseDrawerDuringApproval defaults true, which is
+// what makes the box clause work at all: with the drawer collapsed, a live dialog's bottom
+// border ends the pane. It is a documented settings.json key that the in-app settings dialog
+// does not offer, so setting it false is a hand edit — and then gemini renders the composer
+// AND footer below a LIVE dialog. bottomBoxBlock anchors on the composer, so this returns
+// false, and InputBoxVisible answers TRUE on that same composer.
 //
-// Disclosed rather than fixed because no predicate here can fix it. With the drawer open an
-// ANSWERED dialog stays in scrollback above the returning composer, so live and dismissed
-// render the same structure; the only difference gemini leaves is the transcript line
-// "Request cancelled", and keying on quotable content is the bug this whole change removes.
-// Tracked as #746, and TestGeminiConfirmationMissesWhenTheDrawerStaysOpen pins the miss.
+// Session.AwaitingInput is `!GateUp && !DetectPrompt && InputBoxVisible` over a live capture
+// — three terms, and HasBusyMarker is not one of them. That matters for whoever picks #746
+// up: the busy state does gate delivery, but downstream in promptDeliveryReady's state
+// argument, behind a timeout that expires. Fixing this in BusyMarkers or MarkerWindow would
+// redden nothing and close nothing. All three of AwaitingInput's terms fall the wrong way
+// here, so Atrium sends the queued first prompt at a pane holding an unanswered approval.
+//
+// What gemini then does with those keystrokes is NOT stated here, because it was not driven.
+// The bundle has the composer subscribed and isInputActive true during
+// "waiting_for_confirmation", which points at the composer absorbing them; the flat literal
+// this replaced matched this pane, so #746 is a regression either way. Reaching the answer
+// costs a hand-edited setting and an API turn, and a guess would be the third wrong sentence
+// this file has written about a consequence it could not measure.
+//
+// FIXABLE, and not fixed here — the difference matters, because an earlier draft of this
+// paragraph said no predicate could fix it and that was false. Measured: a flat conjunction of
+// both labels over flattenChrome(content, WindowPrompt) is TRUE on this pane and FALSE on
+// every driven negative in the tree — the dismissed capture, the 0.55.1 idle composer and the
+// quoting pane. The premise that ruled it out was wrong too: an answered dialog does not
+// linger looking live. geminiConfirmDismissedPane, a driven capture, holds ZERO occurrences of
+// either label — gemini replaces the whole dialog with a tool-RESULT box.
+//
+// What it costs is why it is #746's call and not this change's: a flat clause fires on any
+// pane carrying both labels within WindowPrompt lines, and both are verbatim in this file. It
+// re-opens a narrowed form of the very class #736 reported, trading it for a configuration
+// nobody has driven. The measurement is recorded on the issue so that trade is made on
+// numbers. TestGeminiConfirmationMissesWhenTheDrawerStaysOpen pins the miss meanwhile.
 //
 // WHAT THE BOX CLAUSE NARROWS AND DOES NOT CLOSE. It is not a guarantee that the block is a
 // dialog, only that it is the pane's last box: any bottom-most box carrying both rows fires,
@@ -1315,24 +1374,38 @@ func geminiTrustGateVisible(content string) bool {
 // TestGeminiConfirmationStillFiresOnAQuotedDialogEndingThePane. Narrowing it further would
 // take a header literal, and the headers differ per branch — four of which are undriven.
 //
-// THE COMPOSER VETO IS FOR THE OLD SHAPE, and its cost lands on the new one. 0.55.1 draws the
-// composer UNWALLED (block glyphs, not box rules), so it can never enter a bottomBoxBlock and
-// the veto cannot fire on any 0.55.1 pane — TestGeminiConfirmationVetoesABoxedComposer has to
-// compose a 0.27-shaped one. What it CAN do on a 0.55.1 pane is miss: a dialog whose outer box
-// ever renders a row starting "> " takes the whole match down. The driven captures are clear
-// only because the echoed command sits in a NESTED box, whose double wall isInputBoxLine does
-// not strip. Kept because 0.27 DID wall the composer and the pin now covers 0.55.1 forward
-// while the doctor stays silent below it (see the adapter header), but it is a trade, not a
-// free clause — and the cost side is asserted, not just described, by
-// TestGeminiConfirmationVetoCostsAMissOnASingleWalledRow. That guard is what a later reader
-// needs to decide whether the clause still earns its place: it holds the miss at exactly one
-// single-walled row, so the day the trade stops being worth it, the evidence is already here.
+// THERE IS NO COMPOSER VETO HERE, and its removal is the point rather than an omission. The
+// loop used to reject any block line isInputBoxLine matched, to keep the matcher off a 0.27
+// composer — which WAS a walled box. 0.55.1 draws the composer unwalled (block glyphs, not box
+// rules), so it can never enter a bottomBoxBlock and the clause could not fire on a 0.55.1
+// pane at all. What it could still do was MISS: one row inside the dialog's own outer box that
+// survives the single-"│" trim and starts with "> " took the whole match down.
 //
-// NOT COVERED, and disclosed rather than quietly half-covered: the ask_user and exit_plan_mode
-// confirmation types return options: [] and render no option row at all, so no literal from
-// getOptions can reach them. Their headers are distinctive but sit at the TOP of a box that can
-// outgrow a 19-row preview pane, which is the shape this package has twice found unusable.
-// Filed rather than guessed at.
+// That miss is worse than a miss. isInputBoxLine with defaultPrompts is the SAME predicate
+// InputBoxVisible anchors on, and gemini declares no InputBoxPrompts of its own, so the one
+// row that vetoed the match also answered InputBoxVisible TRUE. Measured on the pane
+// TestGeminiConfirmationFiresOnADialogRowThatLooksLikeAComposer holds: DetectPrompt false,
+// GateUp false, InputBoxVisible true — Session.AwaitingInput exactly, on a live dialog, in
+// gemini's DEFAULT configuration where no composer exists to absorb what gets typed. This file
+// already calls that mechanism the worse of the two for the IDE nudge and made it #717.
+//
+// Deleting it trades an unsafe direction for a safe one. What comes back is a 0.27-shaped
+// boxed composer quoting both labels now matching — an over-fire, which is NoAutoTap ->
+// PanePromptManual -> NeedsInput with the prompt withheld, the direction #342 named acceptable
+// and the one this package prefers. That over-fire is asserted, not assumed, by
+// TestGeminiConfirmationOverFiresOnA027BoxedComposer.
+//
+// NOT COVERED, and disclosed rather than quietly half-covered: three confirmation states
+// render no option row at all, so no literal from getOptions can reach them. ask_user and
+// exit_plan_mode return options: [] outright. The third sits INSIDE the edit branch this
+// comment's branch-invariance claim covers — edit is the only one of the five whose pushes are
+// conditional, on `if (!confirmationDetails.isModifying)`, and choosing edit's own "Modify
+// with external editor" option sets it: getOptions returns [] and the renderer draws a
+// bordered box reading "Modify in progress: " with no RadioButtonSelect. So "all five branches
+// push both labels" is true of the code path getOptions takes, and conditionally four of the
+// dialog a user can be sitting in front of. Their headers are distinctive but sit at the TOP
+// of a box that can outgrow a 19-row preview pane, which is the shape this package has twice
+// found unusable. Filed rather than guessed at.
 func geminiConfirmationVisible(content string) bool {
 	block, ok := bottomBoxBlock(content)
 	if !ok {
@@ -1340,13 +1413,10 @@ func geminiConfirmationVisible(content string) bool {
 	}
 	var allow, cancel bool
 	for _, line := range block {
-		if isInputBoxLine(line, defaultPrompts) {
-			return false // a composer, not the dialog
-		}
-		if strings.Contains(line, "Allow once") {
+		if strings.Contains(line, geminiAllowRow) {
 			allow = true
 		}
-		if strings.Contains(line, "No, sug") {
+		if strings.Contains(line, geminiCancelRow) {
 			cancel = true
 		}
 	}

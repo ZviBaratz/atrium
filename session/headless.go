@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/ZviBaratz/atrium/cmd"
+	"github.com/ZviBaratz/atrium/config"
 )
 
 // claudeResult is the subset of `claude -p --output-format json` we care about.
@@ -64,6 +66,27 @@ func runClaudeHeadless(ctx context.Context, executor cmd.Executor, claudePath, w
 	return res.Result, nil
 }
 
+// geminiHeadlessWorkspace creates the throwaway cwd for a headless gemini call under
+// Atrium's own data dir. It exists so the directory's ANCESTORS are owner-controlled —
+// see runGeminiHeadless for the .env walk that makes that the property which matters,
+// rather than the mode of the leaf MkdirTemp already sets to 0700.
+//
+// An error here fails the call rather than falling back to os.TempDir(). The fallback
+// is the bug: it would restore the world-writable chain silently, on the path where
+// something about the data dir was already wrong. A failed naming call costs a default
+// session title, which is the direction session/naming.go already degrades in.
+func geminiHeadlessWorkspace() (string, error) {
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		return "", err
+	}
+	root := filepath.Join(configDir, "headless")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return "", err
+	}
+	return os.MkdirTemp(root, "gemini-")
+}
+
 // runGeminiHeadless runs `gemini -p` from a freshly created empty workspace dir
 // (gemini scans its cwd as workspace context, so an empty dir keeps the call fast
 // and the context clean) and returns the bare stdout text — gemini emits no JSON
@@ -79,12 +102,30 @@ func runClaudeHeadless(ctx context.Context, executor cmd.Executor, claudePath, w
 // variable set returned a title and exit 0. The CLI's own error names this
 // variable as the remedy for headless use (docs/cli/trusted-folders.md).
 //
-// Trusting it is safe precisely because of what the dir is: this function created
-// it, empty, milliseconds earlier, and removes it on return. Trust governs whether
-// gemini will load a workspace's GEMINI.md, settings and extensions — there are
-// none here to load, and nothing else can put any there.
+// WHAT TRUST ACTUALLY WIDENS, which is not what an earlier draft of this comment
+// said. That draft enumerated GEMINI.md, settings and extensions and concluded the
+// empty dir made them moot. It missed the one that is not about the workspace dir at
+// all: loadEnvironment calls findEnvFile, which walks from the cwd to "/" looking for
+// a .env, and trust decides what is done with the first one it finds. Untrusted, only
+// AUTH_ENV_VAR_WHITELIST's four keys apply and each is stripped to [a-zA-Z0-9-_./];
+// trusted, EVERY key applies unsanitized, and a <dir>/.gemini/.env probe is added at
+// each level that untrusted does not make at all. Measured at 0.55.1: a GEMINI_SANDBOX
+// planted in an ancestor's .env is ignored without the variable and exits 44 with it,
+// from either spelling of the file.
+//
+// That is why the workspace is rooted HERE and not in os.TempDir(). The walk is over
+// the cwd's ANCESTORS, so what matters is not this directory's mode but every mode
+// above it, and MkdirTemp("") puts the chain's first link in a world-writable /tmp
+// where any local uid can plant /tmp/.env or /tmp/.gemini/.env. Atrium's data dir is
+// owner-writable the whole way up. The walk still ends at $HOME's own .env, which is
+// unchanged: the /tmp-rooted walk reached the same file through findEnvFile's home
+// fallback, so this moves no boundary except the one that was shared.
+//
+// --ignore-env is NOT the remedy it looks like. 0.55.1's yargs is .strict() and exits
+// 1 on the flag, and even where it parses it gates only the plain .env branch, leaving
+// the trusted-only .gemini/.env probe live at every level.
 func runGeminiHeadless(ctx context.Context, executor cmd.Executor, geminiPath, promptArg, stdin string) (string, error) {
-	workDir, err := os.MkdirTemp("", "cs-headless-gemini-")
+	workDir, err := geminiHeadlessWorkspace()
 	if err != nil {
 		return "", err
 	}
