@@ -331,6 +331,15 @@ type Adapter struct {
 	// against the configured program when it is the canonical binary itself
 	// (even at an absolute path), else against the canonical name — never
 	// against a wrapper, whose side effects must not run on a probe.
+	//
+	// It is a CAPABILITY check and only that. Grepping --help answers "does this
+	// build support the flag" and can say nothing about whether a conversation
+	// exists to resume: it passes in an empty directory exactly as it does in a
+	// populated one. Existence is a separate question, asked in
+	// Instance.startResuming through transcript.HasResumable, where only claude has
+	// an adapter — so for every other agent the flag is applied with nothing having
+	// looked. What each vendor does with it is driven and recorded beside that
+	// agent's Resume, and repaired generically by Instance.RepairResumingLaunch (#712).
 	ResumeProbe string
 
 	// HookSupport marks agents with an authoritative status-hook integration

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -51,6 +52,11 @@ type fakeTmux struct {
 	// dieAtAttach makes the session vanish when the attach client connects — see
 	// dieOnAttach.
 	dieAtAttach bool
+	// dieFlag, when non-empty, kills only the launches whose command line contains it —
+	// see dieOnAttachWhenLaunchContains. dieNext carries that decision from the
+	// new-session that made it to the attach that acts on it.
+	dieFlag string
+	dieNext bool
 }
 
 // newSessionArgv is the `tmux new-session` command line the agent was created with.
@@ -58,17 +64,32 @@ type fakeTmux struct {
 // so the one under test has to be picked out by name rather than by being the last.
 func (f *fakeTmux) newSessionArgv(t *testing.T) []string {
 	t.Helper()
+	argvs := f.newSessionArgvs()
+	if len(argvs) == 0 {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		t.Fatalf("no tmux new-session was launched (saw %v)", f.launches)
+	}
+	return argvs[0]
+}
+
+// newSessionArgvs is every `tmux new-session` this server was asked for, in order. A
+// test about a RELAUNCH needs the sequence rather than one of them: "it retried blank"
+// is a claim about the second launch existing and about what the first one carried, and
+// newSessionArgv alone can support neither half.
+func (f *fakeTmux) newSessionArgvs() [][]string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	var out [][]string
 	for _, argv := range f.launches {
 		for _, arg := range argv {
 			if arg == "new-session" {
-				return argv
+				out = append(out, argv)
+				break
 			}
 		}
 	}
-	t.Fatalf("no tmux new-session was launched (saw %v)", f.launches)
-	return nil
+	return out
 }
 
 func (f *fakeTmux) Start(cmd *exec.Cmd) (*os.File, error) {
@@ -80,10 +101,18 @@ func (f *fakeTmux) Start(cmd *exec.Cmd) (*os.File, error) {
 	}
 	f.launched = true
 	f.exists = true
-	f.launches = append(f.launches, append([]string(nil), cmd.Args...))
-	for _, arg := range cmd.Args {
-		if arg == "attach-session" && f.dieAtAttach {
-			f.exists = false
+	argv := append([]string(nil), cmd.Args...)
+	f.launches = append(f.launches, argv)
+	for _, arg := range argv {
+		switch arg {
+		case "new-session":
+			// The program is one trailing argv element ("claude --continue …"), so the
+			// flag is looked for in the whole line rather than as a word of its own.
+			f.dieNext = f.dieFlag != "" && strings.Contains(strings.Join(argv, " "), f.dieFlag)
+		case "attach-session":
+			if f.dieAtAttach || f.dieNext {
+				f.exists = false
+			}
 		}
 	}
 	file, err := os.CreateTemp("", "pty-stub")
@@ -125,6 +154,30 @@ func (f *fakeTmux) dieOnAttach() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.dieAtAttach = true
+}
+
+// dieOnAttachWhenLaunchContains is dieOnAttach narrowed to the launches whose command
+// line contains flag — a session that dies because of WHAT it was asked to run.
+//
+// Keying on the flag rather than on "the first launch" is the whole point: a retry
+// asserted against a fake that dies once and then stops would pass for a retry that
+// relaunched the identical resuming command, which is the bug rather than the fix. Here
+// the second launch survives by being blank, and a retry that kept the flag would die
+// again and be observable.
+func (f *fakeTmux) dieOnAttachWhenLaunchContains(flag string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.dieFlag = flag
+}
+
+// killSession takes the session away without anyone here asking — an agent that
+// crashed, or an external kill. It is what makes a "once per launch" claim testable:
+// the SECOND death has to be a real one, or a refusal to relaunch proves only that the
+// first repair left a live session behind.
+func (f *fakeTmux) killSession() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.exists = false
 }
 
 // adopt marks the fake server as already holding a session nobody here created — a

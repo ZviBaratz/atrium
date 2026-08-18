@@ -472,6 +472,13 @@ const lostSessionRecoverThreshold = 2
 // lostSessionLaunchCrashWindow is how soon after (re)launch a lost-session
 // recovery counts as a crash-at-launch (a bad program/profile) rather than a
 // long-lived session that later died, so the notice can name the command.
+//
+// It bounds the blank relaunch too (Instance.RepairResumingLaunch), and deliberately
+// the same number: both ask "did this session die OF its launch?". It has to be
+// comfortably more than the death it repairs takes to arrive — `claude --continue`
+// with nothing to resume was driven at 3.3s from launch to exit — and comfortably less
+// than a session's working life, which is what keeps a long-lived session that dies
+// from being resurrected instead of parked.
 const lostSessionLaunchCrashWindow = 15 * time.Second
 
 // lostRecovery is the outcome of recovering one lost session, returned so the
@@ -490,12 +497,18 @@ const lostSessionLaunchCrashWindow = 15 * time.Second
 // session normally reports false, because it has no worktree to free and its working
 // directory is the user's own checkout, but one whose directory the user has since
 // deleted reports true and its shell is stranded exactly like a git session's.
+//
+// relaunchedBlank marks the one outcome that is NOT a park: a session whose resuming
+// launch died at birth and was relaunched without its resume flag (#712). It is still
+// reported, because it is the recovery a user cannot see — the row keeps its title, its
+// status and its place, and only the agent's memory of the conversation is gone.
 type lostRecovery struct {
-	instance     *session.Instance
-	title        string
-	err          error
-	worktreeGone bool
-	launchCmd    string
+	instance        *session.Instance
+	title           string
+	err             error
+	worktreeGone    bool
+	launchCmd       string
+	relaunchedBlank bool
 }
 
 // recoverLostInstances moves instances whose tmux session has died (flagged
@@ -529,6 +542,20 @@ func recoverLostInstances(results []instanceMetaResult, strikes map[*session.Ins
 		// debouncing; above it a prior attempt already ran and (if it failed) must not
 		// be retried every tick — surface once, then leave it be.
 		if strikes[r.instance] != lostSessionRecoverThreshold {
+			continue
+		}
+		// Repair before park. A session whose RESUMING launch died at birth is one a
+		// blank relaunch can save, and parking it instead would remove the worktree
+		// Atrium had just rebuilt — the #699 consequence, for the agents #712 leaves
+		// exposed. The strike goes with the repair: the session is live again, so the
+		// next tick starts counting from zero like any other live observation.
+		if r.instance.RepairResumingLaunch(lostSessionLaunchCrashWindow) {
+			delete(strikes, r.instance)
+			recovered = append(recovered, lostRecovery{
+				instance:        r.instance,
+				title:           r.instance.Title,
+				relaunchedBlank: true,
+			})
 			continue
 		}
 		err := r.instance.RecoverLostSession()

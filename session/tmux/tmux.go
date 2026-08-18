@@ -400,12 +400,20 @@ func (t *Session) Start(workDir string) error {
 }
 
 // StartContinue starts the session resuming the prior conversation when the program
-// supports it (claude --continue, codex resume --last, gemini --resume latest). It is
-// used only on resurrection — the agent process died and we are relaunching it — never
-// on PTY reattach (Restore), where the process is still alive. The continue command is
-// computed transiently; t.program, the value persisted via Instance, is never mutated.
-func (t *Session) StartContinue(workDir string) error {
-	return t.start(workDir, t.resumeCommand())
+// supports it (claude --continue, codex resume --last, gemini --resume latest, agy
+// --continue). It is used only on resurrection — the agent process died and we are
+// relaunching it — never on PTY reattach (Restore), where the process is still alive.
+// The continue command is computed transiently; t.program, the value persisted via
+// Instance, is never mutated.
+//
+// resuming reports whether the launch actually carried a rewrite. It is false whenever
+// resumeCommand fell back to the plain program — no Resume, a probe that failed, an
+// argv the adapter refuses to splice into — and a caller repairing a launch that died
+// needs it: relaunching THAT command blank would re-run the identical command. It is
+// returned rather than left to be re-derived so the answer describes this launch.
+func (t *Session) StartContinue(workDir string) (resuming bool, err error) {
+	command := t.resumeCommand()
+	return command != t.program, t.start(workDir, command)
 }
 
 // resumeCommand returns the launch command that resumes the prior conversation, or the
@@ -414,6 +422,20 @@ func (t *Session) StartContinue(workDir string) error {
 // rewrite of the single program argv element is sufficient — no shell wrapping. When the
 // adapter requires a capability probe (gemini's --resume is recent), an installed binary
 // that predates the flag relaunches blank instead of failing on an unknown flag.
+//
+// ResumeProbe is a CAPABILITY check and nothing more: binHelpContains greps the binary's
+// --help, so it answers "does this build support the flag" and never "is there a
+// conversation to resume". It passes in an empty directory exactly as it does in a
+// populated one. Conversation-EXISTENCE is asked separately, in Instance.startResuming
+// via transcript.HasResumable, and only claude has an adapter there — so for agy, codex
+// and gemini the flag is applied whenever the binary supports it, with nothing having
+// looked for a conversation (#712).
+//
+// That is survivable because those CLIs tolerate it, which is a property of their code
+// rather than of ours: driven and recorded beside each adapter's Resume, re-checkable
+// with `just drive-agent resume <agent>`. Instance.RepairResumingLaunch is the belt to
+// that brace — it relaunches blank, once, when a resuming launch dies at birth,
+// whichever agent and whatever the reason.
 func (t *Session) resumeCommand() string {
 	a := t.adapter
 	if a.Resume == nil {
@@ -1149,6 +1171,22 @@ func (t *Session) liveness() sessionLiveness {
 // distinguish transient failures from a real death use liveness directly (Poll).
 func (t *Session) DoesSessionExist() bool {
 	return t.liveness() == sessionAlive
+}
+
+// Gone reports that the session is DEFINITIVELY dead — tmux answered, and the answer
+// was that there is no such session.
+//
+// It is not the negation of DoesSessionExist, and the difference is the whole reason it
+// exists. That predicate reads every inconclusive probe — a socket that cannot be opened
+// for any reason but its absence, a probe the context cancelled, a fork/exec failure
+// under load — as not-alive, which is the safe way round for a caller asking "may I use
+// this session?". A caller about to relaunch OVER the session is asking the opposite
+// question, and for it an inconclusive answer must never authorise the relaunch: the
+// server may be up with the session on it, and the second launch would either collide
+// with a live agent or fail on the duplicate-name guard. Callers that must tell a
+// transient failure from a death use this or liveness directly (Poll, startResuming).
+func (t *Session) Gone() bool {
+	return t.liveness() == sessionGone
 }
 
 // Attached reports whether an interactive tmux client currently owns this

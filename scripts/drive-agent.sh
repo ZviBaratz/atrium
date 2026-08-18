@@ -57,7 +57,12 @@
 #     email addresses by default;
 #   - a confirmation dialog's options can include "(Persist to settings.json)", so a
 #     misaimed Enter edits your real agent config. `keys` refuses to send Enter at
-#     such a pane unless FORCE=1.
+#     such a pane unless FORCE=1;
+#   - and `resume` drives a resume flag against that same real config. It answers the
+#     scratch workspace's folder-trust gate, and that answer is a write: codex records
+#     the path in its config.toml, gemini in trustedFolders.json, agy in its settings
+#     and its last-conversations cache — one nonce path per drive, naming a directory
+#     `down` then deletes. That Enter is the only key it ever sends.
 #
 # USAGE — see `help`. The short version:
 #
@@ -68,6 +73,11 @@
 #   scripts/drive-agent.sh ladder confirm             # 120 60 40 34 28 26 24 20
 #   scripts/drive-agent.sh emit agy > /tmp/fixtures.go.txt
 #   scripts/drive-agent.sh down
+#
+# and the resume-survival arm (#712), which needs none of the above:
+#
+#   scripts/drive-agent.sh resume gemini              # does the resume flag survive
+#   scripts/drive-agent.sh down                       # a directory with nothing in it?
 
 set -euo pipefail
 
@@ -114,6 +124,47 @@ MIN_TMUX=3.2
 # redraws on SIGWINCH asynchronously, so capturing immediately catches a half-drawn
 # frame. Raise it if a capture looks torn.
 SETTLE="${SETTLE:-1.5}"
+
+# How long `resume` waits before each of its two readings. Longer than SETTLE, and
+# measuring a different thing: SETTLE covers a repaint, this covers a program's own
+# decision to exit.
+#
+# Sized against the one death that has been timed. claude 2.1.234, whose `--continue`
+# with nothing to resume is exactly the exit this arm exists to be able to see, is still
+# ALIVE 0.4s after the trust answer and dead by 1.7s. So a repaint-sized wait would have
+# recorded that agent as a survivor — the false verdict this constant is margin against.
+RESUME_SETTLE="${RESUME_SETTLE:-5}"
+
+# Whether this run's tmux keeps a pane whose program has exited. Off for every verb but
+# `resume`, which sets it before the boot: a capture wants the live screen, while there
+# the death IS the observation and a destroyed pane takes the exit status, the CLI's
+# last words and the session itself with it. write_capture_conf writes it out and
+# assert_render_conf_applied proves it landed.
+REMAIN_ON_EXIT=off
+
+# RESUME_TABLE — what `resume` drives. One row per registry adapter whose Resume is
+# non-nil: <agent>|<the command Atrium relaunches a dead agent with>|<verdict driven>.
+#
+# Column 2 is a SECOND COPY of the Resume rewrites in session/agent/registry.go, for
+# the same reason MIN_TMUX is a second copy of a Go const, and drive_agent_drift_test.go
+# holds both columns to the registry: each command to Resolve(<agent>).Resume(<agent>),
+# and the row set to every adapter that has a Resume at all — so a newly
+# resume-capable agent cannot ship undriven.
+#
+# Column 3 is the half no Go test can reach. It is what a live drive OBSERVED, and
+# driving it is the only thing that can notice a vendor changing its mind (#712).
+#
+# claude's row is the control rather than an entry. `claude --continue` with nothing to
+# resume aborts and kills the pane — the death #699 was filed for, and the reason
+# Instance.startResuming asks the transcript adapter first for claude and only claude.
+# A table whose every row read `alive` would pass exactly as it does now if this verb
+# could not observe a death at all.
+RESUME_TABLE=(
+	"claude|claude --continue|dead"
+	"agy|agy --continue|alive"
+	"codex|codex resume --last|alive"
+	"gemini|gemini --resume latest|alive"
+)
 
 die() { printf 'drive-agent: %s\n' "$*" >&2; exit 1; }
 note() { printf 'drive-agent: %s\n' "$*" >&2; }
@@ -353,6 +404,12 @@ write_capture_conf() {
 		set-option -g  destroy-unattached off
 		set-option -g  remain-on-exit off
 	EOF
+	# Appended rather than interpolated: the block above is a QUOTED heredoc, so nothing
+	# in it can expand, and that property is worth keeping for the block as a whole.
+	# `resume` is the only verb that turns this on — see REMAIN_ON_EXIT.
+	if [[ "$REMAIN_ON_EXIT" == on ]]; then
+		printf 'set-option -g remain-on-exit on\n' >>"$RUN/tmux/capture.conf"
+	fi
 }
 
 # assert_render_conf_applied proves the config was actually read. A -f pointing at an
@@ -360,11 +417,17 @@ write_capture_conf() {
 # defaults — so the whole fidelity argument above would be silently untrue. Check one
 # value that differs from tmux's built-in default and would change what gets captured.
 assert_render_conf_applied() {
-	local limit status_
+	local limit status_ roe want_roe=off
 	limit="$(t display-message -p -t "$SESSION" '#{history_limit}')"
 	status_="$(t show-option -gv status)"
-	[[ "$limit" == 10000 && "$status_" == off ]] ||
-		die "the capture config did not take effect (history-limit=$limit status=$status_) — captures would not match production"
+	# remain-on-exit is asked of the CONF FILE, not of $REMAIN_ON_EXIT: `fresh` boots
+	# again from that file in a LATER process, where the variable is back to its default
+	# — so the variable would disagree with the server it is checking, and this assertion
+	# would fail on the one verb that reuses a conf someone else wrote.
+	if grep -q '^set-option -g remain-on-exit on$' "$RUN/tmux/capture.conf"; then want_roe=on; fi
+	roe="$(t show-option -gv remain-on-exit)"
+	[[ "$limit" == 10000 && "$status_" == off && "$roe" == "$want_roe" ]] ||
+		die "the capture config did not take effect (history-limit=$limit status=$status_ remain-on-exit=$roe, wanted $want_roe) — captures would not match production"
 }
 
 # resolve_ids records the pane and window IDS of the capture session, and everything
@@ -434,6 +497,18 @@ pane() {
 
 pane_prod() {
 	t capture-pane -p -e -J -t "$PANE"
+}
+
+# pane_dead_flag prints 1 once the pane's program has exited, 0 while it is still
+# running. Only meaningful under remain-on-exit on (see REMAIN_ON_EXIT) — without it a
+# dead pane is destroyed with its session, and this asks a target that is not there.
+pane_dead_flag() {
+	local dead
+	dead="$(t display-message -p -t "$PANE" '#{pane_dead}')"
+	case "$dead" in
+	0 | 1) printf '%s' "$dead" ;;
+	*) die "could not read whether the pane is dead (got '$dead') — the run is left up; try \`status\`" ;;
+	esac
 }
 
 current_width() {
@@ -705,6 +780,8 @@ cmd_up() {
 	# `up` exiting IS the success path, so a trap left armed would destroy the session
 	# it just created. ladder/send/wait/sample install no teardown trap at all,
 	# because they must leave the session alive — see `reap-all` for what that costs.
+	# `resume` is this call's caller and adds none of its own: its settle runs after
+	# this trap is disarmed, so a Ctrl-C there strands a server the same way.
 	#
 	# The trap runs a FUNCTION reading globals. The obvious spelling expands $SOCK and
 	# $RUN into the trap string at arm time, which makes the paths part of a command
@@ -742,6 +819,118 @@ EOF
 	note "size    ${width}x${height}  pane $PANE  window $WINDOW"
 	note "fleet   $(grep -c . "$RUN/fleet-before.txt" || true) live Atrium sessions recorded by name"
 	note "attach  tmux -S $SOCK attach -t $SESSION"
+}
+
+# resume_agents prints the agent names RESUME_TABLE covers, for a usage message.
+resume_agents() {
+	local row out=""
+	for row in "${RESUME_TABLE[@]}"; do out+="${row%%|*} "; done
+	printf '%s' "${out% }"
+}
+
+# cmd_resume launches one adapter's resume command in a directory nothing has ever
+# stored a conversation for, and reports whether the pane is still running a settle
+# later (#712). It is the only thing that can notice a vendor deciding to exit on a
+# resume flag with nothing to resume — the launch Atrium makes for every agent but
+# claude without ever asking whether a conversation exists.
+#
+# It takes an AGENT NAME, unlike every other verb, which takes a program. The question
+# is what Atrium relaunches with, and that is the registry's rewrite (RESUME_TABLE),
+# not what a human would type.
+#
+# It sends exactly one key, an Enter at the folder-trust gate, and that Enter is the
+# difference between measuring the right thing and the wrong one — see the stage-two
+# comment below for what a launch-only reading actually observes.
+cmd_resume() {
+	local agent="${1:-}" width="${2:-$DEFAULT_WIDTH}" height="${3:-$DEFAULT_HEIGHT}"
+	[[ -n "$agent" ]] || die "usage: resume <agent> [width] [height]  (agents: $(resume_agents))"
+
+	local row name cmd want program="" expect=""
+	for row in "${RESUME_TABLE[@]}"; do
+		IFS='|' read -r name cmd want <<<"$row"
+		if [[ "$name" == "$agent" ]]; then
+			program="$cmd"
+			expect="$want"
+			break
+		fi
+	done
+	[[ -n "$program" ]] ||
+		die "no resume command recorded for '$agent' (agents: $(resume_agents)) — an adapter with no Resume, as aider has none, has nothing to drive"
+
+	# The pane must outlive its program here; see REMAIN_ON_EXIT.
+	REMAIN_ON_EXIT=on
+
+	# A run name nothing has ever resumed in. `up` argues its run directory is
+	# DETERMINISTIC because the workspace path ends up inside committed fixtures; that
+	# reason does not reach this verb, and its opposite governs — codex filters its
+	# picker by cwd and gemini keys sessions per project, both by their own --help, while
+	# agy documents no scope at all but does record the workspace in its
+	# last-conversations cache. So a second drive at a stable path could find the
+	# conversation the FIRST drive created, and would then quietly answer a different
+	# question. Nothing this verb writes may become a committed fixture.
+	#
+	# ATR_CAP_RUN is left alone rather than overridden: `up` refuses both spellings at
+	# once, and a caller who pinned a path owns whether it is conversation-free.
+	if [[ -z "${ATR_CAP_RUN:-}" ]]; then
+		export ATR_CAP_NAME="resume-$agent-$$"
+	fi
+
+	cmd_up "$program" "$width" "$height"
+	# For $VERSION, so the verdict below dates a version rather than an unnamed binary.
+	# cmd_up probed it into meta.env; load_run is what reads that back.
+	load_run
+
+	note "settling ${RESUME_SETTLE}s before the first reading…"
+	sleep "$RESUME_SETTLE"
+
+	# The reading comes from #{pane_dead}, never from has-session: with remain-on-exit on
+	# the session outlives the program, so has-session would call every row a survivor.
+	local launched dead status_ observed answered=no
+	launched="$(pane_dead_flag)"
+	dead="$launched"
+
+	# Stage two, and it is what makes this verb measure the property rather than a
+	# neighbouring one. All four CLIs put a folder-trust screen in front of a directory
+	# they have never seen, and a workspace nothing has resumed in is untrusted BY
+	# CONSTRUCTION. Where the resume flag is acted on relative to that screen is the
+	# vendor's choice: claude 2.1.234 sits at it holding `--continue` and exits "No
+	# conversation found to continue" only once the folder is trusted, so for claude a
+	# launch-only reading answers "did it reach the trust gate" instead. Production
+	# resumes into a worktree the user trusted at first start, where the flag is
+	# evaluated at launch — which is what this second reading reproduces.
+	#
+	# One Enter, through the same guard_enter every other Enter in this file goes through
+	# (cmd_keys). The default row is the trusting one in all four — gemini's answer
+	# visibly restarts the CLI to apply it — and at a pane with no gate up, an empty
+	# submit is a no-op.
+	if [[ "$dead" == 0 ]]; then
+		answered=yes
+		note "pane alive at launch; answering the folder-trust gate and reading again…"
+		cmd_keys Enter
+		sleep "$RESUME_SETTLE"
+		dead="$(pane_dead_flag)"
+	fi
+	status_="$(t display-message -p -t "$PANE" '#{pane_dead_status}')"
+	case "$dead" in
+	0) observed=alive ;;
+	*) observed=dead ;;
+	esac
+
+	write_capture "resume-$agent"
+	# And the scrollback, which the three fixture forms do not carry. tmux appends its own
+	# "Pane is dead" line at the bottom of a dead pane, which can push the CLI's last words
+	# off the top of the screen — and for a death those words are the whole record.
+	t capture-pane -p -S - -t "$PANE" >"$RUN/captures/resume-$agent.scrollback.txt"
+
+	note "───"
+	note "RESUME  $agent ${VERSION:-unknown}"
+	note "        $program"
+	note "        pane_dead=$launched at launch, Enter sent: $answered, pane_dead=$dead${status_:+ (exit $status_)} → $observed, recorded $expect"
+	note "        captures/resume-$agent.txt (+ cat-A/, prod/, .scrollback.txt)"
+	note "───"
+	[[ "$observed" == "$expect" ]] ||
+		die "$agent resumed $observed and RESUME_TABLE records $expect. Read the capture before touching the table: column 3 is a driven record, so the answer is to re-drive and write down what happened, never to edit the expectation to fit. The run is left up — \`down\` when you are done with it."
+	note "as recorded. \`down\` when you are done with the session."
 }
 
 # cmd_fresh replaces the session with a new one, in a NEW workspace, at a new width.
@@ -1235,8 +1424,8 @@ cmd_down() {
 }
 
 # cmd_reap_all sweeps every capture server under $RUN_ROOT. It exists because
-# ladder/sample install no teardown trap — they must not, since their job is to leave
-# the session alive — so a Ctrl-C during the long verb strands a server whose socket
+# ladder/sample/resume install no teardown trap — they must not, since their job is to
+# leave the session alive — so a Ctrl-C during the long verb strands a server whose socket
 # nothing else looks at. internal/testutil/tmux.go describes this same orphan class
 # and why an automatic sweep was tried and reverted: the glob that finds these roots
 # is one wrong prefix away from the live socket. Here it stays an explicit verb, and
@@ -1260,6 +1449,10 @@ drive-agent.sh — drive a real agent CLI at a width ladder and capture its pane
 VERBS
   up <program> [w] [h]     start <program> detached in a scratch git repo on an
                            isolated socket (default 120x40); prints the attach command
+  resume <agent> [w] [h]   launch <agent>'s RESUME command in a directory nothing has
+                           stored a conversation for, and report whether the pane
+                           survives — takes an agent NAME, not a program; see RESUME
+                           SURVIVAL below
   keys <key>...            send-keys verbatim — how a per-CLI trust screen is dismissed
   send <text>              type <text> literally, then Enter (mirrors SendKeys)
   paste <text>             deliver <text> as one bracketed paste, then Enter
@@ -1296,6 +1489,8 @@ ENV
                  `up` it also PINS the run: the pointer is neither consulted nor
                  written, which is what makes a second parallel run possible.
   SETTLE         seconds to let the CLI repaint after a resize/keystroke (default 1.5)
+  RESUME_SETTLE  seconds `resume` waits before each of its two #{pane_dead} readings
+                 (default 5)
   KEEP=1         keep the run directory on `down`
   FORCE=1        allow `keys Enter` at a persist-to-settings dialog
 
@@ -1312,6 +1507,54 @@ ONE RUN AT A TIME
   shell keeps steering the first run — including when the pinned one is torn down.
   Keep the variable exported for every verb of that run: unset it and the shell
   silently goes back to following `current`, which is the other run.
+
+RESUME SURVIVAL (`resume`, #712)
+  Atrium relaunches a dead agent with its resume flag — `claude --continue`,
+  `codex resume --last`, `gemini --resume latest`, `agy --continue` — and only claude
+  is asked first whether a conversation exists at all (Instance.startResuming, through
+  the transcript adapter, which no other agent has). Every other agent gets its flag
+  whether or not there is anything to resume. ResumeProbe does not close that: it greps
+  the binary's --help, so it answers "does this build support the flag", never "is
+  there a conversation", and it passes in an empty directory exactly as in a full one.
+  That the result is harmless is a property of the vendors' CLIs — a thing to drive
+  rather than to assume.
+
+  `resume <agent>` boots that exact command in a scratch repo, under a run name nothing
+  has resumed in before, and reads #{pane_dead} TWICE: once after $RESUME_SETTLE
+  seconds, then again after one Enter answers the folder-trust gate. The second reading
+  is the verdict, and it compares against what RESUME_TABLE records. The run keeps
+  remain-on-exit ON, so a pane that dies is still there to read — with its scrollback,
+  where a CLI's parting message usually is.
+
+  Worth holding onto:
+    - The gate is why there are two readings. A workspace nothing has resumed in is
+      untrusted by construction, and all four CLIs put a trust screen in front of one.
+      Where in that sequence the resume flag is acted on is per-vendor: claude 2.1.234
+      sits at the screen holding --continue and dies only once the folder is trusted,
+      while gemini 0.55.1 prints its "no previous sessions" line before showing its own
+      gate. Read the first number alone and, for claude at least, you have measured
+      whether the CLI reaches its trust gate.
+    - Conversation-free means the DIRECTORY, and each vendor scopes its own lookup.
+      gemini documents --list-sessions as "for the current project" and says as much on
+      screen; codex's picker is cwd-filtered by default (its `resume --help` describes
+      --all as the flag that "disables cwd filtering"); agy documents --continue only as
+      "the most recent conversation", so that row rests on what was observed rather than
+      on a documented scope.
+    - Answering the trust gate WRITES to the agent's real config — codex records the
+      path in config.toml, gemini in trustedFolders.json, agy in its settings and its
+      last-conversations cache. One nonce path per drive, naming a directory `down`
+      then deletes. That cache is also why the run name carries a nonce at all: at a
+      stable path the second drive would resume the FIRST drive's own conversation.
+    - claude's row expects a DEATH, and that is the control. Four `alive` rows would
+      pass identically if the verb could not observe a death at all.
+
+  A resuming launch that dies at birth is relaunched blank, once, by Atrium itself
+  (Instance.RepairResumingLaunch), so what this arm is for is NOTICING that a vendor
+  changed its mind — not being the only thing standing between that and a lost session.
+
+  The observed results, and the versions they were driven at, live beside each
+  adapter's Resume in session/agent/registry.go. The commands themselves are held to
+  that registry by drive_agent_drift_test.go.
 
 THE JUDGEMENT — what this script does NOT do for you
   Which literal a matcher keys on is a human call. #512 got it wrong twice from wide
@@ -1422,6 +1665,7 @@ main() {
 	[[ $# -gt 0 ]] && shift
 	case "$verb" in
 	up) cmd_up "$@" ;;
+	resume) cmd_resume "$@" ;;
 	keys) cmd_keys "$@" ;;
 	send) cmd_send "$@" ;;
 	paste) cmd_paste "$@" ;;

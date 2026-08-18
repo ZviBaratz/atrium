@@ -507,6 +507,15 @@ type Instance struct {
 	conversationResumed bool
 	conversationKnown   bool
 
+	// lastLaunchResumed records whether the launch that started the CURRENT agent
+	// process carried a resume flag. It is what makes a crash-at-launch repairable:
+	// RepairResumingLaunch relaunches blank only when the command that died is one a
+	// blank relaunch would actually change. Set by startResuming on every relaunch and
+	// cleared by the blank relaunch it authorises; false for a first Start, which never
+	// resumes. In-memory only, and guarded by mu — the relaunch runs off the UI thread
+	// and the poll loop reads it from the main one.
+	lastLaunchResumed bool
+
 	// unread marks a Ready session the user has not visited since the agent last
 	// finished a turn. Set by SetStatus on a transition into Ready; cleared by
 	// MarkSeen (attach or selection dwell). Persisted in state.json. Guarded by mu.
@@ -973,8 +982,20 @@ func (i *Instance) parkOverBudget() {
 // locatable (claude) AND no session record exists for workDir — the exact case where
 // `claude --continue` aborts with "No conversation found to continue!", killing the pane
 // and bouncing the session straight back to Paused. Agents without a native-transcript
-// adapter (codex/gemini) report supported == false and defer to their own resume probe in
-// tmux.resumeCommand, so their behavior is unchanged.
+// adapter (agy/codex/gemini) report supported == false and defer to their own resume
+// probe in tmux.resumeCommand — which is a CAPABILITY check, not an existence one, so
+// for them a resume flag is applied with nothing having looked for a conversation.
+//
+// What defends those agents without modelling any vendor's storage is not decided here:
+// this records whether the launch carried a resume flag (lastLaunchResumed), and
+// RepairResumingLaunch relaunches blank if that launch turns out to have died at birth.
+// The detection is left to the poll loop's existing debounce for a measured reason — a
+// resume flag with nothing to resume does not fail fast, and the seconds it takes are
+// recorded on app.lostSessionLaunchCrashWindow, the window that has to cover them. A
+// settle here short enough not to be felt on every resume would miss exactly the failure
+// it was added for. Today agy, codex and gemini all survive the flag (driven, recorded
+// beside each adapter's Resume), so this guards against a vendor changing its mind
+// rather than fixing a live break (#712).
 func (i *Instance) startResuming(ts *tmux.Session, workDir string) error {
 	// Both branches below create a tmux session, and a session's environment can only
 	// be set as it is born — so a relaunch (resume, or an in-place recovery) has to
@@ -988,9 +1009,23 @@ func (i *Instance) startResuming(ts *tmux.Session, workDir string) error {
 	// a fact is the thing the confirmation copy already refuses to do.
 	i.noteConversationOutcome(resumable, supported)
 	if supported && !resumable {
+		i.noteLaunchResumed(false)
 		return ts.Start(workDir)
 	}
-	return ts.StartContinue(workDir)
+	resuming, err := ts.StartContinue(workDir)
+	// Recorded whatever the launch turned out to be, including false: a relaunch that
+	// carried no rewrite — no Resume, a probe that failed, an argv the adapter refuses
+	// to splice into — is one a blank retry would run identically, and leaving a stale
+	// true here would authorise exactly that.
+	i.noteLaunchResumed(resuming)
+	return err
+}
+
+// noteLaunchResumed records whether the launch just made carried a resume flag.
+func (i *Instance) noteLaunchResumed(resuming bool) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.lastLaunchResumed = resuming
 }
 
 // noteConversationOutcome records what startResuming learned from the transcript

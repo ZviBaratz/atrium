@@ -1504,6 +1504,7 @@ func TestResumeCommand(t *testing.T) {
 	forceHelpProbe(t, map[string]string{
 		"gemini": "-r, --resume   Resume a previous session",
 		"codex":  "Commands:\n  resume  Resume a previous interactive session",
+		"agy":    "  -c                Short alias for --continue\n  --continue        Continue the most recent conversation",
 		// The canonical binary at an absolute path is probed at that path (it may
 		// not be on PATH at all); keyed by path so a bare-name probe would miss.
 		"/opt/agents/gemini": "-r, --resume   Resume a previous session",
@@ -1522,6 +1523,9 @@ func TestResumeCommand(t *testing.T) {
 		{"codex gets resume --last", "codex", "codex resume --last"},
 		// The codex subcommand cannot be spliced into an argv with flags; relaunch blank.
 		{"codex with flags unchanged", "codex --model o3", "codex --model o3"},
+		// agy appends unconditionally, so a flag-bearing program still resumes.
+		{"agy gets --continue", "agy", "agy --continue"},
+		{"agy with flags gets --continue", "agy --model x", "agy --model x --continue"},
 		// An off-PATH absolute install still resumes: the probe targets the
 		// program's own path because its basename is the canonical binary.
 		{"absolute gemini path probes itself", "/opt/agents/gemini", "/opt/agents/gemini --resume latest"},
@@ -1550,9 +1554,10 @@ func TestResumeCommandProbeGate(t *testing.T) {
 	forceHelpProbe(t, map[string]string{
 		"gemini": "old gemini help with no such flag",
 		"codex":  "old codex; sessions resume automatically on restart",
+		"agy":    "old agy help; nothing to continue with",
 	})
 
-	for _, program := range []string{"gemini", "codex"} {
+	for _, program := range []string{"gemini", "codex", "agy"} {
 		s := NewSessionWithDeps(context.Background(), "resume-test", program, NewMockPtyFactory(t), cmd_test.MockCmdExec{})
 		require.Equal(t, program, s.resumeCommand(), "probe must fail closed for %s", program)
 	}
@@ -1602,7 +1607,9 @@ func TestStartContinueAppendsContinueForClaude(t *testing.T) {
 	ptyFactory := NewMockPtyFactory(t)
 	session := NewSessionWithDeps(context.Background(), "cont-test", "claude", ptyFactory, startMockExec())
 
-	require.NoError(t, session.StartContinue(t.TempDir()))
+	resuming, err := session.StartContinue(t.TempDir())
+	require.NoError(t, err)
+	require.True(t, resuming, "a launch that appended --continue must report that it resumed")
 
 	// cmds[0] is the new-session launch; cmds[1] is the trailing attach from Restore.
 	newSession := cmd2.ToString(ptyFactory.cmds[0])
@@ -1615,11 +1622,44 @@ func TestStartContinueLeavesNonClaudeUnchanged(t *testing.T) {
 	ptyFactory := NewMockPtyFactory(t)
 	session := NewSessionWithDeps(context.Background(), "cont-test", "aider --model x", ptyFactory, startMockExec())
 
-	require.NoError(t, session.StartContinue(t.TempDir()))
+	resuming, err := session.StartContinue(t.TempDir())
+	require.NoError(t, err)
+	require.False(t, resuming,
+		"an agent with no resume support launched the plain program, and a caller repairing that launch must not retry the same command")
 
 	newSession := cmd2.ToString(ptyFactory.cmds[0])
 	require.NotContains(t, newSession, "--continue")
 	require.Contains(t, newSession, "aider --model x")
+}
+
+// Gone answers a different question from DoesSessionExist, and this is the case where
+// they must disagree: a socket tmux cannot open for a reason that is not its absence.
+// Nothing was asked of any server, so a session may well be alive behind it — which is
+// why the relaunch-over-it caller (Instance.startResuming) gates on this one. Reading
+// the pair the other way round would relaunch an agent over a live one.
+func TestGoneIsNotTheNegationOfDoesSessionExist(t *testing.T) {
+	sealed := cmd_test.MockCmdExec{
+		RunFunc: func(*exec.Cmd) error {
+			return fmt.Errorf("error connecting to /tmp/sock (Permission denied)")
+		},
+		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
+	}
+	session := NewSessionWithDeps(context.Background(), "sealed", "claude", NewMockPtyFactory(t), sealed)
+
+	require.False(t, session.DoesSessionExist(), "an inconclusive probe is not proof of life")
+	require.False(t, session.Gone(), "nor is it proof of death, which is the whole difference")
+}
+
+// And the case where they must agree: tmux answered, and the answer was no such session.
+func TestGoneIsTrueWhenTmuxSaysTheSessionIsNotThere(t *testing.T) {
+	dead := cmd_test.MockCmdExec{
+		RunFunc:    func(*exec.Cmd) error { return fmt.Errorf("can't find session: sealed") },
+		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
+	}
+	session := NewSessionWithDeps(context.Background(), "sealed", "claude", NewMockPtyFactory(t), dead)
+
+	require.True(t, session.Gone())
+	require.False(t, session.DoesSessionExist())
 }
 
 // Plain Start must never append --continue, even for claude — that is the first-time and

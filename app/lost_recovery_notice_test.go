@@ -25,6 +25,24 @@ func TestSurfaceLostRecoveries(t *testing.T) {
 		require.Contains(t, h.menu.NoticeText(), "2 sessions")
 	})
 
+	t.Run("a blank relaunch says the conversation is gone", func(t *testing.T) {
+		h := newCreateFormHome(t)
+		cmd := h.surfaceLostRecoveries([]lostRecovery{{title: "alpha", relaunchedBlank: true}})
+		require.NotNil(t, cmd)
+		require.Equal(t, stateDefault, h.state, "a session that came back needs no modal")
+		require.Contains(t, h.menu.NoticeText(), "alpha")
+		require.Contains(t, h.menu.NoticeText(), "without it",
+			"the notice has to say the conversation did not come back — the row shows nothing")
+	})
+
+	t.Run("a blank relaunch outranks a park, which the row already shows", func(t *testing.T) {
+		h := newCreateFormHome(t)
+		h.surfaceLostRecoveries([]lostRecovery{{title: "parked"}, {title: "relaunched", relaunchedBlank: true}})
+		require.Contains(t, h.menu.NoticeText(), "relaunched",
+			"the park turns a row Paused and announces itself; the relaunch changes nothing visible")
+		require.NotContains(t, h.menu.NoticeText(), "parked")
+	})
+
 	t.Run("crash at launch → persistent modal naming the command", func(t *testing.T) {
 		h := newCreateFormHome(t)
 		h.surfaceLostRecoveries([]lostRecovery{{title: "boom", launchCmd: "claude --profile typo"}})

@@ -202,15 +202,23 @@ func (m *home) settingNotice(text string, level ui.NoticeLevel, key string) tea.
 // Running→Paused that looks like a user pause (#270). It picks one message by
 // priority: a failed recovery (most urgent) → an error the user must act on; a
 // crash within seconds of launch → a persistent modal naming the command, since a
-// typo'd program/profile would otherwise loop invisibly on every Resume; otherwise
-// a single batched, neutral toast for ordinary terminal deaths.
+// typo'd program/profile would otherwise loop invisibly on every Resume; a session
+// relaunched without its conversation; otherwise a single batched, neutral toast for
+// ordinary terminal deaths.
+//
+// The blank relaunch outranks the parks, and the ranking is about VISIBILITY rather
+// than severity. A park announces itself: the row turns Paused and stays there until
+// the user acts. A blank relaunch leaves the row exactly as it was, so the only thing
+// that ever says the agent lost its conversation is this line.
 func (m *home) surfaceLostRecoveries(recoveries []lostRecovery) tea.Cmd {
-	var parked []string
+	var parked, relaunched []string
 	var failed, launchCrash *lostRecovery
 	for i := range recoveries {
 		switch r := &recoveries[i]; {
 		case r.err != nil:
 			failed = r
+		case r.relaunchedBlank:
+			relaunched = append(relaunched, r.title)
 		case r.launchCmd != "":
 			launchCrash = r
 		default:
@@ -223,6 +231,10 @@ func (m *home) surfaceLostRecoveries(recoveries []lostRecovery) tea.Cmd {
 			failed.title, failed.err, keys.LabelOf(keys.KeyResume), keys.LabelOf(keys.KeyKill)))
 	case launchCrash != nil:
 		return m.showLaunchCrash(launchCrash)
+	case len(relaunched) == 1:
+		return m.handleInfoNotice(fmt.Sprintf("session %q exited while resuming its conversation — restarted without it", relaunched[0]))
+	case len(relaunched) > 1:
+		return m.handleInfoNotice(fmt.Sprintf("%d sessions exited while resuming their conversations — restarted without them", len(relaunched)))
 	case len(parked) == 1:
 		return m.handleInfoNotice(fmt.Sprintf("session %q terminal exited — parked as paused; %s", parked[0], pressToResume()))
 	case len(parked) > 1:

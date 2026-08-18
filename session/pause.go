@@ -94,6 +94,101 @@ func (i *Instance) RecoverLostSession() error {
 	return i.pause()
 }
 
+// RepairResumingLaunch relaunches the agent BLANK when the launch that just died was a
+// resuming one made within `within`, and reports whether it did. It is the caller's
+// first move on a lost session: a repair here means the session stays Running and
+// RecoverLostSession is never reached.
+//
+// The failure it repairs is #699's, generalised (#712). Atrium relaunches a dead agent
+// with its resume flag, and only claude is asked first whether a conversation exists —
+// transcript.HasResumable has an adapter for nothing else, and ResumeProbe answers a
+// different question (does the binary support the flag). So agy, codex and gemini are
+// launched with a resume flag whether or not there is anything to resume, and that this
+// is harmless is a property of their CLIs rather than of anything here. All three were
+// driven and all three survive; this is what keeps a vendor changing its mind from
+// costing a session, without modelling any vendor's on-disk conversation store.
+//
+// Every condition is a refusal to relaunch on a guess:
+//
+//   - lastLaunchResumed, because a blank relaunch of a command that carried no resume
+//     flag is the same command again;
+//   - DiedAtLaunch, because a session that ran for hours and then died did not die OF
+//     its launch — the user quit it, or the machine did — and relaunching that would be
+//     a resurrection nobody asked for;
+//   - a working directory still on disk, because there is nowhere to relaunch into
+//     otherwise, and RecoverLostSession is what handles that case;
+//   - a tmux session that is DEFINITIVELY gone (Session.Gone), not merely one that did
+//     not answer, because what follows is a kill and a relaunch: on a false positive
+//     this would close a live agent and start a second over it. The caller decides WHEN
+//     to try, with a debounce that already refuses to read a transient probe failure as
+//     a death (the #270 shape); this re-asks immediately before acting, so an
+//     inconclusive probe here declines rather than destroys;
+//   - and a session that can still be closed, since the relaunch would otherwise meet
+//     Start's duplicate-name guard.
+//
+// Once, per launch: the relaunch it makes carries no resume flag, so lastLaunchResumed
+// is false afterwards and a second death parks in the ordinary way.
+func (i *Instance) RepairResumingLaunch(within time.Duration) bool {
+	if !i.isStarted() || i.Paused() {
+		return false
+	}
+	i.mu.RLock()
+	resuming := i.lastLaunchResumed
+	i.mu.RUnlock()
+	if !resuming || !i.DiedAtLaunch(within) {
+		return false
+	}
+	ts := i.tmux()
+	if ts == nil {
+		return false
+	}
+	workDir := i.WorkingDir()
+	if workDir == "" || i.WorkingDirGone() {
+		return false
+	}
+	if !ts.Gone() {
+		return false
+	}
+
+	// Detach before close, the pairing closeParkedSession owns and for its reason: Close
+	// kills the session and closes ptmx but never clears attachCh, so closing without
+	// detaching would strand the goroutines of an attach it raced (#701). A failed close
+	// ABORTS — unlike a park, which must finish regardless, this is optional repair, and
+	// relaunching over a session that would not die is how you get two agents or a
+	// launch refused by name.
+	if err := ts.DetachSafely(); err != nil {
+		log.ErrorLog.Printf("failed to detach the dead session for %s: %v", i.Title, err)
+	}
+	if err := ts.Close(); err != nil {
+		log.ErrorLog.Printf("cannot repair the resuming launch for %s: %v", i.Title, err)
+		return false
+	}
+
+	// startResuming re-applies this before every relaunch, and for the same reason: a
+	// tmux session's environment can only be set as it is born.
+	i.applySessionEnv(workDir)
+	if err := ts.Start(workDir); err != nil {
+		log.ErrorLog.Printf("blank relaunch failed for %s, leaving it to be parked: %v", i.Title, err)
+		return false
+	}
+	log.InfoLog.Printf("%q exited at launch while resuming its conversation; relaunched without resuming", i.Title)
+
+	i.mu.Lock()
+	// Stamped so DiedAtLaunch keeps describing THIS launch: a blank agent that also dies
+	// at birth is a crash-at-launch the caller must still be able to name (#270).
+	i.startedAt = time.Now()
+	i.lastLaunchResumed = false
+	// The conversation did not come back. conversationKnown is left alone — whatever the
+	// transcript adapter could say about this agent it can still say; what changed is the
+	// answer, not whether there is one.
+	i.conversationResumed = false
+	i.mu.Unlock()
+	// The relaunched agent's boot idle is a boot artifact, not a finished turn — the
+	// suppression Resume and recoverInPlace arm for the same reason.
+	i.ArmReadySuppression()
+	return true
+}
+
 // Auto-commit marker. Pause commits a dirty worktree under this message so work
 // is not lost when the worktree is removed; Resume recognizes it by these
 // affixes and soft-resets it away, making pause/resume round-trip transparently.
