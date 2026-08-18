@@ -62,9 +62,9 @@ func parkedTitles(d DeferredRecovery) []string {
 // launched — the liveness probe asks, and so does the duplicate-name guard inside
 // start(), and a later Resume asks again through that same guard — so a fixed call count
 // would encode the path under test rather than the fact. Counting is what breaks when the
-// path changes: Resume used to add a probe of its own here and now closes instead, which
-// moves every later answer along by one. Once a pty exists the session is real and every
-// command succeeds.
+// path changes: Resume used to open with a probe of its own and now opens with a close, so
+// a fixture answering by position feeds its "gone" to a kill-session. Once a pty exists the
+// session is real and every command succeeds.
 func recoverableInstance(t *testing.T, title string) (*Instance, *recordingPtyFactory) {
 	t.Helper()
 	return recoverableInstanceLaunching(t, title, nil)
