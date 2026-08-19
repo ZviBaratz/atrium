@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// open makes a lock file and a second, independent descriptor on it. Two descriptors are
+// open2 makes a lock file and two independent descriptors on it. Two descriptors are
 // the point: flock is per open-file-description, so a single *os.File cannot contend with
 // itself and a test that reused one would prove nothing.
 func open2(t *testing.T) (acquirer, reader *os.File) {

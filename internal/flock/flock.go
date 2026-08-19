@@ -24,9 +24,9 @@ package flock
 
 import "time"
 
-// Attempts and Delay are the default budget: how long an acquirer waits behind a lock
-// it expects to be free. Callers pass them explicitly rather than reading them here, so
-// a caller that needs a different budget is visible at its call site.
+// Attempts and Delay are the default budget: how long an acquirer waits behind a lock it
+// expects to be free. LockExclusive takes them as arguments rather than reaching for them
+// itself, so a call site that wants a different budget says so where it is read.
 const (
 	Attempts = 20
 	Delay    = 5 * time.Millisecond
