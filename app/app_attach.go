@@ -7,6 +7,7 @@ import (
 	"os"
 	"slices"
 
+	"github.com/ZviBaratz/atrium/internal/handover"
 	"github.com/ZviBaratz/atrium/internal/lifecycle"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
@@ -34,6 +35,11 @@ var (
 	restoreTerm      = term.Restore
 	suspendInterrupt = lifecycle.SuspendTerminalSignals
 )
+
+// handoverHold is seamed for the reason the term calls above are: the tests that drive
+// Run need to observe that the lock was taken and released around it, and a fake makes
+// the failure branch — a data dir that cannot be written — reachable at all.
+var handoverHold = handover.Hold
 
 // attachCommand adapts a blocking terminal takeover into a tea.ExecCommand so Bubble
 // Tea releases the terminal before it and restores+repaints it after —
@@ -83,9 +89,29 @@ type attachCommand struct {
 	// rawModeFailed records that raw mode couldn't be set, so the attach ran cooked
 	// and Ctrl+Q detach was disabled. Read by attachExec's callback after Run returns.
 	rawModeFailed bool
+	// handover names what the terminal is being handed to, so Run can publish it for
+	// the headless commands. The zero value is honoured: a Run with nothing to say
+	// still takes the lock, because whether the loop is parked is the fact that
+	// matters and the label only decorates the message (internal/handover).
+	handover handover.Payload
 }
 
 func (a *attachCommand) Run() error {
+	// Publish the suspension for the whole of Run, which is exactly how long the event
+	// loop is blocked and therefore how long neither outbox spool is drained. Registered
+	// as the first defer so it releases LAST — the loop does not resume until Run
+	// returns, so the lock should outlive the raw-mode restore, not the other way round.
+	//
+	// A failure to take it is logged and ignored. Handing over the terminal must not
+	// depend on a lock file, and failing open costs only the warning: a headless command
+	// reads the lock as free and stays quiet, which is the behaviour that predates this.
+	// (Nothing here reads or writes pane state or any home field, so the staleness
+	// hazard the attach path carries — see home.attachGen — is not in play.)
+	if release, err := handoverHold(a.handover); err == nil {
+		defer release()
+	} else {
+		log.WarningLog.Printf("failed to record the terminal handover; `atrium new` cannot report it: %v", err)
+	}
 	if fd := int(os.Stdin.Fd()); a.raw && isTerminal(fd) {
 		if oldState, err := makeRaw(fd); err == nil {
 			defer func() { _ = restoreTerm(fd, oldState) }()
@@ -173,6 +199,11 @@ func (m *home) attachExecCarry(attach func() (chan struct{}, error), killTarget 
 	// keys) are read as single bytes, which cooked mode's line buffering and IXON cannot
 	// deliver. A custom command passes false; see attachCommand.raw.
 	cmd := &attachCommand{attach: attach, raw: true, keeper: keeper,
+		// killTarget is nil only for the terminal tab, and that tab shows the selected
+		// session — every terminal-tab site selects the row before attaching — so the
+		// selection names the session either way. Read here rather than in Run, which
+		// runs on the suspended goroutine and must not consult the list.
+		handover: handover.Payload{Kind: handover.KindAttach, Label: attachLabel(killTarget, m.list.GetSelectedInstance())},
 		// Runs on the suspended event-loop goroutine (see attachCommand.onAttached),
 		// so the bump is ordered before every parked message the resumed loop
 		// processes — pre-attach captures always compare against the new generation.
@@ -194,6 +225,21 @@ func (m *home) attachExecCarry(attach func() (chan struct{}, error), killTarget 
 			keeperErrs:      cmd.keeper.errs,
 		}
 	})
+}
+
+// attachLabel names the session an attach is handing the terminal to, for the
+// handover payload. killTarget when there is one, else the selection — the terminal
+// tab is the only attach without a kill target, and it belongs to the selected row.
+// "" when neither is available, which handover.Payload.Describe renders as no label
+// rather than as a guess.
+func attachLabel(killTarget, selected *session.Instance) string {
+	if killTarget != nil {
+		return killTarget.Title
+	}
+	if selected != nil {
+		return selected.Title
+	}
+	return ""
 }
 
 // attachFinishedMsg is delivered after a tea.Exec terminal attach returns (the

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ZviBaratz/atrium/internal/doctor"
+	"github.com/ZviBaratz/atrium/internal/handover"
 	"github.com/stretchr/testify/require"
 )
 
@@ -80,6 +81,34 @@ func TestReadmeDocumentsEveryCommand(t *testing.T) {
 	require.NotZero(t, documented, "every command was skipped; the guard would pass vacuously")
 }
 
+// TestReadmeNamesTheHandoverLock keeps the Scripting section's claim about what `send`
+// and `new` consult tied to the artifact they consult, rather than to a sentence nobody
+// re-reads. "Prose says why; data says what" (CLAUDE.md): the filename is the datum, and
+// a rename or a removal of the mechanism fails here instead of leaving the README
+// describing a lock that no longer exists.
+//
+// It does not check what the prose says ABOUT the lock — no test can — only that the
+// name is present, which is the part that goes stale silently.
+func TestReadmeNamesTheHandoverLock(t *testing.T) {
+	section := readmeSection(t, "#### Scripting Atrium", "#### Keybindings")
+	require.Contains(t, section, handover.LockFilename,
+		"the Scripting section states which locks the headless commands take; name this one")
+	require.Contains(t, section, tuiLockFilename, "and the one it is read alongside")
+}
+
+// readmeSection returns the README text between two headings, failing rather than
+// searching the whole file: a guard that fell back to the document would keep passing
+// after the section it is about was renamed away.
+func readmeSection(t *testing.T, startMarker, endMarker string) string {
+	t.Helper()
+	readme := moduleFile(t, "README.md")
+	start := strings.Index(readme, startMarker)
+	require.GreaterOrEqual(t, start, 0, "README is missing the %q heading", startMarker)
+	end := strings.Index(readme[start:], endMarker)
+	require.Greater(t, end, 0, "README is missing the %q heading after %q", endMarker, startMarker)
+	return readme[start : start+end]
+}
+
 // TestEveryCommandHasAShortDescription: Cobra lists Short in `atrium --help`, so
 // an empty one leaves a blank row in the very output a new user reads first.
 func TestEveryCommandHasAShortDescription(t *testing.T) {
@@ -113,12 +142,19 @@ func TestEveryCommandHasAShortDescription(t *testing.T) {
 func TestHeadlessCommandsRunWhileTheTUIHoldsItsLock(t *testing.T) {
 	sandboxDataDir(t)
 
-	// Hold the lock, standing in for a running TUI.
+	// Hold BOTH locks, standing in for a running TUI whose terminal is handed to a
+	// session — the parked case #760 added handover.lock for. Holding tui.lock alone
+	// would leave the newer probe untested here, and the newer probe is the one whose
+	// failure mode is the same temptation: reading "nobody is draining this" as a reason
+	// to refuse rather than as a reason to warn. Nothing here may refuse.
 	lockPath, err := tuiLockPath()
 	require.NoError(t, err)
 	release, err := acquireTUILock(lockPath)
 	require.NoError(t, err)
 	defer release()
+	releaseHandover, err := handover.Hold(handover.Payload{Kind: handover.KindAttach, Label: "fix-auth"})
+	require.NoError(t, err)
+	defer releaseHandover()
 
 	seedInstances(t, inst("fix-auth", "/repo/web"))
 

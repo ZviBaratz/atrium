@@ -36,10 +36,12 @@ var (
 			"stays queued and is created the next time one starts, provided that is within 24\n" +
 			"hours — a request older than that names a branch point the tree has moved on\n" +
 			"from, so it is discarded with a receipt rather than built. An Atrium that is\n" +
-			"running but attached to a session is a third case: its poll loop is parked, so\n" +
-			"the request waits for the detach rather than for a relaunch. Use --wait to block\n" +
-			"until the session actually exists and be told the branch it was given (`atrium\n" +
-			"ls` reports the same branch once it does).\n\n" +
+			"running but has handed its terminal to a session is a third case: its poll loop\n" +
+			"is parked, so the request waits for the detach rather than for a relaunch. That\n" +
+			"case is detected rather than left to be guessed at — it warns on stderr when it\n" +
+			"spools, and --wait names it at the deadline instead of listing every possibility.\n" +
+			"Use --wait to block until the session actually exists and be told the branch it\n" +
+			"was given (`atrium ls` reports the same branch once it does).\n\n" +
 			"The title is the session's name, and because the branch and tmux names derive\n" +
 			"from it, choosing a title is choosing a branch. A title whose derived names are\n" +
 			"already taken is refused rather than silently suffixed.\n\n" +
@@ -181,15 +183,35 @@ func runNew(out, errOut io.Writer, r newRequest) error {
 	}
 	_, _ = fmt.Fprintf(out, "queued: create %q in %s\n", title, path)
 
+	warnSpoolWaiting(errOut, "creating", r.wait > 0)
 	if r.wait > 0 {
 		return waitForCreate(out, spooled, title, path, r.wait)
 	}
-	if running, known := tuiRunning(); known && !running {
-		_, _ = fmt.Fprintf(errOut,
-			"warning: no atrium TUI is running, so nothing is creating this yet; "+
-				"it stays queued and is picked up the next time one starts\n")
-	}
 	return nil
+}
+
+// warnSpoolWaiting prints the "nothing is going to pick this up soon" warning shared by
+// `new` and `send`, or nothing when there is nothing to say. See spoolWaitWarning
+// (drainstate.go) for the two cases and who each is addressed to.
+//
+// waiting says the caller is about to block on --wait, which suppresses the no-TUI
+// warning: that one predicts an outcome the wait is about to report for real, and
+// printing a prediction before the wait even begins is what TestNewWaitSkipsTheNoTUIWarning
+// exists to stop.
+//
+// The parked warning is deliberately NOT suppressed, and the asymmetry is the point. It
+// is not addressed to the caller at all — it is addressed to the person at the keyboard,
+// the only party who can unblock it, and it is actionable the moment it is printed
+// rather than at the deadline. Under `--wait 60s` the suppressed version would leave
+// them a minute of silence in front of a session that is not going to appear.
+func warnSpoolWaiting(errOut io.Writer, gerund string, waiting bool) {
+	verdict, what := drainState()
+	if waiting && verdict != drainParked {
+		return
+	}
+	if msg := spoolWarningFor(verdict, what, gerund); msg != "" {
+		_, _ = fmt.Fprint(errOut, msg)
+	}
 }
 
 // resolveNewProgram turns --program/--profile into the program string the request
@@ -347,6 +369,11 @@ func checkTitleFree(prefix, title, path string, instances []session.InstanceData
 // keeps waiting rather than being told a half-built session was created, and the next
 // atrium's reconcile settles the claim one way or the other.
 //
+// The deadline message names who is not draining rather than listing everyone who might
+// not be — see joinTimedOut and drainerClause. That was not possible when this was
+// written: tui.lock is held whether the loop is running or parked, so a live-but-attached
+// Atrium and a live-and-polling one were the same observation from here.
+//
 // That second half is what makes the next line safe rather than a race. The branch is
 // read back out of state.json rather than derived from the
 // title. They would usually agree, but "usually" is not something to print: the
@@ -355,16 +382,21 @@ func checkTitleFree(prefix, title, path string, instances []session.InstanceData
 func waitForCreate(out io.Writer, path, title, repo string, timeout time.Duration) error {
 	if err := awaitSpool(path, outbox.ClaimPath(path), timeout, spoolWaitCopy{
 		refused: "atrium did not create the session",
-		// Neither half of the obvious wording is knowable from here. "No TUI created it"
-		// is wrong while one is mid-create — the record is deliberately held for the whole
-		// of Start, so its presence means "queued or being built", and this side cannot
-		// tell those apart. "Picked up the next time one runs" is wrong when a TUI is
-		// running but attached: its poll loop is parked, and the request drains on detach
-		// rather than on a relaunch. Say only what is true of the file.
-		timedOut: fmt.Sprintf("waited %s without a session appearing; the request is still in the "+
-			"outbox — either queued, or being built right now, since a create is held there until "+
-			"its worktree, branch and agent exist. A running atrium drains it on its next tick, or "+
-			"on detach if it is attached to a session; otherwise the next one to start does", timeout),
+		// The file half of this stays deliberately vague, because it has to: the record is
+		// held for the whole of Start, so its presence means "queued or being built" and
+		// this side cannot tell those apart.
+		//
+		// The drainer half no longer has to be. It used to enumerate all three cases — a
+		// running TUI, an attached one, and none at all — because nothing here could tell
+		// which held; handover.lock is what changed that, so drainerClause names the one
+		// that is true and this enumeration is reached only when neither lock could answer.
+		timedOut: func() string {
+			return joinTimedOut(fmt.Sprintf("waited %s without a session appearing; the request is "+
+				"still in the outbox — either queued, or being built right now, since a create is "+
+				"held there until its worktree, branch and agent exist", timeout),
+				"A running atrium drains it on its next tick, or on detach if its terminal is "+
+					"handed to a session; otherwise the next one to start does")
+		},
 	}); err != nil {
 		return err
 	}

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ZviBaratz/atrium/cmdlog"
+	"github.com/ZviBaratz/atrium/internal/handover"
 	"github.com/ZviBaratz/atrium/log"
 
 	tea "charm.land/bubbletea/v2"
@@ -101,6 +103,10 @@ func (m *home) terminalCustomCommandExec(spec customCommandSpec) (*attachCommand
 		// Ctrl+C reaches it — which is why Run borrows SIGINT for the duration.
 		raw:    false,
 		keeper: keeper,
+		// The description rather than the key, because that is what the user named the
+		// command; the key is the keystroke that reached it. Empty desc falls back to the
+		// key, and an empty label renders as no label at all (handover.Payload.Describe).
+		handover: handover.Payload{Kind: handover.KindCommand, Label: cmp.Or(spec.desc, spec.key)},
 		// Runs on the suspended event-loop goroutine, so the bump is ordered before
 		// every parked message the resumed loop processes.
 		onAttached: func() { m.attachGen++ },

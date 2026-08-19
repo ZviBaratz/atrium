@@ -31,8 +31,11 @@ var (
 			"quick-send: strictly when the agent next goes idle, never injected mid-turn.\n\n" +
 			"Delivery is asynchronous. The message is spooled to the data directory and the\n" +
 			"running Atrium picks it up within about a second; with no Atrium running it stays\n" +
-			"queued and is delivered the next time one starts. Use --wait to block until it\n" +
-			"has actually been queued on the session.\n\n" +
+			"queued and is delivered the next time one starts. An Atrium that is running but\n" +
+			"has handed its terminal to a session is a third case: its poll loop is parked, so\n" +
+			"the prompt waits for the detach rather than for a relaunch, and both the stderr\n" +
+			"warning and --wait say so. Use --wait to block until it has actually been queued\n" +
+			"on the session.\n\n" +
 			"With no message argument, or with \"-\", the prompt is read from stdin.",
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -113,13 +116,9 @@ func runSend(out, errOut io.Writer, selector, path, text string, wait time.Durat
 		_, _ = fmt.Fprintf(errOut, "note: %q is paused — the prompt waits until you resume it\n", target.Title)
 	}
 
+	warnSpoolWaiting(errOut, "delivering", wait > 0)
 	if wait > 0 {
 		return waitForDrain(spooled, wait)
-	}
-	if running, known := tuiRunning(); known && !running {
-		_, _ = fmt.Fprintf(errOut,
-			"warning: no atrium TUI is running, so nothing is delivering this yet; "+
-				"it stays queued and is picked up the next time one starts\n")
 	}
 	return nil
 }
@@ -136,8 +135,17 @@ func waitForDrain(path string, timeout time.Duration) error {
 	// prompt IS the whole job and the drain unlinks as soon as it has done it.
 	return awaitSpool(path, "", timeout, spoolWaitCopy{
 		refused: "atrium did not deliver the prompt",
-		timedOut: fmt.Sprintf("waited %s and no atrium TUI picked the prompt up; it is still queued "+
-			"in the outbox and will be delivered the next time one runs", timeout),
+		// The old wording ended "and will be delivered the next time one runs", which is
+		// false of the case that is easiest to be in: an atrium that is running but has
+		// handed its terminal to a session delivers on the detach, not on a relaunch.
+		// drainerClause says which of the three it actually is, or nothing, in which case
+		// this enumerates rather than asserts.
+		timedOut: func() string {
+			return joinTimedOut(fmt.Sprintf("waited %s and no atrium TUI picked the prompt up; "+
+				"it is still queued in the outbox", timeout),
+				"A running atrium delivers it on its next tick, or on detach if its terminal is "+
+					"handed to a session; otherwise the next one to start does")
+		},
 	})
 }
 
@@ -225,8 +233,27 @@ func spoolSettled(record, inFlight string) (bool, error) {
 // are called for this particular command. Both are finished strings — the caller knows
 // its own timeout, so nothing here has to be a format.
 type spoolWaitCopy struct {
-	refused  string
-	timedOut string
+	refused string
+	// timedOut is called at the deadline, not built before the wait. It names who is
+	// draining (drainerClause), and that answer is only true of the instant it is
+	// asked: a user who detached during the wait has changed it, and reporting the
+	// state the wait STARTED in would blame a condition that has since cleared.
+	timedOut func() string
+}
+
+// joinTimedOut completes a deadline message with what is actually draining, falling
+// back to fallback when nothing can be determined.
+//
+// The fallback is an enumeration of every case rather than a claim about one, which is
+// what both messages said unconditionally before there was any way to tell them apart
+// — correct, and useless to a caller trying to work out whether to wait longer or go
+// and detach.
+func joinTimedOut(head, fallback string) string {
+	clause := drainerClause()
+	if clause == "" {
+		clause = fallback
+	}
+	return head + ". " + clause
 }
 
 // awaitSpool implements the completion protocol both `send --wait` and `new --wait`
@@ -302,7 +329,7 @@ func awaitSpool(path, inFlight string, timeout time.Duration, wording spoolWaitC
 			if lastStatErr != nil {
 				return fmt.Errorf("failed to read the outbox: %w", lastStatErr)
 			}
-			return errors.New(wording.timedOut)
+			return errors.New(wording.timedOut())
 		}
 		time.Sleep(drainPollInterval)
 	}

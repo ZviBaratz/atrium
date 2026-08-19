@@ -148,8 +148,8 @@ const createDisposalBudget = 50
 // TUI otherwise, and actionable only by the person there — so it keeps the fallback and
 // pays the row.
 //
-// Three things do hold it, none of them a state: a staged spawn plan, a pending quit
-// and an in-flight async action. See createDrainHeld.
+// Four things do hold it, none of them a state: a staged spawn plan, a pending quit, an
+// in-flight async action and an in-flight teardown. See createDrainHeld.
 func (m *home) drainCreateRequests() tea.Cmd {
 	if m.createDrainHeld() {
 		return nil
@@ -344,7 +344,7 @@ func (m *home) drainCreateRequests() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// createDrainHeld reports whether this tick must not create. All three cases are keyed
+// createDrainHeld reports whether this tick must not create. All four cases are keyed
 // on what is actually true of the model rather than on a UI state — a state gate is
 // what deadlocked this drain behind the welcome modal.
 //

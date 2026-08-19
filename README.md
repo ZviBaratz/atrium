@@ -253,16 +253,27 @@ Without it the command is honestly fire-and-forget: it prints what it queued, an
 
 Both spools are drained by the TUI's poll loop, which is **suspended while you
 are attached to a session** — Atrium has handed the terminal to tmux and its
-event loop is parked until you detach. Nothing is lost, but "within about a
-second" assumes a TUI watching the list rather than one sitting inside a pane.
+event loop is parked until you detach. Nothing is lost, and the wait is bounded by
+that one attach rather than by a relaunch: the drain runs on the first poll tick
+after the detach. But "within about a second" assumes a TUI watching the list
+rather than one sitting inside a pane, and that is the common case for the workflow
+`new` exists for, since an agent handing off runs *inside* a session.
+
+So it is reported rather than left to be inferred. `send` and `new` warn on stderr
+when they spool into a parked Atrium, naming the session to detach from, and
+`--wait` says the same at its deadline instead of listing every reason it might not
+have landed. One gap remains, deliberately: the warning goes to the pane of the
+session that ran the command, so an agent in session B handing off while you watch
+session A prints where nobody is looking.
 
 None of the four holds Atrium's lock or writes `state.json`, so running them on a
 loop alongside a live Atrium is safe. `ls` and `peek` only read it; `send` and
-`new` add one file each — the request they spool — and, when they are not blocking
-on `--wait`, take `tui.lock` and release it again to work out whether a TUI is
-there to warn you about — briefly and non-blockingly, so a held lock changes the
-warning rather than the outcome. All four append to the shared, rotating
-`atrium.log` in the data directory.
+`new` add one file each — the request they spool — and then take `tui.lock` and
+`handover.lock` and release them again to work out what to warn you about: whether
+a TUI is there at all, and whether the one that is has its terminal handed to a
+session. Both probes are brief and non-blocking, so a held lock changes the warning
+rather than the outcome. All four append to the shared, rotating `atrium.log` in the
+data directory.
 
 A queued request is state, so `atrium reset` discards both spools along with
 everything else it wipes. Without that, a create request made before the reset

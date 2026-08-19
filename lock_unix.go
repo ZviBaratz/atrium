@@ -43,6 +43,11 @@ func acquireTUILock(path string) (release func(), err error) {
 // known is false when the question could not be answered at all (an unresolvable
 // data dir, or a lock that cannot be opened), so a caller can stay silent rather
 // than assert something wrong.
+//
+// It answers half a question, and never on its own. This lock is held identically by a
+// TUI whose event loop is running and one that has handed its terminal to a session and
+// so is draining nothing, which is why both callers read it through drainState
+// (drainstate.go) alongside internal/handover rather than directly.
 func tuiRunning() (running, known bool) {
 	path, err := tuiLockPath()
 	if err != nil {

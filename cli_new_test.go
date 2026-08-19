@@ -446,8 +446,11 @@ func TestNewWaitClearsConsumedReceipt(t *testing.T) {
 // TestNewWaitTimesOut says the request is still in the outbox, because it is: the
 // timeout is this process giving up, not Atrium refusing. What it must not say is
 // which of the two states the record is in — untouched, or held open for the whole of
-// a Start already under way — because from here those are the same file, nor that a
-// relaunch is what picks it up, because an attached TUI drains it on detach.
+// a Start already under way — because from here those are the same file.
+//
+// The drainer half of the message is the part that used to enumerate every case, and
+// the per-verdict wording is pinned unix-side (TestNewWaitNamesWhoIsNotDraining),
+// where the locks it reads can actually be held.
 func TestNewWaitTimesOut(t *testing.T) {
 	sandboxDataDir(t)
 	_, _, err := newSession(t, newRequest{
@@ -455,7 +458,6 @@ func TestNewWaitTimesOut(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "still in the outbox")
-	assert.Contains(t, err.Error(), "on detach", "an attached TUI is the case the old wording misdirected")
 	assert.Len(t, spooledCreates(t), 1, "and it really is still there")
 }
 
@@ -660,7 +662,7 @@ func TestNewWaitDoesNotReadARefusalAsSuccess(t *testing.T) {
 	t.Cleanup(func() { betweenSpoolSamples = func() {} })
 
 	err = awaitSpool(path, outbox.ClaimPath(path), 5*time.Second,
-		spoolWaitCopy{refused: "refused", timedOut: "timed out"})
+		spoolWaitCopy{refused: "refused", timedOut: func() string { return "timed out" }})
 	require.True(t, fired, "precondition: the window was reproduced")
 	require.Error(t, err, "a refusal read as a success is the whole failure mode")
 	assert.Contains(t, err.Error(), "already exists here")
@@ -680,7 +682,7 @@ func TestNewWaitKeepsWaitingWhileTheRequestIsClaimed(t *testing.T) {
 	require.NoFileExists(t, path, "precondition: the record itself is gone")
 
 	err = awaitSpool(path, outbox.ClaimPath(path), 20*time.Millisecond,
-		spoolWaitCopy{refused: "refused", timedOut: "still queued"})
+		spoolWaitCopy{refused: "refused", timedOut: func() string { return "still queued" }})
 	require.Error(t, err, "a claimed request has not completed")
 	assert.Contains(t, err.Error(), "still queued")
 }
@@ -926,7 +928,7 @@ func TestAwaitSpoolRetriesAStatItCouldNotAnswer(t *testing.T) {
 	}
 	t.Cleanup(func() { betweenSpoolSamples = func() {} })
 
-	err = awaitSpool(record, "", 10*time.Second, spoolWaitCopy{refused: "refused", timedOut: "timed out"})
+	err = awaitSpool(record, "", 10*time.Second, spoolWaitCopy{refused: "refused", timedOut: func() string { return "timed out" }})
 	require.GreaterOrEqual(t, samples, 2, "precondition: the window was reproduced")
 	assert.NoError(t, err, "a transient Stat error must not end the wait")
 }
@@ -941,7 +943,7 @@ func TestAwaitSpoolReportsAStatErrorThatNeverClears(t *testing.T) {
 	require.NoError(t, os.WriteFile(blocker, []byte("not a directory"), 0o600))
 
 	err := awaitSpool(filepath.Join(blocker, "record.json"), "", 10*time.Millisecond,
-		spoolWaitCopy{refused: "refused", timedOut: "no atrium picked it up"})
+		spoolWaitCopy{refused: "refused", timedOut: func() string { return "no atrium picked it up" }})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to read the outbox")
 	assert.NotContains(t, err.Error(), "no atrium picked it up",
