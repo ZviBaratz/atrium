@@ -14,6 +14,7 @@ import (
 	"github.com/ZviBaratz/atrium/cmdlog"
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/customcmd"
+	"github.com/ZviBaratz/atrium/internal/handover"
 
 	tea "charm.land/bubbletea/v2"
 	xansi "github.com/charmbracelet/x/ansi"
@@ -58,8 +59,8 @@ func terminalEntry(key, desc, command string) config.CustomCommand {
 // out of #375's UI stage.
 //
 // A tea.ExecProcess would run the command and look correct. What it would not do is any
-// of the three things suspending the event loop obliges a caller to do — and each failure
-// is invisible on the screen the user is looking at:
+// of the things suspending the event loop obliges a caller to do — and each failure is
+// invisible on the screen the user is looking at:
 //
 //   - no attachGen bump: a pane capture taken before a three-minute command is applied
 //     after it, replaying a stale PanePrompt as a TapEnter into whatever dialog is up now.
@@ -67,6 +68,8 @@ func terminalEntry(key, desc, command string) config.CustomCommand {
 //     dialog for the whole command (#264, reintroduced).
 //   - excluded set to anything but nil: the keeper skips a session for no reason — unlike
 //     an attach, no session is holding the terminal here.
+//   - no handover payload: the outbox spools stop draining for the length of the command,
+//     and `atrium new` cannot say so or say what to wait for (#760).
 func TestCustomCommandTerminalWiresEveryAttachObligation(t *testing.T) {
 	h, inst := newCustomCommandHome(t, nil)
 	other := newGateInstance(t, h, "other")
@@ -82,6 +85,8 @@ func TestCustomCommandTerminalWiresEveryAttachObligation(t *testing.T) {
 	assert.False(t, cmd.raw,
 		"a `sh -c` child must run cooked — raw mode clears OPOST and staircases its output")
 	require.NotNil(t, cmd.onAttached, "the generation bump is not optional")
+	assert.Equal(t, handover.Payload{Kind: handover.KindCommand, Label: "take the terminal"}, cmd.handover,
+		"the kind is load-bearing, not decoration: Resumes phrases a command's return and a detach differently")
 	require.NotNil(t, callback, "every path must yield a done message")
 
 	before := h.attachGen

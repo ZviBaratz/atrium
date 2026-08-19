@@ -1008,6 +1008,28 @@ func TestCreateDrainRunsOnTheMetadataTick(t *testing.T) {
 	assert.NotNil(t, titled(h, "fix-auth"), "the tick must reach the create drain")
 }
 
+// TestCreateDrainRunsOnAStaleAttachTick is the fact #760 rests on, and the one thing
+// nothing here asserted: the create drain sits OUTSIDE the attachGen guard, so the tick
+// message parked on Bubble Tea's unbuffered channel for the whole of an attach still
+// creates the session when the loop resumes.
+//
+// That is what bounds the wait to the length of one attach rather than to a relaunch,
+// and it is what `atrium new`'s "it lands when you detach" is a claim about. Inside the
+// guard the request would sit until the NEXT tick — or, with the loop parked at the
+// moment the app exits, until the next launch. The prompt spool has had
+// TestDrainRunsOnStaleAttachTick for this since it was written; the create spool
+// inherited the property and not the proof.
+func TestCreateDrainRunsOnAStaleAttachTick(t *testing.T) {
+	h := drainHome(t)
+	spoolCreate(t, outbox.Request{Title: "fix-auth", Path: t.TempDir()})
+
+	h.attachGen = 7
+	h.Update(metadataUpdateDoneMsg{attachGen: 3}) // stale: captured before the attach
+
+	assert.NotNil(t, titled(h, "fix-auth"),
+		"a request spooled during an attach is created on the first tick after the detach")
+}
+
 // TestCreateDrainEmptySpoolIsQuiet: the common case by far, twice a second for the
 // life of the TUI.
 func TestCreateDrainEmptySpoolIsQuiet(t *testing.T) {
