@@ -8,7 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
-	"time"
+
+	"github.com/ZviBaratz/atrium/internal/flock"
 )
 
 // maxPayloadBytes caps what Held reads back, because the label's length is not this
@@ -20,17 +21,6 @@ import (
 // arbitrary allocation driven by a file this package does not exclusively write.
 const maxPayloadBytes = 4096
 
-// holdAttempts and holdRetryDelay bound how long Hold retries past a reader's shared
-// lock — see lockExclusive for why it retries at all. They bound the worst case an attach
-// can pay before giving up and going unrecorded, and are set far above the two syscalls
-// Held holds the shared lock for, so losing to a probe takes a run of coincidences rather
-// than one. TestHoldRetriesPastASharedLock computes the bound from these two rather than
-// restating it.
-const (
-	holdAttempts   = 20
-	holdRetryDelay = 5 * time.Millisecond
-)
-
 // Hold takes the handover lock and records what the terminal was handed to, so a
 // headless command can name it. The returned release clears the payload and drops
 // the lock; the caller must invoke it, and should defer it, since the whole point is
@@ -41,6 +31,11 @@ const (
 // lock file. The cost is that this handover goes unobserved: a headless command reads the
 // lock as free, so it cannot warn, and a --wait caller is told the outbox is being read
 // (see drainstate.go's drainLive) when nothing is reading it.
+//
+// flock.LockExclusive is what keeps that rare. Held takes a SHARED lock, which refuses an
+// exclusive request while it is held, so without the retry a `send` or `new` probing at
+// the same instant could cost this attach its whole record. Those two are the only
+// readers — Held has one caller, drainState — so `ls` and `peek` are not in this picture.
 func Hold(p Payload) (release func(), err error) {
 	path, err := Path()
 	if err != nil {
@@ -55,7 +50,7 @@ func Hold(p Payload) (release func(), err error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := lockExclusive(f); err != nil {
+	if err := flock.LockExclusive(f, flock.Attempts, flock.Delay); err != nil {
 		_ = f.Close()
 		return nil, err
 	}
@@ -70,37 +65,6 @@ func Hold(p Payload) (release func(), err error) {
 		// Closing the descriptor releases the flock.
 		_ = f.Close()
 	}, nil
-}
-
-// lockExclusive takes the exclusive lock, retrying briefly while a reader holds the
-// shared one.
-//
-// Held asks for LOCK_SH and releases it two syscalls later, and a shared lock refuses an
-// exclusive request for as long as it is held. So a single non-blocking attempt makes an
-// `atrium ls` loop — which the README blesses as safe to run alongside a live Atrium —
-// able to cost an attach its entire handover record: Hold fails, attachCommand.Run
-// carries on, and every headless command for the length of that attach reads the lock as
-// free. Retrying is what closes it. The alternative, a blocking LOCK_EX, would put an
-// attach behind a wedged reader with no way out.
-//
-// The cap is what keeps this a retry rather than a wait. Exhausting it means something
-// holds the lock that is not a passing probe — which tui.lock's one-TUI-per-data-dir
-// rule says should not exist — so the answer then is to fail open, not to keep trying.
-func lockExclusive(f *os.File) error {
-	var err error
-	for attempt := 0; attempt < holdAttempts; attempt++ {
-		if attempt > 0 {
-			time.Sleep(holdRetryDelay)
-		}
-		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
-		if err == nil {
-			return nil
-		}
-		if !errors.Is(err, syscall.EWOULDBLOCK) {
-			return err
-		}
-	}
-	return err
 }
 
 // writePayload replaces the lock file's contents in place. Best-effort throughout:

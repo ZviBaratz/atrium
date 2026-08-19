@@ -23,7 +23,7 @@ import (
 // editor, a pager, a build the user means to watch.
 //
 // It is NOT a tea.ExecProcess. Suspending the event loop is the same act a tmux attach
-// performs, and it carries the same three obligations, none of them local to the code
+// performs, and it carries the same obligations, none of them local to the code
 // that suspends:
 //
 //  1. m.attachGen++ — pane-capture commands stamp the generation they were created
@@ -78,9 +78,12 @@ func (m *home) startTerminalCustomCommand(spec customCommandSpec) tea.Cmd {
 //
 // Split out from the tea.Exec call for one reason: tea.Exec wraps both of these in a
 // message type bubbletea does not export, so a test holding the returned tea.Cmd can see
-// nothing about what was wired. The three obligations at the top of this file are the
+// nothing about what was wired. The obligations listed at the top of this file are the
 // whole substance of terminal mode, and every one of them lives in the value this
 // returns — an untestable constructor would leave them provable only by hand.
+// TestCustomCommandTerminalWiresEveryAttachObligation enumerates them and is the count's
+// one home; #760 added a fourth (the handover payload) and this doc undercounted it until
+// the numbers came out of the prose.
 //
 // Everything the child needs is already a string in spec, resolved on the update thread.
 // Nothing here closes over an *Instance: the keeper takes a main-thread copy of the

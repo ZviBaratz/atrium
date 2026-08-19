@@ -82,7 +82,7 @@ type attachCommand struct {
 	keeper *attachKeeper
 	// onAttached is called once the attach has succeeded, before the keeper starts.
 	// Run executes on the suspended event-loop goroutine, so the callback may touch
-	// main-loop state — attachExecCarry uses it to bump home.attachGen, retiring
+	// main-loop state — attachExecCommand uses it to bump home.attachGen, retiring
 	// pane-state captures taken before the keeper started rearranging panes. nil is
 	// tolerated for tests that only exercise Run.
 	onAttached func()

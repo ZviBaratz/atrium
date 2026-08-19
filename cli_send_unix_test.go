@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZviBaratz/atrium/internal/flock"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -157,7 +159,7 @@ func TestStartingTUIOutlastsAProbesLock(t *testing.T) {
 	unlocked := make(chan struct{})
 	go func() {
 		defer close(unlocked)
-		time.Sleep(2 * lockRetryDelay)
+		time.Sleep(2 * flock.Delay)
 		_ = syscall.Flock(fd, syscall.LOCK_UN)
 	}()
 
@@ -170,11 +172,17 @@ func TestStartingTUIOutlastsAProbesLock(t *testing.T) {
 // TestAcquireTUILockSpendsItsRetryBudget is the deterministic half of the above: with a
 // reader's shared lock held for the whole call, acquireTUILock must spend its budget before
 // refusing rather than give up on the first EWOULDBLOCK. The elapsed floor is what a single
-// non-blocking attempt cannot clear, and it is computed from the two constants so the
-// bound has one home.
+// non-blocking attempt cannot clear, and it is read from flock's constants so the bound has
+// one home.
 //
 // TestStartingTUIOutlastsAProbesLock covers the same mutation from the success side, but it
 // depends on a goroutine being scheduled; this one does not.
+//
+// The refusal here is deliberately asserted as a refusal and nothing more. A shared holder
+// that outlasts the budget reaches the same arm as a real second TUI and is reported as
+// one, which is wrong but safe (#230 is the cost of the other error); #771 tracks telling
+// them apart. Asserting errTUIAlreadyRunning specifically would pin that misreport as
+// intended behaviour.
 func TestAcquireTUILockSpendsItsRetryBudget(t *testing.T) {
 	sandboxDataDir(t)
 	path, err := tuiLockPath()
@@ -191,7 +199,6 @@ func TestAcquireTUILockSpendsItsRetryBudget(t *testing.T) {
 		release()
 		t.Fatal("a shared lock held for the whole call must refuse the exclusive one")
 	}
-	assert.ErrorIs(t, err, errTUIAlreadyRunning)
-	assert.GreaterOrEqual(t, elapsed, time.Duration(lockAttempts-1)*lockRetryDelay,
+	assert.GreaterOrEqual(t, elapsed, time.Duration(flock.Attempts-1)*flock.Delay,
 		"acquireTUILock gave up without spending its retry budget, so a passing probe can refuse a starting TUI")
 }

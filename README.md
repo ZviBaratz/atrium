@@ -275,8 +275,8 @@ add one file each — the request they spool — and then read `tui.lock` and
 and whether the one that is has its terminal handed to a session. Both probes ask
 for a *shared* lock, briefly and without blocking, and neither creates the file it
 reads — so a held lock changes the warning rather than the outcome, and two of these
-running at once cannot mistake each other for Atrium. All four append to the shared, rotating `atrium.log` in the
-data directory.
+running at once cannot mistake each other for Atrium. All four append to the shared,
+rotating `atrium.log` in the data directory.
 
 A queued request is state, so `atrium reset` discards both spools along with
 everything else it wipes. Without that, a create request made before the reset

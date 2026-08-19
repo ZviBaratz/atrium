@@ -6,23 +6,28 @@ import (
 	"errors"
 	"os"
 	"syscall"
-	"time"
+
+	"github.com/ZviBaratz/atrium/internal/flock"
 )
 
 // acquireTUILock takes the exclusive single-instance lock at path and returns a
 // release func the running TUI holds for its entire lifetime; closing the descriptor
 // drops the flock (and so does process death). If another interactive atrium already
-// still holds it once lockExclusive's retry budget is spent, it returns
-// errTUIAlreadyRunning so RunE can refuse to start a duplicate — the retry being what
-// keeps a passing tuiRunning probe from looking like one.
+// still holds it once flock.LockExclusive's budget is spent, it returns
+// errTUIAlreadyRunning so RunE can refuse to start a duplicate. The retry is what keeps a
+// passing tuiRunning probe from looking like one; it shrinks that window rather than
+// closing it, since a shared holder outlasting the budget lands in this same arm and is
+// reported as a second TUI. Refusing is the safe side of that (issue #230), and #771
+// tracks telling the two apart.
 // Mirrors acquireDaemonLock (daemon/daemon_unix.go) and acquireUpdateLock
-// (internal/update/lock_unix.go).
+// (internal/update/lock_unix.go) in shape, but no longer in behaviour: neither of those
+// retries, and the daemon's own probe is still exclusive, so #772 tracks giving them this.
 func acquireTUILock(path string) (release func(), err error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return nil, err
 	}
-	if err := lockExclusive(f); err != nil {
+	if err := flock.LockExclusive(f, flock.Attempts, flock.Delay); err != nil {
 		_ = f.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) {
 			return nil, errTUIAlreadyRunning
@@ -43,9 +48,10 @@ func acquireTUILock(path string) (release func(), err error) {
 // writes state.json, each only spools, and each has already spooled by the time it
 // asks. What the answer changes is whether a warning is printed, never what was done.
 //
-// known is false when the question could not be answered at all (an unresolvable
-// data dir, or a lock that cannot be opened), so a caller can stay silent rather
-// than assert something wrong.
+// known is false when the question could not be answered at all — an unresolvable data
+// dir, or a lock that cannot be opened — so a caller can stay silent rather than assert
+// something wrong. A data dir with no lock file in it is NOT one of those: it answers
+// "no TUI", for the reason the ErrNotExist arm below gives.
 //
 // It answers half a question, and never on its own. This lock is held identically by a
 // TUI whose event loop is running and one that has handed its terminal to a session and
@@ -87,43 +93,4 @@ func tuiRunning() (running, known bool) {
 	}
 	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 	return false, true
-}
-
-// lockAttempts and lockRetryDelay bound how long lockExclusive retries: how long a real
-// TUI is willing to wait behind a lock it expects to be free, and so how long a second TUI
-// takes to be refused. TestAcquireTUILockSpendsItsRetryBudget computes the bound from
-// these two rather than restating it.
-const (
-	lockAttempts   = 20
-	lockRetryDelay = 5 * time.Millisecond
-)
-
-// lockExclusive takes tui.lock exclusively, retrying briefly while someone else holds it.
-//
-// Without the retry, tuiRunning's own shared probe can deny a starting TUI its
-// single-instance lock: the arm below turns EWOULDBLOCK into errTUIAlreadyRunning and
-// acquireTUILockOrWarn turns that into a refusal, so a user who launched atrium at the
-// moment an `atrium new` was mid-probe would be told atrium was already running for this
-// data directory, naming an instance that does not exist. #760 made that likelier by probing on the --wait path too and again at
-// each deadline. A shared probe holds the lock for two syscalls, so retrying past it is
-// enough; only a lock still held after the whole budget is a real second TUI.
-//
-// A mirror of internal/handover's lockExclusive, which needs the same thing in the other
-// direction. Duplicated rather than shared, as acquireDaemonLock and acquireUpdateLock
-// already are — the two differ in what exhaustion means.
-func lockExclusive(f *os.File) error {
-	var err error
-	for attempt := 0; attempt < lockAttempts; attempt++ {
-		if attempt > 0 {
-			time.Sleep(lockRetryDelay)
-		}
-		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
-		if err == nil {
-			return nil
-		}
-		if !errors.Is(err, syscall.EWOULDBLOCK) {
-			return err
-		}
-	}
-	return err
 }

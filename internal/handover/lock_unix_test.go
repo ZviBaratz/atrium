@@ -5,10 +5,11 @@ package handover
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/ZviBaratz/atrium/internal/flock"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -164,12 +165,11 @@ func TestHeldReadsAnUnparseablePayloadAsUnknown(t *testing.T) {
 // before giving up rather than failing on the first refusal. The elapsed floor is what a
 // single non-blocking attempt cannot clear.
 //
-// The mutation it exists for is a one-line revert of lockExclusive to a bare
+// The mutation it exists for is a one-line revert of flock.LockExclusive to a bare
 // Flock(LOCK_EX|LOCK_NB), which nothing that predates the retry can see: every earlier
 // test in this package takes the lock with no reader in the way.
 func TestHoldRetriesPastASharedLock(t *testing.T) {
 	path := sandbox(t)
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	reader, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = reader.Close() })
@@ -183,18 +183,18 @@ func TestHoldRetriesPastASharedLock(t *testing.T) {
 		t.Fatal("a shared lock held for the whole call must refuse the exclusive one")
 	}
 	assert.ErrorIs(t, err, syscall.EWOULDBLOCK)
-	assert.GreaterOrEqual(t, elapsed, time.Duration(holdAttempts-1)*holdRetryDelay,
+	assert.GreaterOrEqual(t, elapsed, time.Duration(flock.Attempts-1)*flock.Delay,
 		"Hold gave up without spending its retry budget, so a passing probe can cost an attach its whole handover record")
 }
 
 // TestHoldSucceedsOnceAProbeLetsGo is the same defect from the direction a user meets it:
-// an `atrium ls` loop — which the README blesses as safe to run alongside a live Atrium —
-// must not be able to make an attach go unrecorded. Held takes its shared lock for two
-// syscalls, so the reader here holds it far longer than the real one ever does and Hold
-// still has most of its budget left.
+// a scripted `send`/`new` loop — which the README blesses as safe to run alongside a live
+// Atrium, and which is the only thing that reads this lock — must not be able to make an
+// attach go unrecorded. Held takes its shared lock for two syscalls, so the reader here
+// holds it far longer than the real one ever does and Hold still has most of its budget
+// left.
 func TestHoldSucceedsOnceAProbeLetsGo(t *testing.T) {
 	path := sandbox(t)
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	reader, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = reader.Close() })
@@ -208,7 +208,7 @@ func TestHoldSucceedsOnceAProbeLetsGo(t *testing.T) {
 	unlocked := make(chan struct{})
 	go func() {
 		defer close(unlocked)
-		time.Sleep(2 * holdRetryDelay)
+		time.Sleep(2 * flock.Delay)
 		_ = syscall.Flock(fd, syscall.LOCK_UN)
 	}()
 

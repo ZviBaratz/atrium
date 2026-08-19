@@ -115,7 +115,7 @@ func TestAttachRunProceedsWhenTheHandoverCannotBeRecorded(t *testing.T) {
 // Every other test here constructs an attachCommand literally, so deleting the `handover:`
 // line from either builder shipped green — and an attach would then publish the zero
 // Payload, leaving `atrium new` unable to name what to detach from for every real attach
-// while all four tests above still passed.
+// while every test around it still passed.
 //
 // It goes through the constructors rather than the tea.Cmd they are wrapped in for the
 // reason terminalCustomCommandExec's doc gives: tea.Exec's message type is unexported, so

@@ -14,7 +14,7 @@ func Hold(Payload) (release func(), err error) {
 
 // Held cannot answer on Windows: Hold is a no-op there, so a try-acquire would always
 // succeed and report "no handover is in progress" even mid-attach. Reporting "unknown" is
-// the same choice lock_windows.go's tuiRunning makes, for the same reason.
+// the same choice tuiRunning makes on Windows, for the same reason.
 //
 // Which is why nothing production reaches this: drainState asks tuiRunning first and stops
 // at drainUnknown, so on Windows the answer is settled before this is called. It exists to
