@@ -199,17 +199,23 @@ func (m *home) settingNotice(text string, level ui.NoticeLevel, key string) tea.
 }
 
 // surfaceLostRecoveries makes lost-session recoveries visible instead of a silent
-// Running→Paused that looks like a user pause (#270). It picks one message by
-// priority: a failed recovery (most urgent) → an error the user must act on; a
-// crash within seconds of launch → a persistent modal naming the command, since a
-// typo'd program/profile would otherwise loop invisibly on every Resume; a session
-// relaunched without its conversation; otherwise a single batched, neutral toast for
-// ordinary terminal deaths.
+// Running→Paused that looks like a user pause (#270). Two outcomes claim the whole
+// message because the user must act on them: a failed recovery → an error, and a crash
+// within seconds of launch → a persistent modal naming the command, since a typo'd
+// program/profile would otherwise loop invisibly on every Resume.
 //
-// The blank relaunch outranks the parks, and the ranking is about VISIBILITY rather
-// than severity. A park announces itself: the row turns Paused and stays there until
-// the user acts. A blank relaunch leaves the row exactly as it was, so the only thing
-// that ever says the agent lost its conversation is this line.
+// Everything else is one neutral toast, and the two kinds it can carry are JOINED rather
+// than ranked. Ranking them was the bug this shape replaces: the relaunch outranked the
+// parks, so a tick with one repair and three parks reported the repair and left three
+// sessions silently Paused — the exact silent-transition shape the function exists to
+// close. The relaunch clause still comes first, because it is the one the row shows
+// nothing of: a park announces itself (the row turns Paused and stays there until the
+// user acts), while a blank relaunch leaves the row exactly as it was, so this line is
+// the only thing that ever says the agent lost its conversation.
+//
+// A launch crash still swallows a relaunch that shares its tick — one modal, and the
+// modal is the more urgent — so the relaunch is recorded in the log either way
+// (RepairResumingLaunch).
 func (m *home) surfaceLostRecoveries(recoveries []lostRecovery) tea.Cmd {
 	var parked, relaunched []string
 	var failed, launchCrash *lostRecovery
@@ -231,17 +237,24 @@ func (m *home) surfaceLostRecoveries(recoveries []lostRecovery) tea.Cmd {
 			failed.title, failed.err, keys.LabelOf(keys.KeyResume), keys.LabelOf(keys.KeyKill)))
 	case launchCrash != nil:
 		return m.showLaunchCrash(launchCrash)
+	}
+	var clauses []string
+	switch {
 	case len(relaunched) == 1:
-		return m.handleInfoNotice(fmt.Sprintf("session %q exited while resuming its conversation — restarted without it", relaunched[0]))
+		clauses = append(clauses, fmt.Sprintf("session %q died at launch — restarted without resuming its conversation", relaunched[0]))
 	case len(relaunched) > 1:
-		return m.handleInfoNotice(fmt.Sprintf("%d sessions exited while resuming their conversations — restarted without them", len(relaunched)))
+		clauses = append(clauses, fmt.Sprintf("%d sessions died at launch — restarted without resuming their conversations", len(relaunched)))
+	}
+	switch {
 	case len(parked) == 1:
-		return m.handleInfoNotice(fmt.Sprintf("session %q terminal exited — parked as paused; %s", parked[0], pressToResume()))
+		clauses = append(clauses, fmt.Sprintf("session %q terminal exited — parked as paused; %s", parked[0], pressToResume()))
 	case len(parked) > 1:
-		return m.handleInfoNotice(fmt.Sprintf("%d sessions' terminals exited — parked as paused; %s", len(parked), pressToResume()))
-	default:
+		clauses = append(clauses, fmt.Sprintf("%d sessions' terminals exited — parked as paused; %s", len(parked), pressToResume()))
+	}
+	if len(clauses) == 0 {
 		return nil
 	}
+	return m.handleInfoNotice(strings.Join(clauses, ". "))
 }
 
 // flushDeferredRecovery toasts the startup recoveries the host session budget

@@ -511,22 +511,50 @@ type lostRecovery struct {
 	relaunchedBlank bool
 }
 
-// recoverLostInstances moves instances whose tmux session has died (flagged
-// sessionLost by the metadata tick) into Paused, so they stop being polled and can be
-// brought back with Resume. It debounces using strikes (a per-instance count of
-// consecutive dead observations, owned by the caller): a session is only recovered
-// after lostSessionRecoverThreshold consecutive misses; any live observation resets
-// the count. Recovery is attempted exactly once (at the threshold strike): a failed
-// recovery pins the strike above the threshold so it never retries in a tight loop
-// (the #270 dead-end), and pause() guarantees the instance ends Paused regardless, so
-// the next tick's Paused check clears the strike. Returns one lostRecovery per
-// instance acted on so the caller can persist, surface, and reap them. Runs on the main
-// thread — the only place model state may be mutated.
+// recoverLostInstances acts on instances whose tmux session has died (flagged
+// sessionLost by the metadata tick). Nearly always that means parking them as Paused, so
+// they stop being polled and can be brought back with Resume; the one exception is a
+// resuming launch that died at birth, which RepairResumingLaunch relaunches blank and
+// leaves RUNNING (see lostRecovery.relaunchedBlank). Everything below that says "recovery"
+// covers both.
+//
+// It debounces using strikes (a per-instance count of consecutive dead observations, owned
+// by the caller): a session is only recovered after lostSessionRecoverThreshold
+// consecutive misses; any live observation resets the count. Recovery is attempted exactly
+// once (at the threshold strike): a failed recovery pins the strike above the threshold so
+// it never retries in a tight loop (the #270 dead-end), and pause() guarantees the instance
+// ends Paused regardless, so the next tick's Paused check clears the strike. A repair
+// clears the strike itself, because its instance ends live rather than Paused and so is
+// never caught by that check. Returns one lostRecovery per instance acted on so the caller
+// can persist, surface, and reap them. Runs on the main thread — the only place model state
+// may be mutated.
+//
+// busy suspends the whole sweep for a tick, and it is the guard against acting on a pane
+// some off-thread action is in the middle of killing. A pause runs through
+// beginAsyncAction and writes SetStatus(Paused) only AFTER closeParkedSession, the WIP
+// commit and the worktree removal — several seconds during which the pane is already dead,
+// the instance still reads Running, and nothing marks it retiring (that mark covers kills).
+// Two 500ms ticks fit inside that window easily. Parking it a second time was merely
+// redundant; RepairResumingLaunch would launch a fresh agent into a worktree being
+// unlinked, and pause() would then write Paused over a row whose tmux session is live —
+// leaving an agent nothing re-parks. Strikes are left untouched rather than cleared, so
+// the debounce resumes where it was once the action finishes.
+//
+// Both outcomes do blocking I/O here, on the update thread, and the repair is the CHEAPER
+// of the two: a handful of tmux calls, the short ones capped at tmuxOpTimeout, plus
+// start's bounded existence backoff (2s worst case, single-digit ms in practice). The
+// park it replaces runs pause() — kill-session, two git queries, possibly a commit, a
+// recursive worktree removal and a prune — and always has. Moving one without the other
+// would leave the heavier path inline, so if this ever needs to go off-thread (#380's
+// shape) both go together.
 //
 // The reap is the caller's because this is a free function with no m; each
 // lostRecovery therefore carries the instance and whether the recovery freed its
 // working directory (see the type).
-func recoverLostInstances(results []instanceMetaResult, strikes map[*session.Instance]int, retiring map[*session.Instance]bool) []lostRecovery {
+func recoverLostInstances(results []instanceMetaResult, strikes map[*session.Instance]int, retiring map[*session.Instance]bool, busy bool) []lostRecovery {
+	if busy {
+		return nil
+	}
 	var recovered []lostRecovery
 	for _, r := range results {
 		// A retiring session's pane is SUPPOSED to die: its kill is in flight and
@@ -579,6 +607,56 @@ func recoverLostInstances(results []instanceMetaResult, strikes map[*session.Ins
 		})
 	}
 	return recovered
+}
+
+// finishBlankRelaunches does for a repaired session what the resume path does for a
+// resumed one, and it is needed because a repair is invisible to everything that normally
+// notices a relaunch — the selection did not move and no user action ran.
+//
+// The size, because ts.Start creates the replacement with `new-session -d` and no -x/-y,
+// so the pane keeps tmux's 80x24 default until something gives it the preview's geometry.
+// The only thing that does that on its own is the layout recompute
+// (SetSessionPreviewSize), and no part of this path asks for one. A background create has
+// the same gap for the same reason and closes it the same way, through the same seam —
+// see handleInstanceStarted, the other site sizing one pane by hand. The window this
+// would otherwise leave unsized is the BOOT window, whose captures feed GateUp,
+// DetectPrompt and the busy-marker search — every one of them width-sensitive (#512,
+// #648, #665).
+//
+// The frame note, because a repair swaps the pane underneath the same *Instance, which is
+// precisely the case instanceChanged's pointer comparison cannot see. Without it the quiet
+// run measured against the DEAD pane goes on deciding whether the new one is captured, and
+// the preview reports a real frame age for a pane that no longer exists (noteFrameTargetChange).
+//
+// Runs on the main thread, from the metadata handler, with the recoveries that handler
+// just produced.
+func (m *home) finishBlankRelaunches(recoveries []lostRecovery) {
+	selected := m.list.GetSelectedInstance()
+	width, height := m.tabbedWindow.GetPreviewSize()
+	for _, rec := range recoveries {
+		if !rec.relaunchedBlank || rec.instance == nil {
+			continue
+		}
+		if err := sizeStartedPane(rec.instance, width, height); err != nil {
+			log.ErrorLog.Printf("could not size the relaunched pane for %q: %v", rec.title, err)
+		}
+		if rec.instance == selected {
+			m.noteFrameTargetChange()
+		}
+	}
+}
+
+// countLostDeaths is how many of recoveries actually cost the fleet a session. A blank
+// relaunch did not: it is reported so the user hears about the lost conversation, but the
+// agent is running, so the OS chrome must not paint the taskbar error state for it.
+func countLostDeaths(recoveries []lostRecovery) int {
+	deaths := 0
+	for _, rec := range recoveries {
+		if !rec.relaunchedBlank {
+			deaths++
+		}
+	}
+	return deaths
 }
 
 // metadataUpdateDoneMsg is sent when the background metadata update completes.

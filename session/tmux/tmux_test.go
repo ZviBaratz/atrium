@@ -1635,8 +1635,8 @@ func TestStartContinueLeavesNonClaudeUnchanged(t *testing.T) {
 // Gone answers a different question from DoesSessionExist, and this is the case where
 // they must disagree: a socket tmux cannot open for a reason that is not its absence.
 // Nothing was asked of any server, so a session may well be alive behind it — which is
-// why the relaunch-over-it caller (Instance.startResuming) gates on this one. Reading
-// the pair the other way round would relaunch an agent over a live one.
+// why the relaunch-over-it caller (Instance.RepairResumingLaunch) gates on this one.
+// Reading the pair the other way round would relaunch an agent over a live one.
 func TestGoneIsNotTheNegationOfDoesSessionExist(t *testing.T) {
 	sealed := cmd_test.MockCmdExec{
 		RunFunc: func(*exec.Cmd) error {
@@ -1660,6 +1660,75 @@ func TestGoneIsTrueWhenTmuxSaysTheSessionIsNotThere(t *testing.T) {
 
 	require.True(t, session.Gone())
 	require.False(t, session.DoesSessionExist())
+}
+
+// Gone is narrower than `liveness() == sessionGone`, and this is the whole of that gap:
+// the poll parks on all three of sessionGone's producers, while Gone accepts only the one
+// a server answered.
+//
+// Driven from the split halves of the same table close_test.go holds the kill path to, so
+// a message added to sessionAlreadyGone cannot land on the wrong side unnoticed. Both
+// directions are asserted because they fail differently. A confirmed message Gone refuses
+// makes the repair decline forever — a lost feature, and a silent one. A socket-missing
+// message Gone accepts is the DOUBLE AGENT: unlink a live server's socket and every
+// command aimed at that path reports ENOENT, so the kill is forgiven, the existence check
+// agrees, and `new-session` builds a second server at the same path with a second agent in
+// the same worktree while the first keeps running.
+//
+// PaneDead is asserted alongside so the two verdicts are pinned as DIFFERENT rather than
+// as one predicate read twice: every row here is a death for the poll, and only some are
+// a death Gone will act on.
+func TestGoneAcceptsOnlyAServersOwnAnswer(t *testing.T) {
+	goneCase := func(msg string, wantGone bool) {
+		t.Run(msg, func(t *testing.T) {
+			cmdExec := cmd_test.MockCmdExec{
+				RunFunc: func(cmd *exec.Cmd) error {
+					// Real tmux puts the diagnostic on stderr and exits non-zero; the
+					// error-string fallback a fake would otherwise hit proves nothing
+					// about production.
+					if cmd.Stderr != nil {
+						_, _ = fmt.Fprintln(cmd.Stderr, msg)
+					}
+					return fmt.Errorf("exit status 1")
+				},
+				OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
+			}
+			s := NewSessionWithDeps(context.Background(), "dead", "claude", NewMockPtyFactory(t), cmdExec)
+
+			require.Equal(t, wantGone, s.Gone())
+			require.Equal(t, PaneDead, s.Poll(), "every row here is still a death for the poll")
+		})
+	}
+	for _, msg := range confirmedGoneMessages {
+		goneCase(msg, true)
+	}
+	for _, msg := range socketMissingGoneMessages {
+		goneCase(msg, false)
+	}
+}
+
+// The other producer Gone must refuse: liveness's trailing fallthrough, which reads every
+// diagnostic this package has not been taught as a death (#734). `unknown command:
+// has-session` is the concrete one — a tmux below the version floor — and it is a server
+// that is up, answering, and quite possibly running the session.
+func TestGoneRefusesAnUnrecognizedTmuxFailure(t *testing.T) {
+	cmdExec := cmd_test.MockCmdExec{
+		RunFunc: func(cmd *exec.Cmd) error {
+			if cmd.Stderr != nil {
+				_, _ = fmt.Fprintln(cmd.Stderr, "unknown command: has-session")
+			}
+			// A real *exec.ExitError, because that is what the fallthrough keys on:
+			// an error carrying only the text would fall to the already-indeterminate
+			// default and prove nothing about this branch.
+			return &exec.ExitError{}
+		},
+		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
+	}
+	s := NewSessionWithDeps(context.Background(), "dead", "claude", NewMockPtyFactory(t), cmdExec)
+
+	require.False(t, s.Gone(),
+		"an unrecognized failure is not a server saying the session is absent, and relaunching over one risks a second agent")
+	require.Equal(t, PaneDead, s.Poll(), "the poll still parks on it, which is the gap this pair pins")
 }
 
 // Plain Start must never append --continue, even for claude — that is the first-time and

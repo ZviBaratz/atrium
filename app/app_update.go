@@ -248,28 +248,36 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 		}
 		if msg.attachGen == m.attachGen {
-			recoveries := recoverLostInstances(msg.results, m.lostStrikes, m.retiring)
+			// actionInFlight suspends the sweep: an off-thread pause has already killed
+			// the pane it is still removing the worktree for. See recoverLostInstances.
+			recoveries := recoverLostInstances(msg.results, m.lostStrikes, m.retiring, m.actionInFlight)
 			if len(recoveries) > 0 {
-				// A recovery runs the same pause(), so it removes the worktree on its
-				// success path as well as most of its failing ones — and it was the one
-				// teardown with no reap at all, leaving the session's shell running in
-				// the deleted directory (#707). Reap before persisting: the reap is the
-				// part that must not be skipped by an early return added later.
+				// A PARK runs pause(), so it removes the worktree on its success path as
+				// well as most of its failing ones — and it was the one teardown with no
+				// reap at all, leaving the session's shell running in the deleted
+				// directory (#707). A blank relaunch removes nothing, and reports
+				// worktreeGone false, so reapStrandedShell is a no-op for it. Reap before
+				// persisting: the reap is the part that must not be skipped by an early
+				// return added later.
 				for _, rec := range recoveries {
 					m.reapStrandedShell(rec.instance, rec.worktreeGone)
 				}
-				// Every recovery ends the instance Paused (even a failed one), so its
-				// status genuinely changed — persist. Then make the transition visible
-				// rather than a silent Running→Paused (#270).
+				// Every recovery moved the instance — a park to Paused (even a failed
+				// one), a repair to a fresh Running — so its status genuinely changed:
+				// persist. Then make the transition visible rather than a silent
+				// Running→Paused, or a relaunch the row shows nothing of at all (#270).
 				if err := m.persistInstances(); err != nil {
 					log.ErrorLog.Printf("failed to persist recovered sessions: %v", err)
 				}
+				m.finishBlankRelaunches(recoveries)
 				cmds = append(cmds, m.surfaceLostRecoveries(recoveries))
 			}
 			cmds = append(cmds, m.applyMetadataResults(msg.results, true)...)
-			// Surface the fleet in the OS chrome once per tick; a session death this
-			// tick (a recovery) shows the taskbar error state, cleared next tick.
-			m.refreshOSChrome(len(recoveries) > 0)
+			// Surface the fleet in the OS chrome once per tick; a session DEATH this tick
+			// shows the taskbar error state, cleared next tick. A blank relaunch is not
+			// one: the session is running, and painting the error state for it would
+			// report a loss the fleet did not take.
+			m.refreshOSChrome(countLostDeaths(recoveries) > 0)
 		}
 		m.metadataTick++
 		fullSweep := m.metadataTick%metadataFullSweepEvery == 0

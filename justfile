@@ -77,7 +77,7 @@ smoke:
 # heuristic rot — VerifiedVersion is a record, not a tripwire (registry.go's header).
 # Opt-in only — NOT part of `test`/`ci`: it starts a real tmux server, drives a real
 # authenticated CLI and spends real API turns. Start with `just drive-agent help`.
-# Run `just drive-agent reap-all` if an interrupted ladder stranded a server.
+# Run `just drive-agent reap-all` if an interrupted ladder/sample/resume stranded a server.
 #
 # ${@+"$@"} rather than {{args}}, and that is load-bearing rather than style. just
 # splices {{args}} into the recipe line as raw text, so a quoted argument is re-split

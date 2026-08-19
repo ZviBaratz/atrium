@@ -507,13 +507,17 @@ type Instance struct {
 	conversationResumed bool
 	conversationKnown   bool
 
-	// lastLaunchResumed records whether the launch that started the CURRENT agent
-	// process carried a resume flag. It is what makes a crash-at-launch repairable:
-	// RepairResumingLaunch relaunches blank only when the command that died is one a
-	// blank relaunch would actually change. Set by startResuming on every relaunch and
-	// cleared by the blank relaunch it authorises; false for a first Start, which never
-	// resumes. In-memory only, and guarded by mu — the relaunch runs off the UI thread
-	// and the poll loop reads it from the main one.
+	// lastLaunchResumed records whether the launch that started the CURRENT agent process
+	// was REWRITTEN to resume: tmux.Session.StartContinue compared the command it ran
+	// against the plain program and they differed. That is narrower than "carried a resume
+	// flag", deliberately — a program that already pins a conversation (claude --resume
+	// <id>, which session/fork.go writes) is launched unchanged and reads false here.
+	//
+	// It is what makes a crash-at-launch repairable: RepairResumingLaunch relaunches blank
+	// only when the command that died is one a blank relaunch would actually change. Set by
+	// startResuming on every relaunch and cleared by the blank relaunch it authorises; false
+	// for a first Start, which never resumes. In-memory only, and guarded by mu — the
+	// relaunch runs off the UI thread and the poll loop reads it from the main one.
 	lastLaunchResumed bool
 
 	// unread marks a Ready session the user has not visited since the agent last
@@ -1015,8 +1019,9 @@ func (i *Instance) startResuming(ts *tmux.Session, workDir string) error {
 	resuming, err := ts.StartContinue(workDir)
 	// Recorded whatever the launch turned out to be, including false: a relaunch that
 	// carried no rewrite — no Resume, a probe that failed, an argv the adapter refuses
-	// to splice into — is one a blank retry would run identically, and leaving a stale
-	// true here would authorise exactly that.
+	// to splice into, or a program already pinning its own conversation — is one a blank
+	// retry would run identically, and leaving a stale true here would authorise exactly
+	// that.
 	i.noteLaunchResumed(resuming)
 	return err
 }
@@ -1042,7 +1047,7 @@ func (i *Instance) noteConversationOutcome(resumable, supported bool) {
 //
 // known is false in two shapes that must not be confused with "started fresh":
 // nothing has relaunched yet, and an agent with no native-transcript adapter
-// (codex/gemini), whose own resume probe decides after we have stopped looking.
+// (agy/codex/gemini), whose own resume probe decides after we have stopped looking.
 // A caller that flattens the two would tell the user their conversation was lost
 // on the strength of not having looked.
 func (i *Instance) ResumedConversation() (resumed, known bool) {

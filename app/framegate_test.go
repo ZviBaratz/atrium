@@ -436,12 +436,16 @@ func TestFrameChain_DiesOnAnEmptyTargetAndRevivesFromThePreviewTick(t *testing.T
 	}
 }
 
-// Every deliberate re-point drops the run.
+// Every re-point drops the run.
 //
-// A run describing the pane the user just looked away from must not decide whether
-// the new one is captured. The reset lives in noteFrameTargetChange, which is
-// already the shared tail of all four paths — so this is also the guard that a
-// fifth exit inherits it.
+// A run describing the pane that is no longer there must not decide whether the new one
+// is captured. The reset lives in noteFrameTargetChange, which is already the shared tail
+// of every path that re-points — so this is also the guard that the next one inherits it.
+//
+// The last two rows are the ones the pointer comparison cannot see: both leave the same
+// *Instance selected and swap the pane underneath it. The blank relaunch is the harder
+// of the two, because no user action ran at all — it arrives from the poll loop, on a
+// row the user may be looking straight at.
 func TestNoteFrameTargetChange_ResetsTheQuietRun(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -460,6 +464,15 @@ func TestNoteFrameTargetChange_ResetsTheQuietRun(t *testing.T) {
 			withStorage(t, h)
 			h.handleResumeDone(resumeDoneMsg{instance: inst})
 		}},
+		{"a blank relaunch, which swaps it the same way and is not the user's doing at all",
+			func(t *testing.T, h *home, inst *session.Instance) {
+				// Sizing is the other half of that path and belongs to its own test; stub
+				// it so this row measures the frame note alone.
+				restore := sizeStartedPane
+				t.Cleanup(func() { sizeStartedPane = restore })
+				sizeStartedPane = func(*session.Instance, int, int) error { return nil }
+				h.finishBlankRelaunches([]lostRecovery{{instance: inst, title: inst.Title, relaunchedBlank: true}})
+			}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, inst := newCaptureHome(t, newFrameSpy("agent output"))

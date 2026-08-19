@@ -36,12 +36,29 @@ func TestDriveAgentTmuxFloorMatchesAtrium(t *testing.T) {
 		"scripts/drive-agent.sh's MIN_TMUX disagrees with session/tmux.MinVersion; update the script")
 }
 
-// resumeRowRe pulls one RESUME_TABLE row out of the script:
+// resumeTableRe pulls the RESUME_TABLE array out of the script, and rows are then read
+// only from inside it. Matching rows against the whole file would leave the guard
+// anchored to a SHAPE rather than to the array: deleting or renaming RESUME_TABLE while
+// leaving four tab-indented `"a|b|c"` lines anywhere in the script would still yield
+// rows, still satisfy the both-directions checks, and still pass — which is the mutation
+// this guard most needs to fail on, since the table is what the verb reads.
+var resumeTableRe = regexp.MustCompile(`(?s)\nRESUME_TABLE=\(\n(.*?)\n\)\n`)
+
+// resumeRowRe pulls one RESUME_TABLE row out of that block:
 // `"<agent>|<command>|<verdict>"`, one per line, tab-indented inside the array. It is
-// anchored so the prose above the table — which spells the same commands in sentences —
-// cannot match, and so a row that loses its quoting fails as a missing row rather than
-// matching something adjacent.
+// anchored so a row that loses its quoting fails as a missing row rather than matching
+// something adjacent.
 var resumeRowRe = regexp.MustCompile(`(?m)^\t"([^"|]+)\|([^"|]+)\|([^"|]+)"$`)
+
+// resumeLauncherRe is what holds cmd_resume to the COLUMN it launches. The verb re-parses
+// each row itself, so the drift the table guard cannot see is in that parse: swap the read
+// order, or write `program="$want"`, and the script drives the literal `alive` as a command
+// while every assertion below stays green — under a docstring promising that the table is
+// what `resume` launches.
+//
+// Written as one expression over the three lines rather than three lookups, so a reordered
+// read cannot be satisfied by fragments matching in the wrong places.
+var resumeLauncherRe = regexp.MustCompile(`(?s)IFS='\|' read -r name cmd want <<<"\$row".*?program="\$cmd".*?expect="\$want"`)
 
 // TestDriveAgentResumeTableMatchesTheRegistry holds scripts/drive-agent.sh's
 // RESUME_TABLE to session/agent's adapters, in both directions.
@@ -59,13 +76,25 @@ var resumeRowRe = regexp.MustCompile(`(?m)^\t"([^"|]+)\|([^"|]+)\|([^"|]+)"$`)
 // The verdict column is deliberately unchecked here: no Go test can know whether a
 // vendor's CLI survives its own resume flag. Driving it is the only thing that can, and
 // that is the point of the verb.
+//
+// Two mutations this would otherwise miss are pinned first, because both keep every
+// assertion below green: rows read from anywhere in the file rather than from the array
+// (resumeTableRe), and a launcher that reads the columns in a different order or launches
+// a different one (resumeLauncherRe).
 func TestDriveAgentResumeTableMatchesTheRegistry(t *testing.T) {
 	path := filepath.Join(moduleRoot(t), "scripts", "drive-agent.sh")
 	src, err := os.ReadFile(path)
 	require.NoError(t, err)
 
-	rows := resumeRowRe.FindAllStringSubmatch(string(src), -1)
-	require.NotEmpty(t, rows, "no RESUME_TABLE rows in %s — this guard is matching nothing", path)
+	require.Regexp(t, resumeLauncherRe, string(src),
+		"cmd_resume no longer reads RESUME_TABLE's columns as <agent>|<command>|<verdict> and launches the command; "+
+			"the table below would then be held to a script that drives something else")
+
+	table := resumeTableRe.FindStringSubmatch(string(src))
+	require.NotNil(t, table, "no RESUME_TABLE=( … ) array in %s — this guard is matching nothing", path)
+
+	rows := resumeRowRe.FindAllStringSubmatch(table[1], -1)
+	require.NotEmpty(t, rows, "RESUME_TABLE has no rows this guard recognizes in %s", path)
 
 	driven := map[string]bool{}
 	for _, row := range rows {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -87,10 +88,60 @@ func TestRepairResumingLaunch_RelaunchesBlankWhenTheResumingLaunchDied(t *testin
 		"and the repair must be blank — relaunching the same command would die the same way")
 	require.True(t, fake.sessionExists(), "the repair must leave a live session behind")
 	require.Equal(t, Running, inst.GetStatus(), "and a session that was never parked")
+	// Weak on its own — the fixture's own Resume() already wrote Running, so this passes
+	// for an implementation that leaves the status untouched. What the repair owes the row
+	// is pinned in TestRepairResumingLaunch_WritesRunningOverTheDeadAgentsStatus.
 
 	resumed, known := inst.ResumedConversation()
 	require.False(t, resumed, "the conversation did not come back, and the restore notice reads this")
 	require.True(t, known, "claude has a transcript adapter, so 'started fresh' is known rather than a guess")
+}
+
+// The row is not refreshed by the relaunch on its own: applyMetadataResults skips a
+// sessionLost result, so whatever the dying agent last painted is what the row still
+// shows. The repair therefore has to write the status its relaunch implies, and it has to
+// write it BEFORE arming the unread suppression.
+//
+// Both halves are asserted because both fail silently. Without the write, a brand-new
+// agent boots under a row advertising the dead one's finished turn. Without the ordering,
+// the arm is never consumed — ArmReadySuppression is a one-shot spent by an edge INTO
+// Ready, and arming on a row that is already Ready leaves it sitting there to eat some
+// later genuine turn-end instead: no ding, no unread glyph, skipped by NextUnread.
+func TestRepairResumingLaunch_WritesRunningOverTheDeadAgentsStatus(t *testing.T) {
+	inst, _ := dyingResumingInstance(t)
+	// The state the poll loop actually reaches the repair in: the agent finished a turn,
+	// the user saw it, and then the pane died.
+	inst.SetStatus(Ready)
+	inst.MarkSeen()
+
+	require.True(t, inst.RepairResumingLaunch(15*time.Second))
+	require.Equal(t, Running, inst.GetStatus(),
+		"a fresh agent is booting, and the row must not go on advertising the dead one's Ready")
+
+	// The boot settle. It must spend the arm rather than flag unread...
+	inst.SetStatus(Ready)
+	require.False(t, inst.Unread(), "the post-boot idle is a boot artifact, not a finished turn")
+	// ...and it must actually spend it: an arm left standing is the one that eats a real
+	// turn-end later, which is the failure the ordering above exists to prevent.
+	inst.mu.RLock()
+	dangling := inst.suppressNextUnread
+	inst.mu.RUnlock()
+	require.False(t, dangling, "the suppression belongs to this boot, not to whatever comes next")
+}
+
+// There must be a worktree git still recognises, not merely a directory that stats.
+// WorkingDirGone counts only fs.ErrNotExist, so a base repo that moved or was deleted
+// leaves the tree on disk with a dangling .git file — and an agent launched there fails
+// every git operation it and the diff worker make. recoverInPlace asks the same question
+// for the same reason; the park, which keeps the branch, is what this case belongs to.
+func TestRepairResumingLaunch_RefusesAnOrphanedWorktree(t *testing.T) {
+	inst, fake := dyingResumingInstance(t)
+	// Break the link to the base repo without touching the directory, so WorkingDirGone
+	// still reports false and only the worktree check can catch it.
+	require.NoError(t, os.RemoveAll(filepath.Join(inst.WorkingDir(), ".git")))
+
+	require.False(t, inst.RepairResumingLaunch(15*time.Second))
+	require.Len(t, launchedPrograms(fake), 1, "the directory is still there; what is gone is the worktree")
 }
 
 // Once per launch. The blank relaunch carries no resume flag, so there is nothing left

@@ -131,7 +131,7 @@ func TestRecoverLostInstances_RepairsAResumingLaunchInsteadOfParkingIt(t *testin
 
 	var recoveries []lostRecovery
 	for range lostSessionRecoverThreshold {
-		recoveries = recoverLostInstances(lost, strikes, nil)
+		recoveries = recoverLostInstances(lost, strikes, nil, false)
 	}
 
 	require.Len(t, recoveries, 1, "the repair is still reported — it is the one recovery a user cannot see")
@@ -167,10 +167,90 @@ func TestRecoverLostInstances_StillParksASessionWithNoResumeToRepair(t *testing.
 	lost := []instanceMetaResult{{instance: inst, sessionLost: true}}
 	var recoveries []lostRecovery
 	for range lostSessionRecoverThreshold {
-		recoveries = recoverLostInstances(lost, strikes, nil)
+		recoveries = recoverLostInstances(lost, strikes, nil, false)
 	}
 
 	require.Len(t, recoveries, 1)
 	require.False(t, recoveries[0].relaunchedBlank, "there was no resume flag to drop")
 	require.True(t, inst.Paused(), "so the ordinary park is what must happen")
+}
+
+// The sweep is suspended while an off-thread action is in flight, and the pause is why.
+// A pause runs through beginAsyncAction and writes SetStatus(Paused) only AFTER
+// closeParkedSession, the WIP commit and the worktree removal — several seconds in which
+// the pane is already dead, the row still reads Running, and nothing marks it retiring
+// (that mark covers kills). Two 500ms ticks fit inside that window easily.
+//
+// Parking there was merely a redundant second teardown. Repairing there is worse: a fresh
+// agent is launched into a worktree being unlinked, and pause() then writes Paused over a
+// row whose tmux session is live — an agent nothing re-parks and nothing shows.
+func TestRecoverLostInstances_SuspendsWhileAnOffThreadActionRuns(t *testing.T) {
+	inst, srv := repairableLostInstance(t)
+	strikes := map[*session.Instance]int{}
+	lost := []instanceMetaResult{{instance: inst, sessionLost: true}}
+
+	for range lostSessionRecoverThreshold * 2 {
+		require.Empty(t, recoverLostInstances(lost, strikes, nil, true),
+			"a tick that lands inside an off-thread action has observed nothing")
+	}
+	require.Equal(t, int32(2), srv.launches.Load(),
+		"nothing may be relaunched into a worktree a pause may be in the middle of removing")
+	require.False(t, inst.Paused(), "and nothing may be parked over it either")
+
+	// The control: deferred, not lost. Once the action finishes the same results recover
+	// through the ordinary debounce — a suspended sweep must not become a stuck one.
+	var recoveries []lostRecovery
+	for range lostSessionRecoverThreshold {
+		recoveries = recoverLostInstances(lost, strikes, nil, false)
+	}
+	require.Len(t, recoveries, 1, "control: the very same results recover once the action is done")
+	require.True(t, recoveries[0].relaunchedBlank)
+}
+
+// The relaunched pane is sized to the preview, because nothing else will.
+//
+// ts.Start creates the replacement with `new-session -d` and no -x/-y, so it keeps tmux's
+// 80x24 default until something hands it the preview's geometry — and the only production
+// caller that does is the layout recompute, which no part of this path triggers. The
+// window that leaves unsized is the BOOT window, whose captures feed GateUp, DetectPrompt
+// and the busy-marker search (#512, #648, #665).
+//
+// Asserted at the seam for the reason sizeStartedPane's doc gives: the width tmux reports
+// back is its own SIGWINCH policy, so reading it would pin tmux rather than this branch.
+func TestFinishBlankRelaunches_SizesTheRelaunchedPane(t *testing.T) {
+	h, inst := newCaptureHome(t, newFrameSpy("agent output"))
+	wantW, wantH := h.tabbedWindow.GetPreviewSize()
+
+	var gotInst *session.Instance
+	var gotW, gotH int
+	restore := sizeStartedPane
+	t.Cleanup(func() { sizeStartedPane = restore })
+	sizeStartedPane = func(i *session.Instance, w, h int) error {
+		gotInst, gotW, gotH = i, w, h
+		return nil
+	}
+
+	h.finishBlankRelaunches([]lostRecovery{{instance: inst, title: inst.Title, relaunchedBlank: true}})
+
+	require.Same(t, inst, gotInst, "the pane sized is the one that was just relaunched")
+	require.Equal(t, wantW, gotW, "sized to the preview's width")
+	require.Equal(t, wantH, gotH, "and its height")
+
+	// The control: a park has no new pane to size, and its instance is on its way to
+	// Paused, where SetPreviewSize refuses anyway.
+	gotInst = nil
+	h.finishBlankRelaunches([]lostRecovery{{instance: inst, title: inst.Title}})
+	require.Nil(t, gotInst, "only a relaunch produces a pane that needs sizing")
+}
+
+// The taskbar error state reports a session the fleet LOST. A blank relaunch is reported
+// so the user hears about the conversation, but the agent is running — painting the error
+// state for it would announce a loss that did not happen.
+func TestCountLostDeaths_ExcludesABlankRelaunch(t *testing.T) {
+	require.Equal(t, 0, countLostDeaths([]lostRecovery{{title: "back", relaunchedBlank: true}}))
+	require.Equal(t, 2, countLostDeaths([]lostRecovery{
+		{title: "parked"},
+		{title: "back", relaunchedBlank: true},
+		{title: "failed", err: errors.New("boom")},
+	}), "a park and a failed park are both real deaths; the relaunch between them is not")
 }

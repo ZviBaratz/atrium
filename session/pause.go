@@ -110,13 +110,21 @@ func (i *Instance) RecoverLostSession() error {
 //
 // Every condition is a refusal to relaunch on a guess:
 //
-//   - lastLaunchResumed, because a blank relaunch of a command that carried no resume
-//     flag is the same command again;
+//   - lastLaunchResumed, because a blank relaunch of a command the adapter did not
+//     REWRITE is the same command again. Note what that excludes: a program already
+//     carrying its own resume flag — a forked claude pinned to a conversation id, which
+//     session/fork.go writes — is launched unchanged, so the flag reads false and this
+//     declines. Declining is right (dropping nothing would change nothing), but it does
+//     mean a pin whose conversation has been garbage-collected is a #699 death nothing
+//     here reaches;
 //   - DiedAtLaunch, because a session that ran for hours and then died did not die OF
 //     its launch — the user quit it, or the machine did — and relaunching that would be
 //     a resurrection nobody asked for;
-//   - a working directory still on disk, because there is nowhere to relaunch into
-//     otherwise, and RecoverLostSession is what handles that case;
+//   - a worktree git still recognises, not merely a directory that stats: a base repo
+//     that moved or was deleted leaves the directory behind with a dangling .git file,
+//     and an agent launched there fails every git operation it makes. That is the park's
+//     case — it keeps the branch — and recoverInPlace asks the same question for the same
+//     reason. A directory that is simply gone is RecoverLostSession's;
 //   - a tmux session that is DEFINITIVELY gone (Session.Gone), not merely one that did
 //     not answer, because what follows is a kill and a relaunch: on a false positive
 //     this would close a live agent and start a second over it. The caller decides WHEN
@@ -128,6 +136,14 @@ func (i *Instance) RecoverLostSession() error {
 //
 // Once, per launch: the relaunch it makes carries no resume flag, so lastLaunchResumed
 // is false afterwards and a second death parks in the ordinary way.
+//
+// What it CANNOT tell is why the launch died, and the window is the whole of the
+// diagnosis. An agent the user quit deliberately seconds after a resume is relaunched
+// rather than parked, and a typo'd program/profile is relaunched once before its second
+// death reaches showLaunchCrash's modal — both cost one relaunch and a notice, which is
+// why the notice says the launch died rather than naming a cause it has not established.
+// A narrower gate would have to model each vendor's exit codes; the ceiling on being
+// wrong here is one blank agent in the worktree the session already owned.
 func (i *Instance) RepairResumingLaunch(within time.Duration) bool {
 	if !i.isStarted() || i.Paused() {
 		return false
@@ -145,6 +161,23 @@ func (i *Instance) RepairResumingLaunch(within time.Duration) bool {
 	workDir := i.WorkingDir()
 	if workDir == "" || i.WorkingDirGone() {
 		return false
+	}
+	// A directory that stats is not a worktree git still recognises, and every other
+	// relaunch path asks the stronger question — recoverInPlace degrades to Paused when
+	// this fails, and pause() has a whole branch for the orphan. WorkingDirGone counts
+	// only fs.ErrNotExist by design, so it passes for a worktree whose base repo has
+	// moved or been deleted: the agent would come up in a tree where every git operation
+	// made in it fails, where the park would have kept the branch.
+	// Skipped for a direct session, which has no worktree and runs in the user's own
+	// checkout (worktree() is nil there).
+	if wt := i.worktree(); wt != nil {
+		valid, err := wt.IsValidWorktree()
+		if err != nil {
+			log.ErrorLog.Printf("cannot validate the worktree for %s, leaving it to be parked: %v", i.Title, err)
+		}
+		if err != nil || !valid {
+			return false
+		}
 	}
 	if !ts.Gone() {
 		return false
@@ -183,6 +216,22 @@ func (i *Instance) RepairResumingLaunch(within time.Duration) bool {
 	// answer, not whether there is one.
 	i.conversationResumed = false
 	i.mu.Unlock()
+
+	// Running, then the arm: the pairing both other relaunch paths use — Resume and
+	// recoverInPlace — and which ArmReadySuppression's own doc names as its contract.
+	// Both halves are load-bearing here.
+	//
+	// The write, because nothing else replaces the dead agent's status. applyMetadataResults
+	// skips a sessionLost result, so without this the row keeps whatever the dying agent
+	// last painted — Ready, NeedsInput, a held Pending — while a brand-new agent boots
+	// underneath it.
+	//
+	// The order, because ArmReadySuppression is a one-shot consumed by an edge INTO Ready
+	// (setStatusLocked). Arming on a row that is already Ready leaves it unconsumed until
+	// some later edge eats it, which for a chip-held Pending is a genuine turn-end going
+	// silent — no ding, no unread glyph, skipped by NextUnread. A non-Ready write clears
+	// any stale arm first, so the one set below is this launch's.
+	i.SetStatus(Running)
 	// The relaunched agent's boot idle is a boot artifact, not a finished turn — the
 	// suppression Resume and recoverInPlace arm for the same reason.
 	i.ArmReadySuppression()

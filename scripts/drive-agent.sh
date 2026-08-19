@@ -58,11 +58,12 @@
 #   - a confirmation dialog's options can include "(Persist to settings.json)", so a
 #     misaimed Enter edits your real agent config. `keys` refuses to send Enter at
 #     such a pane unless FORCE=1;
-#   - and `resume` drives a resume flag against that same real config. It answers the
-#     scratch workspace's folder-trust gate, and that answer is a write: codex records
+#   - and `resume` drives a resume flag against that same real config. Where it answers
+#     the scratch workspace's folder-trust gate, that answer is a write: codex records
 #     the path in its config.toml, gemini in trustedFolders.json, agy in its settings
-#     and its last-conversations cache — one nonce path per drive, naming a directory
-#     `down` then deletes. That Enter is the only key it ever sends.
+#     and its last-conversations cache — one nonce path per drive (PID + $RANDOM),
+#     naming a directory `down` then deletes. That Enter is the only key it ever sends,
+#     and it sends none at all at a pane that is already dead.
 #
 # USAGE — see `help`. The short version:
 #
@@ -125,9 +126,13 @@ MIN_TMUX=3.2
 # frame. Raise it if a capture looks torn.
 SETTLE="${SETTLE:-1.5}"
 
-# How long `resume` waits before each of its two readings. Longer than SETTLE, and
-# measuring a different thing: SETTLE covers a repaint, this covers a program's own
-# decision to exit.
+# How long `resume` waits before a #{pane_dead} reading. Longer than SETTLE, and measuring
+# a different thing: SETTLE covers a repaint, this covers a program's own decision to exit.
+#
+# The second reading waits this PLUS one SETTLE, because the Enter before it goes through
+# cmd_keys, which settles on its own — 6.5s at both defaults. That is margin in the safe
+# direction (a survivor is given longer to die, never less), so it is left as an emergent
+# sum rather than subtracted out.
 #
 # Sized against the one death that has been timed. claude 2.1.234, whose `--continue`
 # with nothing to resume is exactly the exit this arm exists to be able to see, is still
@@ -838,9 +843,11 @@ resume_agents() {
 # is what Atrium relaunches with, and that is the registry's rewrite (RESUME_TABLE),
 # not what a human would type.
 #
-# It sends exactly one key, an Enter at the folder-trust gate, and that Enter is the
+# It sends at most one key, an Enter at the folder-trust gate, and that Enter is the
 # difference between measuring the right thing and the wrong one — see the stage-two
-# comment below for what a launch-only reading actually observes.
+# comment below for what a launch-only reading actually observes. "At most", because a
+# pane already dead at the first reading is answered by nobody and read once; which rows
+# reach that state is the vendors' business and the whole thing being measured.
 cmd_resume() {
 	local agent="${1:-}" width="${2:-$DEFAULT_WIDTH}" height="${3:-$DEFAULT_HEIGHT}"
 	[[ -n "$agent" ]] || die "usage: resume <agent> [width] [height]  (agents: $(resume_agents))"
@@ -871,8 +878,13 @@ cmd_resume() {
 	#
 	# ATR_CAP_RUN is left alone rather than overridden: `up` refuses both spellings at
 	# once, and a caller who pinned a path owns whether it is conversation-free.
+	#
+	# $$ alone would not do it. A PID is reused, and `down` removes the directory, so a
+	# recycled one reproduces the exact workspace path — where agy's last-conversations
+	# cache still has a record of the previous drive, and the run would report `alive` for
+	# having found it. $RANDOM is what makes the path a nonce rather than a label.
 	if [[ -z "${ATR_CAP_RUN:-}" ]]; then
-		export ATR_CAP_NAME="resume-$agent-$$"
+		export ATR_CAP_NAME="resume-$agent-$$-$RANDOM"
 	fi
 
 	cmd_up "$program" "$width" "$height"
@@ -1468,7 +1480,7 @@ VERBS
   emit [prefix] [--join]   print Go fixtures for every capture, to stdout
   status                   run, size, capture count, live-fleet count
   down                     kill the capture server BY PATH, check the fleet, clean up
-  reap-all                 sweep servers stranded by an interrupted ladder/sample
+  reap-all                 sweep servers stranded by an interrupted ladder/sample/resume
   help                     this
 
 EACH RUNG WRITES THREE FILES
@@ -1489,8 +1501,9 @@ ENV
                  `up` it also PINS the run: the pointer is neither consulted nor
                  written, which is what makes a second parallel run possible.
   SETTLE         seconds to let the CLI repaint after a resize/keystroke (default 1.5)
-  RESUME_SETTLE  seconds `resume` waits before each of its two #{pane_dead} readings
-                 (default 5)
+  RESUME_SETTLE  seconds `resume` waits before a #{pane_dead} reading (default 5). The
+                 reading after the trust Enter waits this plus one SETTLE, since the
+                 Enter goes through `keys`
   KEEP=1         keep the run directory on `down`
   FORCE=1        allow `keys Enter` at a persist-to-settings dialog
 
@@ -1520,11 +1533,12 @@ RESUME SURVIVAL (`resume`, #712)
   rather than to assume.
 
   `resume <agent>` boots that exact command in a scratch repo, under a run name nothing
-  has resumed in before, and reads #{pane_dead} TWICE: once after $RESUME_SETTLE
-  seconds, then again after one Enter answers the folder-trust gate. The second reading
-  is the verdict, and it compares against what RESUME_TABLE records. The run keeps
-  remain-on-exit ON, so a pane that dies is still there to read — with its scrollback,
-  where a CLI's parting message usually is.
+  has resumed in before, and reads #{pane_dead} after $RESUME_SETTLE seconds. If the pane
+  is still alive it sends one Enter to answer the folder-trust gate and reads a second
+  time; a pane already dead is the verdict as it stands, and nothing is sent to it. The
+  LAST reading is the verdict, and it compares against what RESUME_TABLE records. The run
+  keeps remain-on-exit ON, so a pane that dies is still there to read — with its
+  scrollback, where a CLI's parting message usually is.
 
   Worth holding onto:
     - The gate is why there are two readings. A workspace nothing has resumed in is
@@ -1542,9 +1556,10 @@ RESUME SURVIVAL (`resume`, #712)
       on a documented scope.
     - Answering the trust gate WRITES to the agent's real config — codex records the
       path in config.toml, gemini in trustedFolders.json, agy in its settings and its
-      last-conversations cache. One nonce path per drive, naming a directory `down`
-      then deletes. That cache is also why the run name carries a nonce at all: at a
-      stable path the second drive would resume the FIRST drive's own conversation.
+      last-conversations cache. One nonce path per drive (PID + $RANDOM), naming a
+      directory `down` then deletes. That cache is why the name needs a nonce and not
+      just a PID: PIDs are reused, `down` frees the path, and a recycled one would
+      resume the FIRST drive's own conversation and report `alive` for finding it.
     - claude's row expects a DEATH, and that is the control. Four `alive` rows would
       pass identically if the verb could not observe a death at all.
 
