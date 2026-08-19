@@ -97,6 +97,7 @@ func TestNewWarnsWhileParkedWithoutALabel(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, stderr, "poll loop is parked")
 	assert.Contains(t, stderr, "has handed its terminal to a session")
+	assert.Contains(t, stderr, "when you detach", "the kind is known even when the label is not")
 }
 
 // TestNewWaitStillWarnsWhileAtriumIsParked is the deliberate exception to

@@ -35,26 +35,28 @@ const (
 	drainLive
 )
 
-// drainState reports who is draining the spools and, for drainParked, a noun phrase
-// naming what the terminal was handed to ("" when there is nothing trustworthy to say).
-func drainState() (drainVerdict, string) {
+// drainState reports who is draining the spools and, for drainParked, what the terminal
+// was handed to. The payload is passed on whole rather than pre-rendered: the two
+// messages built from it need different parts of it (see handover.Payload.Describe and
+// Resumes), and only one of them is a noun phrase.
+func drainState() (drainVerdict, handover.Payload) {
 	running, known := tuiRunning()
 	switch {
 	case !known:
-		return drainUnknown, ""
+		return drainUnknown, handover.Payload{}
 	case !running:
-		return drainNoTUI, ""
+		return drainNoTUI, handover.Payload{}
 	}
 	held, payload, known := handover.Held()
 	switch {
 	case !known:
 		// A live TUI that cannot be asked whether it is parked is the one combination
 		// with two plausible readings and no way to pick, so it asserts neither.
-		return drainUnknown, ""
+		return drainUnknown, handover.Payload{}
 	case held:
-		return drainParked, payload.Describe()
+		return drainParked, payload
 	default:
-		return drainLive, ""
+		return drainLive, handover.Payload{}
 	}
 }
 
@@ -62,9 +64,11 @@ func drainState() (drainVerdict, string) {
 // returned, or "" when there is nothing worth saying. gerund is the caller's verb for
 // what is not happening ("creating", "delivering").
 //
-// Takes the verdict rather than re-deriving it so one command run makes one pair of
-// lock probes, and so the warning and any later --wait message cannot disagree about
-// what was seen.
+// Takes the verdict rather than re-deriving it so the caller pays one pair of lock
+// probes for the decision to warn and the wording of the warning. It deliberately does
+// NOT make the warning and a later --wait message agree: drainerClause probes again at
+// the deadline, because a user who detached during the wait has changed the answer and
+// repeating the earlier reading would name a condition that has since cleared.
 //
 // The two cases it does speak to are not equally urgent, and only one is addressed to
 // the caller. "No TUI is running" is for whoever ran the command: the request is
@@ -72,15 +76,15 @@ func drainState() (drainVerdict, string) {
 // keyboard, who is the only party that can unblock it — and, since an agent's `atrium
 // new` runs inside a session, the pane this lands in is usually the one they are
 // looking at.
-func spoolWarningFor(verdict drainVerdict, what, gerund string) string {
+func spoolWarningFor(verdict drainVerdict, p handover.Payload, gerund string) string {
 	switch verdict {
 	case drainNoTUI:
 		return fmt.Sprintf("warning: no atrium TUI is running, so nothing is %s this yet; "+
 			"it stays queued and is picked up the next time one starts\n", gerund)
 	case drainParked:
 		return fmt.Sprintf("warning: atrium is running but %s, so its poll loop is parked and "+
-			"nothing is %s this yet; it stays queued and is picked up when you detach\n",
-			handedOverPhrase(what), gerund)
+			"nothing is %s this yet; it stays queued and is picked up %s\n",
+			p.Describe(), gerund, p.Resumes())
 	default:
 		return ""
 	}
@@ -93,29 +97,18 @@ func spoolWarningFor(verdict drainVerdict, what, gerund string) string {
 // during the wait has changed the answer, and reporting the state at the start would
 // name a condition that has since cleared.
 func drainerClause() string {
-	verdict, what := drainState()
+	verdict, p := drainState()
 	switch verdict {
 	case drainNoTUI:
 		return "No atrium TUI is running, so nothing is draining the outbox; " +
 			"the next one to start picks it up"
 	case drainParked:
 		return fmt.Sprintf("Atrium is running but %s, so its poll loop is parked: "+
-			"the outbox drains when it returns, not on a relaunch", handedOverPhrase(what))
+			"the outbox drains %s, not on a relaunch", p.Describe(), p.Resumes())
 	case drainLive:
 		return "An atrium TUI is running with its poll loop live, so the outbox is being " +
 			"read — this is queued behind something rather than unattended"
 	default:
 		return ""
 	}
-}
-
-// handedOverPhrase renders what the terminal went to, falling back to the fact itself
-// when the payload named nothing. The fallback is not a cosmetic default: the lock is
-// what proves the loop is parked, and the label is decoration written beside it, so a
-// missing label must not cost the caller the finding.
-func handedOverPhrase(what string) string {
-	if what == "" {
-		return "has handed its terminal to a session"
-	}
-	return what
 }

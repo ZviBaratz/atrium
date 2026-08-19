@@ -152,5 +152,7 @@ func TestHeldReadsAnUnparseablePayloadAsUnknown(t *testing.T) {
 	held, p, known := Held()
 	assert.True(t, held, "the lock is what says a handover is in progress")
 	assert.True(t, known)
-	assert.Equal(t, "", p.Describe(), "and an empty payload names nothing rather than guessing")
+	assert.Equal(t, Payload{}, p, "and the payload is not invented from the last holder's")
+	assert.Equal(t, "has handed its terminal to another program", p.Describe(),
+		"which costs the reader the session name and nothing else — see Describe")
 }

@@ -75,26 +75,59 @@ type Payload struct {
 	Label string `json:"label"` // the session's title, or the command's name
 }
 
-// Describe renders the payload as a noun phrase for the middle of a sentence, or ""
-// when there is nothing trustworthy to say — an empty payload (the write window, or
-// a Hold that could not record one) or a label carrying a control character.
+// Describe renders the handover as a noun phrase for the middle of a sentence:
+// `attached to session "fix-auth"`, or `has handed its terminal to a session` when the
+// payload named nothing.
 //
-// The control-rune check is outbox.FirstControlRune's concern arriving by a second
-// route. A session title cannot hold one, but a custom command's name comes from
-// repo config, and this string is printed to a terminal by a command an agent runs
-// unattended.
+// It always answers, and that is the point rather than a convenience. The lock is what
+// proves the loop is parked; the label is decoration written beside it, and can be
+// missing for reasons that have no bearing on the finding — a Hold that could not write
+// it, a probe landing in the window between the truncate and the write. A caller left to
+// supply its own fallback would be one `if` away from dropping the whole warning over a
+// cosmetic gap, so there is nothing to fall back from.
+//
+// The label is dropped, and only the label, when it carries a control character. That is
+// outbox.FirstControlRune's concern arriving by a second route: a session title cannot
+// hold one, but a custom command's name comes from repo config, and this string is
+// printed to a terminal by a command an agent runs unattended.
 func (p Payload) Describe() string {
 	label := strings.TrimSpace(p.Label)
-	if label == "" || strings.IndexFunc(label, unicode.IsControl) >= 0 {
-		return ""
+	if strings.IndexFunc(label, unicode.IsControl) >= 0 {
+		label = ""
 	}
+	switch {
+	case p.Kind == KindAttach && label != "":
+		return "attached to session " + quote(label)
+	case p.Kind == KindCommand && label != "":
+		return "running the terminal command " + quote(label)
+	case p.Kind == KindAttach:
+		return "has handed its terminal to a session"
+	case p.Kind == KindCommand:
+		return "has handed its terminal to a command"
+	default:
+		return "has handed its terminal to another program"
+	}
+}
+
+// Resumes names what ends the handover, for the tail of a "your request is waiting"
+// message. The two kinds end differently and only one of them is something the reader
+// does: you detach from a session, while a terminal command finishes on its own.
+//
+// It exists because the obvious single wording is wrong for half the callers. "Picked up
+// when you detach" is the actionable sentence for an attach — it is aimed at the person
+// at the keyboard — and it is simply false of a custom command in terminal mode, which
+// reaches the same Run and takes the same lock.
+//
+// Unlike Describe this always answers: the fallback is about the lock, which is held
+// whatever the payload says, so it stays true for an unrecorded or unrecognised kind.
+func (p Payload) Resumes() string {
 	switch p.Kind {
 	case KindAttach:
-		return "attached to session " + quote(label)
+		return "when you detach"
 	case KindCommand:
-		return "running the terminal command " + quote(label)
+		return "when that command finishes"
 	default:
-		return ""
+		return "when it has its terminal back"
 	}
 }
 

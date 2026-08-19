@@ -205,11 +205,11 @@ func runNew(out, errOut io.Writer, r newRequest) error {
 // rather than at the deadline. Under `--wait 60s` the suppressed version would leave
 // them a minute of silence in front of a session that is not going to appear.
 func warnSpoolWaiting(errOut io.Writer, gerund string, waiting bool) {
-	verdict, what := drainState()
+	verdict, payload := drainState()
 	if waiting && verdict != drainParked {
 		return
 	}
-	if msg := spoolWarningFor(verdict, what, gerund); msg != "" {
+	if msg := spoolWarningFor(verdict, payload, gerund); msg != "" {
 		_, _ = fmt.Fprint(errOut, msg)
 	}
 }
