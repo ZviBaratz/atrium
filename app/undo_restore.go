@@ -378,12 +378,14 @@ func restoredNotice(instances []*session.Instance, entries []undo.Entry, freshAg
 // Called where the notice is built rather than carried on undoDoneMsg, so there is
 // no separate step to forget: the count cannot drift from the sessions it counts,
 // because it is derived from them at the moment they are reported. Reading it this
-// late is safe because nothing relaunches a live session — the only other writer,
-// recoverInPlace, runs during load, before an instance is published to the poll
-// loop — so the answer Resume recorded is still the answer.
+// late is safe in a different sense than it used to be: RepairResumingLaunch is now a
+// second writer, on a PUBLISHED instance, from the poll loop (recoverInPlace, the other
+// one, still runs during load). What it writes is false — the blank relaunch really did
+// come back without the conversation — so a repair landing between the resume and this
+// read moves the count toward the truth rather than away from it.
 //
 // Only the knowable case counts. An agent with no native-transcript adapter
-// (codex/gemini) resolves its own resume after Atrium has stopped looking, and an
+// (agy/codex/gemini) resolves its own resume after Atrium has stopped looking, and an
 // instance reporting "unknown" for any other reason has told us nothing — counting
 // either as fresh would announce a loss on the strength of not having checked,
 // which is the same coin-flip-printed-as-fact the confirmation copy refuses.

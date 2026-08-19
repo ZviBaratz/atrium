@@ -1921,6 +1921,18 @@ func TestGeminiGateAndResume(t *testing.T) {
 	require.Equal(t, "--resume", gemini.ResumeProbe)
 }
 
+// TestAgyResume pins agy's rewrite and its probe, which nothing asserted until #712 —
+// the adapter that has been shipping a resume flag with no test of its own.
+//
+// The rewrite is unconditional, unlike claude's (which leaves an already-pinned
+// conversation alone) and codex's (which refuses a program carrying flags): a program
+// with flags gets --continue appended after them, which is where agy's own help puts it.
+func TestAgyResume(t *testing.T) {
+	require.Equal(t, "agy --continue", agy.Resume("agy"))
+	require.Equal(t, "agy --model x --continue", agy.Resume("agy --model x"))
+	require.Equal(t, "--continue", agy.ResumeProbe)
+}
+
 // --- Aider fixtures.
 
 func TestAider(t *testing.T) {

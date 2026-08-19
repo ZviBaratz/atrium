@@ -399,6 +399,15 @@ var claude = &Adapter{
 	// (resuming an id keeps that id, so the pin never goes stale — see
 	// session/fork.go), and appending --continue beside it would hand claude two
 	// different answers to "which conversation?" on every resurrection.
+	//
+	// DRIVEN 2026-08-18 on claude 2.1.234, in a directory with no conversation:
+	// `claude --continue` prints "No conversation found to continue" and exits 1,
+	// killing the pane. That is why Instance.startResuming asks the transcript adapter
+	// FIRST for claude — and why this row is the control in drive-agent.sh's
+	// RESUME_TABLE: an arm that could not observe a death would report the other three
+	// as survivors just as it does now. Re-check with `just drive-agent resume claude`.
+	// Note the death lands only once the folder is TRUSTED; a fresh workspace sits at
+	// the trust gate holding the flag.
 	Resume: func(program string) string {
 		if hasFlag(program, "--resume") || hasFlag(program, "-r") {
 			return program
@@ -801,6 +810,15 @@ var codex = &Adapter{
 	// must follow the binary, so resume is only applied to a bare program; a
 	// program carrying flags relaunches blank rather than risk an argv the
 	// resume subcommand rejects.
+	//
+	// DRIVEN 2026-08-18 on codex 0.147.0, in a directory with no conversation: it
+	// starts normally into an empty composer and the pane survives. Its picker is
+	// cwd-filtered — `codex resume --help` describes --all as the flag that "disables
+	// cwd filtering" — so a fresh directory really does leave it nothing to resume.
+	// Nothing in Atrium asks that question for codex (only claude has a transcript
+	// adapter, and ResumeProbe below is a capability check), so this is a record of the
+	// vendor's tolerance rather than of our own guard: re-check with
+	// `just drive-agent resume codex` (#712).
 	Resume: func(program string) string {
 		if strings.ContainsRune(program, ' ') {
 			return program
@@ -823,10 +841,10 @@ var codex = &Adapter{
 // different evidence tiers, and #713 is what the difference costs — say which is which
 // rather than let one word cover both.
 //
-// DRIVEN at 0.55.1 — five surfaces, which is not the same claim as "every surface this adapter
+// DRIVEN at 0.55.1 — six surfaces, which is not the same claim as "every surface this adapter
 // declares" and an earlier draft ran the two together. drift_fields_test.go's comment asked for
-// four by name; #717 added the second Gate after that sentence was written, making five. The
-// sixth is below.
+// four by name; #717 added the second Gate after that sentence was written, and #712 drove
+// Resume after that. The one surface still undriven is below.
 //
 //   - the folder-trust Gate — width ladder in gemini_pane_test.go (#713), re-confirmed byte
 //     for byte in #736's run;
@@ -835,19 +853,25 @@ var codex = &Adapter{
 //   - the busy marker — same file, same authenticated sessions, and what it found moved
 //     MarkerWindow;
 //   - generateNameGemini's `gemini -p` output contract (session/naming.go), probed in the
-//     same run: bare text on stdout, warnings on stderr, no JSON envelope.
+//     same run: bare text on stdout, warnings on stderr, no JSON envelope;
+//   - Resume, in a directory with no conversation (#712) — the DRIVEN note beside the field
+//     itself carries what was observed, and drive-agent.sh's RESUME_TABLE re-drives it, held
+//     to the field by drive_agent_drift_test.go.
 //
 // NOT DRIVEN, and the reason this list stops short of "the whole adapter" — the phrase the
 // codex adapter's header uses, counting its own ResumeProbe among the surfaces it claims.
-// gemini declares Resume and ResumeProbe too, and ResumeProbe is a live heuristic: tmux runs
+// ResumeProbe is the one left, and it is a live heuristic: tmux runs
 // binHelpContains(bin, a.ResumeProbe) and silently disables resume, with only an InfoLog line,
-// when the needle is absent from `<bin> --help`. #736 never probed it. It was checked by hand
-// at 0.55.1 — `gemini --help` still lists "-r, --resume" with "latest" — so nothing is broken
-// today; what is wrong is a pin certifying a surface nobody drove, in the direction this header
-// calls self-concealing. Splitting it out is #721's job.
+// when the needle is absent from `<bin> --help`. Neither #736 nor #712 probed it — #712 drove
+// the flag Resume writes, which is a different question from whether the needle is still in
+// `--help`. It was checked by hand at 0.55.1 — `gemini --help` still lists "-r, --resume" with
+// "latest" — so nothing is broken today; what is wrong is a pin certifying a surface nobody
+// drove, in the direction this header calls self-concealing. Splitting it out is #721's job.
 //
-// The five above are why VerifiedVersion moved to 0.55.1 below. They took a real turn per rung
-// plus an isolated config dir to buy.
+// FIVE of those six are why VerifiedVersion moved to 0.55.1 below — every one but Resume,
+// which was driven at the same version afterwards and moved no pin. internal/doctor's
+// check_test.go cites that five by name, so the two counts differ on purpose rather than one
+// of them being stale. They took a real turn per rung plus an isolated config dir to buy.
 //
 // ONE OF THOSE FIVE WAS VERIFIED AND BROKEN, and moving the pin is what forced fixing it here
 // rather than later. generateNameGemini's output CONTRACT holds exactly as documented; its
@@ -1015,6 +1039,13 @@ var gemini = &Adapter{
 		{Name: "ide-nudge", Match: geminiIdeNudgeVisible},
 	},
 
+	// DRIVEN 2026-08-18 on gemini 0.55.1, in a directory with no conversation: it
+	// prints "No previous sessions found for this project." and carries on, pane alive.
+	// The lookup is per-project by gemini's own account (--list-sessions is documented
+	// as listing sessions "for the current project"), so the flag really is being
+	// applied with nothing to resume. Nothing in Atrium asks that question for gemini —
+	// ResumeProbe is a capability check, not an existence one — so this records the
+	// vendor's tolerance: re-check with `just drive-agent resume gemini` (#712).
 	Resume:        func(program string) string { return program + " --resume latest" },
 	ResumeProbe:   "--resume",
 	HeadlessNamer: true, // `gemini -p` prints bare text (session/naming.go)
@@ -1801,6 +1832,19 @@ var agy = &Adapter{
 		{Name: "trust", Contains: []string{"Yes, I trust"}},
 	},
 
+	// Appended unconditionally, unlike claude's rewrite (which leaves an already-pinned
+	// conversation alone) and codex's (which refuses a program carrying flags): agy
+	// takes --continue after any flags, which is where its own help puts it.
+	//
+	// DRIVEN 2026-08-18 on agy 1.1.14, in a directory with no conversation: it starts
+	// normally into an empty composer and the pane survives. agy documents --continue
+	// only as "Continue the most recent conversation" and says nothing about scope, so
+	// that row rests on the observation rather than on a documented per-project lookup —
+	// its last-conversations cache does record the workspace, which is why the harness
+	// drives each agent in a directory nothing has run in before. Nothing in Atrium asks
+	// whether there is a conversation (ResumeProbe is a capability check), so this is a
+	// record of the vendor's tolerance: re-check with `just drive-agent resume agy`
+	// (#712).
 	Resume:        func(program string) string { return program + " --continue" },
 	ResumeProbe:   "--continue",
 	HeadlessNamer: true,

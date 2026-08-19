@@ -882,15 +882,19 @@ func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd
 	// A background create asks for no global resize — the WindowSizeMsg it would send
 	// exits hint mode (see the tea.WindowSizeMsg arm in Update) and reflows a frame
 	// nothing about the terminal changed. But one half of that resize IS load-bearing
-	// here, and only here: updateHandleWindowSizeEvent ends in SetSessionPreviewSize,
-	// the sole production caller that gives a session's detached tmux pane the
-	// preview's geometry, and it skips any instance that is not yet Started — which this
-	// one already is on arrival, Instance.Start having set the flag on the goroutine
-	// before this message was ever constructed. Left unsized the pane keeps its
-	// new-session -d default: measured at 80 columns against a 116-column preview, so
-	// the preview renders it wrapped at the wrong width and every width-sensitive
-	// classifier in session/agent reads a capture taken at a width the pane never had.
-	// So size just the row this message is about.
+	// here: updateHandleWindowSizeEvent ends in SetSessionPreviewSize, the only thing
+	// that gives a session's detached tmux pane the preview's geometry as a matter of
+	// course, and it skips any instance that is not yet Started — which this one already
+	// is on arrival, Instance.Start having set the flag on the goroutine before this
+	// message was ever constructed. Left unsized the pane keeps its new-session -d
+	// default: measured at 80 columns against a 116-column preview, so the preview
+	// renders it wrapped at the wrong width and every width-sensitive classifier in
+	// session/agent reads a capture taken at a width the pane never had. So size just the
+	// row this message is about.
+	//
+	// Not the only site that has to do that by hand any more: finishBlankRelaunches sizes
+	// the pane a repaired session comes back on, which arrives with no resize behind it
+	// either. Both go through sizeStartedPane.
 	if msg.origin == spawnBackground {
 		w, h := m.tabbedWindow.GetPreviewSize()
 		if err := sizeStartedPane(msg.instance, w, h); err != nil {

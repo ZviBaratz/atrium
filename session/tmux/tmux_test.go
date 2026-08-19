@@ -1524,6 +1524,7 @@ func TestResumeCommand(t *testing.T) {
 	forceHelpProbe(t, map[string]string{
 		"gemini": "-r, --resume   Resume a previous session",
 		"codex":  "Commands:\n  resume  Resume a previous interactive session",
+		"agy":    "  -c                Short alias for --continue\n  --continue        Continue the most recent conversation",
 		// The canonical binary at an absolute path is probed at that path (it may
 		// not be on PATH at all); keyed by path so a bare-name probe would miss.
 		"/opt/agents/gemini": "-r, --resume   Resume a previous session",
@@ -1542,6 +1543,9 @@ func TestResumeCommand(t *testing.T) {
 		{"codex gets resume --last", "codex", "codex resume --last"},
 		// The codex subcommand cannot be spliced into an argv with flags; relaunch blank.
 		{"codex with flags unchanged", "codex --model o3", "codex --model o3"},
+		// agy appends unconditionally, so a flag-bearing program still resumes.
+		{"agy gets --continue", "agy", "agy --continue"},
+		{"agy with flags gets --continue", "agy --model x", "agy --model x --continue"},
 		// An off-PATH absolute install still resumes: the probe targets the
 		// program's own path because its basename is the canonical binary.
 		{"absolute gemini path probes itself", "/opt/agents/gemini", "/opt/agents/gemini --resume latest"},
@@ -1570,9 +1574,10 @@ func TestResumeCommandProbeGate(t *testing.T) {
 	forceHelpProbe(t, map[string]string{
 		"gemini": "old gemini help with no such flag",
 		"codex":  "old codex; sessions resume automatically on restart",
+		"agy":    "old agy help; nothing to continue with",
 	})
 
-	for _, program := range []string{"gemini", "codex"} {
+	for _, program := range []string{"gemini", "codex", "agy"} {
 		s := NewSessionWithDeps(context.Background(), "resume-test", program, NewMockPtyFactory(t), cmd_test.MockCmdExec{})
 		require.Equal(t, program, s.resumeCommand(), "probe must fail closed for %s", program)
 	}
@@ -1622,7 +1627,9 @@ func TestStartContinueAppendsContinueForClaude(t *testing.T) {
 	ptyFactory := NewMockPtyFactory(t)
 	session := NewSessionWithDeps(context.Background(), "cont-test", "claude", ptyFactory, startMockExec())
 
-	require.NoError(t, session.StartContinue(t.TempDir()))
+	resuming, err := session.StartContinue(t.TempDir())
+	require.NoError(t, err)
+	require.True(t, resuming, "a launch that appended --continue must report that it resumed")
 
 	// cmds[0] is the new-session launch; cmds[1] is the trailing attach from Restore.
 	newSession := cmd2.ToString(ptyFactory.cmds[0])
@@ -1635,11 +1642,113 @@ func TestStartContinueLeavesNonClaudeUnchanged(t *testing.T) {
 	ptyFactory := NewMockPtyFactory(t)
 	session := NewSessionWithDeps(context.Background(), "cont-test", "aider --model x", ptyFactory, startMockExec())
 
-	require.NoError(t, session.StartContinue(t.TempDir()))
+	resuming, err := session.StartContinue(t.TempDir())
+	require.NoError(t, err)
+	require.False(t, resuming,
+		"an agent with no resume support launched the plain program, and a caller repairing that launch must not retry the same command")
 
 	newSession := cmd2.ToString(ptyFactory.cmds[0])
 	require.NotContains(t, newSession, "--continue")
 	require.Contains(t, newSession, "aider --model x")
+}
+
+// Gone answers a different question from DoesSessionExist, and this is the case where
+// they must disagree: a socket tmux cannot open for a reason that is not its absence.
+// Nothing was asked of any server, so a session may well be alive behind it — which is
+// why the relaunch-over-it caller (Instance.RepairResumingLaunch) gates on this one.
+// Reading the pair the other way round would relaunch an agent over a live one.
+func TestGoneIsNotTheNegationOfDoesSessionExist(t *testing.T) {
+	sealed := cmd_test.MockCmdExec{
+		RunFunc: func(*exec.Cmd) error {
+			return fmt.Errorf("error connecting to /tmp/sock (Permission denied)")
+		},
+		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
+	}
+	session := NewSessionWithDeps(context.Background(), "sealed", "claude", NewMockPtyFactory(t), sealed)
+
+	require.False(t, session.DoesSessionExist(), "an inconclusive probe is not proof of life")
+	require.False(t, session.Gone(), "nor is it proof of death, which is the whole difference")
+}
+
+// And the case where they must agree: tmux answered, and the answer was no such session.
+func TestGoneIsTrueWhenTmuxSaysTheSessionIsNotThere(t *testing.T) {
+	dead := cmd_test.MockCmdExec{
+		RunFunc:    func(*exec.Cmd) error { return fmt.Errorf("can't find session: sealed") },
+		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
+	}
+	session := NewSessionWithDeps(context.Background(), "sealed", "claude", NewMockPtyFactory(t), dead)
+
+	require.True(t, session.Gone())
+	require.False(t, session.DoesSessionExist())
+}
+
+// Gone is narrower than `liveness() == sessionGone`, and this is the whole of that gap:
+// the poll parks on all three of sessionGone's producers, while Gone accepts only the one
+// a server answered.
+//
+// Driven from the split halves of the same table close_test.go holds the kill path to, so
+// a message added to sessionAlreadyGone cannot land on the wrong side unnoticed. Both
+// directions are asserted because they fail differently. A confirmed message Gone refuses
+// makes the repair decline forever — a lost feature, and a silent one. A socket-missing
+// message Gone accepts is the DOUBLE AGENT: unlink a live server's socket and every
+// command aimed at that path reports ENOENT, so the kill is forgiven, the existence check
+// agrees, and `new-session` builds a second server at the same path with a second agent in
+// the same worktree while the first keeps running.
+//
+// PaneDead is asserted alongside so the two verdicts are pinned as DIFFERENT rather than
+// as one predicate read twice: every row here is a death for the poll, and only some are
+// a death Gone will act on.
+func TestGoneAcceptsOnlyAServersOwnAnswer(t *testing.T) {
+	goneCase := func(msg string, wantGone bool) {
+		t.Run(msg, func(t *testing.T) {
+			cmdExec := cmd_test.MockCmdExec{
+				RunFunc: func(cmd *exec.Cmd) error {
+					// Real tmux puts the diagnostic on stderr and exits non-zero; the
+					// error-string fallback a fake would otherwise hit proves nothing
+					// about production.
+					if cmd.Stderr != nil {
+						_, _ = fmt.Fprintln(cmd.Stderr, msg)
+					}
+					return fmt.Errorf("exit status 1")
+				},
+				OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
+			}
+			s := NewSessionWithDeps(context.Background(), "dead", "claude", NewMockPtyFactory(t), cmdExec)
+
+			require.Equal(t, wantGone, s.Gone())
+			require.Equal(t, PaneDead, s.Poll(), "every row here is still a death for the poll")
+		})
+	}
+	for _, msg := range confirmedGoneMessages {
+		goneCase(msg, true)
+	}
+	for _, msg := range socketMissingGoneMessages {
+		goneCase(msg, false)
+	}
+}
+
+// The other producer Gone must refuse: liveness's trailing fallthrough, which reads every
+// diagnostic this package has not been taught as a death (#734). `unknown command:
+// has-session` is the concrete one — a tmux below the version floor — and it is a server
+// that is up, answering, and quite possibly running the session.
+func TestGoneRefusesAnUnrecognizedTmuxFailure(t *testing.T) {
+	cmdExec := cmd_test.MockCmdExec{
+		RunFunc: func(cmd *exec.Cmd) error {
+			if cmd.Stderr != nil {
+				_, _ = fmt.Fprintln(cmd.Stderr, "unknown command: has-session")
+			}
+			// A real *exec.ExitError, because that is what the fallthrough keys on:
+			// an error carrying only the text would fall to the already-indeterminate
+			// default and prove nothing about this branch.
+			return &exec.ExitError{}
+		},
+		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
+	}
+	s := NewSessionWithDeps(context.Background(), "dead", "claude", NewMockPtyFactory(t), cmdExec)
+
+	require.False(t, s.Gone(),
+		"an unrecognized failure is not a server saying the session is absent, and relaunching over one risks a second agent")
+	require.Equal(t, PaneDead, s.Poll(), "the poll still parks on it, which is the gap this pair pins")
 }
 
 // Plain Start must never append --continue, even for claude — that is the first-time and

@@ -400,12 +400,20 @@ func (t *Session) Start(workDir string) error {
 }
 
 // StartContinue starts the session resuming the prior conversation when the program
-// supports it (claude --continue, codex resume --last, gemini --resume latest). It is
-// used only on resurrection — the agent process died and we are relaunching it — never
-// on PTY reattach (Restore), where the process is still alive. The continue command is
-// computed transiently; t.program, the value persisted via Instance, is never mutated.
-func (t *Session) StartContinue(workDir string) error {
-	return t.start(workDir, t.resumeCommand())
+// supports it (claude --continue, codex resume --last, gemini --resume latest, agy
+// --continue). It is used only on resurrection — the agent process died and we are
+// relaunching it — never on PTY reattach (Restore), where the process is still alive.
+// The continue command is computed transiently; t.program, the value persisted via
+// Instance, is never mutated.
+//
+// resuming reports whether the launch actually carried a rewrite. It is false whenever
+// resumeCommand fell back to the plain program — no Resume, a probe that failed, an
+// argv the adapter refuses to splice into — and a caller repairing a launch that died
+// needs it: relaunching THAT command blank would re-run the identical command. It is
+// returned rather than left to be re-derived so the answer describes this launch.
+func (t *Session) StartContinue(workDir string) (resuming bool, err error) {
+	command := t.resumeCommand()
+	return command != t.program, t.start(workDir, command)
 }
 
 // resumeCommand returns the launch command that resumes the prior conversation, or the
@@ -414,6 +422,22 @@ func (t *Session) StartContinue(workDir string) error {
 // rewrite of the single program argv element is sufficient — no shell wrapping. When the
 // adapter requires a capability probe (gemini's --resume is recent), an installed binary
 // that predates the flag relaunches blank instead of failing on an unknown flag.
+//
+// ResumeProbe is a CAPABILITY check and nothing more: binHelpContains greps the binary's
+// --help, so it answers "does this build support the flag" and never "is there a
+// conversation to resume". It passes in an empty directory exactly as it does in a
+// populated one. Conversation-EXISTENCE is asked separately, in Instance.startResuming
+// via transcript.HasResumable, and only claude has an adapter there — so for agy, codex
+// and gemini the flag is applied whenever the binary supports it, with nothing having
+// looked for a conversation (#712).
+//
+// That is survivable because those CLIs tolerate it, which is a property of their code
+// rather than of ours: driven and recorded beside each adapter's Resume, re-checkable
+// with `just drive-agent resume <agent>`. Instance.RepairResumingLaunch is the belt to
+// that brace — it relaunches blank, once, when a launch this function REWROTE dies at
+// birth, whichever agent and whatever the reason. Its reach is therefore exactly this
+// function's: a program returned unchanged below (no Resume, a failed probe, an argv the
+// adapter refuses, or one already pinning a conversation) is outside both.
 func (t *Session) resumeCommand() string {
 	a := t.adapter
 	if a.Resume == nil {
@@ -913,13 +937,21 @@ func errWithStderr(err error, stderr string) error {
 
 // sessionAlreadyGone reports whether a failed tmux command means no session is left to
 // act on, rather than a real failure. Two callers read it that way — Close, where "gone"
-// is the teardown goal already met, and liveness, where it is a definitive "no" — so a
-// case added here moves kill classification and poll classification together, so it needs
-// adding to alreadyGoneMessages (close_test.go) — the table that holds BOTH callers to it:
-// close_test.go drives the kill through it and tmux_test.go drives the poll through the same
-// list. Those two lists are the authority on which messages land which way. The message can
-// arrive on stderr (real tmux) or in the error itself (test fakes), so check both;
-// anything unrecognized falls through as a real error for the caller to surface.
+// is the teardown goal already met, and probeLiveness, where it is a "no" the poll may
+// park on — so a case added here moves kill classification and poll classification
+// together, so it needs adding to alreadyGoneMessages (close_test.go) — the table that
+// holds BOTH callers to it: close_test.go drives the kill through it and tmux_test.go
+// drives the poll through the same list. Those two lists are the authority on which
+// messages land which way. The message can arrive on stderr (real tmux) or in the error
+// itself (test fakes), so check both (goneHaystack); anything unrecognized falls through
+// as a real error for the caller to surface.
+//
+// It is a UNION of two halves that are not equally strong, and probeLiveness consults
+// them separately rather than through this predicate for exactly that reason:
+// noLiveSessionMessage is a server's own answer, socketMissingMessage is an inference
+// from a path. Session.Gone accepts only the first. A message added here belongs in
+// whichever half it actually is — adding it to the wrong one either weakens the repair's
+// safety guard or blinds it.
 //
 // The socket case is matched as a PAIR rather than on "error connecting to" alone, and
 // that is the whole of its correctness. tmux formats it as `error connecting to %s (%s)`
@@ -959,23 +991,53 @@ func errWithStderr(err error, stderr string) error {
 // an empty one. What is still structural there is the rest: any other non-zero exit from
 // display-message is taken as an answer.
 func sessionAlreadyGone(err error, stderr string) bool {
-	hay := strings.ToLower(err.Error() + " " + stderr)
-	socketMissing := strings.Contains(hay, "error connecting to") &&
-		strings.Contains(hay, "no such file or directory")
-	return socketMissing ||
-		strings.Contains(hay, "no server running") ||
+	hay := goneHaystack(err, stderr)
+	return socketMissingMessage(hay) || noLiveSessionMessage(hay)
+}
+
+// goneHaystack is the text the gone predicates read. The message can arrive on stderr
+// (real tmux) or in the error itself (test fakes), so both are folded into one
+// lower-cased string.
+func goneHaystack(err error, stderr string) string {
+	return strings.ToLower(err.Error() + " " + stderr)
+}
+
+// noLiveSessionMessage is the half of sessionAlreadyGone that a SERVER's answer produces:
+// tmux reached the socket (or found nothing listening on it) and reported that the
+// session is not there. Nothing is running behind it that a relaunch could collide with,
+// which is what makes this half — and only this half — safe for Session.Gone.
+//
+// "no server running" belongs here rather than with the socket case: tmux never unlinks a
+// socket when its server dies, so that message means the file is present and nothing is
+// listening. There is no live server, hence no live session.
+func noLiveSessionMessage(hay string) bool {
+	return strings.Contains(hay, "no server running") ||
 		strings.Contains(hay, "session not found") ||
 		strings.Contains(hay, "can't find session")
+}
+
+// socketMissingMessage is the other half: ENOENT on the socket path. It is counted as
+// gone for Close and for the poll — see sessionAlreadyGone's residual paragraph, which is
+// why — but it is NOT an answer about any server, so Session.Gone must refuse it. Unlink
+// a live server's socket and every command aimed at that path reports ENOENT while the
+// server and its panes keep running; a caller that relaunched on this would stand a
+// second agent up beside the first, on a brand-new server bound to the same socket.
+//
+// Matched as a PAIR rather than on "error connecting to" alone; socketUnreachable is the
+// complement and its doc carries the reason.
+func socketMissingMessage(hay string) bool {
+	return strings.Contains(hay, "error connecting to") &&
+		strings.Contains(hay, "no such file or directory")
 }
 
 // socketUnreachable reports whether tmux could not open the socket at all for a reason
 // other than the file's absence — "(Permission denied)" on a socket a live server may
 // still be serving. That is neither "gone" nor an answer about the session: nothing was
-// asked of any server, so liveness must keep the prior status rather than read it as a
-// death. The ENOENT exclusion is what makes that split correct, and it is checked here
-// rather than left to call order: sessionAlreadyGone owns the one connect failure that does
-// mean gone, and at liveness's call site it has already matched and returned before this
-// runs, so the conjunct is dead weight there.
+// asked of any server, so probeLiveness must keep the prior status rather than read it as
+// a death. The ENOENT exclusion is what makes that split correct, and it is checked here
+// rather than left to call order: socketMissingMessage owns the one connect failure that
+// does mean gone, and at probeLiveness's call site it has already matched and returned
+// before this runs, so the conjunct is dead weight there.
 //
 // It stopped being dead weight when #730 arrived — the "next caller, whose order nothing
 // here can promise" that this comment used to anticipate. classifyPIDProbe consults the
@@ -1078,9 +1140,13 @@ type sessionLiveness int
 
 const (
 	sessionAlive sessionLiveness = iota // has-session succeeded
-	// sessionGone has two producers in liveness: a message sessionAlreadyGone recognizes,
+	// sessionGone has three producers in probeLiveness, and only one of them is a
+	// server's own answer (noLiveSessionMessage). The other two are inferences: ENOENT
+	// on the socket path, which a live server whose socket was unlinked also produces,
 	// and — for now — any other non-zero exit, via a fallthrough whose premise its own
-	// guards disprove. Audit the second before trusting this state (see liveness).
+	// guards disprove. This state therefore means "act as though it is dead", not "it is
+	// dead"; a caller that needs the latter reads probeLiveness's confirmed flag, which
+	// is what Session.Gone does.
 	sessionGone
 	sessionIndeterminate // probe never got a definitive answer (timeout, exec failure)
 )
@@ -1090,18 +1156,39 @@ const (
 // failure, or a socket tmux could not open means the probe never reached a definitive
 // answer, so the caller must keep the prior status rather than tear the session down.
 func (t *Session) liveness() sessionLiveness {
+	state, _ := t.probeLiveness()
+	return state
+}
+
+// probeLiveness is liveness with the EVIDENCE behind a sessionGone verdict kept, because
+// that state has three producers of unequal strength (see the const) and one caller may
+// act only on the strongest.
+//
+// confirmed is true only for a verdict a server's own answer produced: tmux reached the
+// socket, or found nothing listening on it, and said the session is not there. It is
+// false for the two inferences — ENOENT on the socket path, which a live server whose
+// socket was unlinked also produces, and the trailing ExitError fallthrough, which reads
+// every diagnostic this package has not been taught as a death. Both are safe for a
+// caller tearing state down and neither is safe for one about to relaunch, which is the
+// split Session.Gone exists to make. It is meaningless for any state but sessionGone.
+func (t *Session) probeLiveness() (state sessionLiveness, confirmed bool) {
 	ctx, cancel := t.opContext()
 	defer cancel()
 	// Capture stderr so a definitive answer can be recognized the same way Close's
-	// sessionAlreadyGone does — the message is there, not in the error.
+	// sessionAlreadyGone does — the message is there, not in the error. Both halves of
+	// that predicate are read below, separately: see the confirmed return.
 	var stderr bytes.Buffer
 	// Using "-t name" does a prefix match, which is wrong. `-t=` does an exact match.
 	existsCmd := tmuxCommand(ctx, "has-session", fmt.Sprintf("-t=%s", t.snapshotName()))
 	existsCmd.Stderr = &stderr
 	err := t.cmdExec.Run(existsCmd)
+	hay := ""
+	if err != nil {
+		hay = goneHaystack(err, stderr.String())
+	}
 	switch {
 	case err == nil:
-		return sessionAlive
+		return sessionAlive, false
 	// A context-killed probe surfaces as an ExitError ("signal: killed"), so this must
 	// be checked before the ExitError branch below — and on ctx.Err() rather than on
 	// DeadlineExceeded alone, because a CANCELLED context (app shutdown, opContext's
@@ -1110,10 +1197,17 @@ func (t *Session) liveness() sessionLiveness {
 	// which is the #270 mass-pause shape. The error chain is checked too, for a fake
 	// executor that reports the cause without a real context.
 	case ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled):
-		return sessionIndeterminate
-	// tmux gave a definitive "no live session" answer.
-	case sessionAlreadyGone(err, stderr.String()):
-		return sessionGone
+		return sessionIndeterminate, false
+	// tmux reached the socket, or found nothing listening on it, and reported no such
+	// session. The one producer of this state strong enough to relaunch over — see
+	// noLiveSessionMessage for why "no server running" counts as that answer.
+	case noLiveSessionMessage(hay):
+		return sessionGone, true
+	// ENOENT on the socket path. Gone for the poll and for Close, on the reasoning in
+	// sessionAlreadyGone's residual paragraph — but a live server whose socket was
+	// unlinked reports exactly this, so it is not confirmation of anything.
+	case socketMissingMessage(hay):
+		return sessionGone, false
 	// tmux could not open the socket for a reason that is not its absence: nothing was
 	// asked of any server, and one may be alive behind it (#730). Logged, throttled,
 	// because this classification is otherwise completely silent — it leaves the status
@@ -1125,7 +1219,7 @@ func (t *Session) liveness() sessionLiveness {
 				"at the last known value until this clears: %v",
 				t.snapshotName(), errWithStderr(err, stderr.String()))
 		}
-		return sessionIndeterminate
+		return sessionIndeterminate, false
 	// tmux actually ran and exited non-zero for some other reason. Read as a real "no" on
 	// the grounds that has-session only fails when the session is absent — a premise the
 	// two cases above are both counterexamples to, so this default is known incomplete
@@ -1135,11 +1229,11 @@ func (t *Session) liveness() sessionLiveness {
 	// is gone) is tracked in #734; it is a behaviour change on every tmux failure this
 	// package has not enumerated, which is more than #723's blast radius can carry.
 	case errors.As(err, new(*exec.ExitError)):
-		return sessionGone
+		return sessionGone, false
 	// The probe never reached the server (fork/exec EMFILE/ENOMEM, a stalled-but-alive
 	// server): inconclusive, keep the prior status.
 	default:
-		return sessionIndeterminate
+		return sessionIndeterminate, false
 	}
 }
 
@@ -1149,6 +1243,40 @@ func (t *Session) liveness() sessionLiveness {
 // distinguish transient failures from a real death use liveness directly (Poll).
 func (t *Session) DoesSessionExist() bool {
 	return t.liveness() == sessionAlive
+}
+
+// Gone reports that no session is running here and that a SERVER said so — the strongest
+// thing this package can say about a session's death.
+//
+// It is not the negation of DoesSessionExist, and it is not `liveness() == sessionGone`
+// either. Both of those are deliberately generous about death, because their callers are
+// asking "may I use this session?" and the safe answer to an inconclusive probe is no.
+// A caller about to relaunch OVER the session asks the opposite question, and for it the
+// safe answer to an inconclusive probe is "don't": the server may be up with the session
+// on it, and a second launch would either stand a duplicate agent up beside a live one
+// or fail on the duplicate-name guard.
+//
+// So this reads probeLiveness's evidence and accepts only a server's own answer. It
+// refuses both of sessionGone's weaker producers, and each refusal is a concrete
+// double-agent scenario rather than caution in the abstract:
+//
+//   - ENOENT on the socket path, which a LIVE server whose socket was unlinked produces
+//     exactly as a truly-absent one does (sessionAlreadyGone's residual). Every command
+//     aimed at that socket fails the same way, so the kill would be forgiven, the
+//     existence check would agree, and `new-session` would bind a fresh server to it with
+//     a second agent in the same worktree — while the first keeps running. Every Atrium
+//     session is served through the one socket tmuxCommand names (`-L socketName()`), so
+//     that is the whole fleet rather than one row.
+//   - the ExitError fallthrough, which reads every diagnostic this package has not been
+//     taught — an unlisted connect errno, `unknown command: has-session` below the
+//     version floor, a usage error from a malformed target — as a death (#734).
+//
+// Callers that must tell a transient failure from a death, without needing that
+// certainty, use liveness directly (Poll). Instance.RepairResumingLaunch is the caller
+// that needs this one.
+func (t *Session) Gone() bool {
+	state, confirmed := t.probeLiveness()
+	return state == sessionGone && confirmed
 }
 
 // Attached reports whether an interactive tmux client currently owns this

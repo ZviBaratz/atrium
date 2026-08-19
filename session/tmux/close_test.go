@@ -14,11 +14,12 @@ import (
 )
 
 // alreadyGoneMessages and unreachableSocketMessages are the message tables both callers of
-// the classification are held to: Close (below) and liveness (tmux_test.go). They live here
-// as values rather than as prose in the predicates' doc comments so that adding a message
-// moves every assertion that depends on it, and so neither side can drift into covering a
-// message the other does not. A message added to sessionAlreadyGone belongs in the first
-// list; one added to socketUnreachable belongs in the second.
+// the classification are held to: Close (below) and probeLiveness (tmux_test.go). They live
+// here as values rather than as prose in the predicates' doc comments so that adding a
+// message moves every assertion that depends on it, and so neither side can drift into
+// covering a message the other does not. A message added to sessionAlreadyGone belongs in
+// one of the first two lists — which half it is decides whether Session.Gone may act on it
+// — and one added to socketUnreachable belongs in the third.
 //
 // Every string was captured from a real `tmux -S <path>` run (tmux 3.6, Linux) rather than
 // guessed, which matters because the obvious guess is wrong twice over. ECONNREFUSED does
@@ -32,15 +33,28 @@ import (
 // precisely so an errno absent from this list still classifies safely rather than falling
 // through to a death verdict — see its doc for what that costs.
 var (
-	// alreadyGoneMessages must classify as gone: a clean teardown for Close, PaneDead for
-	// the poll. The last is the missing SOCKET rather than a missing session, and the one
-	// that was absent until #723.
-	alreadyGoneMessages = []string{
+	// confirmedGoneMessages are the gone messages a SERVER's own answer produces: tmux
+	// reached the socket, or found nothing listening on it, and reported that the session
+	// is not there. Nothing is running behind them to collide with, which is why these —
+	// and only these — also satisfy Session.Gone (noLiveSessionMessage).
+	confirmedGoneMessages = []string{
 		"can't find session: x",
 		"no server running on /tmp/sock",
 		"session not found",
+	}
+	// socketMissingGoneMessages is the other half: ENOENT on the socket path, the case
+	// that was absent until #723. It classifies as gone for Close and for the poll, but a
+	// LIVE server whose socket was unlinked reports it identically, so Session.Gone must
+	// refuse it — see socketMissingMessage.
+	socketMissingGoneMessages = []string{
 		"error connecting to /tmp/sock (No such file or directory)",
 	}
+	// alreadyGoneMessages is the union, and it is what sessionAlreadyGone recognizes:
+	// every message that must classify as gone — a clean teardown for Close, PaneDead for
+	// the poll. A message added to that predicate belongs in whichever half above it
+	// actually is; putting it in the wrong one either weakens Session.Gone's safety guard
+	// or blinds it (TestGoneAcceptsOnlyAServersOwnAnswer holds both halves).
+	alreadyGoneMessages = append(append([]string{}, confirmedGoneMessages...), socketMissingGoneMessages...)
 	// unreachableSocketMessages must NOT classify as gone: a surfaced error for Close,
 	// PaneUnknown for the poll. connect() never reached a server, so nothing was asked and
 	// no answer came back. The first is a live agent's socket — EACCES is a socket that

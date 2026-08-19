@@ -123,7 +123,7 @@ func TestKill_RetiringInstanceIsNotLostRecovered(t *testing.T) {
 	// threshold needs — exactly what it sees while a teardown is in flight.
 	lost := []instanceMetaResult{{instance: inst, sessionLost: true}}
 	for range lostSessionRecoverThreshold + 1 {
-		require.Empty(t, recoverLostInstances(lost, h.lostStrikes, h.retiring),
+		require.Empty(t, recoverLostInstances(lost, h.lostStrikes, h.retiring, false),
 			"a session being deliberately torn down must never be 'recovered' as paused")
 	}
 	require.Zero(t, h.lostStrikes[inst], "and must not even accumulate strikes")
@@ -132,7 +132,7 @@ func TestKill_RetiringInstanceIsNotLostRecovered(t *testing.T) {
 	// would pass against a recovery path that never fires at all.
 	require.NotEmpty(t, recoverLostInstances(lost, map[*session.Instance]int{
 		inst: lostSessionRecoverThreshold - 1,
-	}, nil), "control: an unmarked lost session is still recovered")
+	}, nil, false), "control: an unmarked lost session is still recovered")
 }
 
 // TestBatchKill_MutatesTheModelOnlyOnTheMainThread: the batch is where the freeze
@@ -188,7 +188,7 @@ func TestKill_CancelledDialogArmsNothing(t *testing.T) {
 	for range lostSessionRecoverThreshold + 1 {
 		// Recovery fires on the exact threshold strike, so collect across ticks
 		// rather than reading only the last one.
-		recovered = append(recovered, recoverLostInstances(lost, h.lostStrikes, h.retiring)...)
+		recovered = append(recovered, recoverLostInstances(lost, h.lostStrikes, h.retiring, false)...)
 	}
 	require.NotEmpty(t, recovered, "a session whose kill was cancelled is still a live session")
 
@@ -219,7 +219,7 @@ func TestKill_RefusedTeardownClearsTheRetiringMark(t *testing.T) {
 	for range lostSessionRecoverThreshold + 1 {
 		// Recovery fires on the exact threshold strike, so collect across ticks
 		// rather than reading only the last one.
-		recovered = append(recovered, recoverLostInstances(lost, h.lostStrikes, h.retiring)...)
+		recovered = append(recovered, recoverLostInstances(lost, h.lostStrikes, h.retiring, false)...)
 	}
 	require.NotEmpty(t, recovered, "and must leave it recoverable when its pane later dies")
 }
@@ -240,7 +240,7 @@ func TestBatchKill_ArmsTheSameGuardsAsASingleKill(t *testing.T) {
 
 	lost := []instanceMetaResult{{instance: inst, sessionLost: true}}
 	for range lostSessionRecoverThreshold + 1 {
-		require.Empty(t, recoverLostInstances(lost, h.lostStrikes, h.retiring),
+		require.Empty(t, recoverLostInstances(lost, h.lostStrikes, h.retiring, false),
 			"a session in a batch teardown must never be 'recovered' as paused")
 	}
 

@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -23,6 +24,29 @@ func TestSurfaceLostRecoveries(t *testing.T) {
 		h := newCreateFormHome(t)
 		h.surfaceLostRecoveries([]lostRecovery{{title: "a"}, {title: "b"}})
 		require.Contains(t, h.menu.NoticeText(), "2 sessions")
+	})
+
+	t.Run("a blank relaunch says the conversation is gone", func(t *testing.T) {
+		h := newCreateFormHome(t)
+		cmd := h.surfaceLostRecoveries([]lostRecovery{{title: "alpha", relaunchedBlank: true}})
+		require.NotNil(t, cmd)
+		require.Equal(t, stateDefault, h.state, "a session that came back needs no modal")
+		require.Contains(t, h.menu.NoticeText(), "alpha")
+		require.Contains(t, h.menu.NoticeText(), "without resuming its conversation",
+			"the notice has to say the conversation did not come back — the row shows nothing")
+		require.NotContains(t, h.menu.NoticeText(), "while resuming",
+			"and it must not name a cause: the repair cannot tell a lost conversation from a typo'd program")
+	})
+
+	t.Run("a blank relaunch and a park in one tick both get said", func(t *testing.T) {
+		h := newCreateFormHome(t)
+		h.surfaceLostRecoveries([]lostRecovery{{title: "parked"}, {title: "relaunched", relaunchedBlank: true}})
+		notice := h.menu.NoticeText()
+		require.Contains(t, notice, "relaunched")
+		require.Contains(t, notice, "parked",
+			"ranking these swallowed the parks, which is the silent Running→Paused #270 is about")
+		require.Less(t, strings.Index(notice, "relaunched"), strings.Index(notice, "parked"),
+			"the relaunch leads: a park turns its row Paused and announces itself, a relaunch changes nothing visible")
 	})
 
 	t.Run("crash at launch → persistent modal naming the command", func(t *testing.T) {
