@@ -149,18 +149,29 @@ func generateName(ctx context.Context, executor cmd.Executor, claudePath, workDi
 }
 
 // generateNameGemini is the gemini counterpart of generateName: `gemini -p`
-// prints the bare response text on stdout (verified against gemini-cli 0.27;
-// auth notices and workspace warnings go to stderr), so the output feeds
-// sanitizeName directly — no JSON envelope (see runGeminiHeadless).
+// prints the bare response text on stdout, so the output feeds sanitizeName
+// directly — no JSON envelope (see runGeminiHeadless).
 //
-// Still 0.27, and this contract is one of the reasons the adapter's
-// VerifiedVersion stays there. #713 re-drove gemini's folder-trust gate and
-// nothing else; the pin is one scalar for the whole agent, so bumping it for
-// that drive would have stopped `atrium doctor` reporting drift on 0.55.x and
-// taken the only runtime signal off a `-p` output shape last checked two dozen
-// minors ago — where a change surfaces as silently garbled session titles. The
-// drifted warning a 0.55 user sees is partly about THIS function. See the gemini
-// adapter header in session/agent/registry.go for the full evidence split.
+// The OUTPUT contract was re-probed live at 0.55.1 by #736 and holds exactly as
+// written: one line of bare text on stdout, warnings on stderr (the probe's own
+// stderr carried "Ripgrep is not available. Falling back to GrepTool."), no
+// envelope. That probe is why the adapter's VerifiedVersion could finally move
+// off 0.27 — this function was the last of the five surfaces that drive covered.
+// Whether five is all of them is registry.go's gemini header to say, and it says
+// not quite: ResumeProbe is declared there and was never driven.
+//
+// The INVOCATION was a separate claim and at 0.55.1 it was broken (#744): gemini
+// refuses to run in an untrusted directory, exiting 55 with EMPTY stdout, and
+// runGeminiHeadless runs from a fresh os.MkdirTemp that can never appear in the
+// user's trustedFolders.json — so every naming call from a 0.55.x install took
+// that path. It failed toward a LOST title rather than a wrong one, since Output
+// returns the non-zero exit as an error and the empty stdout never reaches
+// sanitizeName. runGeminiHeadless now sets GEMINI_CLI_TRUST_WORKSPACE=true, which
+// is where the reasoning about why that is safe lives.
+//
+// Fixed here rather than filed because #736 moved this adapter's pin past 0.55.1,
+// and doctor warns only when installed > verified: leaving the break would have
+// turned a 0.55.x user's "drifted" into "ok" with naming still down.
 func generateNameGemini(ctx context.Context, executor cmd.Executor, geminiPath, prompt string, stats *git.DiffStats) (string, error) {
 	sessionContext := buildContext(prompt, stats)
 	if sessionContext == "" {

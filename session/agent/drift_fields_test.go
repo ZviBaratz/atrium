@@ -12,14 +12,24 @@ func TestAdaptersExposesSeededVersions(t *testing.T) {
 		// by its version; the pin records that every capture in registry.go came from
 		// the ungated (hint-list) footer branch. #337.
 		KeyClaude: {"2.1.210", GranularityMinor, map[string]bool{"tengu_copper_thistle": false}},
-		// Deliberately NOT moved by #713, which re-drove the folder-trust gate and nothing
-		// else: the busy and confirmation literals are bundle-grep presence only and
-		// generateNameGemini's contract was last checked here, so 0.27 is still the last
-		// version at which the WHOLE adapter was verified. registry.go's gemini header
-		// carries the argument, including why the drifted warning that results is the
-		// cheaper error. A future bump belongs to a drive that covers all four surfaces,
-		// or to the per-surface split in #721.
-		KeyGemini: {"0.27", GranularityMinor, nil},
+		// Moved by #736, which is the drive this comment used to ask for by name: "a drive
+		// that covers all four surfaces". #736 drove three of them — the confirmation dialog
+		// and the busy marker on a width ladder, and generateNameGemini's `gemini -p`
+		// contract, in the same authenticated sessions — joining the two gates #713 and #717
+		// had already driven at 0.55.1. How many surfaces that is in total, and which one is
+		// still unprobed, is registry.go's gemini header to state and not this comment's to
+		// re-derive: three files used to count it independently and two of them were wrong.
+		// That header lists each surface with its capture, including the two things the
+		// drive found that a bundle grep could not: both literals are PRESENT and neither is
+		// reachable at every width. Moving the pin also forced #744: doctor flags drift only
+		// when installed > verified, so passing 0.55.1 would have silenced the only amber a
+		// 0.55.x user saw while headless naming was still broken for them. Fixed in the same
+		// change rather than filed, in runGeminiHeadless.
+		//
+		// The other route this comment offered is still open and still better — a per-surface
+		// pin (#721), which would have let #713 move the one surface it drove instead of
+		// waiting for the expensive three.
+		KeyGemini: {"0.55.1", GranularityMinor, nil},
 		KeyCodex:  {"0.147.0", GranularityMinor, nil},
 		KeyAider:  {"0.86.2", GranularityMinor, nil},
 		KeyAgy:    {"1.1.11", GranularityMinor, nil},

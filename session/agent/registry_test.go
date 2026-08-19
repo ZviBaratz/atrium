@@ -1805,9 +1805,15 @@ func TestCodexGateAndResume(t *testing.T) {
 // be driven here (#347/#645)" was too broad, and #713 falsified it: the folder-trust gate
 // renders on the STARTUP screen and costs no API turn, so it has now been driven live at
 // 0.55.1 across a width ladder (gemini_pane_test.go) — which is how the gate literal's rot
-// was found. What is still out of reach is everything past that dialog: the idle composer,
-// the loading row and the tool-confirmation dialog all need an authenticated session and a
-// real turn, which is what #347/#645 were about.
+// was found. Everything past that dialog stayed out of reach until #736 paid for an isolated
+// config dir and an API key: the idle composer, the loading row and the tool-confirmation
+// dialog are all driven now, in gemini_confirm_pane_test.go.
+//
+// This fixture is NOT retired, and it is not a stand-in for geminiIdlePane055 either. What it
+// records is the 0.27 composer SHAPE — a rounded box around a "> " row — and 0.55.1 does not
+// draw that: the driven composer is bounded by "▄▄▄"/"▀▀▀" block rules with no side walls at
+// all. Several tests here depend on the boxed shape, and swapping the value under them would
+// quietly change what they measure. Read it as one CLI generation's chrome, not as gemini's.
 const geminiIdlePane = "✦ Done.\n\n╭───╮\n│ > │\n╰───╯\n~/project   no sandbox   gemini-2.5-pro"
 
 // aiderIdlePane is aider's idle pane, captured from the same live 0.86.2 session as the
@@ -1820,11 +1826,13 @@ var aiderIdlePane = strings.Join([]string{
 	">",
 }, "\n")
 
-// --- Gemini fixtures, all composed rather than captured. The busy and confirmation strings
-// come from the 0.27 package source (LoadingIndicator.js, ToolConfirmationMessage.js) and
-// are still present in the 0.55.1 bundle, but no pane has rendered either here. The trust
-// gate is the exception and no longer belongs to that tier: it is pinned to verbatim 0.55.1
-// captures in gemini_pane_test.go (#713).
+// --- Gemini fixtures, composed rather than captured. They came from the 0.27 package source
+// (LoadingIndicator.js, ToolConfirmationMessage.js), and the panes that now settle both
+// surfaces live elsewhere: the trust gate in gemini_pane_test.go (#713) and the busy marker
+// and tool confirmation in gemini_confirm_pane_test.go (#736). This tier is composed evidence
+// kept for the shapes it names, and driving those two showed why the distinction is worth
+// keeping — the composed busy string carries "esc to cancel" at any width, while the real
+// loading row truncates it away below 33 columns.
 //
 // What changed at the vendor was the gate's HEADLINE, not its component. An earlier draft
 // here said "FolderTrustDialog.js is gone from the 0.55.1 bundle along with the literal it
@@ -1852,16 +1860,13 @@ func TestGeminiBusyMarker(t *testing.T) {
 }
 
 func TestGeminiPrompts(t *testing.T) {
-	confirm := strings.Join([]string{
-		"Apply this change?",
-		"  1. Allow once",
-		"  2. Allow always",
-		"  3. No, suggest changes (esc)",
-	}, "\n")
-	m, ok := gemini.DetectPrompt(confirm)
+	// The adapter's own smoke test. The width ladder, the truncation floor and the
+	// composer-quoting case all live in gemini_confirm_pane_test.go, against verbatim
+	// 0.55.1 captures; this stays here for the shape and the NoAutoTap contract.
+	m, ok := gemini.DetectPrompt(geminiConfirmPane40)
 	require.True(t, ok)
 	require.Equal(t, "confirmation", m.Name)
-	require.True(t, m.NoAutoTap, "an unanchored confirmation must never be Enter-approved (#347)")
+	require.True(t, m.NoAutoTap, "Enter runs the command; it must never be Enter-approved (#347)")
 
 	// The pre-adapter matcher ("Yes, allow once") no longer exists in
 	// gemini-cli; current panes must match on the decline option.
@@ -1872,10 +1877,12 @@ func TestGeminiPrompts(t *testing.T) {
 	_, ok = gemini.DetectPrompt(idle)
 	require.False(t, ok)
 
-	// The #347 quote, composed the same way as codex's above and standing for the same
-	// measurement. For gemini this is where it stops: the CLI is deprecated in favour of
-	// Antigravity (docs/superpowers/specs/2026-07-23-antigravity-integration-design.md), so
-	// the false positive is accepted and made harmless rather than anchored away.
+	// This block used to ASSERT the false positive and call it settled: a pane quoting the
+	// decline label above a composer returned ok, justified on the grounds that the CLI is
+	// deprecated so the exposure was "accepted and made harmless rather than anchored away".
+	// #736 anchored it. The verdict below is the inversion, and the driven version of the
+	// same case — a real composer with the literal typed into it — is
+	// TestGeminiConfirmationIgnoresAComposerQuotingTheLiteral.
 	quoted := strings.Join([]string{
 		"✦ The gemini entry keys on \"No, suggest changes (esc)\",",
 		"  the decline label of the tool-confirmation dialog.",
@@ -1885,9 +1892,8 @@ func TestGeminiPrompts(t *testing.T) {
 		"╰───╯",
 		"~/project   no sandbox   gemini-2.5-pro",
 	}, "\n")
-	m, ok = gemini.DetectPrompt(quoted)
-	require.True(t, ok, "the flat window still reads a quoted literal as a live prompt")
-	require.True(t, m.NoAutoTap, "…so the quote must surface as needs-input, never tap Enter")
+	_, ok = gemini.DetectPrompt(quoted)
+	require.False(t, ok, "a quoted literal is not a live confirmation (#736)")
 }
 
 func TestGeminiGateAndResume(t *testing.T) {

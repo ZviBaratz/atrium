@@ -1115,10 +1115,30 @@ func TestPollGemini(t *testing.T) {
 	s := pollSession(t, "gemini", &c, nil)
 	require.Equal(t, PaneWorking, s.Poll())
 
-	c = "Apply this change?\n  1. Allow once\n  2. Allow always\n  3. No, suggest changes (esc)"
+	// Abridged from the verbatim width-40 capture in session/agent's
+	// gemini_confirm_pane_test.go — the same arrangement wrappedDialog above uses, since the
+	// full pane belongs with the ladder that measures it. It has to be the real SHAPE and not
+	// the four bare lines this used to be: since #736 the matcher anchors on a box whose
+	// bottom border ends the pane, so an unboxed transcript of the option rows is exactly what
+	// must NOT classify as a prompt.
+	c = "✦ I will run a command to delete the README.md file.\n\n" +
+		"╭──────────────────────────────────────╮\n" +
+		"│ ? Shell  rm -f README.md             │\n" +
+		"│ Allow execution of [Shell]?          │\n" +
+		"│                                      │\n" +
+		"│ ● 1. Allow once                      │\n" +
+		"│   2. Allow for this session          │\n" +
+		"│   3. No, suggest changes (esc)       │\n" +
+		"╰──────────────────────────────────────╯"
 	require.Equal(t, PanePromptManual, s.Poll(),
-		"a tool confirmation is a needs-input state — manual, for the same reason as codex's "+
-			"approval overlay (#347)")
+		"a tool confirmation is a needs-input state — manual, because Enter here runs the "+
+			"shell command and the highlighted default is \"Allow once\" (#347)")
+
+	// The same rows with no box around them: a transcript quoting the dialog, which the flat
+	// matcher read as live until #736.
+	c = "Apply this change?\n  1. Allow once\n  2. Allow always\n  3. No, suggest changes (esc)"
+	require.Equal(t, PaneIdle, s.Poll(),
+		"unboxed option rows are a quote, not a live dialog (#736)")
 
 	// PollNow (the post-detach face-value refresh): gemini is marker-bearing, so —
 	// unlike aider's PaneUnknown — an absent marker with no hook file reads as idle,
