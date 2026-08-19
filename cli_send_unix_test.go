@@ -147,14 +147,22 @@ func TestStartingTUIOutlastsAProbesLock(t *testing.T) {
 	probe, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = probe.Close() })
-	require.NoError(t, syscall.Flock(int(probe.Fd()), syscall.LOCK_SH|syscall.LOCK_NB))
+	fd := int(probe.Fd())
+	require.NoError(t, syscall.Flock(fd, syscall.LOCK_SH|syscall.LOCK_NB))
 
+	// The fd is read here and joined below, not touched from the goroutine and left to
+	// run. An unlock landing after t.Cleanup has closed the file would name whatever fd
+	// the runtime handed out next — releasing a flock some other test in this process
+	// holds, which is a failure that surfaces anywhere but here.
+	unlocked := make(chan struct{})
 	go func() {
+		defer close(unlocked)
 		time.Sleep(2 * lockRetryDelay)
-		_ = syscall.Flock(int(probe.Fd()), syscall.LOCK_UN)
+		_ = syscall.Flock(fd, syscall.LOCK_UN)
 	}()
 
 	release, err := acquireTUILock(path)
+	<-unlocked
 	require.NoError(t, err, "a TUI must not be refused its own lock by a passing probe")
 	release()
 }

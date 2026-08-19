@@ -200,12 +200,20 @@ func TestHoldSucceedsOnceAProbeLetsGo(t *testing.T) {
 	t.Cleanup(func() { _ = reader.Close() })
 	require.NoError(t, shareLock(reader))
 
+	// The fd is read here and joined below, not touched from the goroutine and left to
+	// run. An unlock landing after t.Cleanup has closed the file would name whatever fd
+	// the runtime handed out next — releasing a flock some other test in this process
+	// holds, which is a failure that surfaces anywhere but here.
+	fd := int(reader.Fd())
+	unlocked := make(chan struct{})
 	go func() {
+		defer close(unlocked)
 		time.Sleep(2 * holdRetryDelay)
-		_ = syscall.Flock(int(reader.Fd()), syscall.LOCK_UN)
+		_ = syscall.Flock(fd, syscall.LOCK_UN)
 	}()
 
 	release, err := Hold(Payload{Kind: KindAttach, Label: "fix-auth"})
+	<-unlocked
 	require.NoError(t, err, "the attach must still be recorded once the probe lets go")
 	t.Cleanup(release)
 
