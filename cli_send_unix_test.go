@@ -166,3 +166,32 @@ func TestStartingTUIOutlastsAProbesLock(t *testing.T) {
 	require.NoError(t, err, "a TUI must not be refused its own lock by a passing probe")
 	release()
 }
+
+// TestAcquireTUILockSpendsItsRetryBudget is the deterministic half of the above: with a
+// reader's shared lock held for the whole call, acquireTUILock must spend its budget before
+// refusing rather than give up on the first EWOULDBLOCK. The elapsed floor is what a single
+// non-blocking attempt cannot clear, and it is computed from the two constants so the
+// bound has one home.
+//
+// TestStartingTUIOutlastsAProbesLock covers the same mutation from the success side, but it
+// depends on a goroutine being scheduled; this one does not.
+func TestAcquireTUILockSpendsItsRetryBudget(t *testing.T) {
+	sandboxDataDir(t)
+	path, err := tuiLockPath()
+	require.NoError(t, err)
+	probe, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = probe.Close() })
+	require.NoError(t, syscall.Flock(int(probe.Fd()), syscall.LOCK_SH|syscall.LOCK_NB))
+
+	start := time.Now()
+	release, err := acquireTUILock(path)
+	elapsed := time.Since(start)
+	if err == nil {
+		release()
+		t.Fatal("a shared lock held for the whole call must refuse the exclusive one")
+	}
+	assert.ErrorIs(t, err, errTUIAlreadyRunning)
+	assert.GreaterOrEqual(t, elapsed, time.Duration(lockAttempts-1)*lockRetryDelay,
+		"acquireTUILock gave up without spending its retry budget, so a passing probe can refuse a starting TUI")
+}

@@ -21,10 +21,11 @@ import (
 const maxPayloadBytes = 4096
 
 // holdAttempts and holdRetryDelay bound how long Hold retries past a reader's shared
-// lock — see lockExclusive for why it retries at all. The product is the worst case an
-// attach can pay before giving up and going unrecorded, and it is deliberately far
-// longer than the two syscalls Held holds the shared lock for, so losing to a probe
-// takes a run of coincidences rather than one.
+// lock — see lockExclusive for why it retries at all. They bound the worst case an attach
+// can pay before giving up and going unrecorded, and are set far above the two syscalls
+// Held holds the shared lock for, so losing to a probe takes a run of coincidences rather
+// than one. TestHoldRetriesPastASharedLock computes the bound from these two rather than
+// restating it.
 const (
 	holdAttempts   = 20
 	holdRetryDelay = 5 * time.Millisecond

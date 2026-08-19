@@ -165,8 +165,8 @@ func TestHeldReadsAnUnparseablePayloadAsUnknown(t *testing.T) {
 // single non-blocking attempt cannot clear.
 //
 // The mutation it exists for is a one-line revert of lockExclusive to a bare
-// Flock(LOCK_EX|LOCK_NB) — which passes every other test in this package, because none of
-// the others has a reader in the way.
+// Flock(LOCK_EX|LOCK_NB), which nothing that predates the retry can see: every earlier
+// test in this package takes the lock with no reader in the way.
 func TestHoldRetriesPastASharedLock(t *testing.T) {
 	path := sandbox(t)
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))

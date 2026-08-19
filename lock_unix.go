@@ -89,9 +89,10 @@ func tuiRunning() (running, known bool) {
 	return false, true
 }
 
-// lockAttempts and lockRetryDelay bound how long lockExclusive retries. Their product is
-// how long a real TUI is willing to wait behind a lock it expects to be free, and how
-// long a second TUI takes to be refused.
+// lockAttempts and lockRetryDelay bound how long lockExclusive retries: how long a real
+// TUI is willing to wait behind a lock it expects to be free, and so how long a second TUI
+// takes to be refused. TestAcquireTUILockSpendsItsRetryBudget computes the bound from
+// these two rather than restating it.
 const (
 	lockAttempts   = 20
 	lockRetryDelay = 5 * time.Millisecond
@@ -100,10 +101,10 @@ const (
 // lockExclusive takes tui.lock exclusively, retrying briefly while someone else holds it.
 //
 // Without the retry, tuiRunning's own shared probe can deny a starting TUI its
-// single-instance lock: acquireTUILockOrWarn maps EWOULDBLOCK to errTUIAlreadyRunning, so
-// a user who launched atrium at the moment an `atrium new` was mid-probe would be told
-// atrium was already running for this data directory and refused, naming an instance that
-// does not exist. #760 made that likelier by probing on the --wait path too and again at
+// single-instance lock: the arm below turns EWOULDBLOCK into errTUIAlreadyRunning and
+// acquireTUILockOrWarn turns that into a refusal, so a user who launched atrium at the
+// moment an `atrium new` was mid-probe would be told atrium was already running for this
+// data directory, naming an instance that does not exist. #760 made that likelier by probing on the --wait path too and again at
 // each deadline. A shared probe holds the lock for two syscalls, so retrying past it is
 // enough; only a lock still held after the whole budget is a real second TUI.
 //
