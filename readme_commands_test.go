@@ -122,12 +122,12 @@ func TestEveryCommandHasAShortDescription(t *testing.T) {
 // the TUI is up. Only the bare atrium and reset may *hold* tui.lock; a subcommand that
 // held it would refuse exactly when a user most wants it.
 //
-// Holding is the property, not touching. `send` and `new` do acquire the lock — briefly,
-// non-blockingly, and after they have already spooled — because that try-acquire is how
+// Holding is the property, not touching. `send` and `new` do lock it — briefly, shared,
+// non-blockingly, and after they have already spooled — because that probe is how
 // tuiRunning answers "is anyone there to deliver this?" for the warning they print. That
-// is why this asserts each command *succeeds* against a held lock rather than asserting
-// it never calls acquireTUILock: the second would be false, and the first is what a
-// caller actually depends on.
+// is why this asserts each command *succeeds* against a held lock rather than asserting it
+// never touches the file: the second would be false, and the first is what a caller
+// actually depends on.
 //
 // `reap` is the sharpest case rather than one more of the same. It exists for a tmux
 // server that outlived its run and is eating memory now, which is a thing a user

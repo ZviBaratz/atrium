@@ -191,7 +191,7 @@ func runNew(out, errOut io.Writer, r newRequest) error {
 }
 
 // warnSpoolWaiting prints the "nothing is going to pick this up soon" warning shared by
-// `new` and `send`, or nothing when there is nothing to say. See spoolWaitWarning
+// `new` and `send`, or nothing when there is nothing to say. See spoolWarningFor
 // (drainstate.go) for the two cases and who each is addressed to.
 //
 // waiting says the caller is about to block on --wait, which suppresses the no-TUI

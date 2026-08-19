@@ -400,7 +400,7 @@ func (m *home) quitPending() bool { return m.quitRequested }
 // stagedSpawnPlan reports whether a confirmation dialog is holding a spawn plan that
 // has already passed its title and cap checks.
 //
-// Of the three holds this is the one about corrupting another surface rather than about
+// Of the four holds this is the one about corrupting another surface rather than about
 // interleaving with work already under way.
 // Accepting either confirm goes straight to spawnVariants, which re-validates nothing:
 // creating a session in between would let the accepted plan spawn a duplicate title —

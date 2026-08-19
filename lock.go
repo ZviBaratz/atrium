@@ -11,9 +11,9 @@ import (
 
 // tuiLockFilename is the advisory-lock file a running interactive atrium holds for
 // its whole lifetime, sitting next to daemon.lock / daemon.pid / update.lock and
-// internal/handover's handover.lock in the data dir. It enforces one TUI per data dir: two TUIs sharing a state.json would
-// let one's exit-time autoyes daemon snapshot clobber the other's instances and
-// non-instance state (issue #230). The kernel frees an flock when its owning process
+// internal/handover's handover.lock in the data dir. It enforces one TUI per data
+// dir: two TUIs sharing a state.json would let one's exit-time autoyes daemon
+// snapshot clobber the other's instances and non-instance state (issue #230). The kernel frees an flock when its owning process
 // dies — cleanly or by crash — so a dead TUI never wedges the next one and no
 // stale-lock recovery is needed (unlike a PID file).
 const tuiLockFilename = "tui.lock"

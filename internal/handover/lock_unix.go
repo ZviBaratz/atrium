@@ -36,9 +36,10 @@ const (
 // that the lock is held for exactly as long as the terminal is gone.
 //
 // An error means the lock was NOT taken — nothing to release, and the caller should
-// carry on rather than refuse to hand over the terminal. Attaching must not depend
-// on a lock file: the cost of failing open is that a headless command reads the lock
-// as free and stays quiet, which is exactly the behaviour that predates this.
+// carry on rather than refuse to hand over the terminal. Attaching must not depend on a
+// lock file. The cost is that this handover goes unobserved: a headless command reads the
+// lock as free, so it cannot warn, and a --wait caller is told the outbox is being read
+// (see drainstate.go's drainLive) when nothing is reading it.
 func Hold(p Payload) (release func(), err error) {
 	path, err := Path()
 	if err != nil {
@@ -123,10 +124,11 @@ func writePayload(f *os.File, b []byte) {
 // together, since a held handover lock only means "parked" alongside a held tui.lock
 // (with no TUI at all, this lock is free and the caller has a different thing to say).
 //
-// known is false when the question could not be answered at all — an unresolvable
-// data dir, or a lock that cannot be opened — so a caller can stay silent rather
-// than assert something wrong. A missing data dir lands here rather than being
-// created: a headless probe has no business materializing one to ask a question.
+// known is false when the question could not be answered at all — an unresolvable data
+// dir, or a lock that cannot be opened — so a caller can stay silent rather than assert
+// something wrong. A data dir with no lock file in it is NOT one of those: it answers
+// "no handover", and it reaches that answer without O_CREATE, because a probe has no
+// business materializing a lock file in a dir it only meant to read.
 func Held() (held bool, p Payload, known bool) {
 	path, err := Path()
 	if err != nil {

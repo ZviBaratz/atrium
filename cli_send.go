@@ -230,8 +230,8 @@ func spoolSettled(record, inFlight string) (bool, error) {
 }
 
 // spoolWaitCopy is the wording awaitSpool cannot supply: what a refusal and a timeout
-// are called for this particular command. Both are finished strings — the caller knows
-// its own timeout, so nothing here has to be a format.
+// are called for this particular command. Neither is a format string — the caller knows
+// its own timeout — but only refused is a finished one, for the reason timedOut gives.
 type spoolWaitCopy struct {
 	refused string
 	// timedOut is called at the deadline, not built before the wait. It names who is
@@ -244,10 +244,10 @@ type spoolWaitCopy struct {
 // joinTimedOut completes a deadline message with what is actually draining, falling
 // back to fallback when nothing can be determined.
 //
-// The fallback is an enumeration of every case rather than a claim about one, which is
-// what both messages said unconditionally before there was any way to tell them apart
-// — correct, and useless to a caller trying to work out whether to wait longer or go
-// and detach.
+// The fallback is an enumeration of every case rather than a claim about one: correct,
+// and useless to a caller trying to work out whether to wait longer or go and detach.
+// That is what `new` said unconditionally before there was any way to tell the cases
+// apart. `send` did worse — it asserted one of them, and the wrong one; see waitForDrain.
 func joinTimedOut(head, fallback string) string {
 	clause := drainerClause()
 	if clause == "" {
