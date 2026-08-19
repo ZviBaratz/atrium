@@ -841,10 +841,10 @@ var codex = &Adapter{
 // different evidence tiers, and #713 is what the difference costs — say which is which
 // rather than let one word cover both.
 //
-// DRIVEN at 0.55.1 — five surfaces, which is not the same claim as "every surface this adapter
+// DRIVEN at 0.55.1 — six surfaces, which is not the same claim as "every surface this adapter
 // declares" and an earlier draft ran the two together. drift_fields_test.go's comment asked for
-// four by name; #717 added the second Gate after that sentence was written, making five. The
-// sixth is below.
+// four by name; #717 added the second Gate after that sentence was written, and #712 drove
+// Resume after that. The one surface still undriven is below.
 //
 //   - the folder-trust Gate — width ladder in gemini_pane_test.go (#713), re-confirmed byte
 //     for byte in #736's run;
@@ -853,19 +853,25 @@ var codex = &Adapter{
 //   - the busy marker — same file, same authenticated sessions, and what it found moved
 //     MarkerWindow;
 //   - generateNameGemini's `gemini -p` output contract (session/naming.go), probed in the
-//     same run: bare text on stdout, warnings on stderr, no JSON envelope.
+//     same run: bare text on stdout, warnings on stderr, no JSON envelope;
+//   - Resume, in a directory with no conversation (#712) — the DRIVEN note beside the field
+//     itself carries what was observed, and drive-agent.sh's RESUME_TABLE re-drives it, held
+//     to the field by drive_agent_drift_test.go.
 //
 // NOT DRIVEN, and the reason this list stops short of "the whole adapter" — the phrase the
 // codex adapter's header uses, counting its own ResumeProbe among the surfaces it claims.
-// gemini declares Resume and ResumeProbe too, and ResumeProbe is a live heuristic: tmux runs
+// ResumeProbe is the one left, and it is a live heuristic: tmux runs
 // binHelpContains(bin, a.ResumeProbe) and silently disables resume, with only an InfoLog line,
-// when the needle is absent from `<bin> --help`. #736 never probed it. It was checked by hand
-// at 0.55.1 — `gemini --help` still lists "-r, --resume" with "latest" — so nothing is broken
-// today; what is wrong is a pin certifying a surface nobody drove, in the direction this header
-// calls self-concealing. Splitting it out is #721's job.
+// when the needle is absent from `<bin> --help`. Neither #736 nor #712 probed it — #712 drove
+// the flag Resume writes, which is a different question from whether the needle is still in
+// `--help`. It was checked by hand at 0.55.1 — `gemini --help` still lists "-r, --resume" with
+// "latest" — so nothing is broken today; what is wrong is a pin certifying a surface nobody
+// drove, in the direction this header calls self-concealing. Splitting it out is #721's job.
 //
-// The five above are why VerifiedVersion moved to 0.55.1 below. They took a real turn per rung
-// plus an isolated config dir to buy.
+// FIVE of those six are why VerifiedVersion moved to 0.55.1 below — every one but Resume,
+// which was driven at the same version afterwards and moved no pin. internal/doctor's
+// check_test.go cites that five by name, so the two counts differ on purpose rather than one
+// of them being stale. They took a real turn per rung plus an isolated config dir to buy.
 //
 // ONE OF THOSE FIVE WAS VERIFIED AND BROKEN, and moving the pin is what forced fixing it here
 // rather than later. generateNameGemini's output CONTRACT holds exactly as documented; its

@@ -65,11 +65,17 @@
 #     misaimed Enter edits your real agent config. `keys` refuses to send Enter at
 #     such a pane unless FORCE=1;
 #   - and `resume` drives a resume flag against that same real config. Where it answers
-#     the scratch workspace's folder-trust gate, that answer is a write: codex records
-#     the path in its config.toml, gemini in trustedFolders.json, agy in its settings
-#     and its last-conversations cache — one nonce path per drive (PID + $RANDOM),
-#     naming a directory `down` then deletes. That Enter is the only key it ever sends,
-#     and it sends none at all at a pane that is already dead.
+#     the scratch workspace's folder-trust gate, that answer is a write, for every agent
+#     it drives and not merely for some of them: claude records the directory in
+#     ~/.claude.json (the same file config.Config's TrustWorktreesRoot pre-accepts the
+#     dialog in), codex the path in its config.toml, gemini in trustedFolders.json, agy
+#     in its settings and its last-conversations cache — one nonce path per drive
+#     (PID + $RANDOM), naming a directory `down` then deletes. claude is the row that
+#     cannot be driven without that Enter at all: its adapter records the death landing
+#     only once the folder is trusted, so naming the other three and not claude would
+#     read as "claude writes nothing" about the one drive that must answer the gate.
+#     That Enter is the only key it ever sends, and it sends none at all at a pane that
+#     is already dead.
 #
 # USAGE — see `help`. The short version:
 #
@@ -1134,17 +1140,28 @@ cmd_resume() {
 	*) observed=dead ;;
 	esac
 
-	write_capture "resume-$agent"
+	# The -w<width> stem is not decoration. emit globs captures/*.txt and DIES on any stem it
+	# cannot read as <label>-w<width>[-t<frame>], so a bare `resume-<agent>` aborts emit for
+	# the whole run — including the runs that most need reading, since the mismatch die below
+	# leaves the session up precisely so the capture can be looked at. cmd_up asserted this
+	# geometry before the launch (assert_geometry), so the width in the name is the width the
+	# pane rendered at, which is the property that makes a stem safe to trust.
+	write_capture "resume-$agent-w$width"
 	# And the scrollback, which the three fixture forms do not carry. tmux appends its own
 	# "Pane is dead" line at the bottom of a dead pane, which can push the CLI's last words
 	# off the top of the screen — and for a death those words are the whole record.
-	t capture-pane -p -S - -t "$PANE" >"$RUN/captures/resume-$agent.scrollback.txt"
+	#
+	# Beside captures/, never inside it. This is raw scrollback, not a pane at a known width,
+	# and captures/ is the directory emit reads: a .txt in there that is not a fixture-form
+	# pane is the same abort as an unparseable stem, and it would inflate the capture count
+	# `status` prints. write_capture is the only writer of that directory.
+	t capture-pane -p -S - -t "$PANE" >"$RUN/resume-$agent.scrollback.txt"
 
 	note "───"
 	note "RESUME  $agent ${VERSION:-unknown}"
 	note "        $program"
 	note "        pane_dead=$launched at launch, Enter sent: $answered, pane_dead=$dead${status_:+ (exit $status_)} → $observed, recorded $expect"
-	note "        captures/resume-$agent.txt (+ cat-A/, prod/, .scrollback.txt)"
+	note "        captures/resume-$agent-w$width.txt (+ cat-A/, prod/), resume-$agent.scrollback.txt"
 	note "───"
 	[[ "$observed" == "$expect" ]] ||
 		die "$agent resumed $observed and RESUME_TABLE records $expect. Read the capture before touching the table: column 3 is a driven record, so the answer is to re-drive and write down what happened, never to edit the expectation to fit. The run is left up — \`down\` when you are done with it."
@@ -1595,11 +1612,33 @@ cmd_status() {
 	cap_names="$(cap_env_names)"
 	if [[ -n "$cap_names" ]]; then printf 'cap-env  %s\n' "$cap_names"; fi
 	printf 'socket   %s\n' "$SOCK"
-	if t has-session -t "$SESSION" 2>/dev/null; then
-		printf 'session  live, %sx%s  pane %s\n' "$(current_width)" "$HEIGHT" "$PANE"
-	else
+	# has-session stopped being liveness the moment a verb kept the pane open past its
+	# program: `resume` sets REMAIN_ON_EXIT=on, so the session outlives the CLI and
+	# has-session reports every exited row as a survivor. cmd_resume avoids that for its own
+	# verdict by reading #{pane_dead}; `status` has to as well, because it is where both of
+	# that verb's failure paths send you — the mismatch die and pane_dead_flag's — and on
+	# those paths a dead CLI is the whole observation.
+	#
+	# Read directly rather than through pane_dead_flag: that helper dies on a value it cannot
+	# parse, and a diagnostic verb must not exit on the state it was run to report. An
+	# unreadable answer is printed as unreadable.
+	local dead="" exited=""
+	if ! t has-session -t "$SESSION" 2>/dev/null; then
 		# shellcheck disable=SC2016  # backticks here are prose quoting a verb name
 		printf 'session  DEAD (the CLI exited; `down` to clean up)\n'
+	else
+		dead="$(t display-message -p -t "$PANE" '#{pane_dead}' 2>/dev/null || true)"
+		case "$dead" in
+		1)
+			exited="$(t display-message -p -t "$PANE" '#{pane_dead_status}' 2>/dev/null || true)"
+			# shellcheck disable=SC2016  # backticks here are prose quoting a verb name
+			printf 'session  live but the PROGRAM EXITED%s — remain-on-exit is holding the pane open (`resume`)\n' \
+				"${exited:+ (exit $exited)}"
+			;;
+		0) printf 'session  live, %sx%s  pane %s\n' "$(current_width)" "$HEIGHT" "$PANE" ;;
+		*) printf 'session  live, %sx%s  pane %s (could not read whether the program is still running)\n' \
+			"$(current_width)" "$HEIGHT" "$PANE" ;;
+		esac
 	fi
 	printf 'captures %s\n' "$(find "$RUN/captures" -maxdepth 1 -name '*.txt' | grep -c . || true)"
 	# shellcheck disable=SC2016  # backticks here are prose quoting a verb name
@@ -1861,12 +1900,16 @@ RESUME SURVIVAL (`resume`, #712)
       --all as the flag that "disables cwd filtering"); agy documents --continue only as
       "the most recent conversation", so that row rests on what was observed rather than
       on a documented scope.
-    - Answering the trust gate WRITES to the agent's real config — codex records the
-      path in config.toml, gemini in trustedFolders.json, agy in its settings and its
-      last-conversations cache. One nonce path per drive (PID + $RANDOM), naming a
-      directory `down` then deletes. That cache is why the name needs a nonce and not
-      just a PID: PIDs are reused, `down` frees the path, and a recycled one would
-      resume the FIRST drive's own conversation and report `alive` for finding it.
+    - Answering the trust gate WRITES to the agent's real config, for all four rows:
+      claude records the directory in ~/.claude.json, codex the path in config.toml,
+      gemini in trustedFolders.json, agy in its settings and its last-conversations
+      cache. claude is listed first because it is the row that cannot be driven without
+      the Enter — see the bullet above — so an enumeration that skipped it would read as
+      an exemption for the one drive guaranteed to answer the gate. One nonce path per
+      drive (PID + $RANDOM), naming a directory `down` then deletes. That cache is why
+      the name needs a nonce and not just a PID: PIDs are reused, `down` frees the path,
+      and a recycled one would resume the FIRST drive's own conversation and report
+      `alive` for finding it.
     - claude's row expects a DEATH, and that is the control. Four `alive` rows would
       pass identically if the verb could not observe a death at all.
 
