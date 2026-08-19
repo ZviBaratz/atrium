@@ -3,6 +3,8 @@
 package main
 
 import (
+	"os"
+	"syscall"
 	"testing"
 	"time"
 
@@ -90,4 +92,69 @@ func TestTUIRunningDetectsHeldLock(t *testing.T) {
 	release()
 	running, _ = tuiRunning()
 	assert.False(t, running, "releasing the lock frees the probe again")
+}
+
+// TestTUIRunningIgnoresAConcurrentProbe: the probe is shared, so two headless commands
+// asking at the same instant do not read each other as a running TUI.
+//
+// This is the reading #760 made dangerous rather than merely wrong. drainState takes a
+// running TUI with a free handover lock as drainLive, and drainerClause then tells a
+// --wait caller the outbox "is being read" — a confident sentence about a TUI that does
+// not exist, replacing an enumeration that was at least never false. Reverting tuiRunning
+// to acquireTUILock's exclusive request is what this catches.
+func TestTUIRunningIgnoresAConcurrentProbe(t *testing.T) {
+	sandboxDataDir(t)
+	path, err := tuiLockPath()
+	require.NoError(t, err)
+	other, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = other.Close() })
+	require.NoError(t, syscall.Flock(int(other.Fd()), syscall.LOCK_SH|syscall.LOCK_NB),
+		"the shared lock another headless command holds mid-probe")
+
+	running, known := tuiRunning()
+	assert.True(t, known)
+	assert.False(t, running, "another probe is not a TUI")
+}
+
+// TestTUIRunningLeavesNoLockFile: a probe reads the data dir, so it must not write to it.
+// The README's account of what a scripted `send`/`new` loop touches — the request it
+// spools, and nothing else — is only true while this holds.
+func TestTUIRunningLeavesNoLockFile(t *testing.T) {
+	sandboxDataDir(t)
+	running, known := tuiRunning()
+	require.True(t, known, "a data dir with no lock file has answered the question")
+	require.False(t, running)
+
+	path, err := tuiLockPath()
+	require.NoError(t, err)
+	_, statErr := os.Stat(path)
+	assert.ErrorIs(t, statErr, os.ErrNotExist, "the probe created the lock file it only meant to read")
+}
+
+// TestStartingTUIOutlastsAProbesLock: a shared lock still refuses an exclusive one, so
+// switching the probe to LOCK_SH does nothing for this direction — the retry does.
+//
+// Without it, acquireTUILockOrWarn maps the refusal to errTUIAlreadyRunning and the bare
+// `atrium` exits with "atrium is already running for this data directory", naming an
+// instance that does not exist. A user who launched Atrium while an agent's `atrium new`
+// was mid-probe met that, and #760 made it likelier by probing on the --wait path too and
+// again at every deadline.
+func TestStartingTUIOutlastsAProbesLock(t *testing.T) {
+	sandboxDataDir(t)
+	path, err := tuiLockPath()
+	require.NoError(t, err)
+	probe, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = probe.Close() })
+	require.NoError(t, syscall.Flock(int(probe.Fd()), syscall.LOCK_SH|syscall.LOCK_NB))
+
+	go func() {
+		time.Sleep(2 * lockRetryDelay)
+		_ = syscall.Flock(int(probe.Fd()), syscall.LOCK_UN)
+	}()
+
+	release, err := acquireTUILock(path)
+	require.NoError(t, err, "a TUI must not be refused its own lock by a passing probe")
+	release()
 }

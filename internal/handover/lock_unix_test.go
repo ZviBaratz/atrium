@@ -5,8 +5,10 @@ package handover
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -155,4 +157,60 @@ func TestHeldReadsAnUnparseablePayloadAsUnknown(t *testing.T) {
 	assert.Equal(t, Payload{}, p, "and the payload is not invented from the last holder's")
 	assert.Equal(t, "has handed its terminal to another program", p.Describe(),
 		"which costs the reader the session name and nothing else — see Describe")
+}
+
+// TestHoldRetriesPastASharedLock is the retry's own guard, and the one that is not a
+// race: with a reader's shared lock held for the whole test, Hold must spend its budget
+// before giving up rather than failing on the first refusal. The elapsed floor is what a
+// single non-blocking attempt cannot clear.
+//
+// The mutation it exists for is a one-line revert of lockExclusive to a bare
+// Flock(LOCK_EX|LOCK_NB) — which passes every other test in this package, because none of
+// the others has a reader in the way.
+func TestHoldRetriesPastASharedLock(t *testing.T) {
+	path := sandbox(t)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	reader, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reader.Close() })
+	require.NoError(t, shareLock(reader), "the shared lock a concurrent Held would hold")
+
+	start := time.Now()
+	release, err := Hold(Payload{Kind: KindAttach, Label: "fix-auth"})
+	elapsed := time.Since(start)
+	if err == nil {
+		release()
+		t.Fatal("a shared lock held for the whole call must refuse the exclusive one")
+	}
+	assert.ErrorIs(t, err, syscall.EWOULDBLOCK)
+	assert.GreaterOrEqual(t, elapsed, time.Duration(holdAttempts-1)*holdRetryDelay,
+		"Hold gave up without spending its retry budget, so a passing probe can cost an attach its whole handover record")
+}
+
+// TestHoldSucceedsOnceAProbeLetsGo is the same defect from the direction a user meets it:
+// an `atrium ls` loop — which the README blesses as safe to run alongside a live Atrium —
+// must not be able to make an attach go unrecorded. Held takes its shared lock for two
+// syscalls, so the reader here holds it far longer than the real one ever does and Hold
+// still has most of its budget left.
+func TestHoldSucceedsOnceAProbeLetsGo(t *testing.T) {
+	path := sandbox(t)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	reader, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reader.Close() })
+	require.NoError(t, shareLock(reader))
+
+	go func() {
+		time.Sleep(2 * holdRetryDelay)
+		_ = syscall.Flock(int(reader.Fd()), syscall.LOCK_UN)
+	}()
+
+	release, err := Hold(Payload{Kind: KindAttach, Label: "fix-auth"})
+	require.NoError(t, err, "the attach must still be recorded once the probe lets go")
+	t.Cleanup(release)
+
+	held, p, known := Held()
+	assert.True(t, held)
+	assert.True(t, known)
+	assert.Equal(t, "fix-auth", p.Label)
 }

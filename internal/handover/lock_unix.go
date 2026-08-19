@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+	"time"
 )
 
 // maxPayloadBytes caps what Held reads back, because the label's length is not this
@@ -18,6 +19,16 @@ import (
 // name and not the finding. Capping the read keeps that a truncation rather than an
 // arbitrary allocation driven by a file this package does not exclusively write.
 const maxPayloadBytes = 4096
+
+// holdAttempts and holdRetryDelay bound how long Hold retries past a reader's shared
+// lock — see lockExclusive for why it retries at all. The product is the worst case an
+// attach can pay before giving up and going unrecorded, and it is deliberately far
+// longer than the two syscalls Held holds the shared lock for, so losing to a probe
+// takes a run of coincidences rather than one.
+const (
+	holdAttempts   = 20
+	holdRetryDelay = 5 * time.Millisecond
+)
 
 // Hold takes the handover lock and records what the terminal was handed to, so a
 // headless command can name it. The returned release clears the payload and drops
@@ -42,7 +53,7 @@ func Hold(p Payload) (release func(), err error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := lockExclusive(f); err != nil {
 		_ = f.Close()
 		return nil, err
 	}
@@ -57,6 +68,37 @@ func Hold(p Payload) (release func(), err error) {
 		// Closing the descriptor releases the flock.
 		_ = f.Close()
 	}, nil
+}
+
+// lockExclusive takes the exclusive lock, retrying briefly while a reader holds the
+// shared one.
+//
+// Held asks for LOCK_SH and releases it two syscalls later, and a shared lock refuses an
+// exclusive request for as long as it is held. So a single non-blocking attempt makes an
+// `atrium ls` loop — which the README blesses as safe to run alongside a live Atrium —
+// able to cost an attach its entire handover record: Hold fails, attachCommand.Run
+// carries on, and every headless command for the length of that attach reads the lock as
+// free. Retrying is what closes it. The alternative, a blocking LOCK_EX, would put an
+// attach behind a wedged reader with no way out.
+//
+// The cap is what keeps this a retry rather than a wait. Exhausting it means something
+// holds the lock that is not a passing probe — which tui.lock's one-TUI-per-data-dir
+// rule says should not exist — so the answer then is to fail open, not to keep trying.
+func lockExclusive(f *os.File) error {
+	var err error
+	for attempt := 0; attempt < holdAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(holdRetryDelay)
+		}
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			return err
+		}
+	}
+	return err
 }
 
 // writePayload replaces the lock file's contents in place. Best-effort throughout:
