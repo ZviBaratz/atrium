@@ -111,6 +111,27 @@ func TestAttachRunProceedsWhenTheHandoverCannotBeRecorded(t *testing.T) {
 	assert.True(t, attached, "the attach happens whatever the lock did")
 }
 
+// TestBothBuildersWireTheHandover is the assertion the rest of this file was missing.
+// Every other test here constructs an attachCommand literally, so deleting the `handover:`
+// line from either builder shipped green — and an attach would then publish the zero
+// Payload, leaving `atrium new` unable to name what to detach from for every real attach
+// while all four tests above still passed.
+//
+// It goes through the constructors rather than the tea.Cmd they are wrapped in for the
+// reason terminalCustomCommandExec's doc gives: tea.Exec's message type is unexported, so
+// the wiring is invisible from the far side of it.
+func TestBothBuildersWireTheHandover(t *testing.T) {
+	h, inst := newCustomCommandHome(t, nil)
+
+	cmd, _ := h.attachExecCommand(func() (chan struct{}, error) { return nil, nil }, inst, nil)
+	assert.Equal(t, handover.Payload{Kind: handover.KindAttach, Label: inst.Title}, cmd.handover,
+		"a session attach must publish the session it handed the terminal to")
+
+	termCmd, _ := h.terminalCustomCommandExec(customCommandSpec{key: "g", desc: "lazygit"})
+	assert.Equal(t, handover.Payload{Kind: handover.KindCommand, Label: "lazygit"}, termCmd.handover,
+		"a terminal command must publish its own name and kind, since Resumes phrases the two differently")
+}
+
 // TestAttachExecLabelsTheSession pins where the label comes from for each attach shape.
 // killTarget is nil only for the terminal tab, and that tab shows the selected row —
 // every terminal-tab site selects before attaching — so the selection answers for it.

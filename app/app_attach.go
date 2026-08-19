@@ -97,14 +97,19 @@ type attachCommand struct {
 }
 
 func (a *attachCommand) Run() error {
-	// Publish the suspension for the whole of Run, which is exactly how long the event
-	// loop is blocked and therefore how long neither outbox spool is drained. Registered
-	// as the first defer so it releases LAST — the loop does not resume until Run
-	// returns, so the lock should outlive the raw-mode restore, not the other way round.
+	// Publish the suspension for the whole of Run, which is the whole life of the child
+	// holding the terminal and so the span in which neither outbox spool is drained.
+	// bubbletea's Program.exec blocks its event loop for a little longer than this at each
+	// end — it releases the terminal before calling Run and re-captures it after — so the
+	// lock is the inner span, not the outer one. Registered as the first defer so it
+	// releases LAST: the loop does not resume until Run returns, so the lock should
+	// outlive the raw-mode restore, not the other way round.
 	//
-	// A failure to take it is logged and ignored. Handing over the terminal must not
-	// depend on a lock file, and failing open costs only the warning: a headless command
-	// reads the lock as free and stays quiet, which is the behaviour that predates this.
+	// A failure to take it is logged and ignored: handing over the terminal must not
+	// depend on a lock file. What that costs is the handover going unobserved for this
+	// attach, which leaves `atrium new` unable to warn about it and — since drainState
+	// reads a live TUI with a free handover lock as drainLive — able to tell a --wait
+	// caller the outbox is being read when it is not.
 	// (Nothing here reads or writes pane state or any home field, so the staleness
 	// hazard the attach path carries — see home.attachGen — is not in play.)
 	if release, err := handoverHold(a.handover); err == nil {
@@ -181,6 +186,17 @@ func (m *home) attachExec(attach func() (chan struct{}, error), killTarget *sess
 // re-attaches without reaching the error surfacing, so it seeds the next keeper
 // with the losses and the chain's final plain detach surfaces all of them.
 func (m *home) attachExecCarry(attach func() (chan struct{}, error), killTarget *session.Instance, carriedErrs []string) tea.Cmd {
+	return tea.Exec(m.attachExecCommand(attach, killTarget, carriedErrs))
+}
+
+// attachExecCommand builds the suspension and the callback that reports it finished.
+//
+// Split out from the tea.Exec call for the reason terminalCustomCommandExec gives: tea.Exec
+// wraps both of these in a message type bubbletea does not export, so a test holding the
+// returned tea.Cmd can see nothing about what was wired. The handover payload is why this
+// split arrived late — it is the one field here whose whole purpose is to be read by
+// another process, and deleting the line that sets it changed nothing any test could see.
+func (m *home) attachExecCommand(attach func() (chan struct{}, error), killTarget *session.Instance, carriedErrs []string) (*attachCommand, tea.ExecCallback) {
 	// Attaching is the strongest form of visiting: clear the unread state before
 	// handing the terminal over. killTarget is nil only for the terminal tab,
 	// which the selection dwell covers instead.
@@ -216,7 +232,7 @@ func (m *home) attachExecCarry(attach func() (chan struct{}, error), killTarget 
 		onAttached: func() {
 			m.attachGen++
 		}}
-	return tea.Exec(cmd, func(err error) tea.Msg {
+	return cmd, func(err error) tea.Msg {
 		return attachFinishedMsg{
 			err:             err,
 			killTarget:      killTarget,
@@ -224,7 +240,7 @@ func (m *home) attachExecCarry(attach func() (chan struct{}, error), killTarget 
 			keeperDelivered: cmd.keeper.delivered,
 			keeperErrs:      cmd.keeper.errs,
 		}
-	})
+	}
 }
 
 // attachLabel names the session an attach is handing the terminal to, for the
