@@ -86,10 +86,13 @@ type Payload struct {
 // supply its own fallback would be one `if` away from dropping the whole warning over a
 // cosmetic gap, so there is nothing to fall back from.
 //
-// The label is dropped, and only the label, when it carries a control character. That is
-// outbox.FirstControlRune's concern arriving by a second route: a session title cannot
-// hold one, but a custom command's name comes from repo config, and this string is
-// printed to a terminal by a command an agent runs unattended.
+// The label is dropped, and only the label, when it carries a control character. It is
+// untrusted text: a session title, or a custom command's Description out of repo config.
+// outbox.FirstControlRune refuses one in a title `atrium new` was given, which is the
+// same concern arriving by a different route — but that check guards the CLI's own
+// argument, not every path a stored title can come from, so nothing here may assume the
+// label arrived clean. This string is printed to a terminal by a command an agent runs
+// unattended, which is reason enough to sanitise at the point of printing.
 func (p Payload) Describe() string {
 	label := strings.TrimSpace(p.Label)
 	if strings.IndexFunc(label, unicode.IsControl) >= 0 {

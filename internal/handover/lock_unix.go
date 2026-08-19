@@ -10,11 +10,13 @@ import (
 	"syscall"
 )
 
-// maxPayloadBytes caps what Held reads back. The payload is a two-field JSON object
-// whose only unbounded member is a session title (session.MaxTitleLen runes) or a
-// custom command's name, so this is slack rather than a limit — its job is to stop a
-// reader from pulling an arbitrary amount into memory if something else ever writes
-// to this path.
+// maxPayloadBytes caps what Held reads back, because the label's length is not this
+// package's to know. A session title is bounded (session.MaxTitleLen); a custom
+// command's Description is not — nothing validates its length — so a long one is written
+// whole and read back truncated. That decodes as invalid JSON and yields the generic
+// phrasing, the same outcome as any other unreadable payload, costing the caller the
+// name and not the finding. Capping the read keeps that a truncation rather than an
+// arbitrary allocation driven by a file this package does not exclusively write.
 const maxPayloadBytes = 4096
 
 // Hold takes the handover lock and records what the terminal was handed to, so a
