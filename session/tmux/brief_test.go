@@ -81,9 +81,11 @@ func TestSessionBriefNamesLiveFacts(t *testing.T) {
 // the command name leaves an agent knowing it wants a follow-up session and not knowing it can
 // have one — which is the state the whole change exists to end.
 //
-// The name is asserted through GuideSubcommand rather than as a literal because what must not
-// drift is the brief agreeing with the registered subcommand. TestBriefAdvertisesARegisteredCommand
-// in the root package is the other half of that, and reads the name back off the rendered copy.
+// The name is asserted through GuideSubcommand rather than as a literal, so this tracks a rename
+// instead of pinning a spelling. What it cannot see is the template dropping the interpolation
+// for that same spelling — the two render identical bytes — so the guarantee here is narrower
+// than it looks. TestBriefAdvertisesARegisteredCommand in the root package is the other half:
+// it requires the name rootCmd actually registers to appear in the rendered copy.
 func TestSessionBriefNamesTheGuideCommand(t *testing.T) {
 	out := RenderSessionBrief(sentinelBrief)
 
@@ -92,7 +94,7 @@ func TestSessionBriefNamesTheGuideCommand(t *testing.T) {
 
 	// The name alone gives an agent no reason to spend a tool call on it. What connects the
 	// command to the moment an agent needs it is the clause saying what it is for.
-	require.Contains(t, out, "start the follow-up session yourself",
+	require.Contains(t, out, "create the follow-up session yourself",
 		"the brief must say what the command is for, not just name it")
 }
 

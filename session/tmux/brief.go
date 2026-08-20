@@ -96,10 +96,14 @@ const GuideSubcommand = "guide"
 //   - "pausing removes the worktree but keeps the branch" — session/pause.go commits dirty work
 //     as an "[atrium] update from … (paused)" marker, removes the worktree, keeps the branch,
 //     and Resume soft-resets the marker away.
-//   - "run `atrium guide`" — the pointer the whole of #759 is: the capability an agent needs
-//     is `atrium new`, and the page that names it, along with the rest of the headless surface,
-//     is guidePage in main. One clause rather than the surface itself, because everything here is re-paid
-//     on every /clear and compaction while the page is pulled once, by an agent that wants it.
+//   - "`atrium guide` explains how" — the pointer the whole of #759 is: the capability an agent
+//     needs is `atrium new`, and the page that names it, along with the rest of the headless
+//     surface, is guidePage in main. One clause rather than the surface itself, because
+//     everything here is re-paid on every /clear and compaction while the page is pulled once,
+//     by an agent that wants it. The clause names the page as the SUBJECT of "explains" rather
+//     than reading "run `atrium guide`" — an imperative in the same sentence as "create the
+//     follow-up session" is one an agent can resolve as the act of creating it, spending the
+//     tool call and getting a page back.
 //     It states no delivery timing on purpose — when a spooled create actually lands is a live
 //     verdict, which drainState reads off tui.lock and handover.lock and spoolWarningFor prints
 //     at the moment it matters, and newCmd's Long owns the standing rules. A sentence here
@@ -114,7 +118,7 @@ const sessionBriefTemplate = "You are running in Atrium session %q. " +
 	"Killing the session removes the worktree and deletes the branch; " +
 	"pausing removes the worktree but keeps the branch. " +
 	"Other worktrees under %s belong to other Atrium sessions — never touch them. " +
-	"You can start the follow-up session yourself rather than asking — run `atrium " + GuideSubcommand + "`."
+	"You can create the follow-up session yourself rather than asking — `atrium " + GuideSubcommand + "` explains how."
 
 // SessionBrief is the set of per-session facts the brief is rendered from, baked into the hook
 // command line at launch. Supplied by the provider bound with SetSessionBriefFunc, which start()
