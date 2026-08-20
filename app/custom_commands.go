@@ -540,8 +540,11 @@ func customCommandProblemsReport(problems []customcmd.Problem) string {
 // clipReportLine bounds one problem line. The info modal wraps rather than
 // overflowing, so this is about keeping the report readable rather than about the
 // frame: a 400-character description would otherwise wrap over the whole overlay.
-func clipReportLine(s string) string {
-	const limit = 100
+func clipReportLine(s string) string { return clipTo(s, 100) }
+
+// clipTo is clipReportLine with the budget spelled out, for a report line whose value is
+// not a name or a path and needs a different one (see createDisclosureReport).
+func clipTo(s string, limit int) string {
 	if len([]rune(s)) <= limit {
 		return s
 	}

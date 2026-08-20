@@ -305,6 +305,10 @@ func ClearRejection(path string) error {
 // old has no reader left and would otherwise accumulate for the life of the data
 // dir.
 //
+// Receipts only. The create spool holds a second terminal kind with a different reader
+// and its own horizon (SweepDisclosures), and this is deliberately not the one function
+// that sweeps both — see that one for the argument.
+//
 // Both, not just the prompt spool: `atrium new --wait` reads its receipts through
 // the same Rejection call, so a create spool swept by nobody would leak one file
 // per refused request forever.
@@ -348,6 +352,14 @@ const clearReason = "atrium reset discarded every queued request"
 // record of a refusal its producer may not have read yet, and deleting it is the same
 // false success one step earlier. They are bounded already — SweepRejections drops
 // them at the TTL horizon.
+//
+// A create disclosure is left alone for the same reason one step further out, and that is
+// a decision rather than a consequence of the walk below happening not to match it. A
+// disclosure is the only record of a branch, a worktree or a tmux session that belongs to
+// nothing (see Disclose), and reset does not remove those: CleanupWorktrees enumerates
+// the repos of the rows it just deleted, and an orphan has no row to be enumerated
+// through. Discarding the disclosure would make the reset the reason nobody is ever told
+// about the leftovers it did not clean up. SweepDisclosures bounds them.
 //
 // It touches only files this package wrote (the record name format), never the
 // directories, and never a stray file some other process put there. The count is of
@@ -400,7 +412,7 @@ func Clear() (int, error) {
 			// listFiles makes about the pair, and a claim the package should be able to
 			// make about every walk rather than about one of three.
 			if de.IsDir() || !isMessageFile(name) {
-				continue // a receipt, a claim, a nested spool dir, or not ours at all
+				continue // a receipt, a disclosure, a nested spool dir, or not ours at all
 			}
 			if err := Reject(filepath.Join(dir, name), clearReason); err != nil {
 				if firstErr == nil {
@@ -415,13 +427,26 @@ func Clear() (int, error) {
 }
 
 func sweepReceipts(dir string, now time.Time) {
+	sweepSuffixed(dir, rejectedSuffix, now)
+}
+
+// sweepSuffixed drops every file in dir whose name is one writeRecord produced plus
+// suffix, and whose own mtime is past the horizon. Shared by the receipt sweep and
+// SweepDisclosures so the two terminal kinds cannot drift apart on the part that is
+// identical — the screening, and the choice of mtime over the timestamp in the name.
+//
+// Best-effort throughout: a directory that cannot be read, an entry that vanished between
+// ReadDir and Info, and a file that cannot be unlinked are all left for the next sweep.
+// Nothing downstream depends on a sweep having happened, so a failure costs one file that
+// stays a little longer.
+func sweepSuffixed(dir, suffix string, now time.Time) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
 	for _, de := range entries {
 		name := de.Name()
-		base, ok := strings.CutSuffix(name, rejectedSuffix)
+		base, ok := strings.CutSuffix(name, suffix)
 		if de.IsDir() || !ok || !isMessageFile(base) {
 			continue
 		}

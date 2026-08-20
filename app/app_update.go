@@ -957,7 +957,7 @@ func (m *home) reconcileInFlightStarts(ctx context.Context) {
 				// session was never started is what sends a retrying script back to
 				// `atrium new` with the same title, to collide with the live tmux
 				// session and orphan branch the first run really did leave.
-				m.failCreateRequest(inst,
+				m.discloseUnrecordedSession(inst,
 					fmt.Sprintf("the session was created but atrium could not record it: %v", err))
 			}
 			return

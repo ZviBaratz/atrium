@@ -137,8 +137,7 @@ func mustClassify(t *testing.T, record string, instances ...*session.Instance) c
 	require.NoError(t, err)
 	for _, c := range claims {
 		if c.Path == record {
-			v, _ := classifyCreateClaim(context.Background(), c, instances, time.Now())
-			return v
+			return classifyCreateClaim(context.Background(), c, instances, time.Now()).verdict
 		}
 	}
 	// Already applied: re-derive from what is on disk instead.
@@ -638,8 +637,189 @@ func TestReconcileRefusesWhileTheAgentIsStillRunning(t *testing.T) {
 	require.True(t, rejected, "a running agent is not an orphan")
 	assert.Contains(t, reason, inst.TmuxSessionName(),
 		"and the receipt must name the session standing in the way")
+	// The receipt reaches the caller and is then consumed and swept; the disclosure is
+	// what the next TUI reads to tell the person at the terminal that a live agent is
+	// running with nothing in atrium's records pointing at it.
+	d := disclosed(t, record)
+	assert.Equal(t, inst.TmuxSessionName(), d.TmuxName)
 	assert.DirExists(t, live, "the live agent's worktree must not be removed")
 	entries, err := outbox.ListCreates()
 	require.NoError(t, err)
 	assert.Empty(t, entries, "nor re-queued into a retry that could never succeed")
+}
+
+// assertSamePath compares a worktree path the test created against one git reported.
+//
+// Not assert.Equal, because the two spellings differ on macOS and only there: git reports
+// the path it registered, which arrives as /private/var where t.TempDir gives /var — the
+// asymmetry underManagedWorktrees documents and handles for the containment check.
+//
+// assert.Contains does not stand in for this, and passes for a reason that has nothing to
+// do with the paths matching: "/var/…/x" is a literal substring of "/private/var/…/x", so a
+// containment assertion is satisfied by the very mismatch it is meant to tolerate. It would
+// be satisfied by an unrelated /var path with the same tail, too.
+func assertSamePath(t *testing.T, want, got, msg string) {
+	t.Helper()
+	resolve := func(p string) string {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return r
+		}
+		return p
+	}
+	assert.Equal(t, resolve(want), resolve(got), msg)
+}
+
+// disclosed returns the disclosure the reconcile left for record, requiring there to be
+// one.
+func disclosed(t *testing.T, record string) outbox.Disclosure {
+	t.Helper()
+	d, ok := outbox.DisclosureFor(record)
+	require.True(t, ok, "a refusal has to record what the interrupted build left behind")
+	return d
+}
+
+// TestReconcileDisclosesTheOrphanItRefusesFor is #732's complaint applied to the arm that
+// reaches it soonest: a refusal answers the caller and destroys the claim, and the claim
+// was the only durable thing naming the branch and the worktree.
+//
+// The hand-made-checkout arm is the fixture because it is the one refusal where both
+// artifacts are certain to be there and to stay there — the branch and the checkout holding
+// it are exactly what the refusal is about — so the assertion cannot pass on an empty
+// inventory.
+func TestReconcileDisclosesTheOrphanItRefusesFor(t *testing.T) {
+	sandboxSpool(t)
+	branch := strandPrefix + "fix-auth"
+	repo := gitRepoWithBranch(t, branch)
+	mine := worktreeOn(t, repo, branch, filepath.Join(t.TempDir(), "my-own-checkout"))
+	record := strandedIn(t, "fix-auth", repo)
+
+	require.Equal(t, 1, reconcile(t))
+
+	d := disclosed(t, record)
+	assert.Equal(t, "fix-auth", d.Title)
+	assert.Equal(t, repo, d.Repo)
+	assert.Equal(t, branch, d.Branch)
+	assertSamePath(t, mine, d.Worktree, "the thing holding the branch is what the user has to act on")
+	assert.Contains(t, d.Reason, filepath.Base(mine), "and the reason is the one the caller was given")
+	assert.True(t, d.Leftovers(), "so the reader has something to report")
+}
+
+// TestReconcileWillNotRebuildAClaimItAlreadyRefused is #731's third hole, and the reason the
+// disclosure is written BEFORE the discard rather than after.
+//
+// A refusal writes the receipt, marks the request spent, and unlinks. If the unlink fails —
+// EACCES on the spool, EIO — the claim survives, and the caller has already read the receipt
+// and exited non-zero. Judged again on the next launch it meets LIVE git and a freshly
+// loaded instance list, and both have moved on: the session that held the branch may since
+// have been killed, the hand-made worktree removed. Without the disclosure this fixture
+// classifies claimAdopt and builds the session its caller was told it would not get.
+//
+// The claim and the disclosure are placed by hand because the state they represent is a
+// failed unlink, which is not reachable through a sandbox that can write.
+func TestReconcileWillNotRebuildAClaimItAlreadyRefused(t *testing.T) {
+	sandboxSpool(t)
+	branch := strandPrefix + "fix-auth"
+	repo := gitRepoWithBranch(t, branch) // an orphan branch: claimAdopt's own fixture
+	record := strandedIn(t, "fix-auth", repo)
+	require.NoError(t, outbox.Disclose(record, outbox.Disclosure{
+		Title: "fix-auth", Repo: repo, Branch: branch,
+		Reason: "a previous atrium was interrupted while creating this session",
+	}))
+
+	assert.Equal(t, claimAnswered, mustClassify(t, record),
+		"the caller was answered; nothing here may reopen that")
+	require.Equal(t, 1, reconcile(t))
+
+	entries, err := outbox.ListCreates()
+	require.NoError(t, err)
+	assert.Empty(t, entries, "and it must not be re-queued for the drain to build")
+	assertCreateSettled(t, record)
+	_, ok := outbox.DisclosureFor(record)
+	assert.True(t, ok, "the disclosure stays for the reader that has not shown it yet")
+}
+
+// TestReconcileOutranksTheRowWithADisclosure is the ordering half of the arm above. The row
+// check is the one piece of evidence that settles a claim outright, and it deliberately
+// comes first — except after a refusal, where a row appearing under this record would mean
+// something built the session anyway. Read in the other order the request would be reported
+// to its caller as a success it was already told it did not get.
+func TestReconcileOutranksTheRowWithADisclosure(t *testing.T) {
+	sandboxSpool(t)
+	repo := t.TempDir()
+	record := strandedIn(t, "fix-auth", repo)
+	require.NoError(t, outbox.Disclose(record, outbox.Disclosure{
+		Title: "fix-auth", Repo: repo, Reason: "could not record it"}))
+	row := rowFrom(t, "fix-auth", repo, "", record)
+
+	assert.Equal(t, claimAnswered, mustClassify(t, record, row))
+}
+
+// TestReconcilePinsTheBranchItAdopts: Adopt licenses skipping the branch gate, and the pin
+// is what lets the drain re-earn that skip instead of inheriting it. A re-queue that loses
+// the pin reads as "no pin", which fails closed — the request is then refused for the very
+// branch the adoption exists to finish on.
+func TestReconcilePinsTheBranchItAdopts(t *testing.T) {
+	sandboxSpool(t)
+	branch := strandPrefix + "fix-auth"
+	repo := gitRepoWithBranch(t, branch)
+	strandedIn(t, "fix-auth", repo)
+
+	require.Equal(t, 1, reconcile(t))
+
+	got := recovered(t)
+	require.True(t, got.Adopt)
+	want := branchTip(t, repo, branch)
+	require.NotEmpty(t, want, "precondition: the orphan branch has a tip to pin")
+	assert.Equal(t, want, got.AdoptTip, "the commit the drain re-checks against")
+}
+
+// TestApplyAdoptRequeuesPlainWhenTheBranchWentAway covers the window between the verdict and
+// the hand-off: the branch is probed for the pin after the worktree release, and it can be
+// gone by then. Pinning nothing would leave an Adopt the drain fails closed on; re-queueing
+// plain is what the ordinary gates already judge correctly, since there is no branch left
+// for them to refuse.
+//
+// Driven through applyCreateClaim with a hand-built judgement, because the window it covers
+// is a race no fixture can arrange.
+func TestApplyAdoptRequeuesPlainWhenTheBranchWentAway(t *testing.T) {
+	sandboxSpool(t)
+	repo := gitRepoWithBranch(t, "") // no orphan branch at all
+	record := strandedIn(t, "fix-auth", repo)
+	claims, err := outbox.ListClaims()
+	require.NoError(t, err)
+	require.Len(t, claims, 1)
+
+	applied := applyCreateClaim(context.Background(), claims[0],
+		claimJudgement{verdict: claimAdopt, branch: strandPrefix + "fix-auth"})
+
+	require.True(t, applied)
+	got := recovered(t)
+	assert.False(t, got.Adopt, "there is nothing left to adopt")
+	assert.Empty(t, got.AdoptTip)
+	_, rejected := outbox.Rejection(record)
+	assert.False(t, rejected, "and this is not a refusal: an ordinary create is exactly right")
+}
+
+// TestNewHomeBuffersADisclosureAnEarlierProcessLeft wires the two producers to the one
+// reader. A disclosure written by a process that then died has no frame to be shown on, so
+// the construction that reads the spool has to buffer it for the first preview tick — and it
+// has to read AFTER the reconcile, or a refusal this very launch reached lands in the next
+// launch's report instead of this one's.
+func TestNewHomeBuffersADisclosureAnEarlierProcessLeft(t *testing.T) {
+	defer theme.Set(config.DefaultConfig().Theme)()
+	t.Setenv("HOME", t.TempDir())
+
+	branch := config.DefaultConfig().BranchPrefix + "fix-auth"
+	repo := gitRepoWithBranch(t, branch)
+	mine := worktreeOn(t, repo, branch, filepath.Join(t.TempDir(), "my-own-checkout"))
+	record := strand(t, outbox.Request{Title: "fix-auth", Path: repo},
+		outbox.ClaimMeta{At: time.Now(), SessionBranch: branch})
+
+	h, err := newHome(context.Background(), "echo", false, "v", "atr")
+	require.NoError(t, err)
+
+	require.Len(t, h.pendingCreateDisclosures, 1,
+		"the refusal this launch just reached belongs in this launch's report")
+	assert.Equal(t, record, h.pendingCreateDisclosures[0].Path)
+	assertSamePath(t, mine, h.pendingCreateDisclosures[0].Disclosure.Worktree, "")
 }

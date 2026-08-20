@@ -16,6 +16,7 @@ import (
 	"github.com/ZviBaratz/atrium/customcmd"
 	"github.com/ZviBaratz/atrium/hints"
 	"github.com/ZviBaratz/atrium/internal/memo"
+	"github.com/ZviBaratz/atrium/internal/outbox"
 	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/notify"
@@ -392,6 +393,22 @@ type home struct {
 	// when it lifts rather than twice a second for as long as it lasts. State about
 	// the log line only — the hold itself is decided fresh each tick by probing.
 	createTmuxHeld bool
+	// createAdoptHeld is createTmuxHeld's sibling for the other condition that holds a
+	// request instead of refusing it: a repo git could not be read, so the pin that
+	// licenses an adoption cannot be re-checked (see adoptStillOurs). State about the log
+	// line only, as createTmuxHeld is — the hold itself is decided fresh each tick by
+	// re-probing.
+	//
+	// One bool rather than a set keyed by path, because a claim is what produces an Adopt
+	// request and one crash leaves one claim. Two held at once would be reported as one
+	// hold, which is the whole cost.
+	createAdoptHeld bool
+	// pendingCreateDisclosures buffers what spent `atrium new` requests left behind, for
+	// the report flushCreateDisclosures shows once there is a frame to show it on (#731,
+	// #732). Seeded at startup from the create spool — a disclosure written by a process
+	// that then died — and appended to when this process writes one itself, so a live TUI
+	// does not make the user wait for a relaunch to hear about an orphan it just made.
+	pendingCreateDisclosures []outbox.DisclosureEntry
 	// notifier emits the terminal bell / desktop notification when a background
 	// session finishes a turn or blocks on a prompt (see app_notify.go, config
 	// Notifications). nil disables notification (hand-built test homes).
@@ -882,6 +899,10 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 	if n := reconcileCreateClaims(ctx, instances, time.Now()); n > 0 {
 		log.InfoLog.Printf("reconciled %d interrupted create request%s left by an earlier atrium", n, plural(n))
 	}
+	// After the reconcile, not before: a refusal it reaches writes a disclosure, and that
+	// one belongs in this launch's report rather than the next one's. Buffered rather than
+	// surfaced, for the reason the park reports below are — there is no frame yet.
+	pendingDisclosures := loadCreateDisclosures()
 
 	h := assembleHome(ctx, program, autoYes, version, binName, appConfig, appState, storage, instances)
 	// Buffered rather than surfaced here: newHome runs before the program starts, so
@@ -892,6 +913,7 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 	// already persisted as an ordinary Paused row and this load therefore refuses nothing
 	// on its account (#622). pendingParkReports owns which of the two buffers is filled.
 	h.pendingDeferredRecovery, h.pendingEarlierRecovery = pendingParkReports(deferred, instances, time.Now())
+	h.pendingCreateDisclosures = pendingDisclosures
 	// Write back any account identities assembleHome healed (#470). Doing it here
 	// keeps that constructor IO-free, and persisting eagerly is what lets `atrium ls`
 	// and the daemon — separate processes that read the stored rows raw — agree with

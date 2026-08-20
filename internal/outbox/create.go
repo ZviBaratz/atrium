@@ -38,6 +38,12 @@ package outbox
 // rather than a map entry so the link between a request and the session it produced
 // outlives the process that made it. Everything named Claim, plus Requeue,
 // DiscardCreate and ListClaims, belongs to it.
+//
+// A request therefore has three possible files at one name — the record, the claim, and
+// the disclosure a spent one leaves behind (create_disclosure.go) — plus the receipt
+// outbox.go writes. Only the first two are ever executed, and only the record is drained;
+// validRecord is what keeps a caller from deriving one of the others and handing it back
+// in as a record.
 
 import (
 	"encoding/json"
@@ -58,14 +64,22 @@ const (
 	// accepts. It is independent of currentVersion: the two record types are
 	// never read by the same decoder, so neither has to move when the other does.
 	//
-	// It stayed at 1 when the claim fields and Adopt were added (#716), and that is
-	// a decision rather than an oversight. readCreate gates on exact equality, so a
-	// bump makes every atrium reject every request the other writes — including the
-	// ones already sitting in the spool across an upgrade, each with a receipt
-	// ("the request could not be read") that misstates its cause. The new fields are
-	// all omitempty and all additive: an atrium too old to know Adopt refuses a
-	// re-queued orphan with "branch already exists", which is exactly what it did
-	// before this feature existed. A strictly-no-worse degradation needs no gate.
+	// It stayed at 1 when the claim fields and Adopt were added (#716), and again when
+	// AdoptTip joined them (#731), and that is a decision rather than an oversight.
+	// readCreate gates on exact equality, so a bump makes every atrium reject every
+	// request the other writes — including the ones already sitting in the spool across
+	// an upgrade, each with a receipt ("the request could not be read") that misstates
+	// its cause. The new fields are all omitempty and all additive: an atrium too old to
+	// know Adopt refuses a re-queued orphan with "branch already exists", which is
+	// exactly what it did before this feature existed. A strictly-no-worse degradation
+	// needs no gate.
+	//
+	// AdoptTip degrades in the other direction and is no worse either. A NEWER atrium
+	// reading an Adopt written before that field existed finds no tip, and
+	// app.adoptStillOurs fails closed — the branch gate applies and the request is
+	// refused for the orphan branch rather than adopted on unverifiable evidence. That is
+	// the same pre-#716 refusal, and it now leaves a disclosure naming the branch, so the
+	// one thing an upgrade mid-recovery costs is a rebuild the user is told about.
 	//
 	// The asymmetry that argument does not cover is a *downgrade* while a claim is
 	// on disk: an older atrium has no ListClaims, so it neither drains nor settles
@@ -142,6 +156,23 @@ type Request struct {
 	// as a resume, so this is a hole in a load-bearing guard and the evidence for it
 	// is not derivable from the request alone.
 	Adopt bool `json:"adopt,omitempty"`
+
+	// AdoptTip is the commit Claim.SessionBranch pointed at when the reconcile decided
+	// to adopt it, and it is what makes Adopt re-checkable rather than merely believed
+	// (#731).
+	//
+	// Adopt licenses a skip of the branch gate on evidence gathered at reconcile time,
+	// and the request can then sit queued for a long while — tmux off PATH holds the
+	// drain, so does app.createDrainHeld, so does another crash. Delete and recreate the
+	// branch in that window, by hand or through a fetch or a rebase, and the evidence is
+	// stale in the one direction that is silent: Setup takes its existing-branch arm and
+	// the agent resumes on somebody else's work. A name cannot tell those apart; the
+	// commit can.
+	//
+	// Empty means "do not trust Adopt". app.adoptStillOurs re-reads the branch at execution
+	// time and withdraws Adopt unless the live tip matches this, so a hand-written record
+	// and one written by an atrium older than this field both take the ordinary branch gate.
+	AdoptTip string `json:"adopt_tip,omitempty"`
 }
 
 // ClaimMeta is what the drain knows at the instant it claims a request and a later
@@ -289,6 +320,11 @@ func ListCreates() ([]CreateEntry, error) {
 // `atrium new --wait` is watching. One path per request is what keeps a rejection
 // receipt readable by the process that is blocked on it: a Reject aimed at the claim
 // file would write "….json.claimed.rejected", which nothing ever looks for.
+//
+// It concatenates unconditionally, which is safe only because every function that acts on
+// a derived path screens its argument first: validRecord refuses a name that is not one
+// writeRecord produced, so "….json.claimed.claimed" cannot be minted through Claim,
+// Requeue, DiscardCreate or Disclose (#731).
 func ClaimPath(record string) string { return record + claimedSuffix }
 
 // Claim marks a request as taken and being built, recording meta as the evidence a
@@ -305,6 +341,9 @@ func ClaimPath(record string) string { return record + claimedSuffix }
 // window where BOTH exist, which is a third state to recognise everywhere; this has
 // none.
 func Claim(record string, meta ClaimMeta) error {
+	if err := validRecord(record); err != nil {
+		return err
+	}
 	entry := readCreate(record)
 	if entry.Err != nil {
 		return fmt.Errorf("outbox: claim %s: %w", filepath.Base(record), entry.Err)
@@ -321,20 +360,30 @@ func Claim(record string, meta ClaimMeta) error {
 }
 
 // Requeue returns a claimed request to the spool for another attempt, so the next
-// drain tick executes it as an ordinary request. With adopt set it is also marked to
-// take the session branch a previous, interrupted attempt already created.
+// drain tick executes it as an ordinary request. A non-empty adoptTip also marks it to
+// take the session branch a previous, interrupted attempt already created, pinned to the
+// commit that branch pointed at when the caller decided to adopt it.
+//
+// One argument rather than a bool and a string, because "adopt" and "adopt at this
+// commit" are not two decisions: a branch worth adopting always has a tip, and an Adopt
+// carrying no tip is exactly the state app.adoptStillOurs refuses to trust. Making the pin
+// the only way to ask for the skip means a caller cannot forget it.
 //
 // Write-then-rename, for Claim's reason: a crash between the two leaves the claim
 // exactly as recovery found it, and the next recovery reaches the same verdict from
 // the same evidence.
-func Requeue(record string, adopt bool) error {
+func Requeue(record, adoptTip string) error {
+	if err := validRecord(record); err != nil {
+		return err
+	}
 	claim := ClaimPath(record)
 	entry := readCreate(claim)
 	if entry.Err != nil {
 		return fmt.Errorf("outbox: requeue %s: %w", filepath.Base(record), entry.Err)
 	}
 	r := entry.Request
-	r.Adopt = adopt
+	r.Adopt = adoptTip != ""
+	r.AdoptTip = adoptTip
 	if err := writeRequestInPlace(claim, r); err != nil {
 		return err
 	}
@@ -358,7 +407,16 @@ func Requeue(record string, adopt bool) error {
 // Callers that owe their producer a reason use Reject(record, …) and then this: the
 // receipt belongs at the record path (see ClaimPath) and both files have to go either
 // way.
+//
+// It does NOT touch the disclosure a spent request leaves (Disclose). That file outlives
+// the record and the claim on purpose — it is what a later launch reads to say what the
+// request left behind — and its removal belongs to the reader that showed it
+// (ClearDisclosure). Dropping it here would make every path that gives up on a request
+// destroy its own explanation, which is the failure the disclosure was added for.
 func DiscardCreate(record string) error {
+	if err := validRecord(record); err != nil {
+		return err
+	}
 	return errors.Join(Remove(record), removeClaim(record))
 }
 

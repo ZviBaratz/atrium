@@ -996,7 +996,7 @@ func TestSpoolSettledSurvivesARequeueMidSample(t *testing.T) {
 	betweenSpoolStats = func() {
 		calls++
 		if calls == 1 {
-			require.NoError(t, outbox.Requeue(path, true))
+			require.NoError(t, outbox.Requeue(path, "deadbeef"))
 		}
 	}
 	t.Cleanup(func() { betweenSpoolStats = func() {} })

@@ -227,6 +227,40 @@ func LookupLocalBranch(ctx context.Context, repoPath, branch string) (bool, erro
 	return false, nil
 }
 
+// LookupLocalBranchTip returns the commit refs/heads/<branch> points at in the repo at
+// repoPath. An empty sha with a nil error means the branch is not there; an error means
+// the repository could not be read.
+//
+// It answers LookupLocalBranch's question and one more, in the same subprocess, which is
+// why the create recovery uses it rather than both: a caller that has to know whether a
+// branch is still the one it vetted needs existence and identity together, and asking
+// twice would let the two answers describe different instants.
+//
+// The identity matters because a branch NAME is not evidence. The create-adoption path
+// (#731) skips a load-bearing branch gate on the strength of a reconcile's finding, and
+// the request can sit queued for a long while afterwards; a branch deleted and recreated
+// in that window has the same name and somebody else's commits, and adopting it is
+// silent. for-each-ref for LookupLocalBranch's reason — it exits 0 with empty output for
+// a ref that is simply absent, and non-zero only when the repository itself could not be
+// read, so "no such branch" never arrives as a failure.
+func LookupLocalBranchTip(ctx context.Context, repoPath, branch string) (string, error) {
+	ref := "refs/heads/" + branch
+	out, err := localGit(ctx, repoPath, "for-each-ref", "--format=%(objectname) %(refname)", ref)
+	if err != nil {
+		return "", fmt.Errorf("failed to look up branch %q in %s: %w", branch, repoPath, err)
+	}
+	// The pattern matches at path boundaries, so refs/heads/<branch>/sub answers too; the
+	// refname is compared exactly rather than taking the first line, as LookupLocalBranch
+	// does for the same reason.
+	for _, line := range strings.Split(out, "\n") {
+		sha, name, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if ok && name == ref {
+			return sha, nil
+		}
+	}
+	return "", nil
+}
+
 // RepoGroupKey predicts the repo-group key the session list will file a session
 // under when created from path: the repo root's basename when path is inside a
 // git repo (even a subdirectory), else the directory's own basename (how direct
