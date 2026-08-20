@@ -92,6 +92,7 @@ if one is missing from this table.
 | `peek` | Print what a session's pane is showing, without attaching |
 | `send` | Queue a prompt for a session |
 | `new` | Create a session without a TUI |
+| `guide` | Print what an agent running inside a session can do |
 | `doctor` | Check core dependencies (tmux, git, gh) and agent CLI heuristic versions |
 | `reap` | List tmux servers Atrium left behind, and stop them on request |
 | `profiles` | Manage agent profiles (e.g. `profiles detect`) |
@@ -291,6 +292,25 @@ at all — it lists every session, so it has nothing to disambiguate. `new` take
 `--path`, but to choose where the session is created, not to disambiguate.)
 
 All four exit 0 on success and 1 on failure, with the reason on stderr.
+
+**`atrium guide`** is the fifth, and the only one written for a reader rather than a
+script: it prints what an agent running *inside* a session can do — the four commands
+above, the rule that Atrium owns the worktree and reclaims it, how to hand off to the
+next session, and which commands belong to the person at the keyboard rather than to
+the agent. It is static text, takes no locks and reads no state.
+
+It exists because the surface above was undiscoverable to the agents it was built for.
+The `SessionStart` brief Atrium injects into a session (`sessionBriefTemplate`) spends
+one clause naming `guide`, and the page carries everything that clause has no room for
+— the brief is re-delivered on every session start, every `/clear` and every
+compaction, so it is the wrong place to put a manual. Where a fact already has an owner
+the page names the owner instead of restating it: `atrium new --help` is what answers
+when a queued create actually lands.
+
+That pointer reaches **claude sessions only**, because hook injection is gated on the
+agent adapter declaring hook support and claude is the only one that does — a codex,
+gemini or aider session can run `atrium guide` perfectly well, it is simply never told
+to. [#773](https://github.com/ZviBaratz/atrium/issues/773) tracks closing that gap.
 
 <br />
 

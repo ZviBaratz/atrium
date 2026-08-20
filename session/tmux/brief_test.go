@@ -76,6 +76,26 @@ func TestSessionBriefNamesLiveFacts(t *testing.T) {
 	require.Contains(t, out, "already the session branch, so do not create another")
 }
 
+// TestSessionBriefNamesTheGuideCommand: the pointer is the payload of #759 the way the
+// ownership sentence is the payload of #485. A brief that keeps every other clause and drops
+// the command name leaves an agent knowing it wants a follow-up session and not knowing it can
+// have one — which is the state the whole change exists to end.
+//
+// The name is asserted through GuideSubcommand rather than as a literal because what must not
+// drift is the brief agreeing with the registered subcommand. TestBriefAdvertisesARegisteredCommand
+// in the root package is the other half of that, and reads the name back off the rendered copy.
+func TestSessionBriefNamesTheGuideCommand(t *testing.T) {
+	out := RenderSessionBrief(sentinelBrief)
+
+	require.Contains(t, out, "atrium "+GuideSubcommand,
+		"the brief must name the command carrying the agent-facing surface")
+
+	// The name alone gives an agent no reason to spend a tool call on it. What connects the
+	// command to the moment an agent needs it is the clause saying what it is for.
+	require.Contains(t, out, "start the follow-up session yourself",
+		"the brief must say what the command is for, not just name it")
+}
+
 // TestSessionBriefEmptyForIncompleteFacts: a brief missing any fact renders nothing rather
 // than a sentence with a hole in it. A direct (non-git) session has no worktree and no branch,
 // so every load-bearing claim above would be false for it — it gets no brief at all.

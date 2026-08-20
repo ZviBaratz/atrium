@@ -707,6 +707,7 @@ func init() {
 	rootCmd.AddCommand(peekCmd)
 	rootCmd.AddCommand(sendCmd)
 	rootCmd.AddCommand(newCmd)
+	rootCmd.AddCommand(guideCmd)
 	rootCmd.AddCommand(debugCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(resetCmd)

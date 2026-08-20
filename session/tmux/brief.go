@@ -68,9 +68,21 @@ const sessionStartMatcher = "startup|resume|clear|compact"
 // with CLAUDE.md and auto-memory for early-context attention. The cap is enforced by
 // TestSessionBriefLengthCap against a realistic worst case, NOT by truncating at runtime —
 // truncation would silently amputate the worktree-ownership sentence, which is the entire
-// reason the payload exists. The copy renders to 626 chars (~155 tokens) at that worst case
-// today, so the budget leaves roughly one short clause of slack — deliberately tight.
-const sessionBriefMaxLen = 660
+// reason the payload exists.
+//
+// What the copy currently renders to is deliberately not restated here: that value is
+// computed by TestSessionBriefLengthCap from longBrief, and a number in this comment would
+// be a second home for it — the one that goes stale. The cap has moved exactly once, to buy
+// the guide pointer (#759), and the ratchet the test's failure message states still stands:
+// the next clause shortens the copy rather than raising this again.
+const sessionBriefMaxLen = 750
+
+// GuideSubcommand is the CLI verb the brief points an agent at: `atrium guide` prints the
+// agent-facing page the brief itself has no room for. Exported for the same reason
+// HookSubcommand is — the copy below and the subcommand registration in main both spell it,
+// and a rename reaching only one of them would leave the brief advertising a command that
+// does not exist.
+const GuideSubcommand = "guide"
 
 // sessionBriefTemplate is the copy. Every clause states something read out of this codebase,
 // not assumed:
@@ -84,6 +96,14 @@ const sessionBriefMaxLen = 660
 //   - "pausing removes the worktree but keeps the branch" — session/pause.go commits dirty work
 //     as an "[atrium] update from … (paused)" marker, removes the worktree, keeps the branch,
 //     and Resume soft-resets the marker away.
+//   - "run `atrium guide`" — the pointer the whole of #759 is: the capability an agent needs
+//     is `atrium new`, and the page that names it, along with the rest of the headless surface,
+//     is guidePage in main. One clause rather than the surface itself, because everything here is re-paid
+//     on every /clear and compaction while the page is pulled once, by an agent that wants it.
+//     It states no delivery timing on purpose — when a spooled create actually lands is a live
+//     verdict, which drainState reads off tui.lock and handover.lock and spoolWarningFor prints
+//     at the moment it matters, and newCmd's Long owns the standing rules. A sentence here
+//     would be a second, staler home for both.
 //
 // A brief that confidently states the wrong lifecycle is worse than no brief, so an edit here
 // means re-reading those call sites.
@@ -93,7 +113,8 @@ const sessionBriefTemplate = "You are running in Atrium session %q. " +
 	"Atrium owns this worktree: never run `git worktree remove` or `git worktree prune` against it. " +
 	"Killing the session removes the worktree and deletes the branch; " +
 	"pausing removes the worktree but keeps the branch. " +
-	"Other worktrees under %s belong to other Atrium sessions — never touch them."
+	"Other worktrees under %s belong to other Atrium sessions — never touch them. " +
+	"You can start the follow-up session yourself rather than asking — run `atrium " + GuideSubcommand + "`."
 
 // SessionBrief is the set of per-session facts the brief is rendered from, baked into the hook
 // command line at launch. Supplied by the provider bound with SetSessionBriefFunc, which start()
