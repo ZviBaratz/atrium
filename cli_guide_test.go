@@ -7,29 +7,41 @@ import (
 
 	"github.com/ZviBaratz/atrium/session/tmux"
 
+	"github.com/mattn/go-runewidth"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 )
 
-// TestBriefAdvertisesARegisteredCommand closes the gap between the two files that both spell
-// the guide's name: session/tmux/brief.go, which writes it into the copy Claude reads at every
-// session start, and this package, which registers the command. Nothing connects them at
-// compile time — the brief is a string — and a string naming a command that does not exist
-// fails as a "command not found" the agent absorbs quietly, never as a build error.
+// guideSection returns the page text between two markers, so a scoping assertion cannot
+// silently widen to the rest of the page. readmeSection states the reason for the end marker:
+// a guard that fell back to the document would keep passing after the section it is about was
+// renamed away. Here the same applies to a REORDER — the destructive section happens to be last
+// today, so a heading-to-EOF slice and the real section coincide until someone moves one.
+func guideSection(t *testing.T, startMarker, endMarker string) string {
+	t.Helper()
+	start := strings.Index(guidePage, startMarker)
+	require.GreaterOrEqual(t, start, 0, "the page is missing the %q heading", startMarker)
+	rest := guidePage[start:]
+	end := strings.Index(rest, endMarker)
+	require.Greater(t, end, 0, "the page is missing %q after %q", endMarker, startMarker)
+	return rest[:end]
+}
+
+// TestBriefAdvertisesARegisteredCommand holds the brief to a command this binary answers to.
 //
-// The direction it holds is registration → copy: the name rootCmd actually answers to must
-// appear in the RENDERED brief, so a rename reaching the registration and not the template
-// fails here. The reverse — the template dropping `+ GuideSubcommand +` for the identical
-// literal — is invisible to this or any test, since both render the same bytes.
+// What it does NOT do is catch a rename: `Use: tmux.GuideSubcommand` means guideCmd.Name()
+// returns the very constant the template interpolates, so both sides of the name comparison
+// move together and that assertion cannot fail. Two earlier versions of this comment claimed
+// otherwise, in two different ways, so the claim is dropped rather than restated a third time.
+// What the comparison is still worth is the case where the copy stops interpolating and drifts
+// to a stale literal; what the rest of the test is worth is the registration itself, which
+// nothing else asserts — a declared-but-unregistered command is a build-clean "command not
+// found" for every session the brief reaches.
 func TestBriefAdvertisesARegisteredCommand(t *testing.T) {
 	brief := tmux.RenderSessionBrief(tmux.SessionBrief{
-		Name:          "n",
-		Origin:        "/o",
-		Branch:        "b",
-		WorktreesRoot: "/r",
+		Name: "n", Origin: "/o", Branch: "b", WorktreesRoot: "/r",
 	})
 	require.NotEmpty(t, brief, "a complete set of facts renders a brief")
-
 	require.Contains(t, brief, "`atrium "+guideCmd.Name()+"`",
 		"the brief advertises a command this binary does not register under that name")
 
@@ -44,12 +56,10 @@ func TestBriefAdvertisesARegisteredCommand(t *testing.T) {
 }
 
 // TestGuideCommandPrintsThePage drives the registered command through rootCmd rather than
-// calling runGuide, because everything else in this file tests the page and the function while
-// leaving the wiring between them unasserted: replacing RunE's body with `return nil` keeps the
-// whole package green. That is the CLI analogue of the drift-sites gap where nothing asserts a
-// registered key has a case in handleKeyPress, and TestNewCommandFlagsAreAllWired is the same
-// guard for `new`'s flags — an `atrium guide` that prints nothing while the brief keeps pointing
-// every claude session at it is the failure both exist to stop.
+// calling runGuide, because everything else here tests the page and the function while leaving
+// the wiring between them unasserted: replacing RunE's body with `return nil` kept the whole
+// package green. That is the CLI analogue of the drift-sites gap where nothing asserts a
+// registered key has a case in handleKeyPress.
 func TestGuideCommandPrintsThePage(t *testing.T) {
 	restoreRootCmd(t)
 
@@ -63,77 +73,109 @@ func TestGuideCommandPrintsThePage(t *testing.T) {
 	require.Equal(t, guidePage+"\n", out.String(), "`atrium guide` must print the page")
 }
 
+// TestGuideRunMatchesItsHelp: `atrium guide` and `atrium guide --help` are two paths to the
+// same page, and an agent told to run one must not get less than the other.
+//
+// It RENDERS the help path rather than comparing guideCmd.Long to the const, which is the
+// same string by construction and so cannot disagree with itself. Cobra reaches Long through
+// a help template, and a template override is the way this actually breaks: setting one that
+// prints only Short left the package green while `atrium guide --help` printed a single line.
+func TestGuideRunMatchesItsHelp(t *testing.T) {
+	var run bytes.Buffer
+	require.NoError(t, runGuide(&run))
+	require.Equal(t, guidePage+"\n", run.String(), "the command prints the page and nothing else")
+
+	var help bytes.Buffer
+	guideCmd.SetOut(&help)
+	t.Cleanup(func() { guideCmd.SetOut(nil) })
+	require.NoError(t, guideCmd.Help())
+
+	require.Contains(t, help.String(), guidePage,
+		"`--help` must render the same page the command prints")
+}
+
 // TestGuideCarriesTheBriefsLoadBearingRules: the page is not only the brief's overflow, it is
-// the ONLY carrier of these rules for a session that gets no brief at all. ensureHookSettings
-// injects one solely for an adapter declaring HookSupport, so a codex, gemini or aider agent
-// reaches them here or nowhere — which is why the page repeats rather than references them, and
-// why dropping a repetition as redundant would silently strip those sessions of it.
+// the ONLY carrier of these rules for a session that gets no brief — every codex, gemini and
+// aider session, and every direct session. So each clause is pinned individually. Asserting a
+// heading, or one clause standing for the section, is what let an earlier version of this test
+// pass while the sibling-worktree prohibition was deleted as duplicative.
 func TestGuideCarriesTheBriefsLoadBearingRules(t *testing.T) {
-	require.Contains(t, guidePage, "git worktree remove",
-		"the ownership rule this whole channel exists for must be on the page")
-	require.Contains(t, guidePage, "git worktree prune",
-		"both halves of the ownership rule, not just the first")
-	require.Contains(t, guidePage, "already checked out on the session branch",
-		"the branch instruction: the failure mode is branching on top of the session branch")
+	// Each clause must sit on ONE line of the page: a command an agent copies must never be
+	// split by the wrap, and an assertion spanning a break would pin the wrap rather than the
+	// rule, failing on any reflow that leaves the text intact.
+	for _, clause := range []string{
+		"`git worktree remove` or `git worktree prune`",
+		"sibling worktree beside it",
+		"already checked out on the session branch",
+		"create another branch",
+		"Killing the session removes the worktree and deletes the branch",
+		"removes the worktree and keeps the branch",
+	} {
+		require.Contains(t, guidePage, clause,
+			"a rule that reaches non-claude sessions here or nowhere was dropped: %q", clause)
+	}
 }
 
 // TestGuideNamesTheHandoffCommand: the brief spends its one clause pointing here, so the page
-// has to carry the thing the clause promised. Without `atrium new` on it the pointer costs
-// every session, in every repo, on every compaction, and leads nowhere.
+// has to carry what the clause promised — the worked example, and the base-branch fact without
+// which the example silently hands the next agent a worktree missing this agent's work.
 //
-// It asserts the worked example rather than the bare name, which is a substring of the
-// `atrium new --help` pointer the next test requires and so was satisfied by a page that had
-// deleted the entire handing-off section.
+// It asserts the example rather than the bare name, which is a substring of the
+// `atrium new --help` pointer below and so was satisfied by a page that had deleted the whole
+// section.
 func TestGuideNamesTheHandoffCommand(t *testing.T) {
-	require.Contains(t, guidePage, "HANDING OFF",
-		"the page must keep the section that tells an agent to create the next session")
-	require.Contains(t, guidePage, `atrium new "fix the parser"`,
+	section := guideSection(t, "HANDING OFF", "NOT YOURS TO RUN")
+	require.Contains(t, section, `atrium new "fix the parser"`,
 		"the page must show a worked handoff, not merely name the command")
+	require.Contains(t, section, "not from yours",
+		"the page must say the new branch does not start from this session's branch")
+	require.Contains(t, section, "--branch",
+		"and must name the flag that carries this session's work forward")
 }
 
 // TestGuideDefersTheTimingRules: when a queued create actually lands is the claim on this page
-// most likely to be restated wrongly. It is long, it has a parked-TUI case that only a live lock
-// probe answers (drainState), and newCmd's Long already owns all of it. So the page sends an
-// agent there instead of paraphrasing, and this is what stops a paraphrase reappearing.
+// most likely to be restated wrongly — twice already. It is long, it has a parked-TUI case that
+// only a live lock probe answers (drainState), and the warning `new` prints is deliberately
+// asymmetric under --wait (TestNewWaitStillWarnsWhileAtriumIsParked is the exception that broke
+// the page's second attempt at summarising it). newCmd's Long owns all of it.
 func TestGuideDefersTheTimingRules(t *testing.T) {
 	require.Contains(t, guidePage, "atrium new --help",
 		"the page must point at the help that owns the delivery-timing rules")
+	require.NotContains(t, guidePage, "--wait",
+		"the page must not describe --wait's semantics; two attempts at that sentence were wrong")
 }
 
-// TestGuideShowsWaitWithADuration guards a difference the page cannot state safely by accident:
-// --wait is a DurationVar with no NoOptDefVal, so a bare `--wait` is a usage error that fails
-// before anything is spooled. The page is read by an agent deciding what to type, without the
-// flag list beside it that makes newCmd's Long unambiguous, so it must show a value.
-//
-// The NoOptDefVal assertion is the live half: give --wait an implied value and this fails,
-// which is the moment to revisit the wording rather than years later.
-func TestGuideShowsWaitWithADuration(t *testing.T) {
-	flag := newCmd.Flags().Lookup("wait")
-	require.NotNil(t, flag, "`new` must still carry the --wait flag the page describes")
-	require.Empty(t, flag.NoOptDefVal,
-		"--wait now has an implied value, so a bare --wait works and the page can be relaxed")
-
-	require.Contains(t, guidePage, "`--wait 30s`",
-		"a bare --wait is a usage error, so the page must show it with a duration")
+// TestGuideWarnsAboutSendStdin: `send` with the message omitted reads stdin, and messageText has
+// no tty guard, so the form blocks forever for an agent whose shell inherits the session pty —
+// long enough to kill the tool call. cli_new.go documents declining that behaviour for `new`
+// precisely to avoid it. The page recommended the stdin form for one commit; this is what stops
+// it coming back.
+func TestGuideWarnsAboutSendStdin(t *testing.T) {
+	require.Contains(t, guidePage, "Always pass `send` its message as an argument",
+		"the page must tell an agent to pass the message inline")
+	require.Contains(t, guidePage, "waits forever",
+		"and must say what the omitted form does, not merely prefer the other one")
 }
 
 // TestGuideWarnsOffTheDestructiveCommands is the reason the brief points at this page rather
 // than at `atrium --help`, which lists reset and reap beside ls and peek with nothing to say
 // which of them belong to the person at the keyboard.
-//
-// The heading is located before it is sliced on. strings.Index returns -1 when it is missing,
-// and guidePage[-1:] panics rather than failing — which aborts the whole package binary and
-// takes every other test's result with it, so a one-word edit to a heading would read as a
-// crash somewhere else entirely.
 func TestGuideWarnsOffTheDestructiveCommands(t *testing.T) {
-	const heading = "NOT YOURS TO RUN"
-	start := strings.Index(guidePage, heading)
-	require.GreaterOrEqual(t, start, 0, "the page has no %s section", heading)
-
-	section := guidePage[start:]
+	section := guideSection(t, "NOT YOURS TO RUN", "Everything listed under")
 	require.Contains(t, section, "atrium reset", "the page must warn an agent off reset")
 	require.Contains(t, section, "atrium reap --kill", "and off the reap form that stops servers")
 	require.Contains(t, section, "atrium update", "and off replacing the running binary")
+}
+
+// TestGuidePermitsWhatItLists: the closing sentence generalises from the three commands above it
+// to "anything else is theirs", and the page's own entry point has to survive that rule. It did
+// not for one commit: `guide` appeared nowhere in the page text, so the sweep classified the
+// command every session is pointed at as the keyboard's, and a compliant agent would stop
+// re-reading its own instructions.
+func TestGuidePermitsWhatItLists(t *testing.T) {
+	section := guideSection(t, "WHAT YOU CAN RUN", "HANDING OFF")
+	require.Contains(t, section, "atrium "+guideCmd.Name(),
+		"the page must list its own command among the ones an agent may run")
 }
 
 // TestGuideNamesOnlyRegisteredCommands holds the page to the CLI it describes. Every command it
@@ -150,31 +192,24 @@ func TestGuideNamesOnlyRegisteredCommands(t *testing.T) {
 		names[c.Name()] = true
 	}
 
-	for _, name := range []string{"ls", "peek", "send", "new", "reset", "reap", "update"} {
+	for _, name := range []string{"guide", "ls", "peek", "send", "new", "reset", "reap", "update"} {
 		require.Contains(t, guidePage, "atrium "+name, "the page is expected to mention %q", name)
 		require.True(t, names[name], "the page names `atrium %s`, which rootCmd does not register", name)
 	}
 }
 
-// TestGuideRunMatchesItsHelp: `atrium guide` and `atrium guide --help` are two paths to the same
-// page, and an agent told to run one must not get less than the other. Cobra prints Long for the
-// help path, so pointing both at one const is what makes them agree — this fails if a later edit
-// gives RunE its own copy.
-func TestGuideRunMatchesItsHelp(t *testing.T) {
-	var out bytes.Buffer
-	require.NoError(t, runGuide(&out))
-
-	require.Equal(t, guidePage+"\n", out.String(), "the command prints the page and nothing else")
-	require.Equal(t, guidePage, guideCmd.Long, "`--help` must render the same page the command prints")
-}
-
-// TestGuideFitsAnEightyColumnPane: the command table is column-aligned with runs of spaces, so a
-// line over the pane width does not merely wrap — it wraps the description under the next
-// command and the alignment stops meaning anything. An agent reads this through tmux at whatever
-// width the session was created at, and nothing else here measures rendered width.
-func TestGuideFitsAnEightyColumnPane(t *testing.T) {
+// TestGuideFitsEightyColumns keeps the command table's alignment meaningful: the columns are runs
+// of spaces, so a line past the terminal's width does not merely wrap, it wraps a description
+// under the next command. Eighty is a convention rather than a measured pane width — nothing
+// reflows this text, which runGuide writes straight to stdout — so this is a typographic budget,
+// not a rendering guarantee.
+//
+// It measures display width rather than rune count, matching ui/list_sanitize_test.go: the page
+// carries em dashes, which are East-Asian Ambiguous, and several lines sit at exactly the limit
+// with no slack for a glyph that turns out to be wide.
+func TestGuideFitsEightyColumns(t *testing.T) {
 	for _, line := range strings.Split(guidePage, "\n") {
-		require.LessOrEqual(t, len([]rune(line)), 80,
-			"line exceeds an 80-column pane and will reflow: %q", line)
+		require.LessOrEqual(t, runewidth.StringWidth(line), 80,
+			"line exceeds the 80-column budget and will reflow: %q", line)
 	}
 }

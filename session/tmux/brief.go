@@ -70,10 +70,12 @@ const sessionStartMatcher = "startup|resume|clear|compact"
 // would silently amputate the worktree-ownership sentence, which is the entire reason the
 // payload exists.
 //
-// longBrief's values are ASCII, which makes this a budget ratchet rather than a bound: a
-// title at the same MaxTitleLen limit written in a multi-byte script renders past the cap,
-// because the limit counts runes and this guard counts bytes. Nothing breaks when it does —
-// nothing truncates — so what such a title costs is the cost model drifting, not a defect.
+// longBrief's values are ASCII, which makes this a budget ratchet rather than a bound: the
+// limit counts runes and this guard counts bytes, so a non-ASCII title moves the total. Which
+// way, and by how much, is deliberately not stated — two attempts at that sentence were both
+// wrong, because BranchNameForSession also SHORTENS the branch for a title that sanitizes to
+// nothing, and the two effects pull opposite ways. Nothing truncates at runtime, so a title
+// over the cap costs a drifted cost model rather than a lost sentence.
 //
 // What the copy currently renders to is deliberately not restated here: that value is
 // computed by TestSessionBriefLengthCap from longBrief, and a number in this comment would
@@ -83,10 +85,11 @@ const sessionStartMatcher = "startup|resume|clear|compact"
 const sessionBriefMaxLen = 750
 
 // GuideSubcommand is the CLI verb the brief points an agent at: `atrium guide` prints the
-// agent-facing page the brief itself has no room for. Exported for the same reason
-// HookSubcommand is — the copy below and the subcommand registration in main both spell it,
-// and a rename reaching only one of them would leave the brief advertising a command that
-// does not exist.
+// agent-facing page the brief itself has no room for. Exported so main's registration can
+// REFERENCE it (`Use: tmux.GuideSubcommand`) rather than repeat it — that is what makes a
+// rename safe, because both sides then move together. The copy below is the one site that
+// could still drift, by interpolating a literal instead; while the literal matches nothing
+// can detect that, so it is held by review rather than by a test.
 const GuideSubcommand = "guide"
 
 // sessionBriefTemplate is the copy. Every clause states something read out of this codebase,

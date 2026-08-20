@@ -15,10 +15,12 @@ import (
 // pulled once, by an agent that went looking for it.
 //
 // It restates the brief's worktree rules rather than assuming them, and the reason is reach:
-// ensureHookSettings injects the brief only for an adapter declaring HookSupport, so a codex,
-// gemini or aider session is never sent one and this page is the ONLY place those rules can
-// reach it. Anything load-bearing in the brief — worktree ownership, the branch already being
-// checked out — therefore has to appear here too, in full, not by reference.
+// ensureHookSettings has several gates (README's Scripting section enumerates them), and a
+// session failing any of them — every codex, gemini and aider session, and every direct
+// session whatever the agent — is never sent a brief at all. For those this page is the ONLY
+// carrier, so anything load-bearing in the brief appears here too, in full, not by reference.
+// That is also why the branch instruction here is conditioned on not being a direct session,
+// where it would be false: the brief is never rendered for one, so it can state it flatly.
 //
 // Static text on purpose: it takes no lock, reads no state and logs nothing, so there is no
 // moment at which running it is unsafe and no way for it to answer with something stale but
@@ -34,35 +36,39 @@ const guidePage = "You are an AI agent running inside an Atrium session. Atrium 
 	"\n" +
 	"YOUR WORKTREE\n" +
 	"\n" +
-	"  The working directory is already checked out on the session branch. Work on\n" +
-	"  it; do not create another branch.\n" +
+	"  Unless this is a direct session (below), the working directory is a worktree\n" +
+	"  Atrium created, already checked out on the session branch. Work on it; do not\n" +
+	"  create another branch.\n" +
 	"\n" +
 	"  Atrium created this worktree and Atrium reclaims it. Never run\n" +
 	"  `git worktree remove` or `git worktree prune` against it, and never touch a\n" +
 	"  sibling worktree beside it — those are other live agents' desks.\n" +
 	"\n" +
 	"  Killing the session removes the worktree and deletes the branch. Pausing\n" +
-	"  removes the worktree and keeps the branch, first committing whatever is\n" +
-	"  uncommitted as an \"[atrium] … (paused)\" marker; resuming rewinds that marker,\n" +
-	"  so leave it alone rather than cleaning it up.\n" +
+	"  removes the worktree and keeps the branch, committing whatever is uncommitted\n" +
+	"  first as a marker Atrium unwinds when the session resumes. Leave that commit\n" +
+	"  alone rather than cleaning it up.\n" +
 	"\n" +
-	"  A session created *direct* is the exception: its directory is not a git\n" +
-	"  repository at all, so it has no worktree, no branch and no diff, and Atrium\n" +
-	"  reclaims none of it. `atrium ls --json` reports that as the `direct` field.\n" +
+	"  A direct session is the exception: its directory is not a git repository at\n" +
+	"  all, so it has no worktree, no branch and no diff, and Atrium reclaims none of\n" +
+	"  it. `atrium ls --json` reports that as the `direct` field.\n" +
 	"\n" +
 	"WHAT YOU CAN RUN\n" +
 	"\n" +
-	"  atrium ls [--json]               every session: title, status, branch, diff\n" +
+	"  atrium guide                     this page\n" +
+	"  atrium ls [--json]               every session, and what each is doing\n" +
 	"  atrium peek <session>            read another session's pane without attaching\n" +
-	"  atrium send <session> [message]  queue a prompt for another session\n" +
+	"  atrium send <session> <message>  queue a prompt for another session\n" +
 	"  atrium new <title> [prompt]      create a session: worktree, branch, agent\n" +
 	"\n" +
-	"  Each carries its own --help with the rules. Read `atrium new --help` before\n" +
-	"  your first handoff: it owns the answer to when a queued create actually\n" +
-	"  lands, and this page deliberately does not repeat it.\n" +
+	"  Always pass `send` its message as an argument. Left off, it reads the message\n" +
+	"  from stdin instead, which on a terminal waits forever.\n" +
 	"\n" +
-	"  `send` reads its message from stdin when you leave the argument off or pass\n" +
-	"  `-`, which is how a multi-line prompt is handed over.\n" +
+	"  Each command carries its own --help, and that is where the rules live. Read\n" +
+	"  `atrium new --help` before your first handoff: it owns the answer to when a\n" +
+	"  queued create actually lands, which this page deliberately does not repeat.\n" +
+	"  Read what `new` and `send` print on stderr — some of it is addressed to the\n" +
+	"  person at the keyboard rather than to you.\n" +
 	"\n" +
 	"HANDING OFF\n" +
 	"\n" +
@@ -71,24 +77,16 @@ const guidePage = "You are an AI agent running inside an Atrium session. Atrium 
 	"\n" +
 	"      atrium new \"fix the parser\" \"start from the failing test in parse_test.go\"\n" +
 	"\n" +
-	"  `new` does not create the session itself — it spools a request that the\n" +
-	"  running Atrium executes — so it prints what it queued, not what it built.\n" +
-	"  Read its stderr: when it can tell that nothing is draining the request, it\n" +
-	"  says so there.\n" +
+	"  `new` does not build the session — it queues a request that the running Atrium\n" +
+	"  executes — so it reports what it queued, not what it built.\n" +
 	"\n" +
-	"  Pass `--wait 30s` — a duration, not a bare flag — to block until the session\n" +
-	"  exists and be told its branch. Under `--wait` the \"nothing is draining this\"\n" +
-	"  warning is deliberately suppressed, because the wait itself reports that\n" +
-	"  outcome for real if it times out.\n" +
+	"  The new session's branch starts from the origin repo's HEAD, not from yours,\n" +
+	"  so it will not contain work you have not merged. When the next agent needs to\n" +
+	"  start from where you stopped, pass `--branch` naming your own branch.\n" +
 	"\n" +
-	"  Without `--wait` you cannot tell a refused create from a slow one, and\n" +
-	"  `atrium ls` will not tell you either: it lists sessions that exist, while a\n" +
-	"  request the drain refuses leaves no session and no row — only a receipt that\n" +
-	"  `--wait` reads and `ls` does not.\n" +
-	"\n" +
-	"  A title is a branch: the branch and tmux names derive from it. Use 32\n" +
-	"  characters or fewer, and expect a title whose branch or tmux name is already\n" +
-	"  taken to be refused rather than quietly suffixed.\n" +
+	"  A title is a branch: the branch and tmux names derive from it, and a title\n" +
+	"  whose names are already taken is refused rather than quietly suffixed. An\n" +
+	"  over-long title is refused too, and the error names the limit.\n" +
 	"\n" +
 	"NOT YOURS TO RUN\n" +
 	"\n" +
@@ -100,8 +98,8 @@ const guidePage = "You are an AI agent running inside an Atrium session. Atrium 
 	"\n" +
 	"  `atrium update` replaces the running binary with a newer release.\n" +
 	"\n" +
-	"  These belong to the person at the keyboard — ask. Treat anything else in\n" +
-	"  `atrium --help` and not listed above as theirs too."
+	"  Those three belong to the person at the keyboard — ask before running any of\n" +
+	"  them. Everything listed under WHAT YOU CAN RUN is yours, this page included."
 
 var guideCmd = &cobra.Command{
 	Use:   tmux.GuideSubcommand,

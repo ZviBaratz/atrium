@@ -84,8 +84,10 @@ func TestSessionBriefNamesLiveFacts(t *testing.T) {
 // The name is asserted through GuideSubcommand rather than as a literal, so this tracks a rename
 // instead of pinning a spelling. What it cannot see is the template dropping the interpolation
 // for that same spelling — the two render identical bytes — so the guarantee here is narrower
-// than it looks. TestBriefAdvertisesARegisteredCommand in the root package is the other half:
-// it requires the name rootCmd actually registers to appear in the rendered copy.
+// than it looks. The root package's TestBriefAdvertisesARegisteredCommand is not the other
+// half either: the name it compares derives from this same constant, so that comparison moves
+// with a rename too. What it adds is the REGISTRATION — that some command answers to the name
+// at all — not agreement about the spelling.
 func TestSessionBriefNamesTheGuideCommand(t *testing.T) {
 	out := RenderSessionBrief(sentinelBrief)
 

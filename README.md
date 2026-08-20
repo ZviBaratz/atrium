@@ -250,7 +250,9 @@ refuses in the TUI too, and `--force` does not reach it.
 `--wait` blocks until the session actually exists and then prints its branch and
 worktree, read back from what Atrium recorded rather than derived from the title.
 Without it the command is honestly fire-and-forget: it prints what it queued, and
-`atrium ls` is how you watch for the result.
+`atrium ls` shows the session once it exists. That is not the same as watching for the
+*result* — a request the drain refuses leaves no session and no row, and the refusal is
+written as a receipt that only `--wait` reads.
 
 Both spools are drained by the TUI's poll loop, which is **suspended while you
 are attached to a session** — Atrium has handed the terminal to tmux and its

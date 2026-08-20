@@ -15,6 +15,7 @@ import (
 	"github.com/ZviBaratz/atrium/internal/outbox"
 	"github.com/ZviBaratz/atrium/session"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -627,13 +628,31 @@ func resetNewFlags() {
 // this the next test in this package to call rootCmd.Execute() — for any subcommand —
 // silently runs the argv this one left behind, with its output discarded. Latent
 // today, and exactly the kind of thing CI's -shuffle turns into a mystery.
+//
+// Execute also ADDS to rootCmd: ExecuteC calls InitDefaultHelpCmd and
+// InitDefaultCompletionCmd, so `help` and `completion` appear in rootCmd.Commands() for the
+// rest of the binary. That decides the input of every guard that enumerates the command set —
+// TestReadmeDocumentsEveryCommand and TestEveryCommandHasAShortDescription — so whether they
+// check those two depends on whether some other test ran Execute first. Verified by deleting
+// the README's `completion` row: the README guard alone passes, and passes again behind an
+// Execute only because the row is there to find. Removing them here makes that input the same
+// in either order.
 func restoreRootCmd(t *testing.T) {
 	t.Helper()
+	before := map[*cobra.Command]bool{}
+	for _, c := range rootCmd.Commands() {
+		before[c] = true
+	}
 	t.Cleanup(func() {
 		resetNewFlags()
 		rootCmd.SetArgs(nil)
 		rootCmd.SetOut(nil)
 		rootCmd.SetErr(nil)
+		for _, c := range rootCmd.Commands() {
+			if !before[c] {
+				rootCmd.RemoveCommand(c)
+			}
+		}
 	})
 }
 
