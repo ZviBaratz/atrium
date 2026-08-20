@@ -35,7 +35,7 @@ const guidePage = "You are an AI agent running inside an Atrium session. Atrium 
 	"\n" +
 	"  A session created *direct* is the exception: it has no worktree of its own, it\n" +
 	"  works in the real checkout on whatever branch that checkout is on, and Atrium\n" +
-	"  reclaims none of it. `atrium ls --json` reports which a session is.\n" +
+	"  reclaims none of it. `atrium ls --json` reports that as the `direct` field.\n" +
 	"\n" +
 	"WHAT YOU CAN RUN\n" +
 	"\n" +
@@ -85,8 +85,9 @@ var guideCmd = &cobra.Command{
 	},
 }
 
-// runGuide prints the page. No log.Initialize, unlike every other subcommand: this one reads
-// nothing, writes nothing and cannot fail for any reason worth recording, so opening the
+// runGuide prints the page. No log.Initialize, unlike the headless commands beside it (ls,
+// peek, send, new, reap, reset): this one resolves nothing and touches no data dir, so its
+// only failure is a stdout it cannot write to — which Cobra already reports — and opening the
 // shared log would be the only side effect it has.
 func runGuide(w io.Writer) error {
 	_, err := fmt.Fprintln(w, guidePage)
