@@ -66,9 +66,14 @@ const sessionStartMatcher = "startup|resume|clear|compact"
 // sessionBriefMaxLen caps the rendered brief. additionalContext is not paid once: Claude
 // re-delivers it on every session start, every /clear and every compaction, and it competes
 // with CLAUDE.md and auto-memory for early-context attention. The cap is enforced by
-// TestSessionBriefLengthCap against a realistic worst case, NOT by truncating at runtime —
-// truncation would silently amputate the worktree-ownership sentence, which is the entire
-// reason the payload exists.
+// TestSessionBriefLengthCap against longBrief, NOT by truncating at runtime — truncation
+// would silently amputate the worktree-ownership sentence, which is the entire reason the
+// payload exists.
+//
+// longBrief's values are ASCII, which makes this a budget ratchet rather than a bound: a
+// title at the same MaxTitleLen limit written in a multi-byte script renders past the cap,
+// because the limit counts runes and this guard counts bytes. Nothing breaks when it does —
+// nothing truncates — so what such a title costs is the cost model drifting, not a defect.
 //
 // What the copy currently renders to is deliberately not restated here: that value is
 // computed by TestSessionBriefLengthCap from longBrief, and a number in this comment would
