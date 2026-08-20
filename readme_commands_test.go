@@ -10,6 +10,7 @@ import (
 
 	"github.com/ZviBaratz/atrium/internal/doctor"
 	"github.com/ZviBaratz/atrium/internal/handover"
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 )
 
@@ -43,6 +44,21 @@ func moduleFile(t *testing.T, name string) string {
 // help output with nothing checking it, and it had already drifted: it described
 // doctor by a Short string the command no longer had. A command a user cannot
 // discover may as well not ship.
+// userFacingCommands is rootCmd's command set as a USER sees it in `atrium --help`, which
+// includes the two cobra synthesises on demand: `help` and `completion`. Both carry README rows,
+// so a guard that enumerates the set has to see them.
+//
+// They are added by ExecuteC, not by init(), so before this existed the guards below checked
+// them only when some other test in the package had already run rootCmd.Execute() — which made
+// their coverage depend on test order, and on -shuffle. Calling the initialisers here makes the
+// set the same however the binary is filtered or ordered.
+func userFacingCommands(t *testing.T) []*cobra.Command {
+	t.Helper()
+	rootCmd.InitDefaultHelpCmd()
+	rootCmd.InitDefaultCompletionCmd()
+	return rootCmd.Commands()
+}
+
 func TestReadmeDocumentsEveryCommand(t *testing.T) {
 	readme := moduleFile(t, "README.md")
 
@@ -56,7 +72,7 @@ func TestReadmeDocumentsEveryCommand(t *testing.T) {
 	require.Greater(t, end, start, "README is missing the %q heading after %q", endMarker, startMarker)
 	section := readme[start:end]
 
-	commands := rootCmd.Commands()
+	commands := userFacingCommands(t)
 	require.NotEmpty(t, commands, "rootCmd has no subcommands; the guard would pass vacuously")
 
 	documented := 0
@@ -112,7 +128,7 @@ func readmeSection(t *testing.T, startMarker, endMarker string) string {
 // TestEveryCommandHasAShortDescription: Cobra lists Short in `atrium --help`, so
 // an empty one leaves a blank row in the very output a new user reads first.
 func TestEveryCommandHasAShortDescription(t *testing.T) {
-	for _, c := range rootCmd.Commands() {
+	for _, c := range userFacingCommands(t) {
 		require.NotEmpty(t, strings.TrimSpace(c.Short), "command %q has no Short description", c.Name())
 	}
 }

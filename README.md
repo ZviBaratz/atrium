@@ -92,6 +92,7 @@ if one is missing from this table.
 | `peek` | Print what a session's pane is showing, without attaching |
 | `send` | Queue a prompt for a session |
 | `new` | Create a session without a TUI |
+| `guide` | Print what an agent running inside a session can do |
 | `doctor` | Check core dependencies (tmux, git, gh) and agent CLI heuristic versions |
 | `reap` | List tmux servers Atrium left behind, and stop them on request |
 | `profiles` | Manage agent profiles (e.g. `profiles detect`) |
@@ -249,7 +250,9 @@ refuses in the TUI too, and `--force` does not reach it.
 `--wait` blocks until the session actually exists and then prints its branch and
 worktree, read back from what Atrium recorded rather than derived from the title.
 Without it the command is honestly fire-and-forget: it prints what it queued, and
-`atrium ls` is how you watch for the result.
+`atrium ls` shows the session once it exists. That is not the same as watching for the
+*result* — a request the drain refuses leaves no session and no row, and the refusal is
+written as a receipt that only `--wait` reads.
 
 Both spools are drained by the TUI's poll loop, which is **suspended while you
 are attached to a session** — Atrium has handed the terminal to tmux and its
@@ -291,6 +294,31 @@ at all — it lists every session, so it has nothing to disambiguate. `new` take
 `--path`, but to choose where the session is created, not to disambiguate.)
 
 All four exit 0 on success and 1 on failure, with the reason on stderr.
+
+**`atrium guide`** is the fifth, and the only one written for a reader rather than a
+script: it prints what an agent running *inside* a session can do — the four commands
+above, the rule that Atrium owns the worktree and reclaims it, how to hand off to the
+next session, and which commands belong to the person at the keyboard rather than to
+the agent. It is static text, takes no locks and reads no state.
+
+It exists because the surface above was undiscoverable to the agents it was built for.
+The `SessionStart` brief Atrium injects into a session (`sessionBriefTemplate`) spends
+one clause naming `guide`, and the page carries everything that clause has no room for
+— the brief is re-delivered on every session start, every `/clear` and every
+compaction, so it is the wrong place to put a manual. Where a fact already has an owner
+the page names the owner instead of restating it: `atrium new --help` is what answers
+when a queued create actually lands.
+
+That pointer reaches **claude sessions only**, and by more than one gate. `ensureHookSettings`
+injects the settings file solely for an agent whose adapter declares hook support, which claude
+alone does; it also skips injection when the claude binary's `--help` does not advertise
+`--settings`, and the `SessionStart` entry is added only for a session with a worktree and a
+branch — so a *direct* (non-git) session gets no brief either, including the paragraph on this
+page written for it. Any of them can run `atrium guide` perfectly well; they are simply never
+told to. [#773](https://github.com/ZviBaratz/atrium/issues/773) tracks closing the adapter gap.
+
+The page also spells the binary `atrium` throughout, rather than the name it was installed
+under (`install.sh --name`). [#775](https://github.com/ZviBaratz/atrium/issues/775) tracks that.
 
 <br />
 
