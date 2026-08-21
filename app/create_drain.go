@@ -333,12 +333,13 @@ func (m *home) drainCreateRequests() tea.Cmd {
 			if disposed >= createDisposalBudget {
 				continue
 			}
-			// e.Request is the zero value here, so orphan is empty and stays that way:
-			// a record nobody can decode names no branch to disclose.
 			// Unreadable, or from a newer atrium. Discarding is the only way out: a
 			// file nobody can decode and nobody deletes would be re-read on every
 			// tick forever. ListCreates only ever surfaces files matching the
 			// spool's own name format, so this can only discard our own.
+			//
+			// e.Request is the zero value on this arm, so orphan is empty and stays
+			// that way: a record nobody can decode names no branch to disclose.
 			log.ErrorLog.Printf("discarding an unreadable create request: %v", e.Err)
 			reject("the request could not be read")
 			disposed++
