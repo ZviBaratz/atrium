@@ -299,9 +299,11 @@ func SweepDisclosures(now time.Time) {
 // its way past. An undecodable claim yields no evidence and so no disclosure — reset still
 // takes the file, and the log line Clear's caller writes is the only account there can be.
 //
-// An existing disclosure wins. The pair "claim plus disclosure" is a refusal whose unlink
-// failed, and that disclosure was written with the full inventory in hand; overwriting it
-// with this one's single field would trade a complete account for a partial one.
+// Any disclosure already there wins, readable or not. The pair "claim plus disclosure" is a
+// refusal whose unlink failed, and that refusal wrote its account with the full inventory in
+// hand, so overwriting it with this one's single field would trade a complete account for a
+// partial one. One this atrium cannot decode wins for the sharper reason: it may be a newer
+// atrium's, and replacing it would be answering "I cannot read this" by destroying it.
 func discloseClearedClaim(record string, claim CreateEntry) error {
 	if claim.Err != nil || claim.Request.Claim == nil || claim.Request.Claim.SessionBranch == "" {
 		return nil

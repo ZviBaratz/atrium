@@ -276,9 +276,10 @@ func createDisclosureReport(ds []outbox.Disclosure, now time.Time) string {
 // and inventing today's date for it would make the oldest entry look like the newest.
 //
 // A coarse age rather than a Duration's own String, which renders three hours as "3h0m0s"
-// and two days as "49h0m0s" — precision nobody reads, in the units nobody wanted. The tiers
-// are overlay.relTime's with a day added, because a disclosure can outlive a weekend where a
-// command-log row cannot.
+// and two days as "49h0m0s" — precision nobody reads, in the units nobody wanted. Same shape
+// as overlay.relTime, with a day tier added and its seconds tier collapsed into words: a
+// disclosure can outlive a weekend where a command-log row cannot, and the sub-minute case
+// here is a clock that moved rather than something worth counting.
 func gaveUp(at, now time.Time) string {
 	if at.IsZero() {
 		return ""

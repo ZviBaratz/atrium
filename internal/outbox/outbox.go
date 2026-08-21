@@ -373,7 +373,7 @@ const clearReason = "atrium reset discarded every queued request"
 //
 // Edited, because reset removes some of what a disclosure already on disk names and not
 // the rest, and the two halves do not follow from which artifact it is. What goes is the
-// worktree DIRECTORY and the agent: git.CleanupWorktrees removes every top-level entry
+// worktree DIRECTORY and the agent: git.CleanupWorktrees removes every top-level DIRECTORY
 // under the data dir's worktrees/ tree, and tmux.CleanupSessions kills every session
 // matching Prefix() — both walks unscoped by the rows reset just deleted. What stays is
 // the BRANCH and git's stale worktree registration, because `branch -D` and
@@ -390,6 +390,17 @@ const clearReason = "atrium reset discarded every queued request"
 // the returned error and not counted, even though Reject removes it regardless — an
 // unreported failure being better than a record that is re-read and re-rejected
 // forever.
+//
+// A disclosure this walk could not write or could not trim is deliberately absent from that
+// error, and the reason is what the caller does with it: `atrium reset` reads a non-nil
+// error as "a record survived, and the next atrium will act on it" and says so on stderr,
+// which would be false of a report that failed to be written. Nothing is stranded by that
+// failure either — the branch the disclosure would have named is stranded by the reset
+// itself, disclosed or not. And it cannot be the only signal of a broken spool: writing a
+// disclosure and writing a receipt are the same config.WriteFileAtomic against the same
+// directory, so a filesystem that refuses one refuses the other, and the other IS counted.
+// That last point is also why this decision has no test: there is no writable sandbox in
+// which Disclose fails and Reject succeeds.
 func Clear() (int, error) {
 	var removed int
 	var firstErr error
@@ -421,13 +432,10 @@ func Clear() (int, error) {
 				path := filepath.Join(dir, record)
 				// Disclose first, for the ordering Disclose documents: both calls
 				// below destroy something, and the branch this claim's interrupted
-				// build left is named nowhere else. A failure is joined rather than
-				// fatal — reset's job is to leave nothing executable behind, and
-				// withholding the discard because the account of it could not be
-				// written would leave exactly that.
-				err := errors.Join(
-					discloseClearedClaim(path, readCreate(ClaimPath(path))),
-					Reject(path, clearReason), DiscardCreate(path))
+				// build left is named nowhere else. Its failure is deliberately not
+				// part of this walk's verdict, though — see below.
+				_ = discloseClearedClaim(path, readCreate(ClaimPath(path)))
+				err := errors.Join(Reject(path, clearReason), DiscardCreate(path))
 				if err != nil {
 					if firstErr == nil {
 						firstErr = fmt.Errorf("outbox: discard %s: %w", name, err)
@@ -439,9 +447,7 @@ func Clear() (int, error) {
 			}
 			if record, ok := disclosedRecordName(de); ok {
 				// Kept, and trimmed to what reset leaves standing — see the header.
-				if err := trimClearedDisclosure(filepath.Join(dir, record)); err != nil && firstErr == nil {
-					firstErr = err
-				}
+				_ = trimClearedDisclosure(filepath.Join(dir, record))
 				continue
 			}
 			// Both guards, as in listFiles, and most of all here: this is the walk that

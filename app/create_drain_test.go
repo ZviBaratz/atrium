@@ -2143,6 +2143,15 @@ func TestCreateDrainDisclosesAWithdrawnAdoption(t *testing.T) {
 			require.True(t, ok, "but the branch the interrupted build made must still be named")
 			assert.Equal(t, branch, d.Branch)
 			assert.True(t, d.Leftovers())
+			// And the buffered copy is the one that was WRITTEN, stamp included. Disclose
+			// takes a pointer for this: stamping a copy leaves the entry this process
+			// reports from carrying Version 0 and a zero CreatedAt, so the report dates a
+			// live TUI's own orphan as undated while the next launch's — read back off
+			// disk — is dated.
+			require.Len(t, h.pendingCreateDisclosures, 1)
+			buffered := h.pendingCreateDisclosures[0].Disclosure
+			assert.Equal(t, d.CreatedAt.UnixNano(), buffered.CreatedAt.UnixNano())
+			assert.False(t, buffered.CreatedAt.IsZero())
 		})
 	}
 }
@@ -2273,7 +2282,13 @@ func TestCreateDrainKeepsTheAdoptionHoldWhileAnythingIsStillHeld(t *testing.T) {
 	h.drainCreateRequests()
 	require.True(t, h.createAdoptHeld, "precondition: git could not answer for it")
 
-	t.Setenv("PATH", "")
+	// The seam, not PATH: app_test.go stubs tmuxAvailable for the whole package, so
+	// emptying PATH changes nothing the drain reads and the tick would look like an
+	// ordinary one that simply found nothing to hold.
+	orig := tmuxAvailable
+	tmuxAvailable = func() error { return errors.New("tmux is not on PATH") }
+	t.Cleanup(func() { tmuxAvailable = orig })
+
 	h.drainCreateRequests()
 	assert.True(t, h.createAdoptHeld, "tmux being gone is not the re-check starting to work")
 	assertCreateQueued(t, path)
