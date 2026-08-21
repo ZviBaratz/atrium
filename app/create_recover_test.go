@@ -23,6 +23,11 @@ import (
 // explicit value rather than config.DefaultConfig()'s, because the branch NAME is what
 // several of these assertions turn on and reading it out of the code under test would
 // make a wrong derivation agree with itself.
+//
+// It follows that a fixture which also starts a REAL session must not use both: that
+// session's branch comes from the real derivation, which is the lowercased OS username, so
+// the two agree on one machine and nowhere else. Read it off the instance there —
+// TestReconcileRefusesWhileTheAgentIsStillRunning is the one such fixture.
 const strandPrefix = "zvi/"
 
 // strand spools a request, claims it with meta, and returns the record path — a data
@@ -628,7 +633,17 @@ func TestReconcileRefusesWhileTheAgentIsStillRunning(t *testing.T) {
 	live := wt.GetWorktreePath()
 	require.DirExists(t, live)
 
-	record := strandedIn(t, "fix-auth", repo)
+	// The claim's branch read off the instance, not strandedIn's fixed strandPrefix. That
+	// constant is right for the tests where no session was ever built — it keeps a wrong
+	// derivation from agreeing with itself — but here a real one WAS built, and its branch
+	// comes from Config.BranchPrefix, which DefaultConfig derives from the lowercased OS
+	// username. The two coincide on a machine whose account is "zvi" and nowhere else, so a
+	// fixture using both describes two different branches, and the only assertion that
+	// noticed is the one below: the receipt check above it names a tmux session, which
+	// comes from (repo group, title) and carries no prefix at all.
+	require.NotEmpty(t, inst.Branch, "precondition: the interrupted build minted a branch")
+	record := strand(t, outbox.Request{Title: "fix-auth", Path: repo},
+		outbox.ClaimMeta{At: time.Now(), SessionBranch: inst.Branch})
 
 	// No instances: the row is what the crash lost.
 	require.Equal(t, 1, reconcile(t))
