@@ -25,9 +25,10 @@ package outbox
 //
 // Two things a disclosure is not:
 //
-//   - It is not a queue. The reader shows it once and unlinks it (app.flushCreateDisclosures),
-//     and SweepDisclosures is the backstop for one no TUI ever got to. The log line written
-//     beside it is the permanent record.
+//   - It is not a queue. The reader shows it once and then unlinks it if nothing is left
+//     for it to guard (app.flushCreateDisclosures, ClearDisclosure), and SweepDisclosures is
+//     the backstop for one no TUI ever got to. The log line written beside it is the
+//     permanent record.
 //   - It is not evidence anything still exists. The inventory is what the writer knew at
 //     the instant it gave up, so a branch a person deletes in between is named by a
 //     disclosure that outlives it. Over-reporting is the harmless direction here — the
@@ -61,8 +62,11 @@ const (
 	// accepts. Independent of createVersion for the reason createVersion is independent
 	// of currentVersion: no decoder reads both types, so neither has to move when the
 	// other does. An unrecognised version is surfaced as an error rather than decoded on
-	// a guess, and the reader's answer to that is to log it and unlink — nobody is owed
-	// a receipt for a disclosure, so there is nothing to preserve.
+	// a guess, and the reader's answer to that is to log it and clear it — nobody is owed
+	// a receipt for a disclosure, so there is nothing to preserve. "Clear", not "unlink":
+	// ClearDisclosure keeps a disclosure whose record or claim is still on disk, and that
+	// applies to one this atrium cannot decode as much as to one it can. A version from
+	// the future is still a terminal mark.
 	disclosureVersion = 1
 )
 
@@ -99,9 +103,11 @@ type Disclosure struct {
 	// else on disk: the filename carries the REQUEST's own CreatedAt, and one that sat in
 	// the spool for hours before failing is much older than its leftovers.
 	//
-	// The sweep does not read it. SweepDisclosures ages the file by its own mtime, for the
-	// reason SweepRejections does — the same instant, needing no decode, and still an
-	// answer for a file that cannot be decoded at all.
+	// The sweep does not read it — SweepDisclosures ages the file by its own mtime, for the
+	// reason SweepRejections does: the same instant, needing no decode, and still an answer
+	// for a file that cannot be decoded at all. Its reader is the report
+	// (app.createDisclosureReport), where it is the only thing that tells two orphans from
+	// different days apart.
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -140,10 +146,15 @@ func disclosurePath(record string) string { return record + disclosureSuffix }
 //     launch, against live git, into a verdict that builds the session its caller was
 //     told had failed (#731).
 //
-// That second reason is why a disclosure is written for every giving-up, including one
-// with nothing to show: the terminal mark is the guard, and a guard that only appears
-// when there happens to be a branch to name is not one.
-func Disclose(record string, d Disclosure) error {
+// That second reason is why every giving-up on a CLAIM writes one, including one with
+// nothing to show: the terminal mark is the guard, and a guard that only appears when there
+// happens to be a branch to name is not one. A request refused at the drain's gates is the
+// case that does not, and app.flushCreateDisclosures spells out why — it never built
+// anything, so there is nothing to name and no rebuild to forbid.
+// It stamps Version and CreatedAt on the Disclosure it is given rather than on a copy, so
+// the caller that buffers the same value for this process's own report (app.discloseCreate‑
+// Leftovers) shows the record that was written rather than one missing both fields.
+func Disclose(record string, d *Disclosure) error {
 	if err := validRecord(record); err != nil {
 		return err
 	}
@@ -212,13 +223,47 @@ func ListDisclosures() ([]DisclosureEntry, error) {
 	return entries, nil
 }
 
-// ClearDisclosure drops a disclosure the reader has shown. A file that is already gone is
-// not an error, as in Remove.
+// ClearDisclosure drops a disclosure the reader has shown, UNLESS the record or claim it
+// marks terminal is still on disk. A file that is already gone is not an error, as in
+// Remove; a disclosure still doing its second job is not one either, and reports no error
+// because there is nothing for the caller to fix.
+//
+// The two jobs are what makes this conditional. A disclosure is a report, consumed once,
+// and it is the mark that keeps the file beside it from being executed — and only the
+// report is finished when the reader has shown it. A refusal whose DiscardCreate failed
+// leaves claim + disclosure, and clearing the disclosure on the same launch that showed it
+// would hand the next launch a bare claim to re-judge against live git, into a verdict that
+// builds the session its caller was already told had failed. That is the hole Disclose is
+// ordered before DiscardCreate to close, re-entered from the reader's side.
+//
+// So the mark outlives the report, and the cost is that the report repeats on every launch
+// until the unlink that failed succeeds. What it repeats is still true of artifacts still
+// stranded, and every launch retries that unlink (app.applyCreateClaim's claimAnswered arm),
+// so the repetition ends when the condition does.
 func ClearDisclosure(record string) error {
+	if recordStillSpooled(record) {
+		return nil
+	}
 	if err := os.Remove(disclosurePath(record)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("outbox: remove create disclosure: %w", err)
 	}
 	return nil
+}
+
+// recordStillSpooled reports whether a create record or its claim is on disk, which is what
+// a disclosure beside them is still guarding.
+//
+// Either file, because either one is executable: the record by drainCreateRequests and the
+// claim by reconcileCreateClaims. A stat that fails for any reason other than "not there"
+// answers yes — the question is "may I destroy the only thing stopping this from being
+// built", and the safe answer to an unreadable spool is no.
+func recordStillSpooled(record string) bool {
+	for _, path := range []string{record, ClaimPath(record)} {
+		if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+			return true
+		}
+	}
+	return false
 }
 
 // SweepDisclosures deletes disclosures past the TTL horizon.
@@ -233,12 +278,68 @@ func ClearDisclosure(record string) error {
 // unlinked by the first TUI to start after it was written; this is for one written by a
 // process whose user never came back, and the log line it was written beside outlives it
 // either way.
+//
+// It defers to recordStillSpooled for ClearDisclosure's reason, which is the other half of
+// why the two kinds cannot share one sweep: a horizon that dropped the mark while the claim
+// it guards was still there would put the rebuild a day away rather than a launch away.
 func SweepDisclosures(now time.Time) {
 	dir, err := CreateDir()
 	if err != nil {
 		return
 	}
-	sweepSuffixed(dir, disclosureSuffix, now)
+	sweepSuffixed(dir, disclosureSuffix, now, recordStillSpooled)
+}
+
+// discloseClearedClaim records what an `atrium reset` is about to strand by destroying a
+// claim, and is a no-op when there is nothing it can name or a disclosure already says it.
+//
+// Only the branch, and only from the claim's own evidence block. It is what survives a
+// reset (see Clear) and it is the one artifact reset leaves with nothing pointing at it;
+// naming the worktree directory or the agent here would name two things reset destroys on
+// its way past. An undecodable claim yields no evidence and so no disclosure — reset still
+// takes the file, and the log line Clear's caller writes is the only account there can be.
+//
+// An existing disclosure wins. The pair "claim plus disclosure" is a refusal whose unlink
+// failed, and that disclosure was written with the full inventory in hand; overwriting it
+// with this one's single field would trade a complete account for a partial one.
+func discloseClearedClaim(record string, claim CreateEntry) error {
+	if claim.Err != nil || claim.Request.Claim == nil || claim.Request.Claim.SessionBranch == "" {
+		return nil
+	}
+	if _, already := DisclosureFor(record); already {
+		return nil
+	}
+	d := Disclosure{
+		Title:  claim.Request.Title,
+		Repo:   claim.Request.Path,
+		Branch: claim.Request.Claim.SessionBranch,
+		Reason: clearReason + ", and this one had already created its session branch",
+	}
+	return Disclose(record, &d)
+}
+
+// trimClearedDisclosure drops the two fields an `atrium reset` invalidates as it runs — the
+// worktree directory and the tmux session — from a disclosure it is carrying across.
+//
+// Rewritten in place rather than deleted, because the branch it may also name is exactly
+// what reset does not remove. A disclosure left with nothing to name is still kept: it may
+// be the mark holding a record or claim terminal, and that job is recordStillSpooled's to
+// end rather than this one's. An unreadable one is left alone for the reader to log and
+// clear on its own terms.
+func trimClearedDisclosure(record string) error {
+	e := readDisclosure(disclosurePath(record))
+	if e.Err != nil {
+		return nil
+	}
+	if e.Disclosure.Worktree == "" && e.Disclosure.TmuxName == "" {
+		return nil
+	}
+	d := e.Disclosure
+	d.Worktree, d.TmuxName = "", ""
+	if err := Disclose(record, &d); err != nil {
+		return fmt.Errorf("outbox: trim create disclosure: %w", err)
+	}
+	return nil
 }
 
 // disclosedRecordName reports the record name behind a disclosure file, and whether de is
@@ -274,20 +375,4 @@ func readDisclosure(path string) DisclosureEntry {
 			filepath.Base(path), d.Version, disclosureVersion)}
 	}
 	return DisclosureEntry{Path: path, Disclosure: d}
-}
-
-// validRecord screens the path a create-protocol write is about to act on down to a name
-// writeRecord produced.
-//
-// It closes a whole class rather than a live bug. Claim, Requeue, DiscardCreate and
-// Disclose all derive a second path by concatenation (ClaimPath, disclosurePath), so a
-// caller that passed one of those derived paths back in would mint
-// "….json.claimed.claimed" or "….json.claimed.disclosure" — a file no walk in this
-// package matches, and therefore one nothing lists, sweeps, clears or reset can ever
-// remove. No caller does that today; the guard is here so none can (#731).
-func validRecord(record string) error {
-	if base := filepath.Base(record); !isMessageFile(base) {
-		return fmt.Errorf("outbox: %q is not a create record", base)
-	}
-	return nil
 }

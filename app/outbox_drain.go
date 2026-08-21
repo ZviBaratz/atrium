@@ -33,10 +33,11 @@ const outboxDrainBudget = 50
 // worth a constant).
 const rejectionSweepInterval = time.Minute
 
-// sweepRejectionsOccasionally runs the receipt GC at most once per
-// rejectionSweepInterval. The zero lastRejectionSweep makes the first tick after launch
-// sweep, which is the one that matters: it is where a receipt left by a previous run,
-// for a producer that never came back to read it, is finally collected.
+// sweepRejectionsOccasionally runs the terminal-file GC at most once per
+// rejectionSweepInterval — receipts in both spools, and create disclosures in the create
+// one. The zero lastRejectionSweep makes the first tick after launch sweep, which is the
+// one that matters: it is where a receipt left by a previous run, for a producer that never
+// came back to read it, is finally collected.
 func (m *home) sweepRejectionsOccasionally(now time.Time) {
 	if now.Sub(m.lastRejectionSweep) < rejectionSweepInterval {
 		return

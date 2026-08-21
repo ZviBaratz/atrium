@@ -537,18 +537,31 @@ func customCommandProblemsReport(problems []customcmd.Problem) string {
 	return strings.Join(lines, "\n")
 }
 
-// clipReportLine bounds one problem line. The info modal wraps rather than
-// overflowing, so this is about keeping the report readable rather than about the
+// reportLineBudget bounds one line of an info-modal report. The modal wraps rather
+// than overflowing, so this is about keeping the report readable rather than about the
 // frame: a 400-character description would otherwise wrap over the whole overlay.
-func clipReportLine(s string) string { return clipTo(s, 100) }
+const reportLineBudget = 100
 
-// clipTo is clipReportLine with the budget spelled out, for a report line whose value is
-// not a name or a path and needs a different one (see createDisclosureReport).
-func clipTo(s string, limit int) string {
-	if len([]rune(s)) <= limit {
+// clipReportLine keeps the head of a value whose identity is at its front — a name, a
+// path, a description.
+func clipReportLine(s string) string {
+	if len([]rune(s)) <= reportLineBudget {
 		return s
 	}
-	return string([]rune(s)[:limit-1]) + "…"
+	return string([]rune(s)[:reportLineBudget-1]) + "…"
+}
+
+// clipReportLineEnd keeps the TAIL, for a value whose useful half is at its end: an error
+// message, whose cause is the part a clip from the right destroys ("…: no space left on
+// device"), or a sentence that opens with boilerplate and closes with the remedy (see
+// createDisclosureReport). Same budget — which is the point. A wider one for a
+// head-keeping clip only moves the cliff; it never delivers the tail.
+func clipReportLineEnd(s string) string {
+	r := []rune(s)
+	if len(r) <= reportLineBudget {
+		return s
+	}
+	return "…" + string(r[len(r)-(reportLineBudget-1):])
 }
 
 // wereOrWas keeps the report's first line grammatical for one entry as well as many.

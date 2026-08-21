@@ -92,6 +92,10 @@ const (
 	// caller was told it would not get, appearing on the next launch because a branch has
 	// since been freed, is the outcome this forecloses. Being wrong about it costs the
 	// claim its rebuild — which is exactly what the receipt already promised.
+	//
+	// "Already refused" is the premise and not an assumption: applyCreateClaim re-writes the
+	// receipt on this arm, because the crash window Disclose is ordered ahead of Reject to
+	// survive is the one where the receipt was never written at all.
 	claimAnswered
 )
 
@@ -103,8 +107,13 @@ const (
 // measured — the tmux name from liveAgentSession, the worktree from StrandedWorktreeFor,
 // the branch from the claim's own evidence block — and re-deriving them at the point of
 // writing the disclosure would mean asking git again about a state the answer has already
-// been read off. They are set on every judgement, not only refusals; only a refusal
-// writes them anywhere.
+// been read off.
+//
+// They are set where a refusal could need them, which is not every judgement: an arm that
+// returns before the branch is known leaves them empty, and claimSucceeded, claimAnswered
+// and claimDefer never had a use for them. Only a refusal writes them anywhere — including
+// one expireVerdict downgrades from claimAdopt, which is why that carry-over is a line of
+// its own rather than a consequence.
 type claimJudgement struct {
 	verdict claimVerdict
 	reason  string
@@ -187,7 +196,7 @@ func classifyCreateClaim(ctx context.Context, e outbox.CreateEntry, instances []
 	// — which is most of the point, since the refusal that wrote the disclosure may have
 	// been for exactly that.
 	if d, ok := outbox.DisclosureFor(e.Path); ok {
-		return claimJudgement{verdict: claimAnswered, reason: d.Reason}
+		return claimJudgement{verdict: claimAnswered, reason: answeredReason(d)}
 	}
 
 	// The row names the request, not the other way round. A (Title, Path) match would
@@ -225,7 +234,15 @@ func classifyCreateClaim(ctx context.Context, e outbox.CreateEntry, instances []
 		// one CLAUDE.md requires anything naming the socket to go through — a legacy
 		// install is on "claudesquad" and a hardcoded "atrium" here would print a
 		// command that finds nothing.
+		//
+		// The worktree is probed here rather than inherited from the walk below, which
+		// this arm returns before ever reaching. It is the arm where the interrupted build
+		// got FURTHEST — branch, worktree and a running agent — and it is the one arm that
+		// deliberately frees none of them, so a report that omits the directory names the
+		// wrong obstacle: the user kills the tmux session, tries `git branch -d`, and meets
+		// "already used by worktree" against a path nothing told them about.
 		return claimJudgement{verdict: claimRefused, tmuxName: name, branch: claimedBranch(e.Request),
+			worktree: strandedWorktreePath(ctx, e.Request.Path, claimedBranch(e.Request)),
 			reason: fmt.Sprintf("a previous atrium was interrupted while creating this "+
 				"session, and its agent is still running in tmux session %q with nothing in "+
 				"atrium's records pointing at it; attach to it or kill it (`tmux -L %s kill-session "+
@@ -313,15 +330,50 @@ func classifyCreateClaim(ctx context.Context, e outbox.CreateEntry, instances []
 			"could not check what holds branch %q: %v", branch, err)}
 	}
 	if wt != "" && !managed {
-		// The worktree is named in the judgement as well as in the reason, but not as
-		// something to clean up: it is somebody's deliberate checkout, and the disclosure
-		// reader words it as what is holding the branch rather than as leftovers.
-		return claimJudgement{verdict: claimRefused, branch: branch, worktree: wt,
+		// The worktree is named in the reason and NOT in the judgement, which is the one
+		// place the two diverge. Every path this struct's worktree field reaches renders it
+		// as a leftover to be removed by hand, and this directory is the opposite: a
+		// checkout somebody made on purpose, at a path Atrium never minted. The branch IS
+		// this build's leaving and is disclosed; the reason says what is holding it.
+		return claimJudgement{verdict: claimRefused, branch: branch,
 			reason: fmt.Sprintf("a previous atrium was interrupted while creating this session, "+
 				"and branch %q is checked out at %s, which is not a worktree Atrium manages; "+
 				"free the branch or pick another title", branch, wt)}
 	}
 	return expireVerdict(e, claimJudgement{verdict: claimAdopt, branch: branch, worktree: wt}, now)
+}
+
+// answeredReason is the wording a claim's re-written receipt carries when a disclosure
+// beside it says the request was already given up on.
+//
+// The disclosure's own Reason, except for the one case where there isn't one:
+// DisclosureFor reports a file it cannot decode as a disclosure all the same, because the
+// question it answers is whether the request is terminal and an unreadable mark answers
+// that. What it cannot supply is words for the caller, and an empty receipt is worse than
+// a vague one — `atrium new --wait` prints it.
+func answeredReason(d outbox.Disclosure) string {
+	if d.Reason != "" {
+		return d.Reason
+	}
+	return "a previous atrium gave up on this request and could not record why"
+}
+
+// strandedWorktreePath is StrandedWorktreeFor reduced to the directory, for a report
+// rather than for a verdict: an error or an unreadable repo yields "" and the caller says
+// one thing less, where a verdict must defer instead (see claimDefer).
+//
+// It does not screen for `managed`. A refusal reaching for this is naming what holds the
+// branch, and a checkout Atrium did not mint holds it just as hard — the distinction that
+// matters to a verdict does not matter to "here is where it is".
+func strandedWorktreePath(ctx context.Context, repo, branch string) string {
+	if branch == "" {
+		return ""
+	}
+	wt, _, err := git.StrandedWorktreeFor(ctx, repo, branch)
+	if err != nil {
+		return ""
+	}
+	return wt
 }
 
 // claimedBranch returns the session branch a claim recorded, tolerating a claim that has
@@ -403,10 +455,24 @@ func applyCreateClaim(ctx context.Context, e outbox.CreateEntry, j claimJudgemen
 		log.InfoLog.Printf("create request for %q completed before an earlier atrium exited; "+
 			"its session is recorded", name)
 	case claimAnswered:
-		// Nothing is written and nothing is judged: the receipt went out on an earlier
-		// launch and the disclosure beside this claim is what says so. All that is owed is
-		// the unlink that failed then — and if it fails again the pair is still terminal,
-		// so the next launch reaches this same arm rather than the evidence below.
+		// Nothing is judged: the disclosure beside this claim is what says an earlier launch
+		// already gave up on the request, and the unlink that failed then is what is owed.
+		//
+		// The receipt is re-written rather than assumed, because the crash window Disclose
+		// is ordered to survive is exactly the one between the disclosure and the receipt.
+		// A claim reaching this arm with no receipt beside it is a request whose caller was
+		// never told anything, and the unlink below would leave record, claim and receipt
+		// all absent — which awaitSpool reads as SUCCESS (see claimSucceeded, whose whole
+		// signal that is). Re-writing a receipt some earlier --wait already read and
+		// cleared costs a file the TTL sweep collects; not writing one costs a CI job that
+		// proceeds against a session that does not exist. The wording is the disclosure's
+		// own Reason, carried in j.reason for this.
+		if err := outbox.Reject(e.Path, j.reason); err != nil {
+			log.ErrorLog.Printf("failed to re-write the receipt for an already-refused create "+
+				"request for %q: %v", name, err)
+		}
+		// And if this fails again the pair is still terminal, so the next launch reaches
+		// this same arm rather than the evidence below.
 		if err := outbox.DiscardCreate(e.Path); err != nil {
 			log.ErrorLog.Printf("failed to drop an already-refused create request for %q: %v", name, err)
 			return false
@@ -446,7 +512,7 @@ func applyCreateClaim(ctx context.Context, e outbox.CreateEntry, j claimJudgemen
 			// The commit the adoption is pinned to, read here rather than carried over from
 			// the verdict: this is the last instant before the branch leaves this process's
 			// hands, and the drain re-checks the pin against it before taking the branch-gate
-			// skip (adoptStillOurs). Measuring it earlier would widen the window the pin
+			// skip (recheckAdoption). Measuring it earlier would widen the window the pin
 			// exists to close by exactly the work done in between.
 			tip, err := git.LookupLocalBranchTip(ctx, e.Request.Path, j.branch)
 			if err != nil {
@@ -499,7 +565,8 @@ func applyCreateClaim(ctx context.Context, e outbox.CreateEntry, j claimJudgemen
 		//
 		// Then the receipt, whose own ordering is Reject's: on disk before the file a
 		// --wait is watching goes away.
-		if err := outbox.Disclose(e.Path, j.disclosure(e.Request)); err != nil {
+		d := j.disclosure(e.Request)
+		if err := outbox.Disclose(e.Path, &d); err != nil {
 			log.ErrorLog.Printf("failed to record what the interrupted create request for %q left "+
 				"behind: %v", name, err)
 		}

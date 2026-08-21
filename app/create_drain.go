@@ -69,12 +69,11 @@ const createStartBudget = 1
 // (resolveSpawnPool guards it on !plan.direct, app_session.go), and adds
 // git.ProbeGitRepo, which confirms the direct verdict rather than inheriting IsGitRepo's
 // guess (see executeCreateRequest). An Adopt request — one the startup reconcile
-// re-queued to finish an interrupted build — spends five, arriving there by a different
+// re-queued to finish an interrupted build — reaches a different total by a different
 // route: a git target's five, minus the LocalBranchExists it skips deliberately rather
-// than for want of a branch, plus the one adoptStillOurs pays to re-earn that skip (see
-// createConflictIn). It is charged to this budget because drainCreateRequests runs it
-// inside the same check, which is what keeps a backlog of re-queued requests from buying
-// itself unbounded git the way the gates below could not.
+// than for want of a branch, so four when its pin holds and five when it does not,
+// because the withdrawal puts LocalBranchExists back. The pin re-check itself is one more
+// and is charged elsewhere — see createRecheckBudget.
 //
 // Redundancy in that count is deliberate. IsGitRepo, RepoGroupKey and — on the direct
 // path — ProbeGitRepo each run `rev-parse --show-toplevel` on the same path, and
@@ -114,6 +113,31 @@ const createGateBudget = 1
 // already paid by then, and withholding the receipt would only mean paying it again
 // next tick while the caller's --wait keeps blocking.
 const createDisposalBudget = 50
+
+// createRecheckBudget caps how many adoption pins one tick re-checks against git
+// (recheckAdoption). One for-each-ref apiece, on the update goroutine, so it needs a bound
+// for createGateBudget's reason.
+//
+// Its own budget rather than a share of that one, and the difference is starvation. A
+// re-check that CANNOT be answered holds its request without producing a verdict, and the
+// spool is walked oldest-first, so a single repo git cannot read at the head of the queue
+// would spend the tick's one gate on every tick while every ordinary `atrium new` behind it
+// waited — for up to the 24h TTL, with no receipt and no notice. Charged separately, the
+// unanswerable request costs a re-check and the request behind it is still created.
+//
+// Two rather than one because a re-check that SUCCEEDS goes on to the gates, so a budget of
+// one would let one adoption's own progress crowd out the next tick's; and small because the
+// number of Adopt records in flight is bounded by how many claims have accumulated across
+// crashes, which is a handful and not a backlog.
+//
+// What it does not fix, and what is worth naming rather than implying: the walk is
+// oldest-first and remembers nothing about which records it could not answer for, so two
+// permanently-unreadable repos at the head of the queue hold every later ADOPTION behind them
+// until one of the three reaches the TTL. That is head-of-line blocking among recovery
+// requests only — an ordinary `atrium new` carries no pin, needs no re-check, and is gated in
+// the same tick. Accepted rather than solved, because solving it means per-record state about
+// a condition that is usually a drive coming back in a few seconds.
+const createRecheckBudget = 2
 
 // drainCreateRequests creates the sessions spooled by `atrium new` and returns a
 // command that boots them plus a notice, or nil when there was nothing to do.
@@ -165,6 +189,9 @@ func (m *home) drainCreateRequests() tea.Cmd {
 	}
 
 	if len(entries) == 0 {
+		// Through the transition rather than around it: an empty spool holds nothing, so
+		// this is where a hold whose request expired or was reset away is lifted.
+		m.noteAdoptHold(nil, false)
 		return nil
 	}
 
@@ -200,18 +227,33 @@ func (m *home) drainCreateRequests() tea.Cmd {
 	// Seeded with the starts still running from earlier ticks: the budget is on
 	// concurrency, not on arrivals.
 	started := len(m.createsInFlight)
-	var gated, disposed int
+	var gated, disposed, rechecked int
 	// The re-check that could not run this tick, if any. Reported after the walk rather
 	// than at the call, so the hold is logged on its transitions the way the tmux one is
 	// — and so a held request that later expires out of the spool lifts the hold instead
 	// of leaving a bool nothing ever clears.
 	var adoptHoldErr error
+	// Whether any Adopt record is still in the spool that this tick did not re-check. It
+	// is the other half of lifting the hold: adoptHoldErr going nil says nothing on its
+	// own, because every skip below reaches the end of the walk with it nil — tmux off
+	// PATH, a spent budget, a poisoned path, an unwalked tail. Reading that as "the
+	// re-check works again" logs a resume for a request still held and leaves the flag
+	// clear for the next genuine hold to go unlogged.
+	var adoptPending bool
+	anyAdopt := func(rest []outbox.CreateEntry) bool {
+		for _, e := range rest {
+			if e.Err == nil && e.Request.Adopt {
+				return true
+			}
+		}
+		return false
+	}
 	var cmds []tea.Cmd
 	// Gate refusals only. A disposal is charged to disposed and stays off this counter
 	// deliberately — see the notice below for why an expired file must not raise one.
 	var refused int
 
-	for _, e := range entries {
+	for i, e := range entries {
 		// Nothing more can be gated (so nothing more can be started or refused) and
 		// nothing more can be discarded: the rest of the spool is next tick's.
 		//
@@ -220,6 +262,7 @@ func (m *home) drainCreateRequests() tea.Cmd {
 		// walking the remaining entries to a map lookup apiece. Cheap, and not worth a
 		// cleverer condition while ListCreates has already read them all anyway.
 		if (started >= createStartBudget || gated >= createGateBudget) && disposed >= createDisposalBudget {
+			adoptPending = adoptPending || anyAdopt(entries[i:])
 			break
 		}
 		// No in-flight check here, and that is the claim doing the work rather than an
@@ -236,6 +279,31 @@ func (m *home) drainCreateRequests() tea.Cmd {
 		// going up, and poisons the path on its way past — which is why the skip below
 		// is load-bearing for that case and not only for an unlink that failed.
 		if m.outboxPoisoned[e.Path] {
+			adoptPending = adoptPending || anyAdopt(entries[i:i+1])
+			continue
+		}
+
+		// A disclosure beside the record says this request has already been given up on
+		// and its caller answered — by an earlier tick whose unlink failed, or by an
+		// earlier process. It is the record-shaped twin of the state claimAnswered covers
+		// for a claim, and it outranks every arm below for that arm's reason: the rest of
+		// this walk asks whether the request CAN be executed, and this says it must not
+		// be, whatever the answer. Without it the terminal mark guards only the claim, and
+		// a refusal whose Reject could not unlink builds the session on the next tick.
+		//
+		// The receipt is re-written rather than assumed, for applyCreateClaim's reason:
+		// the window Disclose is ordered ahead of Reject to survive is exactly the one
+		// where no receipt was written at all, and an unlink with nothing beside it is
+		// what awaitSpool reads as success.
+		if d, already := outbox.DisclosureFor(e.Path); already {
+			if disposed >= createDisposalBudget {
+				continue
+			}
+			reason := answeredReason(d)
+			log.WarningLog.Printf("dropping a create request for %q that atrium had already "+
+				"given up on: %s", e.Request.Title, reason)
+			m.discardSpoolFile(e.Path, func() error { return outbox.Reject(e.Path, reason) })
+			disposed++
 			continue
 		}
 
@@ -243,12 +311,21 @@ func (m *home) drainCreateRequests() tea.Cmd {
 		// of expired requests cannot spend the one start this tick was allowed to make —
 		// and cannot buy itself unbounded git either. Each arm charges its own budget,
 		// so which one paid is read at the call site rather than through a parameter.
-		// The request as THIS tick will execute it. Adopt can be withdrawn below, and the
-		// closure reads this variable rather than e.Request so a refusal discloses an
-		// orphaned branch only while the request is still entitled to claim it as its own.
+		// The request as THIS tick will execute it, plus the branch a refusal of it owes a
+		// disclosure. Adopt can be withdrawn below and the branch usually cannot: the
+		// licence to skip the branch gate is about now, while the branch itself was made
+		// by an interrupted build whose worktree registration applyCreateClaim already
+		// released on this request's behalf. Reading the flag for both — which this did —
+		// makes every withdrawal a silent orphan, which is the hole this is here to close
+		// (see rejectCreateRequest). The one withdrawal that clears the branch too is the
+		// one where git says it is gone.
 		req := e.Request
+		orphan := ""
+		if req.Adopt {
+			orphan = claimedBranch(req)
+		}
 		reject := func(reason string) {
-			m.rejectCreateRequest(e.Path, req, reason)
+			m.rejectCreateRequest(e.Path, req, orphan, reason)
 		}
 
 		switch {
@@ -256,6 +333,8 @@ func (m *home) drainCreateRequests() tea.Cmd {
 			if disposed >= createDisposalBudget {
 				continue
 			}
+			// e.Request is the zero value here, so orphan is empty and stays that way:
+			// a record nobody can decode names no branch to disclose.
 			// Unreadable, or from a newer atrium. Discarding is the only way out: a
 			// file nobody can decode and nobody deletes would be re-read on every
 			// tick forever. ListCreates only ever surfaces files matching the
@@ -266,8 +345,14 @@ func (m *home) drainCreateRequests() tea.Cmd {
 
 		case e.Request.Expired(now):
 			if disposed >= createDisposalBudget {
+				adoptPending = adoptPending || req.Adopt
 				continue
 			}
+			// Disclosed without a re-check, deliberately. This arm is the one that
+			// destroys the record permanently — the recovery is one-shot — so an Adopt
+			// branch it does not name is named nowhere ever again, while a branch named
+			// after somebody deleted it costs the reader one row that says so. The
+			// asymmetry is the whole argument for over-reporting (see outbox.Disclosure).
 			age := now.Sub(e.Request.CreatedAt).Round(time.Minute)
 			log.WarningLog.Printf("discarding a create request for %q: spooled %s ago, past the %s horizon",
 				e.Request.Title, age, outbox.TTL)
@@ -277,17 +362,18 @@ func (m *home) drainCreateRequests() tea.Cmd {
 		default:
 			// Held, not refused — see the probe above.
 			if tmuxDown != nil {
+				adoptPending = adoptPending || req.Adopt
 				continue
 			}
 			// Both budgets, before the gates rather than after: whether this request
 			// ends in a session or a receipt, finding out costs the same git either
 			// way (see createGateBudget).
 			if started >= createStartBudget || gated >= createGateBudget {
+				adoptPending = adoptPending || req.Adopt
 				continue
 			}
 			// The adoption pin, re-checked here rather than trusted from the record.
-			// Inside the budget check, because it is a git call; before the gates,
-			// because what it decides is which gate applies.
+			// Before the gates, because what it decides is which gate applies.
 			//
 			// Held, not refused, when git cannot answer — the tmux probe's distinction,
 			// and for the same reason twice over. A repo that cannot be read is a fact
@@ -296,12 +382,23 @@ func (m *home) drainCreateRequests() tea.Cmd {
 			// spends the one recovery a stranded create gets on a condition that may
 			// clear on the next tick.
 			if req.Adopt {
-				ok, err := m.adoptStillOurs(req)
+				// Charged before the call, and to a counter of its own. The re-check IS
+				// git, and the `continue` its failure takes skips the rest of this entry
+				// — so a counter incremented below it never moves, and a backlog of
+				// Adopt records git cannot answer for spends one subprocess each, on
+				// every tick, for up to the 24h TTL. See createRecheckBudget for why the
+				// gate budget is the wrong one to charge it to.
+				if rechecked >= createRecheckBudget {
+					adoptPending = true
+					continue
+				}
+				rechecked++
+				state, err := m.recheckAdoption(req)
 				if err != nil {
 					adoptHoldErr = err
 					continue
 				}
-				if !ok {
+				if state != adoptionHolds {
 					// The branch is not the one the reconcile vetted, so the licence to
 					// skip the branch gate is withdrawn and the ordinary gate applies:
 					// a branch that has since gone refuses nothing and the session is
@@ -310,6 +407,12 @@ func (m *home) drainCreateRequests() tea.Cmd {
 					// have happened had the crash never occurred.
 					req.Adopt = false
 					req.AdoptTip = ""
+				}
+				if state == adoptionGone {
+					// And only here is the branch off the disclosure too: git has just
+					// said there is nothing at that name, so a refusal for some other
+					// reason has no leftovers of its own to report.
+					orphan = ""
 				}
 			}
 			gated++
@@ -329,15 +432,7 @@ func (m *home) drainCreateRequests() tea.Cmd {
 		}
 	}
 
-	switch {
-	case adoptHoldErr != nil && !m.createAdoptHeld:
-		m.createAdoptHeld = true
-		log.WarningLog.Printf("holding a re-queued create request until its branch can be "+
-			"re-checked: %v", adoptHoldErr)
-	case adoptHoldErr == nil && m.createAdoptHeld:
-		m.createAdoptHeld = false
-		log.InfoLog.Printf("re-queued create requests can be re-checked again; resuming")
-	}
+	m.noteAdoptHold(adoptHoldErr, adoptPending)
 
 	// No title in either notice: a request's title has no length ceiling this side of
 	// the wire format, and the notice row truncates its tail. Prose says why; the log
@@ -614,7 +709,7 @@ func (m *home) executeCreateRequest(r outbox.Request) (*session.Instance, tea.Cm
 // session's own half-built work and resuming it is the outcome the caller asked for.
 //
 // Those three are established at reconcile time and this runs whenever the drain reaches
-// the request, so Adopt arriving here is a claim about the past. adoptStillOurs is what
+// the request, so Adopt arriving here is a claim about the past. recheckAdoption is what
 // makes it a claim about now: the caller re-checks the branch's commit against the pin the
 // reconcile recorded and withdraws Adopt when they differ, so by the time this reads the
 // flag the skip has been re-earned rather than inherited (#731).
@@ -622,7 +717,33 @@ func (m *home) executeCreateRequest(r outbox.Request) (*session.Instance, tea.Cm
 // The title half still applies with Adopt set. A row that owns the title is a live
 // session, and nothing about finishing an interrupted build makes it right to mint a
 // second session on top of one.
-// adoptStillOurs re-checks, at execution time, the evidence the startup reconcile gathered
+func (m *home) createConflictIn(group string, r outbox.Request, path string, direct bool) string {
+	if r.Adopt {
+		return m.titleConflictIn(group, r.Title)
+	}
+	return m.variantTitleConflictIn(group, r.Title, path, direct)
+}
+
+// adoptionState is what recheckAdoption found about the branch a request was re-queued to
+// take. Three values rather than a bool because the caller does three different things
+// with them, and the third is not "refuse": a branch that is gone takes nothing with it,
+// so the request becomes an ordinary create AND stops owing a disclosure, while one that
+// moved leaves an orphan the caller still has to name.
+type adoptionState int
+
+const (
+	// adoptionHolds: the branch is at the commit the reconcile pinned. The skip is
+	// re-earned.
+	adoptionHolds adoptionState = iota
+	// adoptionMoved: a branch of that name is there and is not the one that was vetted —
+	// or the record carries no pin to compare, which is the same answer for the same
+	// reason. The licence is withdrawn; the branch is still a leftover.
+	adoptionMoved
+	// adoptionGone: no branch of that name. Nothing to adopt and nothing to disclose.
+	adoptionGone
+)
+
+// recheckAdoption re-checks, at execution time, the evidence the startup reconcile gathered
 // when it marked this request for adoption: that the session branch it left behind is still
 // the same branch.
 //
@@ -636,28 +757,49 @@ func (m *home) executeCreateRequest(r outbox.Request) (*session.Instance, tea.Cm
 //
 // The commit is what separates the cases, so a request with no pin fails closed rather than
 // being trusted on its name — a hand-written record, or one re-queued by an atrium older
-// than Request.AdoptTip.
+// than Request.AdoptTip. It still costs the probe: "closed" is adoptionMoved rather than
+// adoptionGone, and only git can tell those apart. A record naming no branch at all is the
+// one case answered without asking.
 //
 // The error is separate from the answer for LookupLocalBranchTip's reason: the caller holds
 // on "git could not be asked" and refuses on "not the branch we vetted", and folding the two
 // would make an unreadable repo spend the recovery.
-func (m *home) adoptStillOurs(r outbox.Request) (bool, error) {
+func (m *home) recheckAdoption(r outbox.Request) (adoptionState, error) {
 	branch := claimedBranch(r)
-	if r.AdoptTip == "" || branch == "" {
-		return false, nil
+	if branch == "" {
+		return adoptionGone, nil
 	}
 	tip, err := git.LookupLocalBranchTip(m.ctx, r.Path, branch)
-	if err != nil {
-		return false, err
+	switch {
+	case err != nil:
+		return adoptionMoved, err
+	case tip == "":
+		return adoptionGone, nil
+	case r.AdoptTip == "" || tip != r.AdoptTip:
+		return adoptionMoved, nil
 	}
-	return tip == r.AdoptTip, nil
+	return adoptionHolds, nil
 }
 
-func (m *home) createConflictIn(group string, r outbox.Request, path string, direct bool) string {
-	if r.Adopt {
-		return m.titleConflictIn(group, r.Title)
+// noteAdoptHold logs the two edges of an adoption hold and nothing in between, which is
+// what createAdoptHeld is for: the drain runs twice a second and an unreadable repo stays
+// unreadable.
+//
+// pending is why this is not simply "err != nil". Every skip in the walk — tmux off PATH, a
+// spent gate budget, a poisoned path, an unwalked tail — arrives here with err nil while the
+// held request is still in the spool, so lifting on err alone announces a resume that did
+// not happen and clears the flag that would have logged the next real hold. The lift needs
+// both: nothing failed, and nothing was left un-re-checked.
+func (m *home) noteAdoptHold(err error, pending bool) {
+	switch {
+	case err != nil && !m.createAdoptHeld:
+		m.createAdoptHeld = true
+		log.WarningLog.Printf("holding a re-queued create request until its branch can be "+
+			"re-checked: %v", err)
+	case err == nil && !pending && m.createAdoptHeld:
+		m.createAdoptHeld = false
+		log.InfoLog.Printf("re-queued create requests can be re-checked again; resuming")
 	}
-	return m.variantTitleConflictIn(group, r.Title, path, direct)
 }
 
 // holdCreateRequest records that path's session is starting — in memory, keyed by the
@@ -781,7 +923,12 @@ func (m *home) holdCreateRequest(path string, r outbox.Request, inst *session.In
 func (m *home) settleCreateRequest(inst *session.Instance, startErr error) {
 	if startErr != nil {
 		// failCreateRequest, not discloseUnrecordedSession: every caller that reaches this
-		// arm tears the session down, so there is nothing left for a disclosure to name.
+		// arm has just torn the session down, or tried to. reconcileInFlightStarts only
+		// logs inst.Kill()'s error and falls through, so a teardown that FAILS reaches
+		// here with the artifacts still standing and nothing discloses them — the same
+		// class as #732 and named by neither issue. Left as adjacent work rather than
+		// fixed here: the fix belongs at the Kill, where the error is, and disclosing from
+		// this side would report leftovers for every successful teardown too.
 		m.failCreateRequest(inst, fmt.Sprintf("the session could not be started: %v", startErr))
 		return
 	}
@@ -802,9 +949,10 @@ func (m *home) settleCreateRequest(inst *session.Instance, startErr error) {
 //
 // It answers the caller and drops the request, and that is all — so on its own it is for a
 // failure whose artifacts somebody else is cleaning up, which is what settleCreateRequest's
-// startErr arm reaches it for: every path into that arm has torn the session down, or is
-// about to on its next line. discloseUnrecordedSession is the other caller, and it records
-// the leftovers itself before delegating the rest here.
+// startErr arm reaches it for: every path into that arm has torn the session down, or has
+// tried to (see that arm for the case where trying is not enough).
+// discloseUnrecordedSession is the other caller, and it records the leftovers itself before
+// delegating the rest here.
 func (m *home) failCreateRequest(inst *session.Instance, reason string) {
 	path, ok := m.createsInFlight[inst]
 	if !ok {
@@ -839,9 +987,19 @@ func (m *home) failCreateRequest(inst *session.Instance, reason string) {
 //
 // The inventory is free at both sites: the instance is in hand, and Branch, worktree path
 // and tmux name are all already resolved on it by the time a persist can fail.
+//
+// It writes the file and opens no report, which is the difference between this and
+// rejectCreateRequest's disclosure and is the reason discloseLiveButUnrecorded exists. A
+// refusal's leftovers belong to no session at all, so the only way anyone hears about them
+// is a modal. These leftovers belong to a session that is in the list, Running, one row
+// away — nothing tore it down — so a modal naming its branch, its worktree and its tmux
+// session under "nothing here will clean them up" would be an instruction to destroy a
+// live agent. The file is for the case the report cannot cover: this process dying before
+// any later persist lands the row, which is the only way these artifacts ever become
+// orphans. A persist that succeeds withdraws it (see home.persistInstances).
 func (m *home) discloseUnrecordedSession(inst *session.Instance, reason string) {
 	if path, ok := m.createsInFlight[inst]; ok {
-		m.discloseCreateLeftovers(path, outbox.Disclosure{
+		m.discloseLiveButUnrecorded(path, outbox.Disclosure{
 			Title:    inst.Title,
 			Repo:     inst.Path,
 			Branch:   inst.Branch,
@@ -860,9 +1018,10 @@ func (m *home) discloseUnrecordedSession(inst *session.Instance, reason string) 
 // so `atrium new --wait` reports the refusal instead of reading the unlink as a
 // successful creation.
 //
-// Only the gate arms of drainCreateRequests reach this, and none of them has claimed
-// anything — a request is claimed exactly when it is accepted (holdCreateRequest), so
-// there is no claim file to release here. A refusal AFTER a claim is failCreateRequest.
+// Every arm of drainCreateRequests that answers a caller reaches this — the gate refusal
+// and both disposals — and none of them has claimed anything, because a request is claimed
+// exactly when it is accepted (holdCreateRequest), so there is no claim file to release
+// here. A refusal AFTER a claim is failCreateRequest.
 //
 // One of those refusals is destructive beyond the record, and it is why this takes the
 // request rather than just its path (#731). A request carrying Adopt is the second attempt
@@ -874,15 +1033,21 @@ func (m *home) discloseUnrecordedSession(inst *session.Instance, reason string) 
 // too. The recovery is one-shot, so that state was permanent. The disclosure is what
 // survives it.
 //
-// Only with Adopt still set. drainCreateRequests withdraws it when the branch is no longer
-// the one the reconcile vetted, and a request whose branch has gone or belongs to someone
-// else has nothing of its own to disclose.
-func (m *home) rejectCreateRequest(path string, r outbox.Request, reason string) {
-	if r.Adopt {
+// The branch to disclose is passed in rather than read off r.Adopt, and that is the whole
+// of the fix. Adopt is a licence about now and the drain withdraws it whenever the pin no
+// longer matches — but withdrawing the licence does not unmake the branch, and every
+// refusal that follows a withdrawal is a refusal of a request whose worktree registration
+// was already released. Reading the flag left three of those silent: a branch that moved
+// under the same name, a record from an atrium too old to carry a pin (which
+// internal/outbox's createVersion promises is covered), and an Adopt request disposed for
+// expiry before the re-check ever runs. The caller passes "" for the one case where there
+// is genuinely nothing to name.
+func (m *home) rejectCreateRequest(path string, r outbox.Request, orphanBranch, reason string) {
+	if orphanBranch != "" {
 		m.discloseCreateLeftovers(path, outbox.Disclosure{
 			Title:  r.Title,
 			Repo:   r.Path,
-			Branch: claimedBranch(r),
+			Branch: orphanBranch,
 			Reason: reason,
 		})
 	}

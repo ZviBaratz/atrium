@@ -231,10 +231,13 @@ func LookupLocalBranch(ctx context.Context, repoPath, branch string) (bool, erro
 // repoPath. An empty sha with a nil error means the branch is not there; an error means
 // the repository could not be read.
 //
-// It answers LookupLocalBranch's question and one more, in the same subprocess, which is
-// why the create recovery uses it rather than both: a caller that has to know whether a
-// branch is still the one it vetted needs existence and identity together, and asking
-// twice would let the two answers describe different instants.
+// It answers LookupLocalBranch's question and one more, in the same subprocess: a caller
+// that has to know whether a branch is still the one it vetted needs existence and
+// identity together, and asking twice would let the two answers describe different
+// instants. That is why app.recheckAdoption, which is exactly that caller, reaches for this
+// one alone. The create recovery reaches for both — LookupLocalBranch to judge the claim
+// and this to pin the branch it hands on — because those two readings are deliberately of
+// different instants, separated by the worktree release in between.
 //
 // The identity matters because a branch NAME is not evidence. The create-adoption path
 // (#731) skips a load-bearing branch gate on the strength of a reconcile's finding, and

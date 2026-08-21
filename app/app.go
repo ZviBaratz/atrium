@@ -395,13 +395,16 @@ type home struct {
 	createTmuxHeld bool
 	// createAdoptHeld is createTmuxHeld's sibling for the other condition that holds a
 	// request instead of refusing it: a repo git could not be read, so the pin that
-	// licenses an adoption cannot be re-checked (see adoptStillOurs). State about the log
+	// licenses an adoption cannot be re-checked (see recheckAdoption). State about the log
 	// line only, as createTmuxHeld is — the hold itself is decided fresh each tick by
 	// re-probing.
 	//
-	// One bool rather than a set keyed by path, because a claim is what produces an Adopt
-	// request and one crash leaves one claim. Two held at once would be reported as one
-	// hold, which is the whole cost.
+	// One bool rather than a set keyed by path, and unlike createTmuxHeld it can be
+	// answering for more than one request: claims accumulate across crashes and claimDefer
+	// leaves them, so several Adopt records can be queued at once. Two held together are
+	// reported as one hold, which is the whole cost. What it must not do is lift while one
+	// of them is still held — see noteAdoptHold, which is why the lift takes a second
+	// argument.
 	createAdoptHeld bool
 	// pendingCreateDisclosures buffers what spent `atrium new` requests left behind, for
 	// the report flushCreateDisclosures shows once there is a frame to show it on (#731,
@@ -409,6 +412,14 @@ type home struct {
 	// that then died — and appended to when this process writes one itself, so a live TUI
 	// does not make the user wait for a relaunch to hear about an orphan it just made.
 	pendingCreateDisclosures []outbox.DisclosureEntry
+	// unrecordedCreates holds the record paths of the disclosures this process wrote for
+	// the OTHER #732 case: a create whose session is live and whose row is not, because
+	// persistInstances failed. Those are never reported by this process — the session is
+	// in the list, so a modal saying to remove its branch by hand would be an instruction
+	// to destroy a live agent — and the file exists only to cover this process dying
+	// before the row lands. A later successful persist makes it false, and that is where
+	// it is withdrawn (see withdrawUnrecordedCreates).
+	unrecordedCreates []string
 	// notifier emits the terminal bell / desktop notification when a background
 	// session finishes a turn or blocks on a prompt (see app_notify.go, config
 	// Notifications). nil disables notification (hand-built test homes).
@@ -822,7 +833,8 @@ type home struct {
 	// not 10×/s — which would also perturb the tick-based idle hysteresis.
 	lastStatusPollSelection *session.Instance
 
-	// lastRejectionSweep is when the outbox receipt GC last walked the two spools. It
+	// lastRejectionSweep is when the terminal-file GC last walked the spools: receipts in
+	// both, and create disclosures in the create one, so three walks per firing. It
 	// enforces a 24h horizon, so it does not need the ~500ms metadata tick's cadence —
 	// see sweepRejectionsOccasionally. Zero means "never this run", which sweeps.
 	lastRejectionSweep time.Time

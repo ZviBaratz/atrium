@@ -11,9 +11,10 @@ import (
 )
 
 // leftovers is a filled-in Disclosure, so a test that cares about one field says so by
-// overriding it rather than by being the only one that sets anything.
-func leftovers() Disclosure {
-	return Disclosure{
+// overriding it rather than by being the only one that sets anything. A pointer because
+// Disclose stamps Version and CreatedAt on what it is given.
+func leftovers() *Disclosure {
+	return &Disclosure{
 		Title:    "fix-auth",
 		Repo:     "/repo/web",
 		Branch:   "zvi/fix-auth",
@@ -43,7 +44,8 @@ func TestDisclosureOutlivesTheRecordAndTheClaim(t *testing.T) {
 	assert.Equal(t, "/data/worktrees/web/fix-auth-1", d.Worktree)
 	assert.Equal(t, "atrium-web-fix-auth", d.TmuxName)
 	assert.Equal(t, disclosureVersion, d.Version)
-	assert.False(t, d.CreatedAt.IsZero(), "and it has to be datable, or the sweep cannot age it")
+	assert.False(t, d.CreatedAt.IsZero(),
+		"and it has to be datable, or the report cannot say when this happened")
 }
 
 // TestADisclosureIsInvisibleToEveryWalkThatCreates is the safety argument, asserted as a
@@ -137,9 +139,10 @@ func TestDisclosureForSeparatesAbsentFromUnreadable(t *testing.T) {
 // (or a sweep that got there first) must not turn that into an error the user sees.
 func TestClearDisclosureIsIdempotent(t *testing.T) {
 	sandbox(t)
-	record, err := WriteCreate(req("fix-auth", "/repo/web"))
-	require.NoError(t, err)
+	record := claimed(t, req("fix-auth", "/repo/web"), meta())
 	require.NoError(t, Disclose(record, leftovers()))
+	require.NoError(t, Reject(record, "could not record it"))
+	require.NoError(t, DiscardCreate(record))
 
 	require.NoError(t, ClearDisclosure(record))
 	_, ok := DisclosureFor(record)
@@ -147,13 +150,58 @@ func TestClearDisclosureIsIdempotent(t *testing.T) {
 	assert.NoError(t, ClearDisclosure(record), "already gone is not an error")
 }
 
-// TestClearLeavesADisclosure pins the `atrium reset` decision. Reset discards every queued
-// record so the next launch cannot rebuild deleted state — but a disclosure is not queued
-// work, it is the only record of a branch and a worktree belonging to nothing, and reset
-// does not remove those: CleanupWorktrees enumerates the repos of the rows it just deleted,
-// and an orphan has no row to be enumerated through. Discarding it would make the reset the
-// reason nobody is ever told about the leftovers it did not clean up.
-func TestClearLeavesADisclosure(t *testing.T) {
+// TestClearDisclosureKeepsAMarkOverAnExecutableFile is the second half of what a disclosure
+// is for, and the half a reader cannot be trusted with.
+//
+// Showing the report finishes its job as a report. It does not finish its job as the mark
+// that stops the file beside it from being built — and those two ends are exactly what
+// Disclose being ordered before DiscardCreate buys. Cleared on the launch that showed it, a
+// refusal whose unlink failed hands the next launch a bare claim to re-judge against live
+// git, into a verdict that creates the session its caller was told it would not get.
+//
+// Both files, because both are executable: the record by the drain and the claim by the
+// startup reconcile.
+func TestClearDisclosureKeepsAMarkOverAnExecutableFile(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		leave func(t *testing.T, record string)
+	}{
+		{"a claim whose discard failed", func(t *testing.T, record string) {
+			require.NoError(t, Reject(record, "could not record it"))
+		}},
+		{"a record whose unlink failed", func(t *testing.T, record string) {
+			require.NoError(t, Requeue(record, ""))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sandbox(t)
+			record := claimed(t, req("fix-auth", "/repo/web"), meta())
+			require.NoError(t, Disclose(record, leftovers()))
+			tc.leave(t, record)
+
+			require.NoError(t, ClearDisclosure(record), "and it is not an error to try")
+
+			_, ok := DisclosureFor(record)
+			assert.True(t, ok, "the mark outlives the report while anything can still act on it")
+
+			SweepDisclosures(time.Now().Add(TTL + time.Hour))
+			_, ok = DisclosureFor(record)
+			assert.True(t, ok, "and the horizon is not a second way round it")
+		})
+	}
+}
+
+// TestClearKeepsADisclosureAndTrimsIt pins the `atrium reset` decision, which is neither
+// "keep it" nor "drop it": reset removes SOME of what a disclosure names.
+//
+// Kept, because the branch it names is what reset leaves standing — `branch -D` and
+// `worktree prune` are the repo-scoped halves of git.CleanupWorktrees, and an orphan has no
+// row to be enumerated through. Trimmed, because the worktree DIRECTORY and the agent are
+// the unscoped halves: CleanupWorktrees removes every top-level entry under the data dir's
+// worktrees/ tree and tmux.CleanupSessions kills every session matching the prefix. Carried
+// across unedited, the report would send the next launch's reader after two things reset
+// had already destroyed, under a header saying nothing here will clean them up.
+func TestClearKeepsADisclosureAndTrimsIt(t *testing.T) {
 	sandbox(t)
 	record, err := WriteCreate(req("fix-auth", "/repo/web"))
 	require.NoError(t, err)
@@ -163,8 +211,52 @@ func TestClearLeavesADisclosure(t *testing.T) {
 	removed, err := Clear()
 	require.NoError(t, err)
 	assert.Zero(t, removed, "there was no queued record left to discard")
-	_, ok := DisclosureFor(record)
-	assert.True(t, ok, "and the orphan still has something naming it")
+	d, ok := DisclosureFor(record)
+	require.True(t, ok, "and the orphan still has something naming it")
+	assert.Equal(t, "zvi/fix-auth", d.Branch, "the branch reset leaves standing")
+	assert.Empty(t, d.Worktree, "the directory reset removed")
+	assert.Empty(t, d.TmuxName, "the agent reset killed")
+	assert.NotEmpty(t, d.Reason, "and it still says why the create failed")
+}
+
+// TestClearDisclosesTheBranchOfTheClaimItDestroys: reset is the one give-up path the
+// Disclose-then-Reject-then-discard ordering does not reach on its own, and destroying a
+// claim destroys the only link to the branch that claim's interrupted build made. Without
+// this, `atrium reset` is the pre-#716 orphan with reset's name on it — state wiped, branch
+// standing, nothing that mentions it, and every later `atrium new` under that title refused
+// for a branch nobody can find.
+func TestClearDisclosesTheBranchOfTheClaimItDestroys(t *testing.T) {
+	sandbox(t)
+	record := claimed(t, req("fix-auth", "/repo/web"), meta())
+
+	removed, err := Clear()
+	require.NoError(t, err)
+	assert.Equal(t, 1, removed)
+	assert.NoFileExists(t, ClaimPath(record), "precondition: the claim is gone")
+
+	d, ok := DisclosureFor(record)
+	require.True(t, ok, "so the branch it made has to be named somewhere")
+	assert.Equal(t, meta().SessionBranch, d.Branch)
+	assert.Empty(t, d.Worktree, "and not the directory reset removes on its way past")
+	assert.Contains(t, d.Reason, clearReason)
+}
+
+// TestClearKeepsTheFullerAccountOfTwo: a claim and a disclosure together is a refusal whose
+// unlink failed, and that disclosure was written with the whole inventory in hand. Reset
+// destroys the claim, and the single-field one it would write for it must not overwrite the
+// account already there.
+func TestClearKeepsTheFullerAccountOfTwo(t *testing.T) {
+	sandbox(t)
+	record := claimed(t, req("fix-auth", "/repo/web"), meta())
+	require.NoError(t, Disclose(record, leftovers()))
+
+	_, err := Clear()
+	require.NoError(t, err)
+
+	d, ok := DisclosureFor(record)
+	require.True(t, ok)
+	assert.Equal(t, leftovers().Reason, d.Reason, "the refusal's own wording, not reset's")
+	assert.Empty(t, d.TmuxName, "trimmed to what reset leaves, as any other carried one is")
 }
 
 // TestSweepDisclosuresAgesByItsOwnMtime is the backstop, and the arithmetic that matters is
@@ -177,6 +269,9 @@ func TestSweepDisclosuresAgesByItsOwnMtime(t *testing.T) {
 		CreatedAt: time.Now().Add(-2 * TTL)})
 	require.NoError(t, err)
 	require.NoError(t, Disclose(record, leftovers()))
+	// Nothing executable beside it, or the sweep defers to the mark rather than the
+	// horizon (TestClearDisclosureKeepsAMarkOverAnExecutableFile).
+	require.NoError(t, Reject(record, "could not record it"))
 
 	SweepDisclosures(time.Now())
 	_, ok := DisclosureFor(record)
@@ -214,10 +309,19 @@ func TestCreateWritesRefuseADerivedPath(t *testing.T) {
 	record := claimed(t, req("fix-auth", "/repo/web"), meta())
 	derived := ClaimPath(record)
 
-	assert.Error(t, Claim(derived, meta()))
-	assert.Error(t, Requeue(derived, "deadbeef"))
-	assert.Error(t, DiscardCreate(derived))
-	assert.Error(t, Disclose(derived, leftovers()))
+	// ErrorContains, not Error, and that is the point of the test rather than a
+	// tightening. Requeue on a derived path errors either way — with the guard gone it
+	// computes ClaimPath(derived), finds no such file, and reports that — so an assertion
+	// on "there was an error" is satisfied by a failure that has nothing to do with the
+	// guard, and passes with the guard deleted. Every leg is spelled the same way so none
+	// of them can be the one that stops testing anything.
+	const refused = "is not a spool record"
+	assert.ErrorContains(t, Claim(derived, meta()), refused)
+	assert.ErrorContains(t, Requeue(derived, "deadbeef"), refused)
+	assert.ErrorContains(t, DiscardCreate(derived), refused)
+	assert.ErrorContains(t, Disclose(derived, leftovers()), refused)
+	assert.ErrorContains(t, Reject(derived, "no"), refused)
+	assert.NoFileExists(t, derived+rejectedSuffix, "and no invisible receipt either")
 
 	assert.NoFileExists(t, ClaimPath(derived), "and nothing invisible was minted")
 	assert.NoFileExists(t, disclosurePath(derived))

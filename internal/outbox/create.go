@@ -76,10 +76,12 @@ const (
 	//
 	// AdoptTip degrades in the other direction and is no worse either. A NEWER atrium
 	// reading an Adopt written before that field existed finds no tip, and
-	// app.adoptStillOurs fails closed — the branch gate applies and the request is
-	// refused for the orphan branch rather than adopted on unverifiable evidence. That is
-	// the same pre-#716 refusal, and it now leaves a disclosure naming the branch, so the
-	// one thing an upgrade mid-recovery costs is a rebuild the user is told about.
+	// app.recheckAdoption fails closed — the branch gate applies and the request is
+	// refused for the orphan branch rather than adopted on unverifiable evidence. It still
+	// pays the probe to do it, because "closed" here means "a branch of that name is
+	// there and is not one we can vouch for", which only git can distinguish from "gone".
+	// That is the same pre-#716 refusal, and it leaves a disclosure naming the branch, so
+	// the one thing an upgrade mid-recovery costs is a rebuild the user is told about.
 	//
 	// The asymmetry that argument does not cover is a *downgrade* while a claim is
 	// on disk: an older atrium has no ListClaims, so it neither drains nor settles
@@ -169,7 +171,7 @@ type Request struct {
 	// the agent resumes on somebody else's work. A name cannot tell those apart; the
 	// commit can.
 	//
-	// Empty means "do not trust Adopt". app.adoptStillOurs re-reads the branch at execution
+	// Empty means "do not trust Adopt". app.recheckAdoption re-reads the branch at execution
 	// time and withdraws Adopt unless the live tip matches this, so a hand-written record
 	// and one written by an atrium older than this field both take the ordinary branch gate.
 	AdoptTip string `json:"adopt_tip,omitempty"`
@@ -321,10 +323,14 @@ func ListCreates() ([]CreateEntry, error) {
 // receipt readable by the process that is blocked on it: a Reject aimed at the claim
 // file would write "….json.claimed.rejected", which nothing ever looks for.
 //
-// It concatenates unconditionally, which is safe only because every function that acts on
-// a derived path screens its argument first: validRecord refuses a name that is not one
-// writeRecord produced, so "….json.claimed.claimed" cannot be minted through Claim,
-// Requeue, DiscardCreate or Disclose (#731).
+// It concatenates unconditionally, which is safe because every function that WRITES a
+// derived path screens its argument first: validRecord refuses a name that is not one
+// writeRecord produced, so neither "….json.claimed.claimed" nor
+// "….json.claimed.rejected" nor "….json.claimed.disclosure" can be minted through Claim,
+// Requeue, DiscardCreate, Reject or Disclose (#731). The functions that only read or
+// unlink a derived path — Rejection, ClearRejection, DisclosureFor, ClearDisclosure — are
+// unscreened deliberately: a derived path they are handed names a file that cannot exist,
+// so the worst they can do is read nothing.
 func ClaimPath(record string) string { return record + claimedSuffix }
 
 // Claim marks a request as taken and being built, recording meta as the evidence a
@@ -366,7 +372,7 @@ func Claim(record string, meta ClaimMeta) error {
 //
 // One argument rather than a bool and a string, because "adopt" and "adopt at this
 // commit" are not two decisions: a branch worth adopting always has a tip, and an Adopt
-// carrying no tip is exactly the state app.adoptStillOurs refuses to trust. Making the pin
+// carrying no tip is exactly the state app.recheckAdoption refuses to trust. Making the pin
 // the only way to ask for the skip means a caller cannot forget it.
 //
 // Write-then-rename, for Claim's reason: a crash between the two leaves the claim

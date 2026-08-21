@@ -23,6 +23,7 @@ package app
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -41,10 +42,12 @@ const createDisclosuresShown = 5
 // buffer.
 //
 // It runs after reconcileCreateClaims so a refusal that reconcile just reached is in this
-// launch's report rather than the next one's. Undecodable files are dropped here rather
-// than carried: nothing downstream can act on a disclosure, so one nobody can read has no
-// reader to preserve it for — unlike a spool record, where the same file means a caller is
-// owed a receipt.
+// launch's report rather than the next one's. Undecodable files are dropped from the REPORT
+// here — nothing downstream can act on a disclosure, so one nobody can read has no reader
+// to preserve it for, unlike a spool record where the same file means a caller is owed a
+// receipt — and offered to ClearDisclosure, which keeps it anyway if a record or claim is
+// still sitting beside it. That distinction is the point: an unreadable disclosure is still
+// a terminal mark, and the version it could not decode may be a newer atrium's.
 func loadCreateDisclosures() []outbox.DisclosureEntry {
 	entries, err := outbox.ListDisclosures()
 	if err != nil {
@@ -65,21 +68,76 @@ func loadCreateDisclosures() []outbox.DisclosureEntry {
 	return kept
 }
 
-// discloseCreateLeftovers records what a spent create request left behind and queues it for
-// this process's own report.
+// writeCreateDisclosure records on disk, and in the log, what a spent create request left
+// behind. It returns the disclosure as written — outbox.Disclose stamps Version and
+// CreatedAt — so a caller buffering the same value for this process's report shows the
+// record that exists rather than one missing both.
 //
-// Buffered even when the write fails. The file's job is to survive a crash; the buffer's is
-// to reach the person at the terminal, and a full disk is no reason to withhold the one
-// mention of an orphaned branch from the only party who can delete it.
-func (m *home) discloseCreateLeftovers(record string, d outbox.Disclosure) {
-	if err := outbox.Disclose(record, d); err != nil {
+// The log line is written whether or not the file could be. It is the only account that
+// survives a full disk, and it is the permanent one either way: every reader of the file
+// deletes it once it has been shown.
+func writeCreateDisclosure(record string, d outbox.Disclosure) outbox.Disclosure {
+	if err := outbox.Disclose(record, &d); err != nil {
 		log.ErrorLog.Printf("failed to record what the create request for %q left behind: %v",
 			d.Title, err)
 	}
 	log.WarningLog.Printf("create request for %q left artifacts belonging to no session "+
 		"(branch %q, worktree %q, tmux %q): %s", d.Title, d.Branch, d.Worktree, d.TmuxName, d.Reason)
+	return d
+}
+
+// discloseCreateLeftovers records what a spent create request left behind and queues it for
+// this process's own report.
+//
+// For leftovers with no session: a refused request, whose branch and worktree belong to
+// nothing in the list, so a modal is the only way the person who can remove them hears
+// about them. discloseLiveButUnrecorded is the other case and deliberately does not queue.
+//
+// Buffered even when the write fails. The file's job is to survive a crash; the buffer's is
+// to reach the person at the terminal, and a full disk is no reason to withhold the one
+// mention of an orphaned branch from the only party who can delete it.
+func (m *home) discloseCreateLeftovers(record string, d outbox.Disclosure) {
 	m.pendingCreateDisclosures = append(m.pendingCreateDisclosures,
-		outbox.DisclosureEntry{Path: record, Disclosure: d})
+		outbox.DisclosureEntry{Path: record, Disclosure: writeCreateDisclosure(record, d)})
+}
+
+// discloseLiveButUnrecorded records the leftovers of a create whose session is live and
+// whose row is not, and remembers the record so a later successful persist can withdraw it.
+//
+// No report, for discloseUnrecordedSession's reason: the artifacts belong to a session in
+// the list, and a modal telling the user to remove them by hand would be telling them to
+// destroy a running agent. The file covers the only way they become orphans, which is this
+// process dying before the row lands.
+//
+// Withdrawn rather than left, because the same file is a false report the moment the row
+// IS durable — the next launch would name a branch, a worktree and a tmux session that
+// state.json has a row for, under a header saying nothing points at them. persistInstances
+// is where that changes, so that is where the withdrawal is.
+func (m *home) discloseLiveButUnrecorded(record string, d outbox.Disclosure) {
+	writeCreateDisclosure(record, d)
+	m.unrecordedCreates = append(m.unrecordedCreates, record)
+}
+
+// withdrawUnrecordedCreates clears the disclosures written for sessions whose rows have
+// since been persisted. Called from persistInstances on success, which is the event that
+// makes every one of them false at once: SaveInstances writes the whole list, so a success
+// means every row in it is durable.
+//
+// It also covers a session removed from the list before any persist landed — a kill, which
+// takes the worktree and the branch with it — because the next save after that removal is
+// the same success.
+//
+// A failure is logged and the entry dropped. The disclosure staying on disk costs one
+// stale report on a later launch; retrying it forever would cost a filesystem call on
+// every persist for the life of the process.
+func (m *home) withdrawUnrecordedCreates() {
+	for _, record := range m.unrecordedCreates {
+		if err := outbox.ClearDisclosure(record); err != nil {
+			log.ErrorLog.Printf("failed to withdraw the disclosure for a create that has since "+
+				"been recorded: %v", err)
+		}
+	}
+	m.unrecordedCreates = nil
 }
 
 // flushCreateDisclosures opens the report for the spent create requests that left something
@@ -89,14 +147,30 @@ func (m *home) discloseCreateLeftovers(record string, d outbox.Disclosure) {
 // this one.
 //
 // The buffer is cleared as it fires so the 100ms preview tick cannot reopen it forever, and
-// the files are unlinked HERE rather than at the read: a quit inside the window before the
+// the files are offered up HERE rather than at the read: a quit inside the window before the
 // first tick leaves the explanation on disk for the next launch instead of erasing it, which
 // is flushDeferredRecovery's rule and the whole failure this path exists for.
 //
-// Entries with nothing to name are dropped without a report. Every refusal writes a
-// disclosure, because the mark is what keeps a claim from being re-judged
-// (applyCreateClaim), and most refusals happen before anything durable was built — a modal
-// saying "a request failed, and left nothing" would be noise the receipt already covered.
+// "Offered", because ClearDisclosure is the one that decides. Showing the report finishes
+// the disclosure's job as a report and not its job as the mark that keeps a surviving
+// record or claim from being executed, so a disclosure with one of those still beside it
+// outlives the modal and is reported again on the next launch. That repetition is the
+// intended shape: what it repeats is still true of artifacts still stranded, and every
+// launch retries the unlink that left them.
+//
+// Entries with nothing to name are dropped without a report, and there are plenty: every
+// giving-up on a CLAIM writes a disclosure whether or not it has an inventory, because there
+// the mark is the guard that keeps the claim from being re-judged (applyCreateClaim). A
+// modal saying "a request failed, and left nothing" would be noise the receipt already
+// covered.
+//
+// The drain's own refusals are the ones that write none. Nothing durable was built by a
+// request refused at the gates, so there is no inventory and no mark is owed: the file it
+// leaves behind on a failed unlink is a REQUEST, and re-draining a request is the model
+// rather than a hole in it — refused again by the same gate, poisoned for the rest of this
+// run, gone at the TTL. The exception is the one refusal that follows an adoption, where an
+// earlier launch already released a worktree registration on the request's behalf; that one
+// discloses (rejectCreateRequest).
 func (m *home) flushCreateDisclosures() tea.Cmd {
 	if len(m.pendingCreateDisclosures) == 0 || m.state != stateDefault {
 		return nil
@@ -119,7 +193,7 @@ func (m *home) flushCreateDisclosures() tea.Cmd {
 	if len(withLeftovers) == 0 {
 		return nil
 	}
-	return m.showInfo(createDisclosureReport(withLeftovers))
+	return m.showInfo(createDisclosureReport(withLeftovers, time.Now()))
 }
 
 // createDisclosureReport is that modal's text, bounded on both axes for
@@ -137,9 +211,17 @@ func (m *home) flushCreateDisclosures() tea.Cmd {
 // instead, on a line short enough to survive, and only when some entry actually has a tmux
 // session to name.
 //
-// The trailer's first sentence is the fact that makes the list actionable rather than
-// alarming: a branch Atrium still owns is not the user's to delete.
-func createDisclosureReport(ds []outbox.Disclosure) string {
+// Each row clips its VALUE rather than the whole line, so the label survives a long path —
+// and the reason clips from the other end (clipReportLineEnd). Every reason here opens with
+// the same "a previous atrium was interrupted while creating this session" and closes with
+// what to do about it, so a truncation from the right keeps the boilerplate and drops the
+// remedy, along with the cause of a persist failure ("…: no space left on device").
+//
+// The trailer states what is true and stops short of an instruction, because the report
+// cannot tell the three cases apart: a branch Atrium made and abandoned is the user's to
+// delete, a worktree they created themselves is not, and the whole inventory was measured
+// when the create gave up rather than now.
+func createDisclosureReport(ds []outbox.Disclosure, now time.Time) string {
 	if len(ds) == 0 {
 		return ""
 	}
@@ -155,15 +237,11 @@ func createDisclosureReport(ds []outbox.Disclosure) string {
 	var anyTmux bool
 	for _, d := range shown {
 		row := func(label, value string) {
-			lines = append(lines, clipReportLine(fmt.Sprintf("    %-8s %s", label, value)))
+			lines = append(lines, fmt.Sprintf("    %-8s %s", label, clipReportLine(value)))
 		}
-		lines = append(lines, "", clipReportLine(fmt.Sprintf("%q in %s", d.Title, d.Repo)))
-		// The reason gets its own budget, wider than a name or a path row's, because it is
-		// the one value that comes from somewhere else — a git or filesystem error, whose
-		// useful half is usually at the END ("…: no space left on device"). At a path row's
-		// budget the cause is what gets cut, which leaves the report saying a create failed
-		// without saying why.
-		lines = append(lines, clipTo(fmt.Sprintf("    %-8s %s", "why", d.Reason), 200))
+		lines = append(lines, "", clipReportLine(fmt.Sprintf("%q in %s%s",
+			d.Title, d.Repo, gaveUp(d.CreatedAt, now))))
+		lines = append(lines, fmt.Sprintf("    %-8s %s", "why", clipReportLineEnd(d.Reason)))
 		if d.Branch != "" {
 			row("branch", d.Branch)
 		}
@@ -179,8 +257,8 @@ func createDisclosureReport(ds []outbox.Disclosure) string {
 		lines = append(lines, fmt.Sprintf("    … and %d more", len(ds)-len(shown)))
 	}
 	lines = append(lines, "",
-		"Nothing in atrium's records points at these, so nothing here will clean them up.",
-		"Remove them by hand, or create a session on the branch yourself.")
+		"Nothing in atrium's records points at these. Read each `why` before acting: a",
+		"branch may be one to resume a session on, and a worktree may be one you made.")
 	if anyTmux {
 		// The socket from config.RuntimeName rather than hardcoded: a legacy install is on
 		// "claudesquad", and `tmux -L atrium` there finds nothing (CLAUDE.md).
@@ -188,4 +266,33 @@ func createDisclosureReport(ds []outbox.Disclosure) string {
 			config.RuntimeName(), config.RuntimeName()))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// gaveUp dates one entry, which is the only thing that tells two orphans from different
+// days apart — and the reason Disclosure.CreatedAt is on the wire at all.
+//
+// Empty for a zero timestamp rather than "0s ago". A disclosure written by an atrium that
+// predates the field, or one whose Disclose failed before it could stamp, has no answer,
+// and inventing today's date for it would make the oldest entry look like the newest.
+//
+// A coarse age rather than a Duration's own String, which renders three hours as "3h0m0s"
+// and two days as "49h0m0s" — precision nobody reads, in the units nobody wanted. The tiers
+// are overlay.relTime's with a day added, because a disclosure can outlive a weekend where a
+// command-log row cannot.
+func gaveUp(at, now time.Time) string {
+	if at.IsZero() {
+		return ""
+	}
+	var age string
+	switch d := now.Sub(at); {
+	case d < time.Minute:
+		age = "under a minute" // and any negative, from a clock that moved
+	case d < time.Hour:
+		age = fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 48*time.Hour:
+		age = fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		age = fmt.Sprintf("%dd", int(d.Hours())/24)
+	}
+	return fmt.Sprintf(" (given up on %s ago)", age)
 }
