@@ -324,3 +324,30 @@ func TestCreateDrainBatchRefusalStillSpendsOneGate(t *testing.T) {
 	assert.False(t, rejected, "the tick's one gate evaluation was spent on the batch")
 	assert.FileExists(t, unrelated)
 }
+
+// TestCreateDrainDoesNotReJudgeTheSiblingsItJustRefused.
+//
+// The listing a tick walks is taken before any refusal in it, so a batch's siblings are
+// still in it after the fan-out has answered them. Reaching one again finds the terminal
+// mark the fan-out just wrote and takes the arm meant for a request an EARLIER launch
+// gave up on: it re-writes the receipt — over one the caller may already have read and
+// cleared — spends disposal budget undoing this tick's own work, and logs that atrium
+// "had already given up on" a refusal it is still in the middle of making.
+//
+// The mark surviving the tick is what says the arm was not taken: that arm clears it.
+func TestCreateDrainDoesNotReJudgeTheSiblingsItJustRefused(t *testing.T) {
+	h := drainHome(t)
+	limit := 1
+	h.appConfig.MaxSessions = &limit
+	addInstance(t, h, "already-here", t.TempDir())
+
+	records := spoolBatchOf(t, t.TempDir(), "b1", "bake", 3, false)
+	refuseDrain(t, h)
+
+	for _, record := range records {
+		assert.Contains(t, refusalFor(t, record), "max_sessions")
+		assert.Equal(t, outbox.HasDisclosure, outbox.DisclosureMark(record),
+			"the mark this tick wrote is left for the next launch's flush, as every "+
+				"inventory-less mark is — clearing it here means the walk re-judged the member")
+	}
+}

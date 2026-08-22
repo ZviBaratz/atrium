@@ -310,6 +310,9 @@ func (m *home) drainCreateRequests() tea.Cmd {
 	// of that batch — so the notice reads this one and the budget reasoning above still
 	// reads the other.
 	var refusedRecords int
+	// The batch members a cap refusal has already answered on this tick, so the rest of
+	// the walk does not re-judge them from the listing it was handed before the refusal.
+	answeredInBatch := map[string]bool{}
 
 	for i, e := range entries {
 		// Nothing more can be gated (so nothing more can be started or refused) and
@@ -347,6 +350,18 @@ func (m *home) drainCreateRequests() tea.Cmd {
 		if m.outboxPoisoned[e.Path] {
 			adoptPending = adoptPending || anyAdopt(entries[i:i+1])
 			markPending = true
+			continue
+		}
+
+		// Already answered by a batch refusal earlier in THIS walk. The listing was taken
+		// before the fan-out ran, so the siblings it refused are still in it — and reaching
+		// them again would find the mark it just wrote and take the arm below for a request
+		// this tick gave up on a moment ago: a second receipt for a caller that may already
+		// have read and cleared the first, a disposal budget spent undoing this tick's own
+		// work, and a log line saying "atrium had already given up on" a refusal it is still
+		// in the middle of making. Their marks are left to be cleared where every other
+		// inventory-less mark is, at the next launch's flush.
+		if answeredInBatch[e.Path] {
 			continue
 		}
 
@@ -594,7 +609,7 @@ func (m *home) drainCreateRequests() tea.Cmd {
 				// created or disposed of has nobody left to answer, and adding == 1 says
 				// exactly that without a second predicate to keep in step.
 				if verdict.bySessionCap && adding > 1 {
-					sibsRefused := m.refuseBatchSiblings(sibs, e.Path, verdict.reason)
+					sibsRefused := m.refuseBatchSiblings(sibs, e.Path, verdict.reason, answeredInBatch)
 					refusedRecords += sibsRefused
 					log.WarningLog.Printf("refusing %d create requests from one atrium new batch, "+
 						"starting with %q: %s", sibsRefused+1, req.Title, verdict.reason)
@@ -806,7 +821,13 @@ func (m *home) pendingBatchMembers(entries []outbox.CreateEntry, id string, now 
 //     of what it left behind, and re-writing that from a request this drain never
 //     executed would replace it with less — the same argument the walk's own mark arm
 //     makes.
-func (m *home) refuseBatchSiblings(sibs []outbox.CreateEntry, gated, reason string) int {
+//
+// answeredInBatch is the caller's record of what this walk has already dealt with. Every
+// sibling refused here is still in the listing the walk is iterating, and that walk must
+// not judge it a second time.
+func (m *home) refuseBatchSiblings(
+	sibs []outbox.CreateEntry, gated, reason string, answeredInBatch map[string]bool,
+) int {
 	answered := 0
 	for _, sib := range sibs {
 		if sib.Path == gated || sib.Request.Adopt {
@@ -818,6 +839,10 @@ func (m *home) refuseBatchSiblings(sibs []outbox.CreateEntry, gated, reason stri
 		if outbox.DisclosureMark(sib.Path) != outbox.NoDisclosure {
 			continue
 		}
+		// Recorded before the refusal rather than after it: what the caller must not do is
+		// reach this entry again from the listing it is walking, and a discard that fails
+		// leaves the record there to be reached.
+		answeredInBatch[sib.Path] = true
 		// Per member, never copied from the gated one: an adopting member carries its own
 		// orphan, and the gated member's has already been cleared by the adoptionGone arm
 		// where git said there was nothing to name.
