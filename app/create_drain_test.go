@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -2568,4 +2569,42 @@ func TestStartFailureMarksTheClaimItGivesUpOn(t *testing.T) {
 
 	h.flushCreateDisclosures()
 	assert.Equal(t, stateDefault, h.state, "so no modal either")
+}
+
+// TestCreateDrainKeepsTheAdoptionHoldBehindASpentDisposalBudget is the last skip in the walk
+// that did not feed the hold's "still pending" answer, and noteAdoptHold's stated rule is what
+// makes that a defect rather than a detail: the lift needs BOTH nothing having failed and
+// nothing having been left un-re-checked, because every skip arrives with the error nil. A
+// tick that walks past an adoption without re-checking it and reports nothing pending logs a
+// resume that did not happen — and clears the flag, so the next genuine hold goes unlogged.
+//
+// The skip here is the terminal-mark arm running out of disposal budget, which needs a spool
+// with createDisposalBudget disposable records ahead of the adoption. Contrived, and the only
+// arm left: the other four already fed it.
+func TestCreateDrainKeepsTheAdoptionHoldBehindASpentDisposalBudget(t *testing.T) {
+	h := drainHome(t)
+	// Oldest first, so the walk spends its whole disposal budget before it reaches the
+	// adoption behind them.
+	for i := 0; i < createDisposalBudget; i++ {
+		spoolCreate(t, outbox.Request{
+			Title: fmt.Sprintf("expired-%02d", i), Path: t.TempDir(),
+			CreatedAt: time.Now().Add(-2 * outbox.TTL),
+		})
+	}
+	adopting := spoolCreate(t, outbox.Request{
+		Title: "fix-auth", Path: gitRepoWithBranch(t, ""), Adopt: true,
+		AdoptTip: strings.Repeat("a", 40),
+		Claim:    &outbox.ClaimMeta{At: time.Now(), SessionBranch: h.appConfig.BranchPrefix + "fix-auth"},
+	})
+	require.NoError(t, outbox.Disclose(adopting, &outbox.Disclosure{
+		Title: "fix-auth", Reason: "an earlier launch gave up on this"}))
+	// The flag as an earlier tick left it: this is state about the log line, so a test may
+	// set it the way a hold would have.
+	h.createAdoptHeld = true
+
+	h.drainCreateRequests()
+
+	assert.FileExists(t, adopting, "precondition: the budget ran out before this one")
+	assert.True(t, h.createAdoptHeld,
+		"an adoption this tick never re-checked is not the re-check starting to work")
 }
