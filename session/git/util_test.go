@@ -2,6 +2,8 @@ package git
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -154,5 +156,53 @@ func TestProbeGitRepo(t *testing.T) {
 	// is why it is the wrong predicate for a headless create and stays right for a form.
 	if IsGitRepo(ctx, repo) {
 		t.Fatal("IsGitRepo(cancelled) = true, want false — it folds 'could not answer' into 'no'")
+	}
+}
+
+// TestProbeGitRepoWillNotCallAnUnreadableRepoAPlainDirectory is the case the exit status
+// cannot decide, and the one with teeth.
+//
+// git prints "fatal: not a git repository (or any of the parent directories): .git" and exits
+// 128 for a directory with no repository AND for a real repository whose .git it cannot read.
+// The same sentence, byte for byte, and the same status — verified by hand at a shell, which is
+// why no amount of stderr parsing was going to separate them. Read as a verdict, the second
+// case licenses everything the first does: app.executeCreateRequest's isolation guard passes
+// because git DID answer, and `atrium new` builds a direct session — no worktree, no branch —
+// with the agent editing the user's own checkout. A chmod that outlives one drain tick is
+// enough, and nothing about the outcome is recoverable or visible.
+//
+// So the negative needs corroboration from something git is not the source of, and a .git that
+// is present while git says there is none is it. os.Lstat reads the entry out of the parent
+// directory, so mode 000 still answers present.
+//
+// The absent half is asserted by TestProbeGitRepo's plain-dir case above, and it is not
+// incidental: it is what keeps a repo somebody deleted answerable in one tick
+// (app.recheckAdoption) rather than held for the whole spool horizon.
+func TestProbeGitRepoWillNotCallAnUnreadableRepoAPlainDirectory(t *testing.T) {
+	repo := newTestRepo(t)
+	gitDir := filepath.Join(repo, ".git")
+	if err := os.Chmod(gitDir, 0o000); err != nil {
+		t.Fatalf("chmod .git: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(gitDir, 0o755) })
+	// Root, or a filesystem with no permission enforcement, reads it anyway.
+	if _, err := LookupLocalBranchTip(context.Background(), repo, "main"); err == nil {
+		t.Skip("this user can read the repository through mode 000")
+	}
+
+	isRepo, known := ProbeGitRepo(context.Background(), repo)
+	if isRepo || known {
+		t.Fatalf("ProbeGitRepo(unreadable .git) = (%v, %v), want (false, false): git says the "+
+			"same thing here as for a plain directory, and a plain directory is what licenses "+
+			"an unisolated session", isRepo, known)
+	}
+
+	// The control, on the same repo one chmod later: the answer is a verdict again, so the
+	// assertion above cannot be passing because this repo was never answerable.
+	if err := os.Chmod(gitDir, 0o755); err != nil {
+		t.Fatalf("chmod .git back: %v", err)
+	}
+	if isRepo, known := ProbeGitRepo(context.Background(), repo); !isRepo || !known {
+		t.Fatalf("ProbeGitRepo(readable again) = (%v, %v), want (true, true)", isRepo, known)
 	}
 }

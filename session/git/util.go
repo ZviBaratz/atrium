@@ -127,23 +127,47 @@ func IsGitRepo(ctx context.Context, path string) bool {
 // agent gets an isolated worktree or runs loose in the caller's own checkout, so it
 // needs to tell "git says no" from "git did not say".
 //
-// The discriminator is how the process ended. git exiting with a status ran and
-// answered (128 for "not a git repository"), so known is true. Anything else did
-// not: an *exec.Error for git off PATH mid-upgrade, a fork failure under memory
-// pressure, or — the case a bare errors.As would misread — a kill by
-// exec.CommandContext when gitLocalTimeout expires or ctx is cancelled, which
-// arrives as an *exec.ExitError whose ExitCode() is -1 because a signalled process
-// carries no status.
+// The first discriminator is how the process ended. git exiting with a status ran
+// and answered, so it is a candidate for known. Anything else did not: an
+// *exec.Error for git off PATH mid-upgrade, a fork failure under memory pressure,
+// or — the case a bare errors.As would misread — a kill by exec.CommandContext when
+// gitLocalTimeout expires or ctx is cancelled, which arrives as an *exec.ExitError
+// whose ExitCode() is -1 because a signalled process carries no status.
+//
+// The exit status is not sufficient on its own, and this is the second
+// discriminator. "fatal: not a git repository (or any of the parent directories):
+// .git" with status 128 is what git prints for a directory that has no repository
+// AND for a real repository whose .git it cannot read — the same sentence, byte for
+// byte, and the same status. So the message and the code together cannot establish
+// the negative, which is the direction with teeth: this verdict is what licenses
+// running the agent directly in path instead of in a worktree.
+//
+// A .git entry that is present while git says there is none is that contradiction,
+// and it is the one thing available that git is not the source of. os.Lstat answers
+// it without opening anything — it reads the entry out of the parent directory, so a
+// .git at mode 000 or a dangling .git symlink still answers present. Present plus
+// "no repository here" is reported as not established; absent corroborates the
+// negative, which is what keeps a repo somebody deleted answerable in one tick
+// (app.recheckAdoption) rather than held for the whole spool horizon.
+//
+// The residue is a directory holding something named .git that is not a gitdir at
+// all, which now reads as unknown rather than as a plain directory. That refuses a
+// headless create where it used to make a direct session, and the trade is deliberate:
+// a refusal is a receipt the caller can retry against, while a wrong direct session
+// has an agent editing the user's own checkout before anyone can look.
 func ProbeGitRepo(ctx context.Context, path string) (isRepo, known bool) {
 	_, err := localGit(ctx, path, "rev-parse", "--show-toplevel")
 	if err == nil {
 		return true, true
 	}
 	var exit *exec.ExitError
-	if errors.As(err, &exit) && exit.ExitCode() >= 0 {
-		return false, true
+	if !errors.As(err, &exit) || exit.ExitCode() < 0 {
+		return false, false
 	}
-	return false, false
+	if _, statErr := os.Lstat(filepath.Join(path, ".git")); statErr == nil {
+		return false, false
+	}
+	return false, true
 }
 
 // CurrentBranchName returns the branch HEAD points at in the repo containing path,
@@ -188,12 +212,17 @@ func BranchNameForSession(prefix, title string) string {
 	return name
 }
 
-// LocalBranchExists reports whether branch exists as a local head in the repo
-// at repoPath. It is an exact ref lookup (show-ref --verify), deliberately not
-// SearchBranches, whose results are capped and merged with origin/ names.
+// LocalBranchExists reports whether branch exists as a local head in the repo at
+// repoPath. It is an exact ref lookup, deliberately not SearchBranches, whose results
+// are capped and merged with origin/ names.
+//
+// Over LookupLocalBranchTip, like LookupLocalBranch and for the same reason: the exact
+// refname comparison was the whole body of all three. What it drops on the way past is
+// the error, which is this function's entire remaining difference from LookupLocalBranch
+// — see there for which callers may do that and which may not.
 func LocalBranchExists(ctx context.Context, repoPath, branch string) bool {
-	_, err := localGit(ctx, repoPath, "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
-	return err == nil
+	tip, _ := LookupLocalBranchTip(ctx, repoPath, branch)
+	return tip != ""
 }
 
 // LookupLocalBranch answers the same question as LocalBranchExists but keeps "git could
@@ -214,17 +243,50 @@ func LocalBranchExists(ctx context.Context, repoPath, branch string) bool {
 // The pattern matches at path boundaries, so refs/heads/<branch>/sub would match too;
 // the answer is an exact line comparison rather than "any output".
 func LookupLocalBranch(ctx context.Context, repoPath, branch string) (bool, error) {
+	// Over LookupLocalBranchTip rather than beside it: one subprocess either way, and the
+	// exact-refname comparison the pattern makes necessary (see there) was the whole body of
+	// this function duplicated. A branch that exists always has a tip, so "no sha" and "no
+	// branch" are the same answer.
+	tip, err := LookupLocalBranchTip(ctx, repoPath, branch)
+	return tip != "", err
+}
+
+// LookupLocalBranchTip returns the commit refs/heads/<branch> points at in the repo at
+// repoPath. An empty sha with a nil error means the branch is not there; an error means
+// the repository could not be read.
+//
+// It answers LookupLocalBranch's question and one more, in the same subprocess: a caller
+// that has to know whether a branch is still the one it vetted needs existence and
+// identity together, and asking twice would let the two answers describe different
+// instants. That is why app.recheckAdoption, which is exactly that caller, reaches for this
+// one alone. The create recovery reaches for both — LookupLocalBranch to judge the claim
+// and this to pin the branch it hands on — because those two readings are deliberately of
+// different instants, separated by the worktree release in between.
+//
+// The identity matters because a branch NAME is not evidence. The create-adoption path
+// (#731) skips a load-bearing branch gate on the strength of a reconcile's finding, and
+// the request can sit queued for a long while afterwards; a branch deleted and recreated
+// in that window has the same name and somebody else's commits, and adopting it is
+// silent. for-each-ref for LookupLocalBranch's reason — it exits 0 with empty output for
+// a ref that is simply absent, and non-zero only when the repository itself could not be
+// read, so "no such branch" never arrives as a failure.
+func LookupLocalBranchTip(ctx context.Context, repoPath, branch string) (string, error) {
 	ref := "refs/heads/" + branch
-	out, err := localGit(ctx, repoPath, "for-each-ref", "--format=%(refname)", ref)
+	out, err := localGit(ctx, repoPath, "for-each-ref", "--format=%(objectname) %(refname)", ref)
 	if err != nil {
-		return false, fmt.Errorf("failed to look up branch %q in %s: %w", branch, repoPath, err)
+		return "", fmt.Errorf("failed to look up branch %q in %s: %w", branch, repoPath, err)
 	}
+	// The pattern matches at path boundaries, so refs/heads/<branch>/sub answers too, and
+	// sorts ahead of the branch itself. Taking the first line would report a sub-ref's sha
+	// as this branch's, so the refname is compared exactly. Both siblings above read their
+	// answer out of this loop, which is why it is the only place the comparison is made.
 	for _, line := range strings.Split(out, "\n") {
-		if strings.TrimSpace(line) == ref {
-			return true, nil
+		sha, name, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if ok && name == ref {
+			return sha, nil
 		}
 	}
-	return false, nil
+	return "", nil
 }
 
 // RepoGroupKey predicts the repo-group key the session list will file a session

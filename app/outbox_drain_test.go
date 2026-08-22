@@ -37,6 +37,31 @@ func addInstance(t *testing.T, h *home, title, path string) *session.Instance {
 	return inst
 }
 
+// addPersistedInstanceOnBranch is addPersistedInstance for a test that needs the row to OWN
+// something. addPersistedInstance writes no branch, so inst.Branch is "" and any assertion
+// about a live session holding a branch compares "" to "" — the shape that passes with the
+// check under test deleted (see liveSessionOwns, which screens out an empty branch for exactly
+// that reason).
+func addPersistedInstanceOnBranch(t *testing.T, h *home, title, path, branch string) *session.Instance {
+	t.Helper()
+	data, err := json.Marshal([]session.InstanceData{{
+		Title: title, Path: path, Program: "echo", Status: session.Paused, Branch: branch,
+		Worktree: session.GitWorktreeData{RepoPath: path, BranchName: branch},
+	}})
+	require.NoError(t, err)
+	require.NoError(t, config.LoadState().SaveInstances(data))
+
+	st, err := session.NewStorage(config.LoadState())
+	require.NoError(t, err)
+	h.storage = st
+	loaded, _, err := st.LoadInstances(context.Background())
+	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+	require.Equal(t, branch, loaded[0].Branch, "precondition: the branch round-tripped")
+	h.list.AddInstance(loaded[0])
+	return loaded[0]
+}
+
 // addPersistedInstance seeds a paused instance into state.json and loads it back
 // through storage, which is the only route to an Instance whose unexported
 // "started" flag is set — and SaveInstances persists nothing else. reattach

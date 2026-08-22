@@ -56,7 +56,15 @@ func (m *home) handleError(err error) tea.Cmd {
 // the canonical manual order (InstancesForPersist), so an active sort mode never
 // overwrites the user's manual ordering on disk.
 func (m *home) persistInstances() error {
-	return m.storage.SaveInstances(m.list.InstancesForPersist())
+	saved := m.list.InstancesForPersist()
+	if err := m.storage.SaveInstances(saved); err != nil {
+		return err
+	}
+	// A save that lands is what makes an "the session exists and nothing records it"
+	// disclosure false — but only for the rows it actually wrote, which is why the list goes
+	// with it rather than the bare fact of success (#731, #732).
+	m.withdrawUnrecordedCreates(saved)
+	return nil
 }
 
 // moveAndPersist runs a list-reorder closure; if it changed the order it persists

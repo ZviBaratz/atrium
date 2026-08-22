@@ -279,7 +279,16 @@ const rejectedSuffix = ".rejected"
 // cannot observe the gap as a success. If the receipt cannot be written the
 // record is still removed: an unreported failure is better than a record that is
 // re-read, re-rejected, and never cleared.
+//
+// The path is screened for validRecord's reason, which the paragraph above ClaimPath
+// spells out for this function in particular: a Reject aimed at a claim would write
+// "….json.claimed.rejected", a name no walk in this package matches, so nothing lists it,
+// nothing sweeps it and `atrium reset` cannot remove it. A receipt is the one derived file
+// the create spool and the prompt spool both write, and both write it from a record path.
 func Reject(path, reason string) error {
+	if err := validRecord(path); err != nil {
+		return err
+	}
 	if err := config.WriteFileAtomic(path+rejectedSuffix, []byte(reason), 0o644); err != nil {
 		return errors.Join(fmt.Errorf("outbox: write rejection receipt: %w", err), Remove(path))
 	}
@@ -304,6 +313,10 @@ func ClearRejection(path string) error {
 // receipt is only ever read by a producer still blocked in --wait, so one this
 // old has no reader left and would otherwise accumulate for the life of the data
 // dir.
+//
+// Receipts only. The create spool holds a second terminal kind with a different reader
+// and its own horizon (SweepDisclosures), and this is deliberately not the one function
+// that sweeps both — see that one for the argument.
 //
 // Both, not just the prompt spool: `atrium new --wait` reads its receipts through
 // the same Rejection call, so a create spool swept by nobody would leak one file
@@ -349,12 +362,42 @@ const clearReason = "atrium reset discarded every queued request"
 // false success one step earlier. They are bounded already — SweepRejections drops
 // them at the TTL horizon.
 //
+// A create disclosure is kept for the same reason one step further out, and reset also
+// WRITES one — a decision rather than a consequence of the walk below happening not to match
+// the name. Destroying a request destroys the only link to the branch its interrupted build
+// left behind (see Disclose), and reset without one is the pre-#716 orphan with reset's name
+// on it: state.json wiped, the branch still there, and nothing that mentions it. Both spool
+// forms get that treatment, because both can name a branch — a claim by being one, and a
+// record by being a claim reconcileCreateClaims re-queued to adopt its own orphan
+// (discloseClearedRequest).
+//
+// A disclosure already on disk is carried across untouched. An earlier draft trimmed the
+// worktree directory and the tmux name out of it on the grounds that reset destroys both,
+// which was wrong twice: this walk runs BEFORE tmux.CleanupSessions and git.CleanupWorktrees,
+// either of which can fail and abort the reset with the artifacts still standing, and the
+// prose reason beside those two fields names them too — so the trim erased the rows and left
+// the sentence. Over-reporting is the harmless direction for this type (see Disclosure) and
+// the report tells its reader to read the reason before acting.
+//
+// SweepDisclosures bounds whatever is left.
+//
 // It touches only files this package wrote (the record name format), never the
 // directories, and never a stray file some other process put there. The count is of
 // records discarded cleanly: one whose receipt could not be written is reported through
 // the returned error and not counted, even though Reject removes it regardless — an
 // unreported failure being better than a record that is re-read and re-rejected
 // forever.
+//
+// A disclosure this walk could not write or could not trim is deliberately absent from that
+// error, and the reason is what the caller does with it: `atrium reset` reads a non-nil
+// error as "a record survived, and the next atrium will act on it" and says so on stderr,
+// which would be false of a report that failed to be written. Nothing is stranded by that
+// failure either — the branch the disclosure would have named is stranded by the reset
+// itself, disclosed or not. And it cannot be the only signal of a broken spool: writing a
+// disclosure and writing a receipt are the same config.WriteFileAtomic against the same
+// directory, so a filesystem that refuses one refuses the other, and the other IS counted.
+// That last point is also why this decision has no test: there is no writable sandbox in
+// which Disclose fails and Reject succeeds.
 func Clear() (int, error) {
 	var removed int
 	var firstErr error
@@ -384,6 +427,14 @@ func Clear() (int, error) {
 			// producer knows; DiscardCreate then takes both files.
 			if record, claimed := claimedRecordName(de); claimed {
 				path := filepath.Join(dir, record)
+				// Disclose first, for the ordering Disclose documents: both calls
+				// below destroy something, and the branch this claim's interrupted
+				// build left is named nowhere else. Unconditionally for a claim, even
+				// one naming nothing, because DiscardCreate can fail and a claim that
+				// outlives it with no mark beside it is re-judged into a rebuild. Its
+				// failure is deliberately not part of this walk's verdict, though —
+				// see below.
+				_ = discloseClearedRequest(path, readCreate(ClaimPath(path)))
 				err := errors.Join(Reject(path, clearReason), DiscardCreate(path))
 				if err != nil {
 					if firstErr == nil {
@@ -400,9 +451,17 @@ func Clear() (int, error) {
 			// listFiles makes about the pair, and a claim the package should be able to
 			// make about every walk rather than about one of three.
 			if de.IsDir() || !isMessageFile(name) {
-				continue // a receipt, a claim, a nested spool dir, or not ours at all
+				continue // a receipt, a nested spool dir, or not ours at all
 			}
-			if err := Reject(filepath.Join(dir, name), clearReason); err != nil {
+			path := filepath.Join(dir, name)
+			// A record can be a post-build request too — see discloseClearedRequest —
+			// and the disclosure is ordered ahead of the Reject that unlinks it for
+			// Disclose's reason. Unconditionally, as for a claim: the Reject below can
+			// write its receipt and fail to unlink, and a record that survives reset is
+			// one the next TUI takes through the gates on behalf of a caller that has
+			// already read "discarded" and exited non-zero.
+			_ = discloseClearedRequest(path, readCreate(path))
+			if err := Reject(path, clearReason); err != nil {
 				if firstErr == nil {
 					firstErr = fmt.Errorf("outbox: discard %s: %w", name, err)
 				}
@@ -414,14 +473,58 @@ func Clear() (int, error) {
 	return removed, firstErr
 }
 
+// validRecord screens the path a spool write is about to act on down to a name
+// writeRecord produced.
+//
+// Every entry point that writes or removes derives a second path by concatenation
+// (ClaimPath, disclosurePath, rejectedSuffix), so one handed a path that already carries a
+// suffix would mint "….json.claimed.claimed" or "….json.claimed.disclosure" — a file no walk
+// in this package matches, and therefore one nothing lists, sweeps, clears or `atrium reset`
+// can ever remove. Screened at the entry points rather than enumerated here: a list of them
+// is one more thing to keep true as the package grows a kind, and it had already fallen
+// behind by one (#731).
+//
+// The screen also keeps a derived path from reading as a successful no-op, which is a
+// separate failure from minting anything: ClearDisclosure would answer the ENOENT on an
+// impossible name as "the file is gone", the reverse of safe — see there.
+//
+// Here rather than in create.go because Reject serves both spools, and the record name
+// format it screens for is the one both share (writeRecord).
+func validRecord(record string) error {
+	if base := filepath.Base(record); !isMessageFile(base) {
+		return fmt.Errorf("outbox: %q is not a spool record", base)
+	}
+	return nil
+}
+
 func sweepReceipts(dir string, now time.Time) {
+	sweepSuffixed(dir, rejectedSuffix, now, nil)
+}
+
+// sweepSuffixed drops every file in dir whose name is one writeRecord produced plus
+// suffix, and whose own mtime is past the horizon. Shared by the receipt sweep and
+// SweepDisclosures so the two terminal kinds cannot drift apart on the part that is
+// identical — the screening, and the choice of mtime over the timestamp in the name.
+//
+// keep, when non-nil, is asked about the RECORD path behind a file old enough to drop and
+// vetoes the unlink. It exists because the two kinds differ on what age means: a receipt is
+// addressed to a producer that has either read it or gone away, so the horizon is the whole
+// of its lifetime, while a disclosure is also the mark that keeps a surviving record or
+// claim from being executed (see Disclose) and outliving the horizon is not what makes that
+// job finished.
+//
+// Best-effort throughout: a directory that cannot be read, an entry that vanished between
+// ReadDir and Info, and a file that cannot be unlinked are all left for the next sweep.
+// Nothing downstream depends on a sweep having happened, so a failure costs one file that
+// stays a little longer.
+func sweepSuffixed(dir, suffix string, now time.Time, keep func(record string) bool) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
 	for _, de := range entries {
 		name := de.Name()
-		base, ok := strings.CutSuffix(name, rejectedSuffix)
+		base, ok := strings.CutSuffix(name, suffix)
 		if de.IsDir() || !ok || !isMessageFile(base) {
 			continue
 		}
@@ -429,8 +532,12 @@ func sweepReceipts(dir string, now time.Time) {
 		if err != nil {
 			continue // vanished between ReadDir and Info; nothing left to sweep
 		}
-		if now.Sub(info.ModTime()) > TTL {
-			_ = os.Remove(filepath.Join(dir, name))
+		if now.Sub(info.ModTime()) <= TTL {
+			continue
 		}
+		if keep != nil && keep(filepath.Join(dir, base)) {
+			continue
+		}
+		_ = os.Remove(filepath.Join(dir, name))
 	}
 }

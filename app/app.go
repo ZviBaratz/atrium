@@ -16,6 +16,7 @@ import (
 	"github.com/ZviBaratz/atrium/customcmd"
 	"github.com/ZviBaratz/atrium/hints"
 	"github.com/ZviBaratz/atrium/internal/memo"
+	"github.com/ZviBaratz/atrium/internal/outbox"
 	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/notify"
@@ -392,6 +393,43 @@ type home struct {
 	// when it lifts rather than twice a second for as long as it lasts. State about
 	// the log line only — the hold itself is decided fresh each tick by probing.
 	createTmuxHeld bool
+	// createAdoptHeld is createTmuxHeld's sibling for the other condition that holds a
+	// request instead of refusing it: a repo git could not be read, so the pin that
+	// licenses an adoption cannot be re-checked (see recheckAdoption). State about the log
+	// line only, as createTmuxHeld is — the hold itself is decided fresh each tick by
+	// re-probing.
+	//
+	// One bool rather than a set keyed by path, and it can be answering for more than one
+	// request: claims accumulate across crashes and claimDefer leaves them, so several Adopt
+	// records can be queued at once. Two held together are reported as one hold naming one
+	// error, which is the whole cost — tmux is one fact about the machine, where each of these
+	// is a different repo, so there is no single error that covers them. What it must not do
+	// is lift while one of them is still held — see noteAdoptHold, which is why the lift takes
+	// a second argument. createMarkHeld below takes the same pair for the same reason.
+	createAdoptHeld bool
+	// createMarkHeld is the same one-log-per-transition flag for a record whose terminal
+	// mark could not be looked for at all — a spool the stat fails on. Separate from the two
+	// above because it is a third condition and they are logged on their own edges; see
+	// noteUnreadableMark.
+	createMarkHeld bool
+	// pendingCreateDisclosures buffers what spent `atrium new` requests left behind, for
+	// the report flushCreateDisclosures shows once there is a frame to show it on (#731,
+	// #732). Seeded at startup from the create spool — a disclosure written by a process
+	// that then died — and appended to when this process writes one itself, so a live TUI
+	// does not make the user wait for a relaunch to hear about an orphan it just made.
+	pendingCreateDisclosures []outbox.DisclosureEntry
+	// unrecordedCreates holds the disclosures this process wrote for the OTHER #732 case: a
+	// create whose session is live and whose row is not, because persistInstances failed.
+	// Those are never reported by this process — the session is in the list, so a modal
+	// saying to remove its branch by hand would be an instruction to destroy a live agent —
+	// and the file exists only to cover this process dying before the row lands.
+	//
+	// Each entry carries the instance as well as the record path, because what makes the
+	// disclosure false is that THIS row is durable rather than that some save succeeded:
+	// SaveInstances skips an instance that has not Started(), and a row killed before its
+	// first save is absent from every save after it while its artifacts may still be
+	// standing. See withdrawUnrecordedCreates.
+	unrecordedCreates []unrecordedCreate
 	// notifier emits the terminal bell / desktop notification when a background
 	// session finishes a turn or blocks on a prompt (see app_notify.go, config
 	// Notifications). nil disables notification (hand-built test homes).
@@ -805,7 +843,8 @@ type home struct {
 	// not 10×/s — which would also perturb the tick-based idle hysteresis.
 	lastStatusPollSelection *session.Instance
 
-	// lastRejectionSweep is when the outbox receipt GC last walked the two spools. It
+	// lastRejectionSweep is when the terminal-file GC last walked the spools: receipts in
+	// both, and create disclosures in the create one, so three walks per firing. It
 	// enforces a 24h horizon, so it does not need the ~500ms metadata tick's cadence —
 	// see sweepRejectionsOccasionally. Zero means "never this run", which sweeps.
 	lastRejectionSweep time.Time
@@ -879,9 +918,17 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 	//
 	// A no-op for every launch that finds no claim, which is all of them but the one
 	// after a crash — one os.ReadDir of a directory the drain polls anyway.
-	if n := reconcileCreateClaims(ctx, instances, time.Now()); n > 0 {
+	n, undisclosed := reconcileCreateClaims(ctx, instances, time.Now())
+	if n > 0 {
 		log.InfoLog.Printf("reconciled %d interrupted create request%s left by an earlier atrium", n, plural(n))
 	}
+	// After the reconcile, not before: a refusal it reaches writes a disclosure, and that
+	// one belongs in this launch's report rather than the next one's. Buffered rather than
+	// surfaced, for the reason the park reports below are — there is no frame yet.
+	//
+	// The disclosures the reconcile could not WRITE are folded in here, because this read
+	// cannot find them: there is no file. See createDisclosureBacklog for the order.
+	pendingDisclosures := createDisclosureBacklog(loadCreateDisclosures(), undisclosed)
 
 	h := assembleHome(ctx, program, autoYes, version, binName, appConfig, appState, storage, instances)
 	// Buffered rather than surfaced here: newHome runs before the program starts, so
@@ -892,6 +939,7 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 	// already persisted as an ordinary Paused row and this load therefore refuses nothing
 	// on its account (#622). pendingParkReports owns which of the two buffers is filled.
 	h.pendingDeferredRecovery, h.pendingEarlierRecovery = pendingParkReports(deferred, instances, time.Now())
+	h.pendingCreateDisclosures = pendingDisclosures
 	// Write back any account identities assembleHome healed (#470). Doing it here
 	// keeps that constructor IO-free, and persisting eagerly is what lets `atrium ls`
 	// and the daemon — separate processes that read the stored rows raw — agree with

@@ -25,23 +25,28 @@ import (
 // successive ticks instead of blocking the UI goroutine on one of them.
 const outboxDrainBudget = 50
 
-// rejectionSweepInterval is how often the receipt GC actually walks the spools. The
-// horizon it enforces is 24 hours, so running it on every ~500ms metadata tick — and
-// twice per tick now that there are two spools to walk — spends around 350k directory
-// reads a day (2/s × 2 dirs × 86400) to delete a file that may sit an extra minute
-// (#546 is the standing reason idle work in this loop is worth a constant).
+// rejectionSweepInterval is how often the terminal-file GC actually walks the spools. The
+// horizon it enforces is 24 hours, so running it on every ~500ms metadata tick — and three
+// times per tick, since receipts are swept in both spools and disclosures in the create one
+// — spends around half a million directory reads a day (2/s × 3 walks × 86400) to delete a
+// file that may sit an extra minute (#546 is the standing reason idle work in this loop is
+// worth a constant).
 const rejectionSweepInterval = time.Minute
 
-// sweepRejectionsOccasionally runs the receipt GC at most once per
-// rejectionSweepInterval. The zero lastRejectionSweep makes the first tick after launch
-// sweep, which is the one that matters: it is where a receipt left by a previous run,
-// for a producer that never came back to read it, is finally collected.
+// sweepRejectionsOccasionally runs the terminal-file GC at most once per
+// rejectionSweepInterval — receipts in both spools, and create disclosures in the create
+// one. The zero lastRejectionSweep makes the first tick after launch sweep, which is the
+// one that matters: it is where a receipt left by a previous run, for a producer that never
+// came back to read it, is finally collected.
 func (m *home) sweepRejectionsOccasionally(now time.Time) {
 	if now.Sub(m.lastRejectionSweep) < rejectionSweepInterval {
 		return
 	}
 	m.lastRejectionSweep = now
 	outbox.SweepRejections(now)
+	// And the create spool's other terminal kind, whose reader is the next TUI rather than a
+	// blocked producer — see outbox.SweepDisclosures for why it is not the same sweep.
+	outbox.SweepDisclosures(now)
 }
 
 // drainOutbox delivers spooled prompts to their sessions and returns a command

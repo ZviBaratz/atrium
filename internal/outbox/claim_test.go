@@ -124,7 +124,7 @@ func TestRequeueReturnsTheRequestToTheSpool(t *testing.T) {
 	sandbox(t)
 	record := claimed(t, req("fix-auth", "/repo/web"), meta())
 
-	require.NoError(t, Requeue(record, false))
+	require.NoError(t, Requeue(record, ""))
 
 	entries, err := ListCreates()
 	require.NoError(t, err)
@@ -136,17 +136,22 @@ func TestRequeueReturnsTheRequestToTheSpool(t *testing.T) {
 
 // TestRequeueWithAdoptMarksTheRequest is the licence half. Adopt is what lets the drain
 // skip its branch check for this one request, so it has to survive the round trip to
-// disk — a flag lost here silently degrades recovery to the refusal it replaces.
+// disk — a flag lost here silently degrades recovery to the refusal it replaces. So does
+// the tip beside it, which is what the drain re-checks before taking the skip. app's
+// recheckAdoption is what fails closed on a pin lost in transit — it reads "no pin" as "not
+// the branch we vetted" and withdraws the licence. createConflictIn only reads the licence,
+// and would take the skip on a bare Adopt.
 func TestRequeueWithAdoptMarksTheRequest(t *testing.T) {
 	sandbox(t)
 	record := claimed(t, req("fix-auth", "/repo/web"), meta())
 
-	require.NoError(t, Requeue(record, true))
+	require.NoError(t, Requeue(record, "deadbeef"))
 
 	entries, err := ListCreates()
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	assert.True(t, entries[0].Request.Adopt)
+	assert.Equal(t, "deadbeef", entries[0].Request.AdoptTip)
 	require.NotNil(t, entries[0].Request.Claim,
 		"and the evidence stays, so a second interruption is judged on the same facts")
 	assert.Equal(t, "zvi/fix-auth", entries[0].Request.Claim.SessionBranch)

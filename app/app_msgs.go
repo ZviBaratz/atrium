@@ -230,6 +230,8 @@ func (m *home) handlePreviewTick(msg previewTickMsg) (tea.Model, tea.Cmd) {
 		m.flushSetupFailures(),
 		// Likewise for the startup recoveries the host session budget deferred.
 		m.flushDeferredRecovery(),
+		// Likewise for what a spent `atrium new` request left stranded (#731, #732).
+		m.flushCreateDisclosures(),
 		func() tea.Msg {
 			time.Sleep(100 * time.Millisecond)
 			return previewTickMsg{}
@@ -795,7 +797,7 @@ func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd
 		// failure rather than read the unlink as success and go looking in state.json
 		// for a branch that is not there. Its own wording, because the session did
 		// start — what failed is the record of it.
-		m.failCreateRequest(msg.instance,
+		m.discloseUnrecordedSession(msg.instance,
 			fmt.Sprintf("the session was created but atrium could not record it: %v", err))
 		if m.quitRequested {
 			if cmd, done := m.resumeQuitAfterStart(); done {

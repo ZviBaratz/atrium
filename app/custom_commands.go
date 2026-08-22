@@ -537,15 +537,47 @@ func customCommandProblemsReport(problems []customcmd.Problem) string {
 	return strings.Join(lines, "\n")
 }
 
-// clipReportLine bounds one problem line. The info modal wraps rather than
-// overflowing, so this is about keeping the report readable rather than about the
+// reportLineBudget bounds one line of an info-modal report. The modal wraps rather
+// than overflowing, so this is about keeping the report readable rather than about the
 // frame: a 400-character description would otherwise wrap over the whole overlay.
+const reportLineBudget = 100
+
+// reportNarrowWidth is the widest a report line can be and still arrive unwrapped on a narrow
+// terminal, and it is a different bound from reportLineBudget above rather than a stricter
+// one. That budget is about legibility and applies to a VALUE, which wraps harmlessly — a
+// wrapped path is still a path. This one applies to a line that must not wrap at all: a
+// command the user is about to copy arrives with the modal's border through the middle of it
+// and is pasteable in neither half.
+//
+// 64, derived from the overlay and not chosen: TextOverlay.boxWidth is
+// min(natural+4, terminalWidth-4) and its wrap width is boxWidth-4, so a report wider than
+// the cap renders at terminalWidth-8 — 72 columns at an 80-column terminal, and 64 at 72.
+// Nothing in the Go suite can see a wrap, so the lines that must survive one are built where a
+// test can enumerate them (app.createDisclosureTrailer) and asserted against this in cells
+// rather than runes — see TestCreateDisclosureTrailerFitsANarrowTerminal, and the scan it
+// replaced, which measured runes and skipped the one long line the report actually builds.
+const reportNarrowWidth = 64
+
+// clipReportLine keeps the head of a value whose identity is at its front — a name, a
+// path, a description.
 func clipReportLine(s string) string {
-	const limit = 100
-	if len([]rune(s)) <= limit {
+	if len([]rune(s)) <= reportLineBudget {
 		return s
 	}
-	return string([]rune(s)[:limit-1]) + "…"
+	return string([]rune(s)[:reportLineBudget-1]) + "…"
+}
+
+// clipReportLineEnd keeps the TAIL, for a value whose useful half is at its end: an error
+// message, whose cause is the part a clip from the right destroys ("…: no space left on
+// device"), or a sentence that opens with boilerplate and closes with the remedy (see
+// createDisclosureReport). Same budget — which is the point. A wider one for a
+// head-keeping clip only moves the cliff; it never delivers the tail.
+func clipReportLineEnd(s string) string {
+	r := []rune(s)
+	if len(r) <= reportLineBudget {
+		return s
+	}
+	return "…" + string(r[len(r)-(reportLineBudget-1):])
 }
 
 // wereOrWas keeps the report's first line grammatical for one entry as well as many.

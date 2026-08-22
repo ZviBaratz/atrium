@@ -1,9 +1,11 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,7 +20,9 @@ import (
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/internal/outbox"
 	"github.com/ZviBaratz/atrium/internal/testutil"
+	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/ui"
 
 	"github.com/stretchr/testify/assert"
@@ -154,6 +158,62 @@ func gitRepoWithBranch(t *testing.T, branch string) string {
 		run("branch", branch)
 	}
 	return dir
+}
+
+// gitEnv is a hermetic committer identity: the developer's global config may set neither,
+// and a commit without one fails rather than defaulting.
+func gitEnv() []string {
+	return append(os.Environ(),
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com")
+}
+
+// branchTip returns the commit refs/heads/<branch> points at, or "" when there is none.
+//
+// It shells out rather than calling git.LookupLocalBranchTip, because these fixtures pin
+// what the ADOPTION is checked against: reading the value through the same function the
+// check uses would make a pin that is wrong in both places agree with itself.
+func branchTip(t *testing.T, repo, branch string) string {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "git", "-C", repo, "rev-parse", "--verify", "--quiet",
+		"refs/heads/"+branch)
+	out, err := cmd.Output()
+	if err != nil {
+		return "" // no such branch; rev-parse --quiet exits 1
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// commitOnto adds a commit to branch, moving its tip — the thing that happens to an
+// orphan branch between the reconcile that vetted it and the drain that executes.
+func commitOnto(t *testing.T, repo, branch string) {
+	t.Helper()
+	for _, args := range [][]string{
+		{"-C", repo, "checkout", branch},
+		{"-C", repo, "commit", "--allow-empty", "-m", "somebody else's work"},
+		{"-C", repo, "checkout", "-"},
+	} {
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Env = gitEnv()
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+	}
+}
+
+// adoptedRequest is the request shape reconcileCreateClaims re-queues for an orphan
+// branch: Adopt, the claim's evidence block naming the session branch, and the pin the
+// drain re-checks before it honours the branch-gate skip (recheckAdoption).
+//
+// Hand-built rather than driven through the reconcile, so a drain test stays a drain test —
+// but complete, because an Adopt request missing any of the three fails closed and would
+// take the ordinary gate instead, which is the arm these tests are not about.
+func adoptedRequest(t *testing.T, h *home, title, repo string) outbox.Request {
+	t.Helper()
+	branch := h.appConfig.BranchPrefix + title
+	return outbox.Request{
+		Title: title, Path: repo, Adopt: true, AdoptTip: branchTip(t, repo, branch),
+		Claim: &outbox.ClaimMeta{At: time.Now(), SessionBranch: branch, BranchExisted: true},
+	}
 }
 
 // TestCreateDrainCreatesSessionAndHoldsTheFile is the end-to-end contract, and
@@ -452,7 +512,7 @@ func TestCreateDrainRejectsExistingBranch(t *testing.T) {
 func TestCreateDrainAdoptsAnExistingBranchWhenTheReconcileSaysSo(t *testing.T) {
 	h := drainHome(t)
 	repo := gitRepoWithBranch(t, h.appConfig.BranchPrefix+"fix-auth")
-	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: repo, Adopt: true})
+	path := spoolCreate(t, adoptedRequest(t, h, "fix-auth", repo))
 
 	require.NotNil(t, h.drainCreateRequests(), "an adopting request must be created, not refused")
 	assert.Equal(t, 1, h.list.NumInstances())
@@ -472,7 +532,7 @@ func TestCreateDrainStillRefusesATakenTitleWhenAdopting(t *testing.T) {
 	h := drainHome(t)
 	repo := gitRepoWithBranch(t, h.appConfig.BranchPrefix+"fix-auth")
 	addInstance(t, h, "fix-auth", repo)
-	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: repo, Adopt: true})
+	path := spoolCreate(t, adoptedRequest(t, h, "fix-auth", repo))
 
 	refuseDrain(t, h)
 
@@ -487,12 +547,20 @@ func TestCreateDrainStillRefusesATakenTitleWhenAdopting(t *testing.T) {
 // adopting request, because those are the facts — and the startup reconcile reads
 // exactly this field to tell an orphan it may finish from a foreign branch it may not.
 //
-// Measured, not inferred, and the third row is what says so. The first two agree with
-// `BranchExisted = r.Adopt` exactly, so a claim that copied its answer off the flag
-// would pass them both while recording a guess. The third splits them: a request the
-// reconcile marked Adopt, whose branch someone deleted before this tick ran, has no
-// existing branch — and recording "true" there would tell the NEXT reconcile the branch
-// it finds was foreign, turning a recoverable build into a permanent refusal.
+// Measured, not inferred — and no row here can prove that any more, which is worth saying
+// plainly rather than leaving the docstring claiming one does. The third row used to split
+// the field from the flag: a request the reconcile marked Adopt whose branch someone deleted
+// before this tick ran had no existing branch, so recording "true" off the flag would have
+// told the NEXT reconcile the branch it finds was foreign, turning a recoverable build into
+// a permanent refusal.
+//
+// recheckAdoption closes that gap upstream. It withdraws Adopt before holdCreateRequest
+// runs, for every branch that is absent or not the one that was vetted, so by the time the
+// claim is written the flag and the tree agree in every state reachable here — a moved
+// branch never gets this far, being refused at the gate. What these rows assert is the
+// recorded VALUE, which is still the thing the reconcile reads; the guard against inferring
+// it from the flag now lives in the withdrawal, and
+// TestCreateDrainDisclosesAWithdrawnAdoption is what holds that.
 func TestCreateDrainRecordsWhatWasTrueOfTheBranchWhenItClaimed(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -511,7 +579,18 @@ func TestCreateDrainRecordsWhatWasTrueOfTheBranchWhenItClaimed(t *testing.T) {
 				existing = h.appConfig.BranchPrefix + tc.branch
 			}
 			repo := gitRepoWithBranch(t, existing)
-			path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: repo, Adopt: tc.adopt})
+			req := outbox.Request{Title: "fix-auth", Path: repo}
+			if tc.adopt {
+				req = adoptedRequest(t, h, "fix-auth", repo)
+				if req.AdoptTip == "" {
+					// The third row's whole point: the reconcile pinned a commit and the
+					// branch was deleted before this tick ran, so the pin names something
+					// no ref reaches. Left empty it would instead exercise the
+					// no-pin-at-all arm, which is a different refusal.
+					req.AdoptTip = strings.Repeat("0", 40)
+				}
+			}
+			path := spoolCreate(t, req)
 
 			require.NotNil(t, h.drainCreateRequests())
 			assertCreateHeld(t, path)
@@ -523,8 +602,91 @@ func TestCreateDrainRecordsWhatWasTrueOfTheBranchWhenItClaimed(t *testing.T) {
 			assert.Equal(t, tc.want, claims[0].Request.Claim.BranchExisted)
 			assert.Equal(t, h.appConfig.BranchPrefix+"fix-auth", claims[0].Request.Claim.SessionBranch,
 				"the branch recorded must be the one Setup would mint")
+			assert.Equal(t, tc.adopt && tc.want, claims[0].Request.Adopt,
+				"and the licence recorded must be the one this build actually used")
 		})
 	}
+}
+
+// TestHoldCreateRequestMeasuresTheBranchRatherThanCopyingTheLicence is the field's own guard,
+// and it is here rather than in the table above because no row of that table can separate the
+// two: every request the drain reaches ends with BranchExisted equal to the Adopt it executed
+// with, so `meta.BranchExisted = r.Adopt` passes the whole suite while writing a guess into
+// the one field whose job is to be evidence.
+//
+// The state that separates them is reachable and is the one the pin exists for: the re-check
+// says the branch is gone, the licence is withdrawn, and something recreates that name — a
+// fetch, a rebase, another checkout — before the claim is written. Then BranchExisted is true
+// and Adopt is false, which is exactly the pair classifyCreateClaim reads as "somebody else's
+// branch is in the way" and refuses. Copied off the licence it reads as "nothing was there",
+// and the next launch adopts a stranger's work.
+func TestHoldCreateRequestMeasuresTheBranchRatherThanCopyingTheLicence(t *testing.T) {
+	h := drainHome(t)
+	branch := h.appConfig.BranchPrefix + "fix-auth"
+	repo := gitRepoWithBranch(t, branch)
+	inst := addInstance(t, h, "fix-auth", repo)
+	require.False(t, inst.IsDirect(), "precondition: a session with a branch to record")
+	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: repo})
+
+	// Adopt false, the branch present: the drain's own gates never produce this pair, so it
+	// is driven directly.
+	h.holdCreateRequest(path, outbox.Request{Title: "fix-auth", Path: repo}, inst)
+
+	claims, err := outbox.ListClaims()
+	require.NoError(t, err)
+	require.Len(t, claims, 1)
+	require.NotNil(t, claims[0].Request.Claim)
+	assert.False(t, claims[0].Request.Adopt, "precondition: no licence was carried")
+	assert.True(t, claims[0].Request.Claim.BranchExisted,
+		"and the field says what git said, not what the licence said")
+}
+
+// TestCreateDrainPersistsAWithdrawnAdoption: outbox.Claim re-reads the record, so a withdrawal
+// the drain keeps in its own copy never reaches the claim it writes. The next launch then reads
+// a licence this build did not use, and classifyCreateClaim's "the branch already existed
+// before it started, so it is not this session's to take" refusal never fires.
+func TestCreateDrainPersistsAWithdrawnAdoption(t *testing.T) {
+	h := drainHome(t)
+	repo := gitRepoWithBranch(t, "") // the pinned branch is gone, so the licence is withdrawn
+	req := adoptedRequest(t, h, "fix-auth", repo)
+	req.AdoptTip = strings.Repeat("0", 40)
+	path := spoolCreate(t, req)
+
+	require.NotNil(t, h.drainCreateRequests())
+	assertCreateHeld(t, path)
+
+	claims, err := outbox.ListClaims()
+	require.NoError(t, err)
+	require.Len(t, claims, 1)
+	assert.False(t, claims[0].Request.Adopt, "the claim records the licence as withdrawn")
+	assert.Empty(t, claims[0].Request.AdoptTip, "and drops the pin it was withdrawn against")
+	assert.False(t, claims[0].Request.CreatedAt.IsZero(),
+		"while the record's own fields survive the edit, or nothing can judge its age")
+}
+
+// TestCreateDrainAnswersAnAdoptionWhoseRepoIsGone: "git could not be asked" and "git says
+// there is no repository here" arrive as one error, and only the first is a fact about the
+// machine. Folded together, a re-queued adoption whose repo has been deleted is held for the
+// full 24h TTL — `atrium new --wait` timing out with no receipt at all — and pays a
+// for-each-ref fork on every one of those ticks. Answered, it goes through the same gates an
+// ordinary request would and the caller is told in one tick.
+func TestCreateDrainAnswersAnAdoptionWhoseRepoIsGone(t *testing.T) {
+	h := drainHome(t)
+	gone := filepath.Join(t.TempDir(), "deleted-repo")
+	path := spoolCreate(t, outbox.Request{
+		Title: "fix-auth", Path: gone, Adopt: true, AdoptTip: strings.Repeat("a", 40),
+		Claim: &outbox.ClaimMeta{At: time.Now(), SessionBranch: h.appConfig.BranchPrefix + "fix-auth"},
+	})
+
+	refuseDrain(t, h)
+
+	reason, rejected := outbox.Rejection(path)
+	require.True(t, rejected, "the caller is answered rather than left to time out")
+	assert.Contains(t, reason, "is not a directory")
+	assert.False(t, h.createAdoptHeld, "and nothing is being held on the machine's account")
+	d, state := outbox.DisclosureFor(path)
+	require.Equal(t, outbox.HasDisclosure, state)
+	assert.False(t, d.Leftovers(), "a repo that is gone took its branch with it")
 }
 
 // TestCreateDrainStampsTheRequestOnTheSession: the stamp is what lets a later reconcile
@@ -1710,4 +1872,1036 @@ func TestHoldCreateRequestDoesNotPoisonARecordItClaimed(t *testing.T) {
 
 	assertCreateHeld(t, path)
 	assert.False(t, h.outboxPoisoned[path], "a claim that worked needs no skip; the rename is the skip")
+}
+
+// TestCreateDrainDisclosesTheOrphanWhenItRefusesAnAdoption is #731's first hole.
+//
+// applyCreateClaim releases the interrupted build's worktree BEFORE it re-queues, which is
+// right on its own terms — the drain can pick the request up on the very next tick, and a
+// Setup that runs while the stale worktree still holds the branch dies on git's "already
+// used by worktree". But the re-queued request then meets gates that refuse destructively,
+// and a title taken since the crash is one of them. Receipt written, record unlinked: the
+// branch had no row, no claim, no request and, after the release, no worktree registration
+// either — invisible to `atrium ls`, to `atrium reap` and to `git worktree list` alike. The
+// recovery is one-shot, so that state was permanent.
+func TestCreateDrainDisclosesTheOrphanWhenItRefusesAnAdoption(t *testing.T) {
+	h := drainHome(t)
+	branch := h.appConfig.BranchPrefix + "fix-auth"
+	repo := gitRepoWithBranch(t, branch)
+	addInstance(t, h, "fix-auth", repo) // the title taken since the crash
+	path := spoolCreate(t, adoptedRequest(t, h, "fix-auth", repo))
+
+	refuseDrain(t, h)
+
+	reason, ok := outbox.Rejection(path)
+	require.True(t, ok, "precondition: the caller is still answered")
+	assert.Contains(t, reason, titleErrAlreadyUsed)
+	d, state := outbox.DisclosureFor(path)
+	require.Equal(t, outbox.HasDisclosure, state, "and the branch the release freed must not go unmentioned")
+	assert.Equal(t, branch, d.Branch)
+	assert.Equal(t, repo, d.Repo)
+	assert.Contains(t, d.Reason, titleErrAlreadyUsed)
+}
+
+// TestCreateDrainMarksAnOrdinaryRefusalWithoutReportingIt is that arm's other half, and the
+// two jobs of a disclosure are what separate them. A request nothing has built yet leaves no
+// INVENTORY, so there is nothing for a modal to name and one saying "a create failed" would
+// be noise the caller's receipt already carried. It still leaves a MARK, because
+// discardSpoolFile's unlink can fail and most of the gates are facts about the fleet rather
+// than about the request — a cap that is raised, a title a kill frees — so a record that
+// survives its own Reject is one a later launch lets through, for a caller that read the
+// refusal and exited non-zero.
+func TestCreateDrainMarksAnOrdinaryRefusalWithoutReportingIt(t *testing.T) {
+	h := drainHome(t)
+	warnings := captureWarnings(t)
+	repo := gitRepoWithBranch(t, "")
+	addInstance(t, h, "fix-auth", repo)
+	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: repo})
+
+	refuseDrain(t, h)
+
+	_, ok := outbox.Rejection(path)
+	require.True(t, ok)
+	d, state := outbox.DisclosureFor(path)
+	require.Equal(t, outbox.HasDisclosure, state, "or a record that outlives its Reject is re-drained")
+	assert.False(t, d.Leftovers(), "and there is nothing for a modal to name")
+	assert.Contains(t, d.Reason, titleErrAlreadyUsed)
+
+	// Not buffered at all, which is the other half of "not reported". A mark with nothing to
+	// name has no reader, so the two things a buffered entry buys — a place in the report, and
+	// clearMarkOverADroppedRecord's promise not to delete a file nobody has seen — are both
+	// vacuous for it, while the slice it sat in has no ceiling and is emptied only by a flush
+	// that returns early behind any overlay. Its guard job is held by ClearDisclosure's own
+	// recordStillSpooled check instead, which is where it belongs.
+	assert.Empty(t, h.pendingCreateDisclosures,
+		"a mark nobody will read does not need a place in the report to keep guarding")
+	h.flushCreateDisclosures()
+	assert.Equal(t, stateDefault, h.state, "and no modal comes of it")
+	// Nor does it claim, at WARNING, that a title collision left artifacts. One wording for
+	// both cases printed `left artifacts belonging to no session (branch "", worktree "",
+	// tmux "")` for the overwhelming majority of giving-ups — the opposite of what happened,
+	// on the level an operator greps, burying the one case where it is true.
+	assert.NotContains(t, warnings.String(), "left artifacts belonging to no session",
+		"a refusal that built nothing did not leave artifacts")
+	assert.Contains(t, warnings.String(), "refusing a create request",
+		"precondition: this arm's own warning did reach the buffer")
+}
+
+// TestCreateDrainRechecksTheAdoptionPin is #731's second hole. The evidence licensing an
+// Adopt is gathered by the startup reconcile and the skip is taken whenever the drain gets
+// round to the request, which can be much later: tmux off PATH holds this drain
+// indefinitely, so does createDrainHeld, so does another crash. Delete and recreate the
+// branch in that window — by hand, by a fetch, by a rebase — and the name still matches
+// while the commits are somebody else's, so Setup takes its existing-branch arm and the
+// agent silently resumes on their work.
+//
+// A moved tip is the same evidence as a recreated branch and is what a test can arrange.
+// Without the re-check both rows below adopt; with it, only the unmoved one does.
+func TestCreateDrainRechecksTheAdoptionPin(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		moveTip   bool
+		wantAdopt bool
+	}{
+		{name: "pin still matches", wantAdopt: true},
+		{name: "somebody else committed on it", moveTip: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := drainHome(t)
+			branch := h.appConfig.BranchPrefix + "fix-auth"
+			repo := gitRepoWithBranch(t, branch)
+			req := adoptedRequest(t, h, "fix-auth", repo)
+			if tc.moveTip {
+				commitOnto(t, repo, branch)
+			}
+			path := spoolCreate(t, req)
+
+			cmd := h.drainCreateRequests()
+
+			reason, rejected := outbox.Rejection(path)
+			if tc.wantAdopt {
+				require.NotNil(t, cmd, "an adoption whose pin holds is still created")
+				assert.False(t, rejected, "and is not handed a receipt: %s", reason)
+				assert.Equal(t, 1, h.list.NumInstances())
+				return
+			}
+			require.True(t, rejected, "a branch that is no longer ours must meet the branch gate")
+			assert.Contains(t, reason, "branch already exists")
+			assert.Zero(t, h.list.NumInstances(), "and no agent is put on somebody else's work")
+		})
+	}
+}
+
+// TestCreateDrainCreatesFreshWhenTheAdoptedBranchIsGone is the third outcome of that
+// re-check, and the one that must NOT be a refusal: a pin naming a branch nobody can find
+// means there is nothing to adopt and nothing in the way, which is exactly what the
+// ordinary gates already handle. Refusing here would spend the recovery on a branch a
+// person had already tidied up themselves.
+func TestCreateDrainCreatesFreshWhenTheAdoptedBranchIsGone(t *testing.T) {
+	h := drainHome(t)
+	repo := gitRepoWithBranch(t, "") // the orphan branch was deleted by hand
+	req := adoptedRequest(t, h, "fix-auth", repo)
+	req.AdoptTip = strings.Repeat("0", 40)
+	path := spoolCreate(t, req)
+
+	require.NotNil(t, h.drainCreateRequests())
+
+	reason, rejected := outbox.Rejection(path)
+	assert.False(t, rejected, "nothing was in the way: %s", reason)
+	assert.Equal(t, 1, h.list.NumInstances())
+	_, state := outbox.DisclosureFor(path)
+	assert.Equal(t, outbox.NoDisclosure, state, "and there was no orphan left to disclose")
+}
+
+// TestCreateDrainHoldsAnAdoptionItCannotRecheck: a repo git cannot read is a fact about the
+// machine, not about the request — the distinction the tmux probe already makes here — and
+// this request in particular is the second attempt at a build that already made a branch, so
+// refusing it spends the one recovery a stranded create gets on a condition that may clear
+// on the next tick. Held, the request keeps its TTL and its claim to that branch.
+func TestCreateDrainHoldsAnAdoptionItCannotRecheck(t *testing.T) {
+	h := drainHome(t)
+	path := unaskableAdoption(t, h, "fix-auth")
+
+	assert.Nil(t, h.drainCreateRequests(), "nothing was created and nothing was refused")
+
+	reason, rejected := outbox.Rejection(path)
+	assert.False(t, rejected, "a machine that cannot answer is not a reason to refuse: %s", reason)
+	assertCreateQueued(t, path)
+	assert.True(t, h.createAdoptHeld, "and the hold is logged once rather than twice a second")
+}
+
+// gitCannotAnswerFor makes the adoption re-check fail to RUN for the given repos, and only
+// for those — the one condition recheckAdoption holds on rather than answers.
+//
+// Through the seam rather than through a broken path, because a broken path is no longer that
+// condition: git reports a missing directory or a plain directory by exiting non-zero, and
+// recheckAdoption reads an answer git gave as a fact about the request, withdraws the licence
+// and lets the gates deal with it. What holds is git not running, and emptying PATH would do
+// that to every repo in the process at once — including the readable one a starvation test
+// needs beside the broken one.
+func gitCannotAnswerFor(t *testing.T, repos ...string) {
+	t.Helper()
+	broken := make(map[string]bool, len(repos))
+	for _, repo := range repos {
+		broken[repo] = true
+	}
+	orig := lookupBranchTip
+	lookupBranchTip = func(ctx context.Context, repo, branch string) (string, error) {
+		if broken[repo] {
+			return "", errors.New(`exec: "git": executable file not found in $PATH`)
+		}
+		return orig(ctx, repo, branch)
+	}
+	t.Cleanup(func() { lookupBranchTip = orig })
+}
+
+// unaskableAdoption spools a re-queued adoption whose repo is real, whose branch is real, and
+// whose pin git cannot be asked about.
+func unaskableAdoption(t *testing.T, h *home, title string) string {
+	t.Helper()
+	branch := h.appConfig.BranchPrefix + title
+	repo := gitRepoWithBranch(t, branch)
+	gitCannotAnswerFor(t, repo)
+	return spoolCreate(t, outbox.Request{
+		Title: title, Path: repo, Adopt: true, AdoptTip: strings.Repeat("a", 40),
+		Claim: &outbox.ClaimMeta{At: time.Now(), SessionBranch: branch},
+	})
+}
+
+// startedCreate is an `atrium new` whose session is genuinely built — worktree, branch,
+// tmux session and agent — and whose row has not been written yet. It is the state the
+// persist-failure paths act on, and it has to be real: an instance the drain constructed but
+// never booted has an empty Branch, worktree path and tmux name, so every assertion about
+// what the failure discloses compares "" to "" and passes with the inventory deleted.
+func startedCreate(t *testing.T, h *home) (*session.Instance, string) {
+	t.Helper()
+	testutil.RequireTmux(t)
+	repo := gitRepoWithBranch(t, "")
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: "fix-auth", Path: repo, Program: "sleep 300",
+	})
+	require.NoError(t, err)
+	inst.SetBaseContext(context.Background())
+	require.NoError(t, inst.Start(true))
+	t.Cleanup(func() {
+		inst.RebindBaseContext(context.Background())
+		_ = inst.Kill()
+	})
+	require.NotEmpty(t, inst.Branch)
+	require.NotEmpty(t, inst.GetWorktreePath())
+	require.NotEmpty(t, inst.TmuxSessionName())
+
+	h.list.AddInstance(inst)
+	inst.SetStatus(session.Loading)
+	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: repo})
+	h.createsInFlight = map[*session.Instance]string{inst: path}
+	return inst, path
+}
+
+// TestCreateDrainDisclosesAPersistFailure is #732 on the in-process path. The session
+// started fine — worktree, branch, tmux session and agent all exist — and what failed is
+// persistInstances, the record of them. Telling the caller is right; dropping the claim as
+// well left the next launch nothing to reconcile, so the branch and the worktree belonged to
+// nothing and nothing ever mentioned them again.
+//
+// The file, and NOT this process's report. Nothing tore the session down — it is in the
+// list, Running, one row away — so a modal naming its branch, its worktree and its tmux
+// session under "nothing here will clean them up" would be an instruction to destroy a live
+// agent. The file covers the only way these become orphans, which is this process dying
+// before a later persist lands the row.
+func TestCreateDrainDisclosesAPersistFailure(t *testing.T) {
+	h := drainHome(t)
+	cs := withCapturingStore(t, h)
+	inst, path := startedCreate(t, h)
+
+	cs.saveErr = errors.New("disk full")
+	h.Update(instanceStartedMsg{instance: inst, origin: spawnBackground})
+
+	reason, rejected := outbox.Rejection(path)
+	require.True(t, rejected, "precondition: the caller still hears the failure")
+	assert.Contains(t, reason, "disk full")
+	d, state := outbox.DisclosureFor(path)
+	require.Equal(t, outbox.HasDisclosure, state, "and what the create left behind must survive the answer")
+	assert.Equal(t, "fix-auth", d.Title)
+	assert.Equal(t, inst.Branch, d.Branch)
+	assert.Equal(t, inst.GetWorktreePath(), d.Worktree)
+	assert.Equal(t, inst.TmuxSessionName(), d.TmuxName)
+	assert.Contains(t, d.Reason, "disk full")
+
+	require.Equal(t, 1, h.list.NumInstances(), "precondition: nothing tore the session down")
+	require.Equal(t, session.Running, inst.GetStatus())
+	assert.Empty(t, h.pendingCreateDisclosures,
+		"so no modal tells the user to delete a session that is in the list")
+	require.Len(t, h.unrecordedCreates, 1, "it is remembered for withdrawal instead")
+	assert.Equal(t, path, h.unrecordedCreates[0].record)
+	assert.Same(t, inst, h.unrecordedCreates[0].inst,
+		"with the session, because what makes it false is THIS row landing")
+}
+
+// TestASucceedingPersistWithdrawsTheDisclosure is the other half of that decision, and the
+// reason the file can be written for a live session at all. The moment the row IS durable
+// the disclosure is a false report — the next launch would name a branch, a worktree and a
+// tmux session that state.json has a row for, under a header saying nothing points at them —
+// and a transient ENOSPC or NFS stall is followed by a successful save within seconds.
+func TestASucceedingPersistWithdrawsTheDisclosure(t *testing.T) {
+	h := drainHome(t)
+	cs := withCapturingStore(t, h)
+	inst, path := startedCreate(t, h)
+
+	cs.saveErr = errors.New("disk full")
+	h.Update(instanceStartedMsg{instance: inst, origin: spawnBackground})
+	_, state := outbox.DisclosureFor(path)
+	require.Equal(t, outbox.HasDisclosure, state, "precondition: the failure left one")
+
+	cs.saveErr = nil
+	require.NoError(t, h.persistInstances())
+
+	_, state = outbox.DisclosureFor(path)
+	assert.Equal(t, outbox.NoDisclosure, state, "the row is durable, so the leftovers are not leftovers")
+	assert.Empty(t, h.unrecordedCreates)
+}
+
+// TestAPersistWithoutTheRowKeepsTheDisclosure is what "a save landed" cannot stand in for, and
+// it is #732 recreated by its own fix. A kill drops the row BEFORE it reports the outcome —
+// applyKillDone removes the instance and then says "killed but teardown was incomplete", and
+// killInstances does the same in the batch path — so a teardown that failed leaves a branch, a
+// worktree and an agent standing while every save after it writes a list the session is not in.
+// Withdrawing on the bare fact of success deletes the only file that named them.
+//
+// Storage.SaveInstances' own filter is the second reason: it skips any instance that has not
+// Started(), so even a row still in the list is not necessarily on disk.
+func TestAPersistWithoutTheRowKeepsTheDisclosure(t *testing.T) {
+	h := drainHome(t)
+	cs := withCapturingStore(t, h)
+	inst, path := startedCreate(t, h)
+
+	cs.saveErr = errors.New("disk full")
+	h.Update(instanceStartedMsg{instance: inst, origin: spawnBackground})
+	require.Len(t, h.unrecordedCreates, 1, "precondition: the failure left one to withdraw")
+
+	// The row goes, the artifacts do not — the state a failed teardown leaves.
+	h.list.RemoveInstance(inst)
+	cs.saveErr = nil
+	require.NoError(t, h.persistInstances())
+
+	_, state := outbox.DisclosureFor(path)
+	assert.Equal(t, outbox.HasDisclosure, state,
+		"nothing recorded this session, so the one file naming its leftovers has to stay")
+	assert.Len(t, h.unrecordedCreates, 1, "and it is still owed a withdrawal if the row comes back")
+}
+
+// TestWithdrawalKeepsAnEntryClearDisclosureDeclined: ClearDisclosure returns nil both for
+// "unlinked" and for "kept, because a record or claim beside it is still executable", and this
+// caller is the one that has to tell them apart. Reading the kept case as done drops the only
+// handle for a retry — leaving a disclosure that names a live session's branch, worktree and
+// tmux session, which the next launch reports as an orphan and offers a kill-session command
+// for.
+func TestWithdrawalKeepsAnEntryClearDisclosureDeclined(t *testing.T) {
+	h := drainHome(t)
+	cs := withCapturingStore(t, h)
+	inst, path := startedCreate(t, h)
+
+	cs.saveErr = errors.New("disk full")
+	h.Update(instanceStartedMsg{instance: inst, origin: spawnBackground})
+	require.Len(t, h.unrecordedCreates, 1)
+	// The claim back on disk: the state a failed removeClaim leaves, and the one
+	// ClearDisclosure refuses to drop a mark over.
+	require.NoError(t, os.WriteFile(outbox.ClaimPath(path), []byte("{}"), 0o644))
+
+	cs.saveErr = nil
+	require.NoError(t, h.persistInstances())
+
+	_, state := outbox.DisclosureFor(path)
+	require.Equal(t, outbox.HasDisclosure, state, "precondition: the mark is still guarding the claim")
+	assert.Len(t, h.unrecordedCreates, 1, "so the withdrawal is still owed and still remembered")
+
+	// And it lands once the claim does go, which is what makes keeping the entry a retry
+	// rather than a leak.
+	require.NoError(t, os.Remove(outbox.ClaimPath(path)))
+	require.NoError(t, h.persistInstances())
+	_, state = outbox.DisclosureFor(path)
+	assert.Equal(t, outbox.NoDisclosure, state)
+	assert.Empty(t, h.unrecordedCreates)
+}
+
+// TestReconcileInFlightStartsDisclosesAPersistFailure is #732's worse call site: the same
+// failure on the shutdown path, where there is no later persist attempt and no frame left to
+// toast on, so before the disclosure it was terminal.
+func TestReconcileInFlightStartsDisclosesAPersistFailure(t *testing.T) {
+	testutil.RequireTmux(t)
+
+	h := drainHome(t)
+	cs := withCapturingStore(t, h)
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: "adopt-me", Path: t.TempDir(), Program: "sleep 300", Direct: true,
+	})
+	require.NoError(t, err)
+	inst.SetBaseContext(context.Background())
+	require.NoError(t, inst.Start(true))
+	require.True(t, inst.Started())
+	t.Cleanup(func() {
+		inst.RebindBaseContext(context.Background())
+		_ = inst.Kill()
+	})
+	h.list.AddInstance(inst)
+	inst.SetStatus(session.Loading) // the dropped instanceStartedMsg
+
+	path := spoolCreate(t, outbox.Request{Title: "adopt-me", Path: inst.Path})
+	h.createsInFlight = map[*session.Instance]string{inst: path}
+
+	cs.saveErr = errors.New("read-only file system")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // signal shutdown
+	h.reconcileInFlightStarts(ctx)
+
+	reason, rejected := outbox.Rejection(path)
+	require.True(t, rejected, "precondition: an adopted session whose row failed owes its caller")
+	assert.Contains(t, reason, "read-only file system")
+	d, state := outbox.DisclosureFor(path)
+	require.Equal(t, outbox.HasDisclosure, state, "and the live agent this exit leaves behind must be on disk for the next launch")
+	assert.Equal(t, inst.TmuxSessionName(), d.TmuxName)
+	assert.True(t, d.Leftovers())
+}
+
+// TestCreateDrainLiftsTheAdoptionHold is the other side of that hold's switch. The bool is
+// state about the LOG LINE, not about the hold — the hold itself is re-decided every tick —
+// so it has to clear when there is nothing held any more. Left set, the next request git
+// cannot answer for is held in silence.
+//
+// The held request going away is how that happens in practice: it expires out of the spool
+// at the horizon, or `atrium reset` clears it, and no probe ever succeeds to un-set the flag.
+func TestCreateDrainLiftsTheAdoptionHold(t *testing.T) {
+	h := drainHome(t)
+	held := unaskableAdoption(t, h, "fix-auth")
+	require.Nil(t, h.drainCreateRequests())
+	require.True(t, h.createAdoptHeld, "precondition: the hold is on")
+
+	require.NoError(t, outbox.DiscardCreate(held))
+	path := spoolCreate(t, outbox.Request{Title: "other", Path: t.TempDir()})
+	require.NotNil(t, h.drainCreateRequests())
+
+	assert.False(t, h.createAdoptHeld, "or the next unanswerable re-check is held in silence")
+	assertCreateHeld(t, path)
+}
+
+// TestCreateDrainDropsARecordItAlreadyGaveUpOn is #731's third hole in its RECORD shape,
+// which the claim-side guard does not cover.
+//
+// rejectCreateRequest writes the disclosure and then Reject, and Reject writes the receipt
+// before it unlinks. A failed unlink — EACCES on the spool, EIO — or a kill between the two
+// leaves record + receipt + disclosure, and the only thing standing between that record and
+// a session was the in-memory poison map, which the next launch does not inherit. So the
+// caller reads its receipt and exits non-zero while the next launch builds the session
+// anyway, and the modal opens naming the branch it is being built on.
+func TestCreateDrainDropsARecordItAlreadyGaveUpOn(t *testing.T) {
+	h := drainHome(t)
+	repo := gitRepoWithBranch(t, "")
+	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: repo})
+	require.NoError(t, outbox.Disclose(path, &outbox.Disclosure{
+		Title: "fix-auth", Repo: repo, Branch: "zvi/fix-auth",
+		Reason: "the title is already used by another session"}))
+
+	assert.Nil(t, h.drainCreateRequests(), "an answered request must not be built")
+
+	assert.Zero(t, h.list.NumInstances())
+	assertCreateSettled(t, path)
+	reason, rejected := outbox.Rejection(path)
+	require.True(t, rejected, "and the receipt is re-written, since the crash may have been before it")
+	assert.Contains(t, reason, "already used")
+}
+
+// TestCreateDrainDisclosesAWithdrawnAdoption is #731's first hole re-entered through the
+// re-check that closes its second.
+//
+// applyCreateClaim releases the interrupted build's worktree registration BEFORE it
+// re-queues, deliberately — a Setup that runs while the stale worktree holds the branch dies
+// on git's "already used by worktree". So by the time the drain sees an Adopt request, the
+// branch has no row, no claim and no worktree registration, and a refusal that unlinks the
+// record leaves it with no request either: invisible to `atrium ls`, to `atrium reap` and to
+// `git worktree list` alike, permanently, since the recovery is one-shot.
+//
+// Gating the disclosure on r.Adopt made every WITHDRAWAL one of those. The two rows here are
+// the withdrawals where the branch is still standing: one whose tip moved under it, and one
+// carrying no pin at all — the upgrade case internal/outbox's createVersion promises by name
+// is covered.
+func TestCreateDrainDisclosesAWithdrawnAdoption(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		arrange func(t *testing.T, repo, branch string, r *outbox.Request)
+	}{
+		{"its tip moved under it", func(t *testing.T, repo, branch string, r *outbox.Request) {
+			commitOnto(t, repo, branch)
+		}},
+		{"it carries no pin", func(t *testing.T, repo, branch string, r *outbox.Request) {
+			r.AdoptTip = ""
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := drainHome(t)
+			branch := h.appConfig.BranchPrefix + "fix-auth"
+			repo := gitRepoWithBranch(t, branch)
+			req := adoptedRequest(t, h, "fix-auth", repo)
+			tc.arrange(t, repo, branch, &req)
+			path := spoolCreate(t, req)
+
+			refuseDrain(t, h)
+
+			reason, rejected := outbox.Rejection(path)
+			require.True(t, rejected, "precondition: it is refused for the branch: %s", reason)
+			assert.Zero(t, h.list.NumInstances(), "and no agent is put on somebody else's work")
+			d, state := outbox.DisclosureFor(path)
+			require.Equal(t, outbox.HasDisclosure, state, "but the branch the interrupted build made must still be named")
+			assert.Equal(t, branch, d.Branch)
+			assert.True(t, d.Leftovers())
+			// And the buffered copy is the one that was WRITTEN, stamp included. Disclose
+			// takes a pointer for this: stamping a copy leaves the entry this process
+			// reports from carrying Version 0 and a zero CreatedAt, so the report dates a
+			// live TUI's own orphan as undated while the next launch's — read back off
+			// disk — is dated.
+			require.Len(t, h.pendingCreateDisclosures, 1)
+			buffered := h.pendingCreateDisclosures[0].Disclosure
+			assert.Equal(t, d.CreatedAt.UnixNano(), buffered.CreatedAt.UnixNano())
+			assert.False(t, buffered.CreatedAt.IsZero())
+		})
+	}
+}
+
+// TestCreateDrainNamesNoBranchWhenItWentAway is the one withdrawal that clears the branch as
+// well as the flag. git has just said there is nothing at that name, so a refusal for some
+// other reason has no leftovers of its own — and the report is the wrong place to name a
+// branch nobody can act on. The mark is still written, because that is the guard rather than
+// the report (see TestCreateDrainMarksAnOrdinaryRefusalWithoutReportingIt).
+func TestCreateDrainNamesNoBranchWhenItWentAway(t *testing.T) {
+	h := drainHome(t)
+	repo := gitRepoWithBranch(t, "") // the orphan branch is gone
+	req := adoptedRequest(t, h, "fix-auth", repo)
+	req.AdoptTip = strings.Repeat("0", 40)
+	// A row owning the title, so the request is refused for something OTHER than its
+	// branch and the disclosure decision is the only thing under test.
+	addInstance(t, h, "fix-auth", repo)
+	path := spoolCreate(t, req)
+
+	refuseDrain(t, h)
+
+	_, rejected := outbox.Rejection(path)
+	require.True(t, rejected, "precondition: refused for the taken title")
+	d, state := outbox.DisclosureFor(path)
+	require.Equal(t, outbox.HasDisclosure, state, "the mark is owed either way")
+	assert.False(t, d.Leftovers(), "there is no branch left to tell anyone about")
+}
+
+// TestCreateDrainDisclosesAnExpiredAdoption: the disposal arms answer their caller and unlink
+// the record without ever reaching the pin re-check, and expiry is the one that destroys the
+// record permanently. A branch it does not name is named nowhere ever again — where a branch
+// named after somebody deleted it costs the reader one row saying so, which is the asymmetry
+// outbox.Disclosure's header argues from.
+func TestCreateDrainDisclosesAnExpiredAdoption(t *testing.T) {
+	h := drainHome(t)
+	branch := h.appConfig.BranchPrefix + "fix-auth"
+	repo := gitRepoWithBranch(t, branch)
+	req := adoptedRequest(t, h, "fix-auth", repo)
+	req.CreatedAt = time.Now().Add(-2 * outbox.TTL)
+	path := spoolCreate(t, req)
+
+	disposeDrain(t, h)
+
+	reason, rejected := outbox.Rejection(path)
+	require.True(t, rejected, "precondition: past the horizon it is discarded")
+	assert.Contains(t, reason, "horizon")
+	d, state := outbox.DisclosureFor(path)
+	require.Equal(t, outbox.HasDisclosure, state, "and this is the last chance anyone has to hear about the branch")
+	assert.Equal(t, branch, d.Branch)
+}
+
+// TestCreateDrainBoundsRechecksWithoutStarvingWhatIsBehindThem: the re-check is a git
+// subprocess, so it needs a budget — and charging it to createGateBudget is what starves
+// everything behind it. A re-check that cannot be answered produces no verdict and `continue`s,
+// so it spends the tick's one gate without gating anything, and the spool is walked
+// oldest-first: one unreadable repo at the head of the queue then holds every ordinary
+// `atrium new` behind it, with no receipt and no notice, for up to the 24h TTL.
+//
+// Asserted through the budget's observable consequences rather than by counting forks. Two
+// requests, both of which the tick must handle: the re-check spends its OWN budget, so the
+// ordinary request behind an unanswerable one is still created in the same tick.
+func TestCreateDrainBoundsRechecksWithoutStarvingWhatIsBehindThem(t *testing.T) {
+	h := drainHome(t)
+	// Spooled first, so the oldest-first walk reaches it before the ordinary request.
+	held := unaskableAdoption(t, h, "held")
+	ordinary := spoolCreate(t, outbox.Request{Title: "ordinary", Path: t.TempDir()})
+
+	require.NotNil(t, h.drainCreateRequests())
+
+	assert.NotNil(t, titled(h, "ordinary"),
+		"a repo git cannot read must not spend the gate the request behind it needed")
+	assertCreateQueued(t, held)
+	assertCreateHeld(t, ordinary)
+	assert.True(t, h.createAdoptHeld)
+}
+
+// TestCreateDrainBoundsRechecksPerTick is the other half: the re-check is a git subprocess
+// on the update goroutine, so a backlog of Adopt records must not spend one apiece on every
+// ~500ms tick. Each is wrapped in gitLocalTimeout, so on a hung mount K unbounded re-checks
+// block one Update for K×30s.
+//
+// Observed through the request the budget stops it reaching, since there is no seam to count
+// forks through. Two unanswerable Adopt records fill createRecheckBudget, so the third — a
+// perfectly good adoption, in a readable repo, with a pin that matches — is not re-checked
+// and not created. Unbounded, it would be.
+//
+// "Not created", with no second tick asserted, and that is the cost the bound buys rather
+// than a gap in the test: the walk is oldest-first and takes no note of which records it
+// could not answer for, so two permanently-unreadable repos at the head of the queue hold
+// the third behind them until one of the three expires. See createRecheckBudget — every
+// request in that queue is recovery work, and an ordinary `atrium new` needs no re-check and
+// is unaffected (TestCreateDrainBoundsRechecksWithoutStarvingWhatIsBehindThem).
+func TestCreateDrainBoundsRechecksPerTick(t *testing.T) {
+	h := drainHome(t)
+	for _, title := range []string{"a", "b"} {
+		unaskableAdoption(t, h, title)
+	}
+	repo := gitRepoWithBranch(t, h.appConfig.BranchPrefix+"fix-auth")
+	good := spoolCreate(t, adoptedRequest(t, h, "fix-auth", repo))
+
+	assert.Nil(t, h.drainCreateRequests(), "the tick's re-checks went to the two ahead of it")
+
+	assert.Nil(t, titled(h, "fix-auth"))
+	assertCreateQueued(t, good)
+	assert.True(t, h.createAdoptHeld, "with the hold the first two produced reported once")
+}
+
+// TestCreateDrainKeepsTheAdoptionHoldWhileAnythingIsStillHeld: createAdoptHeld is state about
+// the LOG LINE, and lifting it on "no error this tick" is wrong for every tick that never
+// reached the re-check. tmux off PATH skips the whole default arm, so the hold error is nil
+// while the held request is untouched — which logs a resume that did not happen and, worse,
+// leaves the flag clear so the next genuine hold goes unlogged.
+func TestCreateDrainKeepsTheAdoptionHoldWhileAnythingIsStillHeld(t *testing.T) {
+	h := drainHome(t)
+	path := unaskableAdoption(t, h, "fix-auth")
+	h.drainCreateRequests()
+	require.True(t, h.createAdoptHeld, "precondition: git could not answer for it")
+
+	// The seam, not PATH: app_test.go stubs tmuxAvailable for the whole package, so
+	// emptying PATH changes nothing the drain reads and the tick would look like an
+	// ordinary one that simply found nothing to hold.
+	orig := tmuxAvailable
+	tmuxAvailable = func() error { return errors.New("tmux is not on PATH") }
+	t.Cleanup(func() { tmuxAvailable = orig })
+
+	h.drainCreateRequests()
+	assert.True(t, h.createAdoptHeld, "tmux being gone is not the re-check starting to work")
+	assertCreateQueued(t, path)
+}
+
+// TestCreateDrainHoldsARecordWhoseMarkCannotBeRead is the drain-side twin of
+// TestClassifyDefersWhenItCannotLookForAMark. DisclosureFor answered every non-ENOENT read
+// error as "there is a mark", and os.ReadFile opens a descriptor — so under fd exhaustion it
+// answers EMFILE for a path that does not exist, and every queued request in the spool is
+// answered with "a previous atrium gave up on this request and could not record why" and
+// unlinked. Presence is a stat now, and a stat that fails for any other reason holds.
+//
+// Held rather than destroyed and rather than executed: the caller may already have been
+// answered, and the record keeps its place and its TTL either way. The fixture also sets
+// CreateEntry.Err, so this doubles as the ordering assertion — the mark arm outranks the
+// undecodable-record arm, which would otherwise dispose it.
+func TestCreateDrainHoldsARecordWhoseMarkCannotBeRead(t *testing.T) {
+	h := drainHome(t)
+	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: gitRepoWithBranch(t, "")})
+	dir := filepath.Dir(path)
+	require.NoError(t, os.Chmod(dir, 0o444))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if _, err := os.Stat(path); err == nil {
+		t.Skip("this filesystem (or this user) ignores the directory's execute bit")
+	}
+
+	assert.Nil(t, h.drainCreateRequests(), "nothing created, nothing refused")
+
+	require.NoError(t, os.Chmod(dir, 0o755))
+	assertCreateQueued(t, path)
+	assert.True(t, h.createMarkHeld, "and the hold is logged once rather than twice a second")
+	assert.Zero(t, h.list.NumInstances())
+}
+
+// TestCreateDrainClearsTheMarkOverTheRecordItDrops: the mark's second job is to stop that
+// record being executed, and it is finished the moment the unlink that had failed lands. Left
+// on disk the same orphan is reported on two consecutive launches — the startup read buffers
+// it, the 100ms flush offers it up while the record is still there and ClearDisclosure rightly
+// declines, and the drain removes the record 400ms later with nothing asking again.
+func TestCreateDrainClearsTheMarkOverTheRecordItDrops(t *testing.T) {
+	h := drainHome(t)
+	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: gitRepoWithBranch(t, "")})
+	d := orphanDisclosure("fix-auth")
+	require.NoError(t, outbox.Disclose(path, &d))
+	// Already shown: the state after a flush that found the record still beside the mark.
+	h.pendingCreateDisclosures = nil
+
+	disposeDrain(t, h)
+
+	assert.NoFileExists(t, path, "precondition: the record is gone")
+	_, state := outbox.DisclosureFor(path)
+	assert.Equal(t, outbox.NoDisclosure, state, "so the mark has nothing left to guard")
+}
+
+// TestCreateDrainKeepsAMarkNobodyHasSeenYet is that clear's one exception, and it is not an
+// optimisation. flushCreateDisclosures waits for a frame with no overlay on it — a fresh
+// install sits in the welcome modal until somebody answers it — while this walk runs
+// regardless. Cleared here, the only account of an orphan is deleted before anyone saw it.
+func TestCreateDrainKeepsAMarkNobodyHasSeenYet(t *testing.T) {
+	h := drainHome(t)
+	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: gitRepoWithBranch(t, "")})
+	d := orphanDisclosure("fix-auth")
+	require.NoError(t, outbox.Disclose(path, &d))
+	h.pendingCreateDisclosures = loadCreateDisclosures()
+	require.Len(t, h.pendingCreateDisclosures, 1, "precondition: it is buffered and unshown")
+
+	disposeDrain(t, h)
+
+	_, state := outbox.DisclosureFor(path)
+	assert.Equal(t, outbox.HasDisclosure, state, "the report has not happened yet")
+}
+
+// TestStartFailureMarksTheClaimItGivesUpOn: failing to start is a giving-up on a CLAIM, and
+// outbox.Disclose is ordered before the discard for exactly the failure available here.
+// DiscardCreate can fail — a full or read-only spool — and a claim that outlives it with no
+// mark beside it is re-judged on the next launch against live git: claimRequeue if the teardown
+// worked, claimAdopt if it did not, and either way a session built for a caller that read "the
+// session could not be started" and exited non-zero.
+//
+// With no inventory, deliberately. The caller has just torn the session down, so naming its
+// branch would put a modal in front of the user for artifacts that are gone — which is why the
+// assertion is on the mark and on the modal's absence, not on a branch.
+func TestStartFailureMarksTheClaimItGivesUpOn(t *testing.T) {
+	h := drainHome(t)
+	inst, path := startedCreate(t, h)
+
+	h.settleCreateRequest(inst, errors.New("the repo is dirty"))
+
+	reason, rejected := outbox.Rejection(path)
+	require.True(t, rejected, "precondition: the caller is answered")
+	assert.Contains(t, reason, "the repo is dirty")
+	d, state := outbox.DisclosureFor(path)
+	require.Equal(t, outbox.HasDisclosure, state,
+		"or a claim that outlives its unlink is re-judged into a rebuild")
+	assert.Contains(t, d.Reason, "the repo is dirty")
+	assert.False(t, d.Leftovers(), "and the caller is tearing the session down, so nothing to name")
+
+	h.flushCreateDisclosures()
+	assert.Equal(t, stateDefault, h.state, "so no modal either")
+}
+
+// TestCreateDrainKeepsTheAdoptionHoldBehindASpentDisposalBudget is the last skip in the walk
+// that did not feed the hold's "still pending" answer, and noteAdoptHold's stated rule is what
+// makes that a defect rather than a detail: the lift needs BOTH nothing having failed and
+// nothing having been left un-re-checked, because every skip arrives with the error nil. A
+// tick that walks past an adoption without re-checking it and reports nothing pending logs a
+// resume that did not happen — and clears the flag, so the next genuine hold goes unlogged.
+//
+// The skip here is the terminal-mark arm running out of disposal budget, which needs a spool
+// with createDisposalBudget disposable records ahead of the adoption. Contrived, and the only
+// arm left: the other four already fed it.
+func TestCreateDrainKeepsTheAdoptionHoldBehindASpentDisposalBudget(t *testing.T) {
+	h := drainHome(t)
+	// Oldest first, so the walk spends its whole disposal budget before it reaches the
+	// adoption behind them.
+	for i := 0; i < createDisposalBudget; i++ {
+		spoolCreate(t, outbox.Request{
+			Title: fmt.Sprintf("expired-%02d", i), Path: t.TempDir(),
+			CreatedAt: time.Now().Add(-2 * outbox.TTL),
+		})
+	}
+	adopting := spoolCreate(t, outbox.Request{
+		Title: "fix-auth", Path: gitRepoWithBranch(t, ""), Adopt: true,
+		AdoptTip: strings.Repeat("a", 40),
+		Claim:    &outbox.ClaimMeta{At: time.Now(), SessionBranch: h.appConfig.BranchPrefix + "fix-auth"},
+	})
+	require.NoError(t, outbox.Disclose(adopting, &outbox.Disclosure{
+		Title: "fix-auth", Reason: "an earlier launch gave up on this"}))
+	// The flag as an earlier tick left it: this is state about the log line, so a test may
+	// set it the way a hold would have.
+	h.createAdoptHeld = true
+
+	h.drainCreateRequests()
+
+	assert.FileExists(t, adopting, "precondition: the budget ran out before this one")
+	assert.True(t, h.createAdoptHeld,
+		"an adoption this tick never re-checked is not the re-check starting to work")
+}
+
+// TestCreateDrainHoldsAnAdoptionWhoseRepoCannotBeRead is the worst outcome in this file, and
+// it arrives through a probe that looks conservative.
+//
+// recheckAdoption folds "git could not be asked" and "git says there is no repository here"
+// apart with git.ProbeGitRepo, so a re-queued adoption whose repo was DELETED is answered in
+// one tick instead of held for the whole 24h horizon. But git prints the same sentence and the
+// same 128 for a real repository whose .git it cannot read, so an unreadable repo took that
+// same arm: adoptionGone, the licence withdrawn ON DISK by WithdrawAdoption, orphan struck off
+// the disclosure, and the request handed to the gates. There targetValidity reads
+// git.IsGitRepo — false — so direct is true, executeCreateRequest's isolation guard passes
+// because git DID answer, and an agent is launched with no worktree in the user's own
+// checkout, on the branch they had checked out, while the one recovery a stranded create gets
+// is spent and the orphan branch is named nowhere.
+//
+// Held instead, which is what the pre-#731 drain did for this case and what tmux off PATH
+// still does: a fact about the machine, no fault of the request, and the next tick can see it
+// come back. TestProbeGitRepoWillNotCallAnUnreadableRepoAPlainDirectory is the unit half.
+func TestCreateDrainHoldsAnAdoptionWhoseRepoCannotBeRead(t *testing.T) {
+	h := drainHome(t)
+	branch := h.appConfig.BranchPrefix + "fix-auth"
+	repo := gitRepoWithBranch(t, branch)
+	tip, err := git.LookupLocalBranchTip(t.Context(), repo, branch)
+	require.NoError(t, err)
+	require.NotEmpty(t, tip, "precondition: the pin is a real commit, so nothing else withdraws it")
+	record := spoolCreate(t, outbox.Request{
+		Title: "fix-auth", Path: repo, Adopt: true, AdoptTip: tip,
+		Claim: &outbox.ClaimMeta{At: time.Now(), SessionBranch: branch},
+	})
+	gitDir := filepath.Join(repo, ".git")
+	require.NoError(t, os.Chmod(gitDir, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(gitDir, 0o755) })
+	if _, err := git.LookupLocalBranchTip(t.Context(), repo, branch); err == nil {
+		t.Skip("this user can read the repository through mode 000")
+	}
+
+	assert.Nil(t, h.drainCreateRequests(), "nothing created, nothing refused")
+
+	assert.Zero(t, h.list.NumInstances(),
+		"and above all no session in the user's own checkout, with no worktree of its own")
+	assertCreateQueued(t, record)
+	assert.True(t, h.createAdoptHeld, "the hold is logged once rather than twice a second")
+	entries, err := outbox.ListCreates()
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.True(t, entries[0].Request.Adopt,
+		"and the licence is still on disk: a withdrawal here is permanent and the repo may come back")
+}
+
+// TestCreateDrainNamesTheBranchAfterAWithdrawalHasLanded: the branch a refusal discloses comes
+// from the claim's evidence block and not from Request.Adopt, and it has to, because
+// outbox.WithdrawAdoption persists the cleared flag.
+//
+// So a record that comes back round after a withdrawal landed — the tick's Claim rename failed,
+// or the process died between the two writes — reads Adopt false with its branch still standing,
+// and applyCreateClaim has already released that branch's worktree registration on this
+// request's behalf. Guarded on the flag, that record named no branch anywhere: no row, no claim,
+// no request, no registration, and nothing that mentions it. The recovery is one-shot, so the
+// state was permanent — #731's hole 1, reached from the one direction the flag could not see.
+func TestCreateDrainNamesTheBranchAfterAWithdrawalHasLanded(t *testing.T) {
+	h := drainHome(t)
+	branch := h.appConfig.BranchPrefix + "fix-auth"
+	repo := gitRepoWithBranch(t, branch)
+	// Adopt false with the evidence block intact: the state a landed withdrawal leaves.
+	record := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: repo,
+		Claim: &outbox.ClaimMeta{At: time.Now(), SessionBranch: branch}})
+	addInstance(t, h, "fix-auth", repo) // so a gate refuses it for the title
+
+	refuseDrain(t, h)
+
+	d := disclosed(t, record)
+	assert.Equal(t, branch, d.Branch,
+		"the branch an interrupted build made outlives the licence to adopt it")
+	assert.True(t, d.Leftovers(), "or the reader drops it and nobody is ever told")
+}
+
+// TestCreateDrainGivesAnUnreadableMarkAHorizon: the terminal-mark probe holds the record above
+// every arm below it, so a record it covers reaches no disposal either — and nothing sweeps a
+// record. sweepSuffixed only ever walks the two suffixed kinds and no arm poisons the path, so
+// a spool the stat keeps failing on held it for the life of this TUI and of every one after,
+// re-listed and re-probed twice a second, with `atrium reset` the only way out.
+//
+// Past the horizon the disposal wins: a second receipt for a caller that may already have one
+// is a duplicate 24 hours late, against a file no atrium can ever let go. The symlink loop is
+// how one file's stat is made to fail while the directory stays writable — the mark cannot be
+// read, and the record beside it can.
+func TestCreateDrainGivesAnUnreadableMarkAHorizon(t *testing.T) {
+	h := drainHome(t)
+	record := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: gitRepoWithBranch(t, ""),
+		CreatedAt: time.Now().Add(-2 * outbox.TTL)})
+	loopTheMarkOf(t, record)
+
+	h.drainCreateRequests()
+
+	assert.NoFileExists(t, record, "a record nothing can ever answer for is not immortal")
+	reason, ok := outbox.Rejection(record)
+	require.True(t, ok, "and its caller is told why")
+	assert.Contains(t, reason, "horizon")
+}
+
+// TestCreateDrainHoldsAFreshRecordWhoseMarkCannotBeRead is the other side of that horizon, and
+// the control for it: under the horizon the hold is what it always was. Without both, the
+// disposal above reads as "an unreadable mark is disposed of", which is the behaviour the whole
+// probe exists to prevent.
+func TestCreateDrainHoldsAFreshRecordWhoseMarkCannotBeRead(t *testing.T) {
+	h := drainHome(t)
+	record := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: gitRepoWithBranch(t, "")})
+	loopTheMarkOf(t, record)
+
+	assert.Nil(t, h.drainCreateRequests(), "nothing created, nothing refused")
+
+	assertCreateQueued(t, record)
+	assert.True(t, h.createMarkHeld)
+	assert.Zero(t, h.list.NumInstances())
+}
+
+// loopTheMarkOf points a record's disclosure path at itself, so os.Stat on it fails with ELOOP
+// while the record beside it and the directory around it stay perfectly readable. That
+// separation is the point: a chmod on the spool directory breaks the record's own read too, so
+// the entry arrives undecodable and exercises a different arm.
+func loopTheMarkOf(t *testing.T, record string) {
+	t.Helper()
+	mark := record + ".disclosure"
+	require.NoError(t, os.Symlink(filepath.Base(mark), mark))
+	if _, err := os.Stat(mark); err == nil {
+		t.Skip("this filesystem resolves a self-referential symlink")
+	}
+	require.Equal(t, outbox.DisclosureUnknown, outbox.DisclosureMark(record),
+		"precondition: the mark cannot be looked for")
+}
+
+// TestCreateDrainKeepsTheMarkHoldBehindASpentDisposalBudget is
+// TestCreateDrainKeepsTheAdoptionHoldBehindASpentDisposalBudget for the other flag, and it is
+// the assertion that was missing when the flag was added.
+//
+// noteAdoptHold was given a `pending` companion because every skip in the walk arrives at the
+// notices with err nil while the held request is still queued. createMarkHeld was given none —
+// and the composite break above the mark probe is the largest such skip there is: it leaves the
+// whole tail of the spool unprobed, so markUnreadable is "" for a record still held. Read as
+// "the spool can be stat'd again", that logs a resume nobody earned and clears the flag the
+// next genuine hold needed, which is the one thing an edge-triggered flag exists to prevent.
+// The next tick re-logs the hold, so the ERROR/INFO pair flaps at 2Hz.
+func TestCreateDrainKeepsTheMarkHoldBehindASpentDisposalBudget(t *testing.T) {
+	h := drainHome(t)
+	// Oldest first, so the walk spends its whole disposal budget, then a gate, before it
+	// reaches the held record — which is what makes the composite break fire on it.
+	for i := range createDisposalBudget {
+		spoolCreate(t, outbox.Request{
+			Title: fmt.Sprintf("expired-%02d", i), Path: t.TempDir(),
+			CreatedAt: time.Now().Add(-2 * outbox.TTL),
+		})
+	}
+	repo := gitRepoWithBranch(t, "")
+	addInstance(t, h, "taken", repo)
+	spoolCreate(t, outbox.Request{Title: "taken", Path: repo}) // charges the gate budget
+	held := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: repo})
+	loopTheMarkOf(t, held)
+	// The flag as an earlier tick left it: state about the log line, so a test may set it the
+	// way a hold would have.
+	h.createMarkHeld = true
+
+	h.drainCreateRequests()
+
+	require.FileExists(t, held, "precondition: the break came before this one was probed")
+	assert.True(t, h.createMarkHeld,
+		"a record this tick never probed is not the spool becoming readable again")
+}
+
+// TestCreateDrainLiftsTheMarkHoldWhenTheSpoolEmpties is the lift the pending companion must not
+// break, and the place it reliably happens. drainCreateRequests returns early on an empty
+// spool, before the walk that would otherwise set the flags, so the transition has to be driven
+// through that return — which is where the adopt flag's lift already lives and where the mark
+// flag's was missing entirely. Without it the flag stays true forever once set, and the next
+// genuinely unreadable mark is held in total silence.
+func TestCreateDrainLiftsTheMarkHoldWhenTheSpoolEmpties(t *testing.T) {
+	h := drainHome(t)
+	h.createMarkHeld = true
+
+	h.drainCreateRequests()
+
+	assert.False(t, h.createMarkHeld,
+		"an empty spool holds nothing, so this is where a reset-away hold is lifted")
+}
+
+// TestCreateDrainKeepsTheAdoptionHoldWhenADropFails is the arm the adopt flag's own companion
+// did not cover. The terminal-mark arm returns ABOVE the re-check, so a record it drops is
+// never re-checked — and the drop is the very call that failed when the mark was written, so
+// the record routinely survives it. Charged from the budget-spent skip alone, a failed drop
+// logged "resuming" for a request still held and cleared the flag; on every later tick the
+// poisoned path then sets pending with err nil, so no case matches and the genuine hold is
+// never re-logged.
+func TestCreateDrainKeepsTheAdoptionHoldWhenADropFails(t *testing.T) {
+	h := drainHome(t)
+	branch := h.appConfig.BranchPrefix + "fix-auth"
+	record := spoolCreate(t, outbox.Request{
+		Title: "fix-auth", Path: gitRepoWithBranch(t, branch), Adopt: true,
+		AdoptTip: strings.Repeat("a", 40),
+		Claim:    &outbox.ClaimMeta{At: time.Now(), SessionBranch: branch},
+	})
+	require.NoError(t, outbox.Disclose(record, &outbox.Disclosure{
+		Title: "fix-auth", Reason: "an earlier launch gave up on this"}))
+	// The unlink fails for the reason the mark exists: a spool that cannot be written. Set
+	// after the mark, so the mark itself is on disk.
+	dir := filepath.Dir(record)
+	require.NoError(t, os.Chmod(dir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if err := os.Remove(record); err == nil {
+		t.Skip("this user can unlink through a read-only directory")
+	}
+	h.createAdoptHeld = true
+
+	h.drainCreateRequests()
+
+	require.FileExists(t, record, "precondition: the drop failed, so the record is still held")
+	assert.True(t, h.createAdoptHeld,
+		"a record the mark arm returns above is never re-checked, so it is never answered for")
+}
+
+// TestCreateDrainMintsNoMarkForAnExpiredRecordWithNothingToName: the two disposal arms are
+// terminal however often they repeat — an expired record is expired again on the next tick and
+// an undecodable one is still undecodable — so a mark buys them no guard at all. What it would
+// cost is a file and two fsyncs per record per tick: createDisposalBudget allows 50, the walk
+// runs twice a second, and a cron backlog cleared while the TUI sits behind the welcome modal
+// (where flushCreateDisclosures returns early and clears nothing) mints them without bound, on
+// the Bubble Tea update goroutine. That is the synchronous freeze createDisposalBudget exists
+// to bound, one layer out from where it can see it.
+//
+// TestCreateDrainRejectsExpiredRequest is the other half: the same arm DOES write one when it
+// has a branch to name, because that file is a report and the report is owed.
+func TestCreateDrainMintsNoMarkForAnExpiredRecordWithNothingToName(t *testing.T) {
+	h := drainHome(t)
+	var records []string
+	for i := range 3 {
+		records = append(records, spoolCreate(t, outbox.Request{
+			Title: fmt.Sprintf("expired-%d", i), Path: t.TempDir(),
+			CreatedAt: time.Now().Add(-2 * outbox.TTL),
+		}))
+	}
+
+	h.drainCreateRequests()
+
+	for _, record := range records {
+		assert.NoFileExists(t, record, "precondition: the arm ran")
+		assert.Equal(t, outbox.NoDisclosure, outbox.DisclosureMark(record),
+			"a mark that guards nothing is a file per record per tick")
+	}
+	assert.Empty(t, h.pendingCreateDisclosures, "and nothing buffered for a report either")
+}
+
+// TestCreateDrainNamesTheMarksTitleForAnUndecodableRecord: the log line in the terminal-mark
+// arm is the only account of the drop that survives it — the record and the mark are both
+// destroyed two calls later. It took its title from the RECORD, which is the zero value on the
+// undecodable arm, while the mark beside it held the answer all along.
+func TestCreateDrainNamesTheMarksTitleForAnUndecodableRecord(t *testing.T) {
+	h := drainHome(t)
+	record := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: gitRepoWithBranch(t, "")})
+	require.NoError(t, outbox.Disclose(record, &outbox.Disclosure{
+		Title: "fix-auth", Reason: "an earlier launch gave up on this"}))
+	require.NoError(t, os.WriteFile(record, []byte("{not json"), 0o644))
+
+	warnings := captureWarnings(t)
+
+	h.drainCreateRequests()
+
+	assert.NoFileExists(t, record, "precondition: the mark arm dropped it")
+	assert.Contains(t, warnings.String(), `"fix-auth"`,
+		"the only surviving account of the drop names which request it was")
+}
+
+// captureWarnings redirects the WARNING log for the duration of one test. Two of the fixes in
+// this file are about what a line SAYS rather than about what a file contains, and nothing else
+// in the package can see that.
+func captureWarnings(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := log.WarningLog.Writer()
+	log.WarningLog.SetOutput(&buf)
+	t.Cleanup(func() { log.WarningLog.SetOutput(prev) })
+	return &buf
 }
