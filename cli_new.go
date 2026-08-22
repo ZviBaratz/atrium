@@ -172,10 +172,25 @@ func runNew(out, errOut io.Writer, r newRequest) error {
 		return fmt.Errorf("--wait %s is negative; pass a positive duration", r.wait)
 	}
 
+	// The flags that name what to run are settled before anything is resolved, so a
+	// command line that contradicts itself is answered as such rather than through
+	// whichever fact about the world happens to be wrong too.
+	if err := checkProgramFlags(r); err != nil {
+		return err
+	}
+
 	// One read for both the profile table and the branch prefix, and a read is all it
 	// is: loadStoredConfig, not config.LoadConfig, for the reasons that function
 	// documents — the loader sweeps in-flight temp files and seeds a config.json.
 	cfg := loadStoredConfig()
+	// Still resolved ahead of the target, as it was before --variants existed, so a
+	// profile typo is reported before a bad --path rather than behind it. It returns ""
+	// for a fan-out, whose programs come from the spec instead.
+	program, err := resolveNewProgram(cfg, r.program, r.profile)
+	if err != nil {
+		return err
+	}
+
 	instances, err := loadStoredInstances()
 	if err != nil {
 		return err
@@ -185,7 +200,7 @@ func runNew(out, errOut io.Writer, r newRequest) error {
 		return err
 	}
 
-	reqs, err := planCreateRequests(context.Background(), cfg, r, title, path, instances)
+	reqs, err := planCreateRequests(context.Background(), cfg, r, program, title, path, instances)
 	if err != nil {
 		return err
 	}
@@ -222,7 +237,7 @@ func runNew(out, errOut io.Writer, r newRequest) error {
 // contract that a batch of one is not a batch.
 func planCreateRequests(
 	ctx context.Context, cfg *config.Config, r newRequest,
-	title, path string, instances []session.InstanceData,
+	program, title, path string, instances []session.InstanceData,
 ) ([]outbox.Request, error) {
 	// Tail only, for runSend's reason: trailing newlines are an artifact of how the text
 	// arrived (a heredoc, a pipe), while leading whitespace could be meaningful. Trimmed
@@ -235,25 +250,11 @@ func planCreateRequests(
 	}
 
 	if r.variants == "" {
-		program, err := resolveNewProgram(cfg, r.program, r.profile)
-		if err != nil {
-			return nil, err
-		}
 		if err := checkTitleFree(cfg.BranchPrefix, title, path, instances); err != nil {
 			return nil, err
 		}
 		base.Title, base.Program = title, program
 		return []outbox.Request{base}, nil
-	}
-
-	// By hand rather than through cobra's mutually-exclusive groups, following
-	// resolveNewProgram: its message is better, and a group is invisible to a test that
-	// calls runNew directly — which most of this command's tests do.
-	if r.program != "" {
-		return nil, errors.New("--variants chooses the programs itself; drop --program")
-	}
-	if r.profile != "" {
-		return nil, errors.New("--variants chooses the profiles itself; drop --profile")
 	}
 
 	specs, err := parseVariantSpec(r.variants)
@@ -335,6 +336,30 @@ func resolveNewProgram(cfg *config.Config, program, profile string) (string, err
 		names = append(names, p.Name)
 	}
 	return "", fmt.Errorf("no profile %q (configured: %s)", profile, strings.Join(names, ", "))
+}
+
+// checkProgramFlags refuses a command line whose flags disagree about what to run.
+//
+// --variants names several programs, so it excludes the two singular flags. Written by
+// hand rather than through cobra's mutually-exclusive groups, following resolveNewProgram
+// — which owns the --program/--profile half — for that function's reasons: the message
+// names what to drop, and a cobra group is invisible to a test that calls runNew
+// directly, which most of this command's tests do.
+//
+// It runs before anything is loaded or resolved, and that ordering is the point: a caller
+// who passed contradictory flags AND a bad path should hear about the flags, which is the
+// mistake they can see in their own command line.
+func checkProgramFlags(r newRequest) error {
+	if r.variants == "" {
+		return nil
+	}
+	if r.program != "" {
+		return errors.New("--variants chooses the programs itself; drop --program")
+	}
+	if r.profile != "" {
+		return errors.New("--variants chooses the profiles itself; drop --profile")
+	}
+	return nil
 }
 
 // resolveNewTarget picks the repository the session is created in: --path, or the

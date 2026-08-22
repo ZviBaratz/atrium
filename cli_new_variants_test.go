@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -392,4 +393,39 @@ func runNewWait(
 	var out strings.Builder
 	err := waitForCreates(&out, members, repo, timeout)
 	return out.String(), err
+}
+
+// TestNewFlagErrorsPrecedeTargetErrors: a command line that contradicts itself is
+// answered as such, ahead of whatever else happens to be wrong about the world.
+//
+// The pairs below are both wrong twice over — a flag conflict or a profile typo AND a
+// path that is not a directory — and the caller can only see one of them in their own
+// argv. Pinned because deriving the variant titles needs the target resolved, which is
+// what pulled program resolution below it in the first place.
+func TestNewFlagErrorsPrecedeTargetErrors(t *testing.T) {
+	sandboxDataDir(t)
+	fanOutConfig(t)
+	missing := filepath.Join(t.TempDir(), "no-such-dir")
+
+	for _, tc := range []struct {
+		name, wants string
+		r           newRequest
+	}{
+		{"variants with program", "drop --program",
+			newRequest{title: "bake", path: missing, variants: "claude:2", program: "codex"}},
+		{"variants with profile", "drop --profile",
+			newRequest{title: "bake", path: missing, variants: "claude:2", profile: "codex"}},
+		{"program with profile", "pass one",
+			newRequest{title: "bake", path: missing, program: "codex", profile: "codex"}},
+		{"unknown profile", `no profile "nope"`,
+			newRequest{title: "bake", path: missing, profile: "nope"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := newSession(t, tc.r)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wants)
+			assert.NotContains(t, err.Error(), "is not a directory",
+				"the argv mistake outranks the one about the world")
+		})
+	}
 }
