@@ -1,6 +1,7 @@
 package outbox
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -504,29 +505,44 @@ func TestClearDisclosureRefusesADerivedPath(t *testing.T) {
 	assert.False(t, removed, "and above all it did not report a withdrawal that never happened")
 	assert.Equal(t, HasDisclosure, DisclosureMark(record),
 		"the real mark is untouched, so the caller that keeps its handle still has one")
+
+	// The reader needs its own screen for the one case that does not reach DisclosureMark: a
+	// successful read. A decodable file at the impossible name — which only something outside
+	// this package can create, since Disclose screens — would otherwise report a mark terminal
+	// at a name no walk here matches, licensing the destruction of a record on the strength of
+	// a file nothing can ever clear.
+	planted, err := json.Marshal(Disclosure{Version: disclosureVersion, Title: "planted"})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(disclosurePath(ClaimPath(record)), planted, 0o644))
+	_, state := DisclosureFor(ClaimPath(record))
+	assert.Equal(t, DisclosureUnknown, state,
+		"a derived path establishes nothing, however readable the file at it is")
 }
 
-// TestDisclosureForReadsAVanishedMarkAsAbsent is the window between the stat and the read, and
-// the direction it must fall.
+// TestDisclosureForLetsTheStatSettleAFailedRead pins the ORDER, which is what removes the
+// window rather than guarding it.
 //
-// Presence is a stat and content is a read (see DisclosureFor), which is what keeps fd
-// exhaustion from reporting every request terminal. The cost of the split is that another
-// atrium's reader can clear a delivered mark in between. Reported as HasDisclosure with a zero
-// Disclosure, that answers a healthy request with "a previous atrium gave up on this request
-// and could not record why" and unlinks it — so the vanished case is absence, not an unreadable
-// mark.
-func TestDisclosureForReadsAVanishedMarkAsAbsent(t *testing.T) {
+// Stat-then-read left an arm with no honest answer: another atrium's reader clears a delivered
+// mark between the two calls, and the read then fails for a file the stat had just seen.
+// Reported terminal — which it was — that answers a healthy request with a receipt saying an
+// earlier atrium gave up without recording why, and unlinks it. Read-first has no such arm,
+// because the stat is the last word whenever the read could not speak.
+//
+// A directory at the disclosure path is how that is reached without a race: the read fails
+// with EISDIR, which is not a decode error and not ENOENT, so only the stat can answer — and
+// it says present. The absent half is the same call with nothing there at all, which must not
+// come back from the failed read as anything but NoDisclosure.
+func TestDisclosureForLetsTheStatSettleAFailedRead(t *testing.T) {
 	sandbox(t)
 	record, err := WriteCreate(req("fix-auth", "/repo/web"))
 	require.NoError(t, err)
-	d := Disclosure{Title: "fix-auth", Reason: "gave up"}
-	require.NoError(t, Disclose(record, &d))
-	require.Equal(t, HasDisclosure, DisclosureMark(record), "precondition: the stat sees it")
-
-	// What the reader's unlink leaves behind, between one call and the next.
-	require.NoError(t, os.Remove(record+disclosureSuffix))
 
 	_, state := DisclosureFor(record)
-	assert.Equal(t, NoDisclosure, state,
-		"a mark that is gone is no mark, not a mark nobody could read")
+	require.Equal(t, NoDisclosure, state,
+		"a read that fails for a file that is not there is absence, not an unreadable mark")
+
+	require.NoError(t, os.Mkdir(disclosurePath(record), 0o755))
+	_, state = DisclosureFor(record)
+	assert.Equal(t, HasDisclosure, state,
+		"and one that fails for a file that IS there is a mark nobody can read")
 }

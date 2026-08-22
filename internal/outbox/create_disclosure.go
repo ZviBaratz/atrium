@@ -225,23 +225,41 @@ const (
 // still answers that. Only a stat that fails for some other reason (a stale NFS handle, an
 // I/O error) is DisclosureUnknown, and the callers hold rather than guess.
 //
-// A file that vanishes BETWEEN the two calls is NoDisclosure, not an unreadable mark. The
-// window is real — another atrium's reader clears a delivered disclosure — and reading it as
-// terminal would answer a healthy request with a receipt saying an earlier atrium gave up
-// without recording why, and unlink it. errors.Is reaches the ENOENT through readDisclosure's
-// wrapping, which is what that wrapping is for.
+// The read comes FIRST and the stat only settles a read that failed, which is the ordering
+// and not an incidental arrangement. Stat-then-read leaves a window: another atrium's reader
+// clears a delivered disclosure between the two calls, and the read then fails for a file the
+// stat had just seen. There is no honest answer to give from inside that arm — reported
+// terminal, it answers a healthy request with a receipt saying an earlier atrium gave up
+// without recording why, and unlinks it; reported absent, it contradicts a stat that was true
+// when it ran. This way round the stat is the last word in every ambiguous case, so the arm
+// does not exist: a file present at the read is decoded, and one that is not present is
+// whatever the stat says about it afterwards.
+//
+// No test distinguishes the two orders and none can — the arm is reachable only through a real
+// race between two processes — so this is a claim about the shape rather than one the suite
+// holds. What the suite does hold is the answer given to each way a read can fail, which is
+// what that arm would have got wrong. The order is also one syscall rather than two on the
+// path that finds a mark, which is the path both consumers take when they are about to act.
 func DisclosureFor(record string) (Disclosure, DisclosureState) {
-	if state := DisclosureMark(record); state != HasDisclosure {
-		return Disclosure{}, state
+	// Screened here as well as in DisclosureMark, and not redundantly: every ambiguous case
+	// below defers to that function and inherits its screen, but a successful READ does not.
+	// A decodable file at "<record>.claimed.disclosure" would come back from this as a mark
+	// terminal at a name no walk in the package matches — licensing the destruction of a
+	// record on the strength of a file nothing here can ever clear.
+	if err := validRecord(record); err != nil {
+		return Disclosure{}, DisclosureUnknown
 	}
 	e := readDisclosure(disclosurePath(record))
-	switch {
-	case errors.Is(e.Err, fs.ErrNotExist):
-		return Disclosure{}, NoDisclosure
-	case e.Err != nil:
-		return Disclosure{}, HasDisclosure
+	if e.Err == nil {
+		return e.Disclosure, HasDisclosure
 	}
-	return e.Disclosure, HasDisclosure
+	// The read failed and cannot say why in a way that may be acted on: os.ReadFile opens a
+	// descriptor, so under fd exhaustion it answers EMFILE for a path that does not exist.
+	// os.Stat allocates none and so cannot give that answer — see DisclosureMark. A file that
+	// exists and merely cannot be DECODED comes back HasDisclosure from there, which is the
+	// right answer: the question is whether the request has been given up on, and a mark
+	// nobody can read still answers it.
+	return Disclosure{}, DisclosureMark(record)
 }
 
 // DisclosureMark answers only whether a record has been given up on, without reading the
