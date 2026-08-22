@@ -399,27 +399,38 @@ type home struct {
 	// line only, as createTmuxHeld is — the hold itself is decided fresh each tick by
 	// re-probing.
 	//
-	// One bool rather than a set keyed by path, and unlike createTmuxHeld it can be
-	// answering for more than one request: claims accumulate across crashes and claimDefer
-	// leaves them, so several Adopt records can be queued at once. Two held together are
-	// reported as one hold, which is the whole cost. What it must not do is lift while one
-	// of them is still held — see noteAdoptHold, which is why the lift takes a second
-	// argument.
+	// One bool rather than a set keyed by path, and it can be answering for more than one
+	// request: claims accumulate across crashes and claimDefer leaves them, so several Adopt
+	// records can be queued at once. createTmuxHeld covers several at once too — its log line
+	// prints how many — and the difference is that it can say so, where this one cannot: tmux
+	// is one fact about the machine and each of these is a different repo. Two held together
+	// are reported as one hold naming one error, which is the whole cost. What it must not do
+	// is lift while one of them is still held — see noteAdoptHold, which is why the lift takes
+	// a second argument.
 	createAdoptHeld bool
+	// createMarkHeld is the same one-log-per-transition flag for a record whose terminal
+	// mark could not be looked for at all — a spool the stat fails on. Separate from the two
+	// above because it is a third condition and they are logged on their own edges; see
+	// noteUnreadableMark.
+	createMarkHeld bool
 	// pendingCreateDisclosures buffers what spent `atrium new` requests left behind, for
 	// the report flushCreateDisclosures shows once there is a frame to show it on (#731,
 	// #732). Seeded at startup from the create spool — a disclosure written by a process
 	// that then died — and appended to when this process writes one itself, so a live TUI
 	// does not make the user wait for a relaunch to hear about an orphan it just made.
 	pendingCreateDisclosures []outbox.DisclosureEntry
-	// unrecordedCreates holds the record paths of the disclosures this process wrote for
-	// the OTHER #732 case: a create whose session is live and whose row is not, because
-	// persistInstances failed. Those are never reported by this process — the session is
-	// in the list, so a modal saying to remove its branch by hand would be an instruction
-	// to destroy a live agent — and the file exists only to cover this process dying
-	// before the row lands. A later successful persist makes it false, and that is where
-	// it is withdrawn (see withdrawUnrecordedCreates).
-	unrecordedCreates []string
+	// unrecordedCreates holds the disclosures this process wrote for the OTHER #732 case: a
+	// create whose session is live and whose row is not, because persistInstances failed.
+	// Those are never reported by this process — the session is in the list, so a modal
+	// saying to remove its branch by hand would be an instruction to destroy a live agent —
+	// and the file exists only to cover this process dying before the row lands.
+	//
+	// Each entry carries the instance as well as the record path, because what makes the
+	// disclosure false is that THIS row is durable rather than that some save succeeded:
+	// SaveInstances skips an instance that has not Started(), and a row killed before its
+	// first save is absent from every save after it while its artifacts may still be
+	// standing. See withdrawUnrecordedCreates.
+	unrecordedCreates []unrecordedCreate
 	// notifier emits the terminal bell / desktop notification when a background
 	// session finishes a turn or blocks on a prompt (see app_notify.go, config
 	// Notifications). nil disables notification (hand-built test homes).
@@ -908,13 +919,20 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 	//
 	// A no-op for every launch that finds no claim, which is all of them but the one
 	// after a crash — one os.ReadDir of a directory the drain polls anyway.
-	if n := reconcileCreateClaims(ctx, instances, time.Now()); n > 0 {
+	n, undisclosed := reconcileCreateClaims(ctx, instances, time.Now())
+	if n > 0 {
 		log.InfoLog.Printf("reconciled %d interrupted create request%s left by an earlier atrium", n, plural(n))
 	}
 	// After the reconcile, not before: a refusal it reaches writes a disclosure, and that
 	// one belongs in this launch's report rather than the next one's. Buffered rather than
 	// surfaced, for the reason the park reports below are — there is no frame yet.
-	pendingDisclosures := loadCreateDisclosures()
+	//
+	// The disclosures the reconcile could not WRITE are appended, because this read cannot
+	// find them: there is no file. They are the same refusals with the richest inventory —
+	// a branch, a registered worktree, a running agent — and a full disk is no reason to
+	// withhold them from the only party who can act (discloseCreateLeftovers' rule, applied
+	// where a free function cannot buffer for itself).
+	pendingDisclosures := append(loadCreateDisclosures(), undisclosed...)
 
 	h := assembleHome(ctx, program, autoYes, version, binName, appConfig, appState, storage, instances)
 	// Buffered rather than surfaced here: newHome runs before the program starts, so

@@ -362,25 +362,22 @@ const clearReason = "atrium reset discarded every queued request"
 // false success one step earlier. They are bounded already — SweepRejections drops
 // them at the TTL horizon.
 //
-// A create disclosure is kept for the same reason one step further out, and reset is the
-// one give-up path that has to both write one and edit one — a decision rather than a
-// consequence of the walk below happening not to match the name.
+// A create disclosure is kept for the same reason one step further out, and reset also
+// WRITES one — a decision rather than a consequence of the walk below happening not to match
+// the name. Destroying a request destroys the only link to the branch its interrupted build
+// left behind (see Disclose), and reset without one is the pre-#716 orphan with reset's name
+// on it: state.json wiped, the branch still there, and nothing that mentions it. Both spool
+// forms get that treatment, because both can name a branch — a claim by being one, and a
+// record by being a claim reconcileCreateClaims re-queued to adopt its own orphan
+// (discloseClearedRequest).
 //
-// Written, because destroying a claim destroys the only link to the branch that claim's
-// interrupted build left behind (see Disclose). Reset without one is the pre-#716 orphan
-// with reset's name on it: state.json wiped, the branch still there, and nothing that
-// mentions it.
-//
-// Edited, because reset removes some of what a disclosure already on disk names and not
-// the rest, and the two halves do not follow from which artifact it is. What goes is the
-// worktree DIRECTORY and the agent: git.CleanupWorktrees removes every top-level DIRECTORY
-// under the data dir's worktrees/ tree, and tmux.CleanupSessions kills every session
-// matching Prefix() — both walks unscoped by the rows reset just deleted. What stays is
-// the BRANCH and git's stale worktree registration, because `branch -D` and
-// `worktree prune` are the repo-scoped halves of CleanupWorktrees and an orphan's repo
-// has no row to be enumerated through. So a disclosure carried across a reset unedited
-// would send the next launch's reader after a directory and a tmux session that reset
-// destroyed, under a report saying nothing here will clean them up.
+// A disclosure already on disk is carried across untouched. An earlier draft trimmed the
+// worktree directory and the tmux name out of it on the grounds that reset destroys both,
+// which was wrong twice: this walk runs BEFORE tmux.CleanupSessions and git.CleanupWorktrees,
+// either of which can fail and abort the reset with the artifacts still standing, and the
+// prose reason beside those two fields names them too — so the trim erased the rows and left
+// the sentence. Over-reporting is the harmless direction for this type (see Disclosure) and
+// the report tells its reader to read the reason before acting.
 //
 // SweepDisclosures bounds whatever is left.
 //
@@ -432,9 +429,12 @@ func Clear() (int, error) {
 				path := filepath.Join(dir, record)
 				// Disclose first, for the ordering Disclose documents: both calls
 				// below destroy something, and the branch this claim's interrupted
-				// build left is named nowhere else. Its failure is deliberately not
-				// part of this walk's verdict, though — see below.
-				_ = discloseClearedClaim(path, readCreate(ClaimPath(path)))
+				// build left is named nowhere else. Unconditionally for a claim, even
+				// one naming nothing, because DiscardCreate can fail and a claim that
+				// outlives it with no mark beside it is re-judged into a rebuild. Its
+				// failure is deliberately not part of this walk's verdict, though —
+				// see below.
+				_ = discloseClearedRequest(path, readCreate(ClaimPath(path)), true)
 				err := errors.Join(Reject(path, clearReason), DiscardCreate(path))
 				if err != nil {
 					if firstErr == nil {
@@ -445,11 +445,6 @@ func Clear() (int, error) {
 				removed++
 				continue
 			}
-			if record, ok := disclosedRecordName(de); ok {
-				// Kept, and trimmed to what reset leaves standing — see the header.
-				_ = trimClearedDisclosure(filepath.Join(dir, record))
-				continue
-			}
 			// Both guards, as in listFiles, and most of all here: this is the walk that
 			// destroys what it matches. The name check alone already rejects the nested
 			// create/ entry, so IsDir is redundant today — which is exactly the claim
@@ -458,7 +453,13 @@ func Clear() (int, error) {
 			if de.IsDir() || !isMessageFile(name) {
 				continue // a receipt, a nested spool dir, or not ours at all
 			}
-			if err := Reject(filepath.Join(dir, name), clearReason); err != nil {
+			path := filepath.Join(dir, name)
+			// A record can be a post-build request too — see discloseClearedRequest —
+			// and the disclosure is ordered ahead of the Reject that unlinks it for
+			// Disclose's reason. A record naming no branch writes nothing: it built
+			// nothing, and reset leaves nothing of it to guard.
+			_ = discloseClearedRequest(path, readCreate(path), false)
+			if err := Reject(path, clearReason); err != nil {
 				if firstErr == nil {
 					firstErr = fmt.Errorf("outbox: discard %s: %w", name, err)
 				}

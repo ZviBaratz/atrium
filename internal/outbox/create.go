@@ -346,6 +346,12 @@ func ClaimPath(record string) string { return record + claimedSuffix }
 // it again. The obvious alternative (write the claim, then unlink the record) has a
 // window where BOTH exist, which is a third state to recognise everywhere; this has
 // none.
+//
+// The record is re-read rather than taken from the caller, and that is what makes the
+// enriched record complete: WriteCreate stamps CreatedAt and Version, and a caller
+// assembling a Request from its own fields would drop both — the first silently, into a
+// claim whose age nothing can judge. A caller that has changed its mind about a field the
+// record carries edits the record first (WithdrawAdoption) and claims after.
 func Claim(record string, meta ClaimMeta) error {
 	if err := validRecord(record); err != nil {
 		return err
@@ -397,6 +403,37 @@ func Requeue(record, adoptTip string) error {
 		return fmt.Errorf("outbox: requeue %s: %w", filepath.Base(record), err)
 	}
 	return nil
+}
+
+// WithdrawAdoption clears the adoption licence a re-queued request carries, in place and
+// without moving the file. It is a no-op for a record that carries none.
+//
+// The licence is a claim about the past — reconcileCreateClaims proved, at startup, that the
+// session branch its interrupted build made was still that branch — and the drain re-checks
+// it at execution time (app.recheckAdoption). What the drain cannot do is keep that
+// withdrawal to itself: Claim re-reads the record, so a withdrawal held only in the drain's
+// own copy writes a claim carrying a licence its build never used. The next launch reads
+// that licence to tell "the branch that already existed is this session's own half-built
+// work" from "somebody else's branch is in the way" (app.classifyCreateClaim's BranchExisted
+// arm), and the stale one answers the first for a build that did the second.
+//
+// So: withdraw on disk, then claim. Rewritten in place rather than through Requeue, which
+// moves a CLAIM back to the record name and is the opposite direction.
+func WithdrawAdoption(record string) error {
+	if err := validRecord(record); err != nil {
+		return err
+	}
+	entry := readCreate(record)
+	if entry.Err != nil {
+		return fmt.Errorf("outbox: withdraw adoption %s: %w", filepath.Base(record), entry.Err)
+	}
+	if !entry.Request.Adopt && entry.Request.AdoptTip == "" {
+		return nil
+	}
+	r := entry.Request
+	r.Adopt = false
+	r.AdoptTip = ""
+	return writeRequestInPlace(record, r)
 }
 
 // DiscardCreate drops a create request that has been accounted for, in whichever form

@@ -214,17 +214,12 @@ func LocalBranchExists(ctx context.Context, repoPath, branch string) bool {
 // The pattern matches at path boundaries, so refs/heads/<branch>/sub would match too;
 // the answer is an exact line comparison rather than "any output".
 func LookupLocalBranch(ctx context.Context, repoPath, branch string) (bool, error) {
-	ref := "refs/heads/" + branch
-	out, err := localGit(ctx, repoPath, "for-each-ref", "--format=%(refname)", ref)
-	if err != nil {
-		return false, fmt.Errorf("failed to look up branch %q in %s: %w", branch, repoPath, err)
-	}
-	for _, line := range strings.Split(out, "\n") {
-		if strings.TrimSpace(line) == ref {
-			return true, nil
-		}
-	}
-	return false, nil
+	// Over LookupLocalBranchTip rather than beside it: one subprocess either way, and the
+	// exact-refname comparison the pattern makes necessary (see there) was the whole body of
+	// this function duplicated. A branch that exists always has a tip, so "no sha" and "no
+	// branch" are the same answer.
+	tip, err := LookupLocalBranchTip(ctx, repoPath, branch)
+	return tip != "", err
 }
 
 // LookupLocalBranchTip returns the commit refs/heads/<branch> points at in the repo at

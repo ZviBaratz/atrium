@@ -70,7 +70,12 @@ func recovered(t *testing.T) outbox.Request {
 
 func reconcile(t *testing.T, instances ...*session.Instance) int {
 	t.Helper()
-	return reconcileCreateClaims(context.Background(), instances, time.Now())
+	acted, undisclosed := reconcileCreateClaims(context.Background(), instances, time.Now())
+	// Every disclosure a refusal writes lands on disk in a writable sandbox, so anything
+	// here would be a Disclose that failed — which no test in this file arranges, and which
+	// would otherwise be swallowed by a helper that only returns the count.
+	require.Empty(t, undisclosed, "no disclosure should have failed to be written")
+	return acted
 }
 
 // rowFrom builds a loaded session row, standing in for what LoadInstances hands
@@ -525,7 +530,8 @@ func TestReconcileConsultsTheRowBeforeTheExpiryHorizon(t *testing.T) {
 
 	// Well past the horizon, judged by a clock the test owns.
 	future := time.Now().Add(outbox.TTL + 48*time.Hour)
-	require.Equal(t, 1, reconcileCreateClaims(context.Background(), []*session.Instance{row}, future))
+	acted, _ := reconcileCreateClaims(context.Background(), []*session.Instance{row}, future)
+	require.Equal(t, 1, acted)
 
 	reason, rejected := outbox.Rejection(record)
 	assert.False(t, rejected, "a session that exists is not refused for being old: %s", reason)
@@ -546,7 +552,8 @@ func TestReconcileNamesTheOrphanBranchItAbandonsOnExpiry(t *testing.T) {
 	record := strandedIn(t, "fix-auth", repo)
 
 	future := time.Now().Add(outbox.TTL + 48*time.Hour)
-	require.Equal(t, 1, reconcileCreateClaims(context.Background(), nil, future))
+	acted, _ := reconcileCreateClaims(context.Background(), nil, future)
+	require.Equal(t, 1, acted)
 
 	reason, rejected := outbox.Rejection(record)
 	require.True(t, rejected, "past the horizon it is not rebuilt")
@@ -567,7 +574,8 @@ func TestReconcileExpiresAClaimThatBuiltNothingWithoutNamingABranch(t *testing.T
 	record := strandedIn(t, "fix-auth", repo)
 
 	future := time.Now().Add(outbox.TTL + 48*time.Hour)
-	require.Equal(t, 1, reconcileCreateClaims(context.Background(), nil, future))
+	acted, _ := reconcileCreateClaims(context.Background(), nil, future)
+	require.Equal(t, 1, acted)
 
 	reason, rejected := outbox.Rejection(record)
 	require.True(t, rejected)
@@ -696,8 +704,8 @@ func assertSamePath(t *testing.T, want, got, msg string) {
 // one.
 func disclosed(t *testing.T, record string) outbox.Disclosure {
 	t.Helper()
-	d, ok := outbox.DisclosureFor(record)
-	require.True(t, ok, "a refusal has to record what the interrupted build left behind")
+	d, state := outbox.DisclosureFor(record)
+	require.Equal(t, outbox.HasDisclosure, state, "a refusal has to record what the interrupted build left behind")
 	return d
 }
 
@@ -764,8 +772,8 @@ func TestReconcileWillNotRebuildAClaimItAlreadyRefused(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, entries, "and it must not be re-queued for the drain to build")
 	assertCreateSettled(t, record)
-	_, ok := outbox.DisclosureFor(record)
-	assert.True(t, ok, "the disclosure stays for the reader that has not shown it yet")
+	_, state := outbox.DisclosureFor(record)
+	assert.Equal(t, outbox.HasDisclosure, state, "the disclosure stays for the reader that has not shown it yet")
 }
 
 // TestReconcileOutranksTheRowWithADisclosure is the ordering half of the arm above. The row
@@ -819,10 +827,11 @@ func TestApplyAdoptRequeuesPlainWhenTheBranchWentAway(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, claims, 1)
 
-	applied := applyCreateClaim(context.Background(), claims[0],
+	applied, undisclosed := applyCreateClaim(context.Background(), claims[0],
 		claimJudgement{verdict: claimAdopt, branch: strandPrefix + "fix-auth"})
 
 	require.True(t, applied)
+	assert.Nil(t, undisclosed, "a re-queue writes no disclosure to fail at")
 	got := recovered(t)
 	assert.False(t, got.Adopt, "there is nothing left to adopt")
 	assert.Empty(t, got.AdoptTip)
@@ -930,4 +939,140 @@ func TestExpiredAdoptableClaimDisclosesWhatItAbandons(t *testing.T) {
 	assertSamePath(t, managed, d.Worktree, "and the registration that blocks the retry")
 	assert.Contains(t, d.Reason, "past the")
 	assert.True(t, d.Leftovers(), "or the reader drops it and nobody is told")
+}
+
+// TestStrandedWorktreePathIgnoresACheckoutTheUserMade is the screening the field's only other
+// reader already applies, arriving here late.
+//
+// Every path Disclosure.Worktree reaches renders it as a leftover to go and remove, and
+// parseWorktreeList returns the PRIMARY worktree too — so a branch the user has checked out in
+// their own clone resolves to that clone. Unscreened, a create whose agent outlived its TUI
+// reports the user's main checkout under a header saying nothing in atrium's records points at
+// it, and whether it does is decided only by whether a tmux session happened to still be
+// running: the sibling arm that meets the same directory through a verdict refuses to put it in
+// this field, and TestReconcileDisclosesTheOrphanItRefusesFor asserts exactly that.
+//
+// TestReconcileRefusesWhileTheAgentIsStillRunning is the positive half — a worktree Atrium
+// minted, through this same function, and named.
+func TestStrandedWorktreePathIgnoresACheckoutTheUserMade(t *testing.T) {
+	sandboxSpool(t)
+	branch := strandPrefix + "fix-auth"
+	repo := gitRepoWithBranch(t, branch)
+	mine := worktreeOn(t, repo, branch, filepath.Join(t.TempDir(), "my-own-checkout"))
+	require.DirExists(t, mine)
+
+	got := strandedWorktreePath(context.Background(), repo, branch)
+
+	assert.Empty(t, got, "a checkout the user made is not a leftover to remove")
+}
+
+// TestReconcileDisclosesTheBranchOfACrossRepoFalseHit: branchOwner reports a row in ANOTHER
+// repository as holding the branch, deliberately — a branch name is only unique within one
+// repo, and its own doc calls that the wrong answer in the harmless direction, harmless
+// because a refusal is retryable where a miss runs os.RemoveAll over a live worktree.
+//
+// Harmless for the verdict, and not for the inventory. On a false hit THIS repo's branch is a
+// genuine orphan, so a refusal naming nothing leaves it stranded behind a mark with nothing to
+// report — silently blocking every later `atrium new` under that title.
+func TestReconcileDisclosesTheBranchOfACrossRepoFalseHit(t *testing.T) {
+	sandboxSpool(t)
+	branch := strandPrefix + "fix-auth"
+	repo := gitRepoWithBranch(t, branch)
+	record := strandedIn(t, "fix-auth", repo)
+	// A row holding the same branch name in a different repository. Same slug, different
+	// checkout — which is exactly the collision branchOwner cannot rule out.
+	elsewhere := rowFrom(t, "fix-auth", gitRepoWithBranch(t, branch), branch, "")
+
+	require.Equal(t, 1, reconcile(t, elsewhere))
+
+	reason, rejected := outbox.Rejection(record)
+	require.True(t, rejected, "precondition: a row holding the branch is refused either way")
+	assert.Contains(t, reason, "another repository")
+	d := disclosed(t, record)
+	assert.Equal(t, branch, d.Branch, "this repo's branch is nobody's, so somebody must be told")
+	assert.True(t, d.Leftovers())
+}
+
+// TestReconcileDisclosesNothingForARowInTheSameRepo is that decision's other side. Here the
+// branch really is held by a live session, so it is not an orphan and naming it would send the
+// user to delete another session's work.
+func TestReconcileDisclosesNothingForARowInTheSameRepo(t *testing.T) {
+	sandboxSpool(t)
+	branch := strandPrefix + "fix-auth"
+	repo := gitRepoWithBranch(t, branch)
+	record := strandedIn(t, "fix-auth", repo)
+	owner := rowFrom(t, "other-title", repo, branch, "")
+
+	require.Equal(t, 1, reconcile(t, owner))
+
+	reason, rejected := outbox.Rejection(record)
+	require.True(t, rejected)
+	assert.NotContains(t, reason, "another repository", "precondition: a same-repo hit")
+	d := disclosed(t, record)
+	assert.False(t, d.Leftovers(), "a live session's branch is not a leftover")
+}
+
+// TestClassifyDefersWhenItCannotLookForAMark: the claimAnswered arm is read before any
+// evidence, so "there is no mark" and "I could not look" must not collapse. Read as absent,
+// a transient spool failure at launch sends the claim to the evidence arms and spends the
+// one-shot recovery; read as present, a receipt is written with a reason nobody wrote.
+//
+// The fixture makes os.Stat fail without making os.ReadDir fail: a directory that is readable
+// and not searchable can be listed while nothing inside it can be stat'd or opened. That also
+// sets CreateEntry.Err, so this doubles as the ordering assertion — the mark arm outranks the
+// undecodable-claim arm, which would otherwise refuse and destroy the claim.
+func TestClassifyDefersWhenItCannotLookForAMark(t *testing.T) {
+	sandboxSpool(t)
+	record := strandedIn(t, "fix-auth", gitRepoWithBranch(t, ""))
+	dir := filepath.Dir(record)
+	require.NoError(t, os.Chmod(dir, 0o444))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if _, err := os.Stat(outbox.ClaimPath(record)); err == nil {
+		t.Skip("this filesystem (or this user) ignores the directory's execute bit")
+	}
+
+	claims, err := outbox.ListClaims()
+	require.NoError(t, err, "precondition: the directory can still be listed")
+	require.Len(t, claims, 1)
+	j := classifyCreateClaim(context.Background(), claims[0], nil, time.Now())
+
+	assert.Equal(t, claimDefer, j.verdict, "an unreadable spool is not an answered request")
+}
+
+// TestReconcileCarriesADisclosureItCouldNotWrite is the asymmetry the reconcile cannot fix for
+// itself. Everything it discloses successfully reaches this launch's report through
+// loadCreateDisclosures, which reads the directory a moment later — and a Disclose that FAILED
+// leaves nothing to read. discloseCreateLeftovers buffers regardless on the drain's side, with
+// the argument that a full disk is no reason to withhold the one mention of an orphaned branch
+// from the only party who can delete it; this is a free function with no *home to buffer on, so
+// it hands the value back instead.
+//
+// These are the refusals with the richest inventory — a branch, a registered worktree, a
+// running agent — so it is the failure where the person at the terminal most needs to be told.
+func TestReconcileCarriesADisclosureItCouldNotWrite(t *testing.T) {
+	sandboxSpool(t)
+	branch := strandPrefix + "fix-auth"
+	repo := gitRepoWithBranch(t, branch)
+	worktreeOn(t, repo, branch, filepath.Join(t.TempDir(), "my-own-checkout"))
+	record := strandedIn(t, "fix-auth", repo)
+
+	// A spool that can be read and listed but not written to: every write this arm makes
+	// fails, which is the state a full or read-only data dir puts it in.
+	dir := filepath.Dir(record)
+	require.NoError(t, os.Chmod(dir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if err := os.WriteFile(filepath.Join(dir, "probe"), nil, 0o644); err == nil {
+		t.Skip("this filesystem (or this user) ignores the directory's write bit")
+	}
+
+	claims, err := outbox.ListClaims()
+	require.NoError(t, err)
+	require.Len(t, claims, 1)
+	_, undisclosed := reconcileCreateClaims(context.Background(), nil, time.Now())
+
+	require.Len(t, undisclosed, 1, "the report is the only place this can still reach")
+	assert.Equal(t, record, undisclosed[0].Path)
+	assert.Equal(t, branch, undisclosed[0].Disclosure.Branch)
+	_, state := outbox.DisclosureFor(record)
+	require.Equal(t, outbox.NoDisclosure, state, "precondition: the write really did fail")
 }

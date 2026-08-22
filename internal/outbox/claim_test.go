@@ -137,8 +137,10 @@ func TestRequeueReturnsTheRequestToTheSpool(t *testing.T) {
 // TestRequeueWithAdoptMarksTheRequest is the licence half. Adopt is what lets the drain
 // skip its branch check for this one request, so it has to survive the round trip to
 // disk — a flag lost here silently degrades recovery to the refusal it replaces. So does
-// the tip beside it, which is what the drain re-checks before taking the skip: a pin lost
-// in transit reads as "no pin", and createConflictIn fails closed on that.
+// the tip beside it, which is what the drain re-checks before taking the skip. app's
+// recheckAdoption is what fails closed on a pin lost in transit — it reads "no pin" as "not
+// the branch we vetted" and withdraws the licence. createConflictIn only reads the licence,
+// and would take the skip on a bare Adopt.
 func TestRequeueWithAdoptMarksTheRequest(t *testing.T) {
 	sandbox(t)
 	record := claimed(t, req("fix-auth", "/repo/web"), meta())

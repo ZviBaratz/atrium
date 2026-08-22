@@ -109,11 +109,17 @@ const (
 // writing the disclosure would mean asking git again about a state the answer has already
 // been read off.
 //
-// They are set where a refusal could need them, which is not every judgement: an arm that
-// returns before the branch is known leaves them empty, and claimSucceeded, claimAnswered
-// and claimDefer never had a use for them. Only a refusal writes them anywhere — including
-// one expireVerdict downgrades from claimAdopt, which is why that carry-over is a line of
-// its own rather than a consequence.
+// They are set where a refusal could need them, which is not every judgement, and "not
+// every" is three separate reasons rather than one. claimSucceeded, claimAnswered and
+// claimDefer never had a use for them. An arm that returns before the branch is known — an
+// undecodable claim, a claim with no evidence block — has nothing to put in them. And two
+// refusals that DO know the branch leave them empty deliberately, because there the branch
+// is not this build's leaving to report: one where a row in the same repository holds it,
+// and one where the claim's own evidence says it was already there before the build started.
+// Both name it in the reason, which says what is in the way rather than what to remove.
+//
+// Only a refusal writes them anywhere — including one expireVerdict downgrades from
+// claimAdopt, which is why that carry-over is a line of its own rather than a consequence.
 type claimJudgement struct {
 	verdict claimVerdict
 	reason  string
@@ -151,23 +157,37 @@ type claimJudgement struct {
 // interrupted build left stranded. That is what claimAnswered reads on a later launch, so
 // the one state this used to have no name for — claim and receipt coexisting because the
 // unlink failed — is no longer judged on evidence that has since moved on.
-func reconcileCreateClaims(ctx context.Context, instances []*session.Instance, now time.Time) int {
+//
+// It also returns the disclosures it could not WRITE, and that return exists because this is
+// a free function with no *home to buffer them on. Everything it discloses successfully
+// reaches this launch's report through loadCreateDisclosures, which reads the directory a
+// moment later; a Disclose that failed reaches nobody, and these are the refusals carrying
+// the full inventory — a branch, a registered worktree, a running agent. The drain's own side
+// buffers regardless for that reason (app.discloseCreateLeftovers), and a full disk is no
+// more of a reason to withhold the report here than it is there.
+func reconcileCreateClaims(ctx context.Context, instances []*session.Instance,
+	now time.Time) (int, []outbox.DisclosureEntry) {
 	claims, err := outbox.ListClaims()
 	if err != nil {
 		log.ErrorLog.Printf("failed to read the create spool for stranded requests: %v", err)
-		return 0
+		return 0, nil
 	}
 	if len(claims) == 0 {
-		return 0
+		return 0, nil
 	}
 
 	var acted int
+	var undisclosed []outbox.DisclosureEntry
 	for _, e := range claims {
-		if applyCreateClaim(ctx, e, classifyCreateClaim(ctx, e, instances, now)) {
+		applied, missed := applyCreateClaim(ctx, e, classifyCreateClaim(ctx, e, instances, now))
+		if applied {
 			acted++
 		}
+		if missed != nil {
+			undisclosed = append(undisclosed, outbox.DisclosureEntry{Path: e.Path, Disclosure: *missed})
+		}
 	}
-	return acted
+	return acted, undisclosed
 }
 
 // classifyCreateClaim reads one stranded claim into a verdict, plus the reason a
@@ -195,8 +215,19 @@ func classifyCreateClaim(ctx context.Context, e outbox.CreateEntry, instances []
 	// Read off the record PATH, so it answers for a claim whose body could not be decoded
 	// — which is most of the point, since the refusal that wrote the disclosure may have
 	// been for exactly that.
-	if d, ok := outbox.DisclosureFor(e.Path); ok {
+	//
+	// A state that could not be established defers instead of guessing, and this is the
+	// arm where that matters most: the recovery is one-shot, so reading "I could not look"
+	// as "there is no mark" spends a stranded claim's only chance on a stale NFS handle,
+	// while reading it as "there is one" answers the caller with a reason nobody wrote.
+	// Deferring costs one launch — claimDefer's own argument, one file out.
+	switch d, state := outbox.DisclosureFor(e.Path); state {
+	case outbox.HasDisclosure:
 		return claimJudgement{verdict: claimAnswered, reason: answeredReason(d)}
+	case outbox.DisclosureUnknown:
+		return claimJudgement{verdict: claimDefer, reason: fmt.Sprintf(
+			"could not check whether an earlier atrium had already given up on this request "+
+				"(%s)", filepath.Base(e.Path))}
 	}
 
 	// The row names the request, not the other way round. A (Title, Path) match would
@@ -289,13 +320,25 @@ func classifyCreateClaim(ctx context.Context, e outbox.CreateEntry, instances []
 	if owner, sameRepo := branchOwner(instances, e.Request.Path, branch); owner != "" {
 		// A live session holds it. That is not an orphan at all, and adopting it would
 		// put a second agent on one branch.
+		//
+		// Unless the row is in another repository, which branchOwner reports on purpose and
+		// calls the wrong answer in the harmless direction. Harmless for the VERDICT — a
+		// refusal the caller can retry under another title, against a miss that runs
+		// os.RemoveAll over a live session's worktree — and not harmless for the inventory:
+		// on a false hit THIS repo's branch is a genuine orphan, and a refusal that names
+		// nothing leaves it stranded with a mark that has nothing to report. So the
+		// same-repo hit discloses nothing and the cross-repo one discloses what it found.
 		where := ""
+		j := claimJudgement{verdict: claimRefused}
 		if !sameRepo {
 			where = " (in another repository — refused anyway, see branchOwner)"
+			j.branch = branch
+			j.worktree = strandedWorktreePath(ctx, e.Request.Path, branch)
 		}
-		return claimJudgement{verdict: claimRefused, reason: fmt.Sprintf(
+		j.reason = fmt.Sprintf(
 			"a previous atrium was interrupted while creating this session, and branch %q now "+
-				"belongs to session %q%s; pick another title", branch, owner, where)}
+				"belongs to session %q%s; pick another title", branch, owner, where)
+		return j
 	}
 	if e.Request.Claim.BranchExisted && !e.Request.Adopt {
 		// The branch was already there when the build claimed the request, so it is
@@ -330,11 +373,12 @@ func classifyCreateClaim(ctx context.Context, e outbox.CreateEntry, instances []
 			"could not check what holds branch %q: %v", branch, err)}
 	}
 	if wt != "" && !managed {
-		// The worktree is named in the reason and NOT in the judgement, which is the one
-		// place the two diverge. Every path this struct's worktree field reaches renders it
-		// as a leftover to be removed by hand, and this directory is the opposite: a
-		// checkout somebody made on purpose, at a path Atrium never minted. The branch IS
-		// this build's leaving and is disclosed; the reason says what is holding it.
+		// The worktree is named in the reason and NOT in the judgement. Every path this
+		// struct's worktree field reaches renders it as a leftover to be removed by hand,
+		// and this directory is the opposite: a checkout somebody made on purpose, at a path
+		// Atrium never minted. The branch IS this build's leaving and is disclosed; the
+		// reason says what is holding it. strandedWorktreePath screens for the same thing on
+		// the arm that reaches a directory without a verdict.
 		return claimJudgement{verdict: claimRefused, branch: branch,
 			reason: fmt.Sprintf("a previous atrium was interrupted while creating this session, "+
 				"and branch %q is checked out at %s, which is not a worktree Atrium manages; "+
@@ -358,19 +402,24 @@ func answeredReason(d outbox.Disclosure) string {
 	return "a previous atrium gave up on this request and could not record why"
 }
 
-// strandedWorktreePath is StrandedWorktreeFor reduced to the directory, for a report
-// rather than for a verdict: an error or an unreadable repo yields "" and the caller says
-// one thing less, where a verdict must defer instead (see claimDefer).
+// strandedWorktreePath is StrandedWorktreeFor reduced to a directory Atrium minted, for a
+// report rather than for a verdict: an error or an unreadable repo yields "" and the caller
+// says one thing less, where a verdict must defer instead (see claimDefer).
 //
-// It does not screen for `managed`. A refusal reaching for this is naming what holds the
-// branch, and a checkout Atrium did not mint holds it just as hard — the distinction that
-// matters to a verdict does not matter to "here is where it is".
+// It screens for `managed`, and that screening is the whole of it. Every field this feeds
+// renders as a leftover to go and remove, and parseWorktreeList returns the PRIMARY worktree
+// too — so a branch the user has checked out in their own clone resolves to that clone's
+// path. Unscreened, a create whose agent is still running reports the user's main checkout
+// under a header saying nothing in atrium's records points at it, and whether it does so is
+// decided only by whether a tmux session happened to outlive its TUI. The sibling arm that
+// meets the same directory through a verdict refuses to put it in this field for exactly that
+// reason (see classifyCreateClaim's unmanaged-worktree arm).
 func strandedWorktreePath(ctx context.Context, repo, branch string) string {
 	if branch == "" {
 		return ""
 	}
-	wt, _, err := git.StrandedWorktreeFor(ctx, repo, branch)
-	if err != nil {
+	wt, managed, err := git.StrandedWorktreeFor(ctx, repo, branch)
+	if err != nil || !managed {
 		return ""
 	}
 	return wt
@@ -441,7 +490,11 @@ func liveAgentSession(ctx context.Context, r outbox.Request) string {
 // is logged and left alone: the claim survives, and the next launch reaches the same
 // verdict from the same evidence — which is what makes leaving it the safe response to
 // a git or filesystem problem rather than a leak.
-func applyCreateClaim(ctx context.Context, e outbox.CreateEntry, j claimJudgement) bool {
+//
+// The second return is the disclosure it meant to write and could not, for the caller to
+// carry to the report — see reconcileCreateClaims. Nil in every other case, including a
+// refusal whose write landed: that one is already on disk for loadCreateDisclosures to find.
+func applyCreateClaim(ctx context.Context, e outbox.CreateEntry, j claimJudgement) (bool, *outbox.Disclosure) {
 	name := e.Request.Title
 	switch j.verdict {
 	case claimSucceeded:
@@ -450,7 +503,7 @@ func applyCreateClaim(ctx context.Context, e outbox.CreateEntry, j claimJudgemen
 		// reads the branch back out of the row that made this verdict true.
 		if err := outbox.DiscardCreate(e.Path); err != nil {
 			log.ErrorLog.Printf("failed to close out a completed create request for %q: %v", name, err)
-			return false
+			return false, nil
 		}
 		log.InfoLog.Printf("create request for %q completed before an earlier atrium exited; "+
 			"its session is recorded", name)
@@ -475,7 +528,7 @@ func applyCreateClaim(ctx context.Context, e outbox.CreateEntry, j claimJudgemen
 		// this same arm rather than the evidence below.
 		if err := outbox.DiscardCreate(e.Path); err != nil {
 			log.ErrorLog.Printf("failed to drop an already-refused create request for %q: %v", name, err)
-			return false
+			return false, nil
 		}
 		log.WarningLog.Printf("dropped a create request for %q that an earlier atrium had already "+
 			"refused: %s", name, j.reason)
@@ -498,13 +551,13 @@ func applyCreateClaim(ctx context.Context, e outbox.CreateEntry, j claimJudgemen
 				// gives the same failure.
 				log.ErrorLog.Printf("failed to re-check what holds branch %q before adopting it; "+
 					"leaving the claim for the next launch: %v", e.Request.Claim.SessionBranch, err)
-				return false
+				return false, nil
 			}
 			if managed {
 				if err := git.ReleaseManagedWorktree(ctx, e.Request.Path, wt); err != nil {
 					log.ErrorLog.Printf("failed to free branch %q from the interrupted build's "+
 						"worktree %s: %v", e.Request.Claim.SessionBranch, wt, err)
-					return false
+					return false, nil
 				}
 				log.InfoLog.Printf("freed branch %q from the interrupted build's worktree %s",
 					e.Request.Claim.SessionBranch, wt)
@@ -521,7 +574,7 @@ func applyCreateClaim(ctx context.Context, e outbox.CreateEntry, j claimJudgemen
 				// spends the recovery. The claim keeps it available.
 				log.ErrorLog.Printf("failed to pin branch %q before adopting it; leaving the "+
 					"claim for the next launch: %v", j.branch, err)
-				return false
+				return false, nil
 			}
 			if tip == "" {
 				// The branch went away between the verdict and here — deleted by hand, or
@@ -536,7 +589,7 @@ func applyCreateClaim(ctx context.Context, e outbox.CreateEntry, j claimJudgemen
 		}
 		if err := outbox.Requeue(e.Path, adoptTip); err != nil {
 			log.ErrorLog.Printf("failed to re-queue the interrupted create request for %q: %v", name, err)
-			return false
+			return false, nil
 		}
 		if adopt {
 			log.WarningLog.Printf("create request for %q was interrupted after it made branch %q at "+
@@ -566,9 +619,14 @@ func applyCreateClaim(ctx context.Context, e outbox.CreateEntry, j claimJudgemen
 		// Then the receipt, whose own ordering is Reject's: on disk before the file a
 		// --wait is watching goes away.
 		d := j.disclosure(e.Request)
+		var undisclosed *outbox.Disclosure
 		if err := outbox.Disclose(e.Path, &d); err != nil {
 			log.ErrorLog.Printf("failed to record what the interrupted create request for %q left "+
 				"behind: %v", name, err)
+			// Carried back to the caller for this launch's report. There is no reader for it
+			// on disk — the write is what failed — and this arm is where the inventory is
+			// richest, so the person at the terminal is the only party who can act on it.
+			undisclosed = &d
 		}
 		if err := outbox.Reject(e.Path, j.reason); err != nil {
 			log.ErrorLog.Printf("failed to write a receipt for the interrupted create request "+
@@ -576,9 +634,10 @@ func applyCreateClaim(ctx context.Context, e outbox.CreateEntry, j claimJudgemen
 		}
 		if err := outbox.DiscardCreate(e.Path); err != nil {
 			log.ErrorLog.Printf("failed to drop the interrupted create request for %q: %v", name, err)
-			return false
+			return false, undisclosed
 		}
 		log.WarningLog.Printf("giving up on an interrupted create request for %q: %s", name, j.reason)
+		return true, undisclosed
 	case claimDefer:
 		// Deliberately nothing on disk. The evidence this verdict needs was a git call
 		// that failed, and both of the writes available here are one-way: a re-queue
@@ -589,9 +648,9 @@ func applyCreateClaim(ctx context.Context, e outbox.CreateEntry, j claimJudgemen
 		// because nothing was.
 		log.WarningLog.Printf("leaving the interrupted create request for %q claimed for a later "+
 			"launch: %s", name, j.reason)
-		return false
+		return false, nil
 	}
-	return true
+	return true, nil
 }
 
 // disclosure assembles what outbox.Disclose records for a refusal: the request's own

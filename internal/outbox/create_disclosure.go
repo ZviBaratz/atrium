@@ -146,11 +146,18 @@ func disclosurePath(record string) string { return record + disclosureSuffix }
 //     launch, against live git, into a verdict that builds the session its caller was
 //     told had failed (#731).
 //
-// That second reason is why every giving-up on a CLAIM writes one, including one with
-// nothing to show: the terminal mark is the guard, and a guard that only appears when there
-// happens to be a branch to name is not one. A request refused at the drain's gates is the
-// case that does not, and app.flushCreateDisclosures spells out why — it never built
-// anything, so there is nothing to name and no rebuild to forbid.
+// That second reason is why every giving-up writes one, including one with nothing to show:
+// the terminal mark is the guard, and a guard that only appears when there happens to be a
+// branch to name is not one.
+//
+// Every giving-up, and not only every giving-up on a claim. A record answered at the drain's
+// gates has built nothing, so it has no inventory — but it is still a file that can outlive
+// the Reject meant to remove it, and several of those gates are facts about the FLEET rather
+// than about the request: a rate limit resets, a session cap is raised, a title is freed by a
+// kill. Re-drained hours later against a fleet that has moved on, the same record passes and
+// the session is built for a caller that read the refusal and exited non-zero. The mark is
+// what makes an unlink that failed harmless in that direction too; app.flushCreateDisclosures
+// is where an inventory-less one stops short of a modal.
 // It stamps Version and CreatedAt on the Disclosure it is given rather than on a copy, so
 // the caller that buffers the same value for this process's own report (app.discloseCreate‑
 // Leftovers) shows the record that was written rather than one missing both fields.
@@ -172,19 +179,53 @@ func Disclose(record string, d *Disclosure) error {
 	return nil
 }
 
-// DisclosureFor returns the disclosure recorded for record, if there is one. A file that
-// cannot be decoded reports true with a zero Disclosure: the caller asking this question
-// wants to know whether the request has already been given up on, and a disclosure it
-// cannot read still answers that.
-func DisclosureFor(record string) (Disclosure, bool) {
-	e := readDisclosure(disclosurePath(record))
-	if e.Err != nil {
-		if errors.Is(e.Err, fs.ErrNotExist) {
-			return Disclosure{}, false
+// DisclosureState is what DisclosureFor could establish about a record's terminal mark.
+// Three values rather than a bool because the two questions a caller has are not the same
+// question: "is there a mark" and "could I find out". Both consumers act destructively on
+// the first — the drain answers the caller and unlinks the record, the startup reconcile
+// spends a stranded claim's one-shot recovery — so an answer that folds "I could not look"
+// into either direction destroys something on a filesystem hiccup.
+type DisclosureState int
+
+const (
+	// DisclosureUnknown means the mark could not be looked for. Iota-0 deliberately, so the
+	// zero value of a var, a struct field or a map miss is the one that licenses nothing —
+	// recordStillSpooled's rule, and app.adoptionState's.
+	DisclosureUnknown DisclosureState = iota
+	// NoDisclosure means there is no mark: the record or claim may be executed.
+	NoDisclosure
+	// HasDisclosure means there is one. The request has been given up on and its caller
+	// answered, whether or not the file could be decoded.
+	HasDisclosure
+)
+
+// DisclosureFor returns the disclosure recorded for record, and what could be established
+// about it.
+//
+// Presence is a stat and content is a read, and separating them is the point. os.ReadFile
+// opens a file descriptor, so under fd exhaustion it can answer EMFILE for a path that
+// does not exist — and a predicate that read every non-ENOENT error as "there is a mark"
+// then reports every queued request terminal, which is a receipt and an unlink apiece for
+// requests nothing was ever wrong with. os.Stat allocates no descriptor and so cannot give
+// that answer.
+//
+// A file that exists and cannot be decoded is HasDisclosure with a zero Disclosure: the
+// question is whether the request has already been given up on, and a mark nobody can read
+// still answers that. Only a stat that fails for some other reason (a stale NFS handle, an
+// I/O error) is DisclosureUnknown, and the callers hold rather than guess.
+func DisclosureFor(record string) (Disclosure, DisclosureState) {
+	path := disclosurePath(record)
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return Disclosure{}, NoDisclosure
 		}
-		return Disclosure{}, true
+		return Disclosure{}, DisclosureUnknown
 	}
-	return e.Disclosure, true
+	e := readDisclosure(path)
+	if e.Err != nil {
+		return Disclosure{}, HasDisclosure
+	}
+	return e.Disclosure, HasDisclosure
 }
 
 // ListDisclosures returns every disclosure in the create spool, oldest first.
@@ -240,14 +281,23 @@ func ListDisclosures() ([]DisclosureEntry, error) {
 // until the unlink that failed succeeds. What it repeats is still true of artifacts still
 // stranded, and every launch retries that unlink (app.applyCreateClaim's claimAnswered arm),
 // so the repetition ends when the condition does.
-func ClearDisclosure(record string) error {
+//
+// removed is false for the kept case and for a removal that failed, and true only when the
+// file is gone. Reported because "nil error" covers both of the first two, and one caller
+// has to tell them apart: app.withdrawUnrecordedCreates retries a withdrawal until it
+// lands, and reading the kept case as done drops the only handle it had — leaving a
+// disclosure that says a live session's branch belongs to nothing.
+func ClearDisclosure(record string) (removed bool, err error) {
 	if recordStillSpooled(record) {
-		return nil
+		return false, nil
 	}
-	if err := os.Remove(disclosurePath(record)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("outbox: remove create disclosure: %w", err)
+	if err := os.Remove(disclosurePath(record)); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return true, nil
+		}
+		return false, fmt.Errorf("outbox: remove create disclosure: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 // recordStillSpooled reports whether a create record or its claim is on disk, which is what
@@ -290,58 +340,60 @@ func SweepDisclosures(now time.Time) {
 	sweepSuffixed(dir, disclosureSuffix, now, recordStillSpooled)
 }
 
-// discloseClearedClaim records what an `atrium reset` is about to strand by destroying a
-// claim, and is a no-op when there is nothing it can name or a disclosure already says it.
+// discloseClearedRequest records what an `atrium reset` is about to strand by destroying a
+// create request, and returns without writing when nothing is owed.
 //
-// Only the branch, and only from the claim's own evidence block. It is what survives a
-// reset (see Clear) and it is the one artifact reset leaves with nothing pointing at it;
-// naming the worktree directory or the agent here would name two things reset destroys on
-// its way past. An undecodable claim yields no evidence and so no disclosure — reset still
-// takes the file, and the log line Clear's caller writes is the only account there can be.
+// mark is the difference between the two arms of Clear that call it. A CLAIM always gets
+// one, including one with nothing to name: the mark is what keeps a claim whose unlink
+// failed from being re-judged into a rebuild on the next launch, and Disclose's whole
+// argument is that a guard which only appears when there happens to be a branch to name is
+// not one. A plain RECORD gets one only when it names a branch, because a record with none
+// built nothing — reset removes it and there is nothing left to guard.
+//
+// A record CAN name a branch, and that is the case this arm exists for: an interrupted
+// build that reconcileCreateClaims re-queued to adopt its own orphan is back at the record
+// name, with the claim's evidence block still on it, and applyCreateClaim released that
+// branch's worktree registration on its way past. Reset it in that window and the branch has
+// no row, no claim, no request and no registration — #731's hole 1 with reset's name on it.
+//
+// The branch comes from the claim's own evidence block and is the only artifact named. It is
+// what survives a reset (see Clear); the worktree DIRECTORY and the agent are what reset
+// destroys, so naming them would send the reader after two things that are already gone.
+// What reset does NOT clear is git's stale registration of that directory — `worktree prune`
+// is repo-scoped through rows reset has just deleted — so the reason says so, because
+// `git branch -D` on such a branch fails with a path that no longer exists and nothing else
+// would tell the reader why.
 //
 // Any disclosure already there wins, readable or not. The pair "claim plus disclosure" is a
 // refusal whose unlink failed, and that refusal wrote its account with the full inventory in
 // hand, so overwriting it with this one's single field would trade a complete account for a
 // partial one. One this atrium cannot decode wins for the sharper reason: it may be a newer
-// atrium's, and replacing it would be answering "I cannot read this" by destroying it.
-func discloseClearedClaim(record string, claim CreateEntry) error {
-	if claim.Err != nil || claim.Request.Claim == nil || claim.Request.Claim.SessionBranch == "" {
+// atrium's, and replacing it would be answering "I cannot read this" by destroying it. A
+// state that could not be established wins too — the same rule one step out.
+func discloseClearedRequest(record string, e CreateEntry, mark bool) error {
+	branch := ""
+	if e.Err == nil && e.Request.Claim != nil {
+		branch = e.Request.Claim.SessionBranch
+	}
+	if !mark && branch == "" {
 		return nil
 	}
-	if _, already := DisclosureFor(record); already {
+	if _, state := DisclosureFor(record); state != NoDisclosure {
 		return nil
 	}
-	d := Disclosure{
-		Title:  claim.Request.Title,
-		Repo:   claim.Request.Path,
-		Branch: claim.Request.Claim.SessionBranch,
-		Reason: clearReason + ", and this one had already created its session branch",
+	d := Disclosure{Reason: clearReason}
+	if e.Err == nil {
+		// An undecodable file yields no identity, and the mark is still owed. The log line
+		// Clear's caller writes is the only account of which request it was.
+		d.Title, d.Repo = e.Request.Title, e.Request.Path
+	}
+	if branch != "" {
+		d.Branch = branch
+		d.Reason += ", and this one had already created its session branch. If `git branch -D` " +
+			"reports that branch checked out at a directory that is no longer there, run " +
+			"`git worktree prune` in that repository first"
 	}
 	return Disclose(record, &d)
-}
-
-// trimClearedDisclosure drops the two fields an `atrium reset` invalidates as it runs — the
-// worktree directory and the tmux session — from a disclosure it is carrying across.
-//
-// Rewritten in place rather than deleted, because the branch it may also name is exactly
-// what reset does not remove. A disclosure left with nothing to name is still kept: it may
-// be the mark holding a record or claim terminal, and that job is recordStillSpooled's to
-// end rather than this one's. An unreadable one is left alone for the reader to log and
-// clear on its own terms.
-func trimClearedDisclosure(record string) error {
-	e := readDisclosure(disclosurePath(record))
-	if e.Err != nil {
-		return nil
-	}
-	if e.Disclosure.Worktree == "" && e.Disclosure.TmuxName == "" {
-		return nil
-	}
-	d := e.Disclosure
-	d.Worktree, d.TmuxName = "", ""
-	if err := Disclose(record, &d); err != nil {
-		return fmt.Errorf("outbox: trim create disclosure: %w", err)
-	}
-	return nil
 }
 
 // disclosedRecordName reports the record name behind a disclosure file, and whether de is
