@@ -72,6 +72,25 @@ func loadCreateDisclosures() []outbox.DisclosureEntry {
 	return kept
 }
 
+// createDisclosureBacklog is the order the reader works through at startup: the disclosures
+// the reconcile could not WRITE first, then the ones found on disk.
+//
+// That order is the whole of this function, and it is decided here rather than at the call
+// site because the reason is not local to either input. The reconcile's undisclosed entries
+// are the same refusals with the richest inventory — a branch, a registered worktree, a
+// running agent — reached on a launch where every Disclose failed, which in practice means a
+// full disk. They exist nowhere but in this slice.
+//
+// flushCreateDisclosures caps what one report names and decides by position, so appended —
+// which they were — five older disk-backed entries took every slot and these went to the held
+// tail. The tail is re-buffered rather than lost, so within a run they are still shown; what
+// the order buys is the crash. A process that dies before the second pass takes the
+// memory-only entries with it, while a disk-backed one is read again by the next launch, so
+// the entries that cannot be re-read are the ones that go first.
+func createDisclosureBacklog(onDisk, undisclosed []outbox.DisclosureEntry) []outbox.DisclosureEntry {
+	return append(undisclosed, onDisk...)
+}
+
 // writeCreateDisclosure records on disk, and in the log, what a spent create request left
 // behind. It returns the disclosure as written — outbox.Disclose stamps Version and
 // CreatedAt — so a caller buffering the same value for this process's report shows the
@@ -81,13 +100,26 @@ func loadCreateDisclosures() []outbox.DisclosureEntry {
 // either way. It is the only one that survives a full disk; and the file itself is not
 // permanent by design — ClearDisclosure drops it once nothing is left for it to guard, so a
 // disclosure whose leftovers were reported and whose record is gone leaves only this line.
+//
+// Two lines, on the two levels, keyed on whether there is an inventory. Most giving-ups have
+// none: every gate refusal writes a mark and an ordinary title collision names no branch, no
+// worktree and no tmux session. Logged through the one wording, that reads
+// `left artifacts belonging to no session (branch "", worktree "", tmux "")` at WARNING — the
+// opposite of what happened, on the level an operator greps, for the overwhelming majority of
+// the lines. It also buries the case the wording exists for, which is the one that is true.
 func writeCreateDisclosure(record string, d outbox.Disclosure) outbox.Disclosure {
 	if err := outbox.Disclose(record, &d); err != nil {
 		log.ErrorLog.Printf("failed to record what the create request for %q left behind: %v",
 			d.Title, err)
 	}
-	log.WarningLog.Printf("create request for %q left artifacts belonging to no session "+
-		"(branch %q, worktree %q, tmux %q): %s", d.Title, d.Branch, d.Worktree, d.TmuxName, d.Reason)
+	if d.Leftovers() {
+		log.WarningLog.Printf("create request for %q left artifacts belonging to no session "+
+			"(branch %q, worktree %q, tmux %q): %s",
+			d.Title, d.Branch, d.Worktree, d.TmuxName, d.Reason)
+	} else {
+		log.InfoLog.Printf("create request for %q was given up on, leaving nothing behind: %s",
+			d.Title, d.Reason)
+	}
 	return d
 }
 
@@ -101,9 +133,21 @@ func writeCreateDisclosure(record string, d outbox.Disclosure) outbox.Disclosure
 // Buffered even when the write fails. The file's job is to survive a crash; the buffer's is
 // to reach the person at the terminal, and a full disk is no reason to withhold the one
 // mention of an orphaned branch from the only party who can delete it.
+//
+// Buffered only when there IS one, though, and that is what bounds the slice. A mark with
+// nothing to name is never shown — flushCreateDisclosures drops it unread — so buffering one
+// grew a slice nothing could ever empty while an overlay owned the screen, at up to a gate
+// refusal per tick for as long as the modal stood. The two things a buffered entry buys are
+// both about being seen: the report, and clearMarkOverADroppedRecord's promise not to delete
+// a file nobody has read yet. Neither applies to a mark with no reader, and its guard job is
+// held by ClearDisclosure's own recordStillSpooled check rather than by this slice.
 func (m *home) discloseCreateLeftovers(record string, d outbox.Disclosure) {
+	written := writeCreateDisclosure(record, d)
+	if !written.Leftovers() {
+		return
+	}
 	m.pendingCreateDisclosures = append(m.pendingCreateDisclosures,
-		outbox.DisclosureEntry{Path: record, Disclosure: writeCreateDisclosure(record, d)})
+		outbox.DisclosureEntry{Path: record, Disclosure: written})
 }
 
 // discloseLiveButUnrecorded records the leftovers of a create whose session is live and
@@ -153,10 +197,15 @@ type unrecordedCreate struct {
 // harmless direction for this type (see outbox.Disclosure) and the report tells its reader to
 // read the reason before acting.
 //
-// A kept entry stays in the slice, because ClearDisclosure also declines to remove a file
-// still guarding a record or claim that could not be unlinked — and there the next persist is
-// the retry that lands it. Dropped only once the file is actually gone, which is what the
-// removed flag is for; a failure is logged and the entry kept for the same reason.
+// A kept entry stays in the slice, and the two reasons it is kept have different futures.
+// ClearDisclosure declines to remove a file still guarding a record or claim whose unlink
+// failed, and there a later persist genuinely does retry it, because the row is durable and
+// the withdrawal is re-attempted every time. A row that never landed is the other case, and
+// nothing in this process retries THAT: applyKillDone drops the row before it reports an
+// incomplete teardown, so the instance is absent from every later save and the entry is held
+// for the life of the run. That is deliberate — the artifacts may still be standing — and it
+// is why the report screens against the live list rather than trusting the file (see
+// flushCreateDisclosures).
 func (m *home) withdrawUnrecordedCreates(persisted []*session.Instance) {
 	if len(m.unrecordedCreates) == 0 {
 		return
@@ -206,15 +255,39 @@ func (m *home) withdrawUnrecordedCreates(persisted []*session.Instance) {
 // Only what this report NAMES is offered up. The report is capped at createDisclosuresShown
 // entries, and an earlier draft unlinked all of them and enumerated the first five — so the
 // sixth onward were destroyed having never been on screen, with a count as the only remedy
-// for the newest orphans. The tail is left on disk instead and reported by the next launch,
-// which is the same rule the kept-mark case above already follows: a file whose job is not
-// finished is not offered up.
+// for the newest orphans. The tail is left on disk instead, which is the same rule the
+// kept-mark case above already follows: a file whose job is not finished is not offered up.
 //
-// Entries with nothing to name ARE offered up, and there are plenty: every giving-up writes a
-// disclosure whether or not it has an inventory, because the mark is what keeps a claim from
-// being re-judged and a record from being re-drained (outbox.Disclose). A modal saying "a
-// request failed, and left nothing" would be noise the receipt already covered — so their
-// report job is finished by there being nothing to report.
+// The tail stays in the BUFFER too, and it has to. The buffer is the only thing
+// clearMarkOverADroppedRecord consults before deleting a mark, so a tail dropped from it was
+// unguarded from the instant this report fired: one drain tick later the same records took
+// the terminal-mark arm, were answered and unlinked, and every held mark went with them —
+// while the modal on screen said they were kept. They were also the NEWEST orphans, the ones
+// likeliest to still have an agent running, because ListDisclosures is oldest-first. Held
+// entries carry their record path for the same reason: a Disclosure alone cannot be re-offered
+// or re-buffered.
+//
+// So the tail is reported on the next TICK rather than the next launch, which is the same
+// sentence with a better horizon: each pass shows five and the buffer strictly shrinks, so
+// the 100ms tick pages through a backlog instead of re-opening one report forever.
+//
+// Entries with nothing to name are offered up unread. Every giving-up writes a mark whether
+// or not it has an inventory, because the mark is what keeps a claim from being re-judged and
+// a record from being re-drained (outbox.Disclose), and a modal saying "a request failed, and
+// left nothing" would be noise the receipt already covered — so their report job is finished
+// by there being nothing to report. This process no longer buffers those at all; the ones
+// that arrive here came off disk.
+//
+// A disclosure whose artifacts belong to a session in the LIST is dropped unread as well, and
+// that is the one screen the file cannot do for itself. discloseLiveButUnrecorded writes a
+// mark for a session that is running while its row is not, and withdraws it when the row
+// lands — but a session killed before it ever persisted is absent from every later save, so
+// the withdrawal never comes and the file outlives the run. Neither name has anything in it
+// that varies between two sessions of the same title in the same repository —
+// git.BranchNameForSession takes a configured prefix and the title, tmux.QualifiedSessionName
+// a repo group and the title — so the next session created under that title is described,
+// byte for byte, by a file saying nothing in atrium's records points at it, under a report
+// that hands the reader a kill command. Matching the live list is what tells those apart.
 func (m *home) flushCreateDisclosures() tea.Cmd {
 	if len(m.pendingCreateDisclosures) == 0 || m.state != stateDefault {
 		return nil
@@ -230,27 +303,56 @@ func (m *home) flushCreateDisclosures() tea.Cmd {
 			log.ErrorLog.Printf("failed to clear a delivered create disclosure: %v", err)
 		}
 	}
-	var shown, held []outbox.Disclosure
+	var shown []outbox.Disclosure
+	var held []outbox.DisclosureEntry
 	for _, e := range entries {
 		switch {
-		case !e.Disclosure.Leftovers():
+		case !e.Disclosure.Leftovers() || m.liveSessionOwns(e.Disclosure):
 			drop(e.Path)
 		case len(shown) < createDisclosuresShown:
 			shown = append(shown, e.Disclosure)
 			drop(e.Path)
 		default:
-			held = append(held, e.Disclosure)
+			held = append(held, e)
 		}
 	}
+	m.pendingCreateDisclosures = held
 	if len(shown) == 0 {
 		return nil
 	}
 	return m.showInfo(createDisclosureReport(shown, held, time.Now()))
 }
 
+// liveSessionOwns reports whether the artifacts d names belong to a session in the list, in
+// which case they are not stranded and the report must not name them.
+//
+// The branch and the tmux name, either of them, and only when non-empty: a direct session has
+// no branch and matching on "" would swallow every disclosure that names only a worktree. A
+// branch a live row holds is that row's, whatever a file written before it says; the same goes
+// for a tmux session, whose name tmux.QualifiedSessionName derives from (repo group, title)
+// and nothing else, so it is exactly as reusable as the branch.
+//
+// Started(), because an unstarted row owns nothing yet — it has no branch and no tmux session
+// — so counting one would suppress a genuine orphan on the strength of a row that has not
+// been built.
+func (m *home) liveSessionOwns(d outbox.Disclosure) bool {
+	for _, inst := range m.list.GetInstances() {
+		if inst == nil || !inst.Started() {
+			continue
+		}
+		if d.Branch != "" && inst.Branch == d.Branch && inst.Path == d.Repo {
+			return true
+		}
+		if d.TmuxName != "" && inst.TmuxSessionName() == d.TmuxName {
+			return true
+		}
+	}
+	return false
+}
+
 // createDisclosureReport is that modal's text, bounded on both axes for
-// repoScriptProblemsReport's reason. held is what the cap left on disk for the next launch,
-// which the report counts rather than names.
+// repoScriptProblemsReport's reason. held is what the cap left for the next pass, which the
+// report counts rather than names.
 //
 // One labelled row per artifact rather than a sentence, because the user is about to retype
 // these into `git branch -d`, `git worktree remove` and `tmux kill-session`, and because it
@@ -261,9 +363,9 @@ func (m *home) flushCreateDisclosures() tea.Cmd {
 // Which is also why no row carries a command. A copy-pasteable `tmux -L … kill-session -t …`
 // beside the session name reads well in source and arrives split across two lines with the
 // modal's border between them — pasteable in neither half. The socket goes in the trailer
-// instead, on a line of its own inside reportNarrowWidth, and only when some entry actually
-// has a tmux session to name — including one only the count mentions, because the trailer is
-// what makes that entry actionable when its turn comes.
+// instead, where the sentence and the command get a line each and both fit reportNarrowWidth,
+// and only when some entry actually has a tmux session to name — including one only the count
+// mentions, because the trailer is what makes that entry actionable when its turn comes.
 //
 // Each row clips its VALUE rather than the whole line, so the label survives a long path —
 // and the reason clips from the other end (clipReportLineEnd). Every reason opens with
@@ -280,7 +382,7 @@ func (m *home) flushCreateDisclosures() tea.Cmd {
 // cannot tell the three cases apart: a branch Atrium made and abandoned is the user's to
 // delete, a worktree they created themselves is not, and the whole inventory was measured
 // when the create gave up rather than now.
-func createDisclosureReport(shown, held []outbox.Disclosure, now time.Time) string {
+func createDisclosureReport(shown []outbox.Disclosure, held []outbox.DisclosureEntry, now time.Time) string {
 	if len(shown) == 0 {
 		return ""
 	}
@@ -308,26 +410,44 @@ func createDisclosureReport(shown, held []outbox.Disclosure, now time.Time) stri
 		}
 	}
 	if len(held) > 0 {
-		lines = append(lines, fmt.Sprintf("    … and %d more, kept for the next launch", len(held)))
+		lines = append(lines, fmt.Sprintf("    … and %d more, shown after this one", len(held)))
 	}
-	lines = append(lines, "",
+	lines = append(lines, "")
+	lines = append(lines, createDisclosureTrailer(config.RuntimeName(), anyTmuxName(shown, held))...)
+	return strings.Join(lines, "\n")
+}
+
+// createDisclosureTrailer is the report's fixed prose: what the reader is being told about the
+// entries above, and — when any of them names a tmux session — the socket to reach it on.
+//
+// A function of the socket rather than lines inlined at the call site, because these are the
+// lines in the report that must not WRAP, and nothing in the Go suite can see a wrap. The
+// entry rows above may: a wrapped path is still a path, and clipping them at reportNarrowWidth
+// instead would cut paths a user has to retype. These cannot — a command arriving with the
+// modal's border through the middle of it is pasteable in neither half — so they are built
+// somewhere a test can measure every one of them, at every socket name an install can have.
+//
+// The socket comes from config.RuntimeName rather than hardcoded: a legacy install is on
+// "claudesquad", and `tmux -L atrium` there finds nothing (CLAUDE.md). It is also why the
+// sentence and the command get a line each: as one line they are over reportNarrowWidth for
+// either socket name, and the test measures both.
+//
+// tmuxNamed rather than reading the entries again, and it counts the ones the cap held back as
+// well as the ones on screen: the socket is unguessable and nothing else supplies it, so a
+// report whose five shown entries are branch-only refusals must still carry the line for the
+// live agents behind them (see anyTmuxName).
+func createDisclosureTrailer(socket string, tmuxNamed bool) []string {
+	lines := []string{
 		"Nothing in atrium's records points at these. Read each `why`",
 		"before acting: a branch may be one to resume a session on, and",
-		"a worktree may be one you made.")
-	if anyTmuxName(shown, held) {
-		// The socket from config.RuntimeName rather than hardcoded: a legacy install is on
-		// "claudesquad", and `tmux -L atrium` there finds nothing (CLAUDE.md).
-		//
-		// Two lines, because one was 76 runes for "atrium" and 86 for "claudesquad" against
-		// an overlay inner width of 64 at a 72-column terminal — so the command arrived with
-		// the modal's border through the middle of it, which is the outcome the paragraph
-		// above rejects a per-row command for.
-		socket := config.RuntimeName()
-		lines = append(lines,
-			fmt.Sprintf("Those tmux sessions are on socket %q. To kill one:", socket),
-			fmt.Sprintf("    tmux -L %s kill-session -t <name>", socket))
+		"a worktree may be one you made.",
 	}
-	return strings.Join(lines, "\n")
+	if !tmuxNamed {
+		return lines
+	}
+	return append(lines,
+		fmt.Sprintf("Those tmux sessions are on socket %q. To kill one:", socket),
+		fmt.Sprintf("    tmux -L %s kill-session -t <name>", socket))
 }
 
 // anyTmuxName reports whether any entry names a tmux session, counting the ones the cap held
@@ -337,12 +457,19 @@ func createDisclosureReport(shown, held []outbox.Disclosure, now time.Time) stri
 // is "claudesquad" and unguessable. Computed over the shown entries alone — which it was — a
 // report whose five oldest entries are branch-only refusals drops the socket line while the
 // two it held back are the live agents whose only remedy is that command.
-func anyTmuxName(sets ...[]outbox.Disclosure) bool {
-	for _, set := range sets {
-		for _, d := range set {
-			if d.TmuxName != "" {
-				return true
-			}
+//
+// Two named parameters rather than a variadic of slices, which is the shape this had: a
+// variadic makes anyTmuxName(shown) a legal call, and forgetting the second argument is the
+// exact bug the function exists to prevent. Two required parameters make the compiler hold it.
+func anyTmuxName(shown []outbox.Disclosure, held []outbox.DisclosureEntry) bool {
+	for _, d := range shown {
+		if d.TmuxName != "" {
+			return true
+		}
+	}
+	for _, e := range held {
+		if e.Disclosure.TmuxName != "" {
+			return true
 		}
 	}
 	return false
@@ -363,8 +490,14 @@ func anyTmuxName(sets ...[]outbox.Disclosure) bool {
 //
 // doctor.HumanAge is the exported ladder next door and is deliberately not reused: it renders
 // the same three hours as "3h0m" and the same two days as "2d0h", which is the precision this
-// one exists to drop. It is answering a different question — how long a leaked worktree has
-// been leaking, where the minutes matter to whoever is deciding whether it is still in use.
+// one exists to drop. It is answering a different question — how long a tmux server has been
+// up, where the minutes matter to whoever is deciding whether it is still in use.
+//
+// The two also disagree about where days begin, on purpose and visibly: HumanAge switches at
+// 24h, this at 48h, so a 36-hour orphan reads "36h ago" here and "1d12h" in `atrium doctor`.
+// A single tier is what the disagreement costs, and it buys the case that matters more — one
+// number for "yesterday evening", where "1d12h" makes the reader do the arithmetic to find
+// out whether an agent could still be running.
 func gaveUp(at, now time.Time) string {
 	if at.IsZero() {
 		return ""

@@ -434,7 +434,7 @@ func Clear() (int, error) {
 				// outlives it with no mark beside it is re-judged into a rebuild. Its
 				// failure is deliberately not part of this walk's verdict, though —
 				// see below.
-				_ = discloseClearedRequest(path, readCreate(ClaimPath(path)), true)
+				_ = discloseClearedRequest(path, readCreate(ClaimPath(path)))
 				err := errors.Join(Reject(path, clearReason), DiscardCreate(path))
 				if err != nil {
 					if firstErr == nil {
@@ -456,9 +456,11 @@ func Clear() (int, error) {
 			path := filepath.Join(dir, name)
 			// A record can be a post-build request too — see discloseClearedRequest —
 			// and the disclosure is ordered ahead of the Reject that unlinks it for
-			// Disclose's reason. A record naming no branch writes nothing: it built
-			// nothing, and reset leaves nothing of it to guard.
-			_ = discloseClearedRequest(path, readCreate(path), false)
+			// Disclose's reason. Unconditionally, as for a claim: the Reject below can
+			// write its receipt and fail to unlink, and a record that survives reset is
+			// one the next TUI takes through the gates on behalf of a caller that has
+			// already read "discarded" and exited non-zero.
+			_ = discloseClearedRequest(path, readCreate(path))
 			if err := Reject(path, clearReason); err != nil {
 				if firstErr == nil {
 					firstErr = fmt.Errorf("outbox: discard %s: %w", name, err)
@@ -474,13 +476,17 @@ func Clear() (int, error) {
 // validRecord screens the path a spool write is about to act on down to a name
 // writeRecord produced.
 //
-// It closes a whole class rather than a live bug. Claim, Requeue, DiscardCreate, Reject
-// and Disclose all derive a second path by concatenation (ClaimPath, disclosurePath,
-// rejectedSuffix), so a caller that passed one of those derived paths back in would mint
-// "….json.claimed.claimed", "….json.claimed.rejected" or "….json.claimed.disclosure" — a
-// file no walk in this package matches, and therefore one nothing lists, sweeps, clears or
-// `atrium reset` can ever remove. No caller does that today; the guard is here so none can
-// (#731).
+// Every entry point that writes or removes derives a second path by concatenation
+// (ClaimPath, disclosurePath, rejectedSuffix), so one handed a path that already carries a
+// suffix would mint "….json.claimed.claimed" or "….json.claimed.disclosure" — a file no walk
+// in this package matches, and therefore one nothing lists, sweeps, clears or `atrium reset`
+// can ever remove. Screened at the entry points rather than enumerated here: a list of them
+// is one more thing to keep true as the package grows a kind, and it had already fallen
+// behind by one (#731).
+//
+// The screen also keeps a derived path from reading as a successful no-op, which is a
+// separate failure from minting anything: ClearDisclosure would answer the ENOENT on an
+// impossible name as "the file is gone", the reverse of safe — see there.
 //
 // Here rather than in create.go because Reject serves both spools, and the record name
 // format it screens for is the one both share (writeRecord).

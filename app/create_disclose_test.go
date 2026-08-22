@@ -236,11 +236,11 @@ func TestCreateDisclosureReportBoundsWhatItEnumerates(t *testing.T) {
 	for _, title := range []string{"a", "b", "c", "d", "e", "f", "g"} {
 		ds = append(ds, orphanDisclosure(title))
 	}
-	report := createDisclosureReport(ds[:5], ds[5:], time.Now())
+	report := createDisclosureReport(ds[:5], heldEntries(ds[5:]...), time.Now())
 
 	assert.Contains(t, report, "7 interrupted `atrium new` requests left artifacts behind:",
 		"the headline counts every entry, not the five on screen")
-	assert.Contains(t, report, "… and 2 more, kept for the next launch")
+	assert.Contains(t, report, "… and 2 more, shown after this one")
 	assert.NotContains(t, report, "zvi/g", "the tail is counted, not printed")
 }
 
@@ -278,8 +278,13 @@ func TestFlushCreateDisclosuresKeepsWhatItCouldNotEnumerate(t *testing.T) {
 	for _, title := range titles[createDisclosuresShown:] {
 		_, state := outbox.DisclosureFor(records[title])
 		assert.Equal(t, outbox.HasDisclosure, state,
-			"%s was only counted, so the next launch has to be able to name it", title)
+			"%s was only counted, so a later pass has to be able to name it", title)
 	}
+	// And still buffered, which is the half this fixture cannot see on its own: it discards the
+	// record first, so no drain tick has anything to drop and the marks survive whatever the
+	// buffer holds. TestFlushKeepsTheHeldTailInTheBufferThatGuardsIt is that case.
+	assert.Len(t, h.pendingCreateDisclosures, len(titles)-createDisclosuresShown,
+		"the tail is what the next pass reports, and the buffer is where it waits")
 }
 
 // TestFlushCreateDisclosuresDropsAMarkWithNothingToShow is the opposite direction: every
@@ -303,41 +308,46 @@ func TestFlushCreateDisclosuresDropsAMarkWithNothingToShow(t *testing.T) {
 	assert.Equal(t, outbox.NoDisclosure, state, "and it is not left to be re-read forever")
 }
 
-// TestCreateDisclosureReportFitsANarrowTerminal is the wrap guard, and it exists because the
+// TestCreateDisclosureTrailerFitsANarrowTerminal is the wrap guard, and it exists because the
 // Go suite cannot see a wrap: TextOverlay renders the string, so a line over the box's inner
 // width arrives split with the modal's border between the halves. That is tolerable for a
-// path — a wrapped value is still a value — and not for the trailer's kill-session command,
-// which is pasteable in neither half. See reportNarrowWidth for where 64 comes from.
+// path — a wrapped value is still a value — and not for the kill-session command, which is
+// pasteable in neither half. See reportNarrowWidth for where 64 comes from.
 //
-// Both socket names, because the line carries config.RuntimeName twice and a legacy install's
-// "claudesquad" is ten runes longer than "atrium" — the form that fitted for one did not for
-// the other.
-func TestCreateDisclosureReportFitsANarrowTerminal(t *testing.T) {
-	report := createDisclosureReport([]outbox.Disclosure{orphanDisclosure("fix-auth")}, nil, time.Now())
-
-	for _, line := range strings.Split(report, "\n") {
-		if strings.HasPrefix(line, "    ") {
-			continue // a labelled row, whose value is allowed to wrap
-		}
-		assert.LessOrEqual(t, len([]rune(line)), reportNarrowWidth,
-			"%q must arrive unwrapped on a 72-column terminal", line)
-	}
-	// The two trailer lines measured for both socket names an install can have, because the
-	// report only ever renders one of them and the legacy name is ten runes longer. The
-	// command's own line is indented, so the loop above skips it — and it is the whole point
-	// of the guard.
+// Measured on the trailer rather than by scanning the report, which is what this did and what
+// made it vacuous. The scan skipped indented lines as "a labelled row, whose value is allowed
+// to wrap" — but the entry HEADER is un-indented and clips its title and its repo at
+// reportLineBudget apiece, so the code permits about 210 cells there while the assertion
+// demanded 64. It passed only because the fixture's path was short:
+// TestCreateDisclosureReportKeepsTheDateBehindALongPath's own fixture breaks it at 119. The
+// bound belongs to the lines the code actually bounds, so those are built somewhere a test can
+// enumerate them.
+//
+// Cells, not runes, because a cell is what TextOverlay wraps against: a CJK or emoji title is
+// two cells per rune, so a 40-rune line passes a rune count at 40 and still arrives wrapped.
+//
+// Both socket names, because the trailer carries config.RuntimeName twice and a legacy
+// install's "claudesquad" is five cells longer than "atrium" — the single-line form fitted for
+// one and not the other.
+func TestCreateDisclosureTrailerFitsANarrowTerminal(t *testing.T) {
 	for _, socket := range []string{config.RuntimeName(), "atrium", "claudesquad"} {
-		for _, line := range []string{
-			fmt.Sprintf("Those tmux sessions are on socket %q. To kill one:", socket),
-			fmt.Sprintf("    tmux -L %s kill-session -t <name>", socket),
-		} {
-			assert.LessOrEqual(t, len([]rune(line)), reportNarrowWidth, line)
+		for _, line := range createDisclosureTrailer(socket, true) {
+			assert.LessOrEqual(t, xansi.StringWidth(line), reportNarrowWidth,
+				"%q must arrive unwrapped on a 72-column terminal", line)
 		}
 	}
-	// And these are the lines the report actually builds — the two above are the same
-	// expressions with the socket varied, so this is what ties them to the code.
-	require.Contains(t, report, fmt.Sprintf("on socket %q. To kill one:", config.RuntimeName()))
-	require.Contains(t, report, fmt.Sprintf("    tmux -L %s kill-session -t <name>", config.RuntimeName()))
+
+	// Tied to the report the code builds, so the loop above cannot be measuring lines nothing
+	// renders. A long repo path is in the fixture on purpose: it proves the entry header is
+	// deliberately outside the bound rather than accidentally under it.
+	d := orphanDisclosure("fix-auth")
+	d.Repo = "/Users/dev/Development/clients/acme/backend/services/payments-gateway-internal"
+	report := createDisclosureReport([]outbox.Disclosure{d}, nil, time.Now())
+	for _, line := range createDisclosureTrailer(config.RuntimeName(), true) {
+		require.Contains(t, report, line)
+	}
+	require.Greater(t, xansi.StringWidth(fmt.Sprintf("%q in %s", d.Title, d.Repo)), reportNarrowWidth,
+		"precondition: the entry header is over the trailer's bound, and wraps rather than clips")
 }
 
 // TestFlushCreateDisclosuresKeepsTheFileGuardingAClaim is #731's third hole approached from
@@ -402,9 +412,127 @@ func TestCreateDisclosureReportNamesTheSocketForAHeldEntry(t *testing.T) {
 		Reason: "the title is already used"}
 	held := orphanDisclosure("new") // this one has a tmux session
 
-	report := createDisclosureReport([]outbox.Disclosure{shown}, []outbox.Disclosure{held}, time.Now())
+	report := createDisclosureReport([]outbox.Disclosure{shown}, heldEntries(held), time.Now())
 
 	assert.NotContains(t, report, "atrium-web-new", "precondition: the tail is counted, not named")
 	assert.Contains(t, report, "kill-session -t <name>",
 		"but the socket it needs is still on the page")
+}
+
+// heldEntries wraps disclosures as the DisclosureEntry slice createDisclosureReport takes for
+// its held tail. The tail carries record paths in production because flushCreateDisclosures
+// re-buffers it — a Disclosure alone cannot be re-offered to ClearDisclosure — and the report
+// only ever counts it, so the paths here are irrelevant to what is being asserted.
+func heldEntries(ds ...outbox.Disclosure) []outbox.DisclosureEntry {
+	entries := make([]outbox.DisclosureEntry, 0, len(ds))
+	for i, d := range ds {
+		entries = append(entries, outbox.DisclosureEntry{
+			Path: filepath.Join("/spool", fmt.Sprintf("held-%d.json", i)), Disclosure: d})
+	}
+	return entries
+}
+
+// TestFlushKeepsTheHeldTailInTheBufferThatGuardsIt is the cap's other half, and the half no
+// assertion on the report can see.
+//
+// m.pendingCreateDisclosures is the only thing clearMarkOverADroppedRecord consults before
+// deleting a mark. Held entries that left the buffer were therefore unguarded from the instant
+// the report fired: one drain tick later the same records took the terminal-mark arm, were
+// answered and unlinked, and every held mark went with them — while the modal on screen said
+// they were kept. They were also the NEWEST orphans, since ListDisclosures is oldest-first, so
+// the ones destroyed unread were the likeliest to still have an agent running.
+//
+// The fixture is the state the mark exists FOR: records still in the spool, each with a mark
+// beside it, which is what a failed unlink leaves. That is why the drain's disposal arm reaches
+// them at all — a fixture that discarded the record first would leave the drain nothing to drop
+// and the loss would not reproduce.
+func TestFlushKeepsTheHeldTailInTheBufferThatGuardsIt(t *testing.T) {
+	h := drainHome(t)
+	const total = createDisclosuresShown + 2
+	var records []string
+	for i := range total {
+		title := fmt.Sprintf("orphan-%d", i)
+		record := spoolCreate(t, outbox.Request{Title: title, Path: gitRepoWithBranch(t, "")})
+		d := orphanDisclosure(title)
+		require.NoError(t, outbox.Disclose(record, &d))
+		records = append(records, record)
+	}
+	h.pendingCreateDisclosures = loadCreateDisclosures()
+	require.Len(t, h.pendingCreateDisclosures, total, "precondition: all of them are buffered")
+
+	h.flushCreateDisclosures()
+	require.Equal(t, stateInfo, h.state, "precondition: the report fired")
+	require.Len(t, h.pendingCreateDisclosures, total-createDisclosuresShown,
+		"the tail stays where the only thing that guards it can see it")
+
+	// One tick of the drain: every record now has a mark beside it, so every one takes the
+	// terminal-mark arm and is dropped. createDisposalBudget is 50, so all of them fit.
+	h.state = stateDefault
+	h.drainCreateRequests()
+
+	surviving := 0
+	for _, record := range records {
+		if outbox.DisclosureMark(record) == outbox.HasDisclosure {
+			surviving++
+		}
+	}
+	assert.Equal(t, total-createDisclosuresShown, surviving,
+		"the marks the report promised to show next are still there to show")
+}
+
+// TestFlushDropsAMarkALiveSessionOwns is the screen the file cannot do for itself.
+//
+// discloseLiveButUnrecorded writes a mark for a session that is running while its row is not,
+// and withdraws it when the row lands. A session killed before it ever persisted is absent
+// from every later save, so the withdrawal never comes and the file outlives the run —
+// applyKillDone drops the row BEFORE it reports an incomplete teardown, which is what makes
+// that reachable rather than theoretical. git.BranchNameForSession and
+// tmux.QualifiedSessionName are pure functions of (repo, title), so the next session created
+// under that title is described byte for byte by a file saying nothing in atrium's records
+// points at it — under a report that hands the reader `tmux kill-session`. Following it
+// destroys a running agent, which is the one thing discloseLiveButUnrecorded exists to avoid.
+func TestFlushDropsAMarkALiveSessionOwns(t *testing.T) {
+	h := drainHome(t)
+	repo := gitRepoWithBranch(t, "")
+	inst := addPersistedInstanceOnBranch(t, h, "fix-auth", repo, "zvi/fix-auth")
+	require.True(t, inst.Started(), "precondition: an unstarted row owns nothing yet")
+
+	record := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: repo})
+	live := outbox.Disclosure{Title: "fix-auth", Repo: repo, Branch: inst.Branch,
+		Reason: "the row could not be written"}
+	require.NoError(t, outbox.Disclose(record, &live))
+	stranded := orphanDisclosure("long-gone")
+	strandedRecord := spoolCreate(t, outbox.Request{Title: "long-gone", Path: repo})
+	require.NoError(t, outbox.Disclose(strandedRecord, &stranded))
+	h.pendingCreateDisclosures = loadCreateDisclosures()
+	require.Len(t, h.pendingCreateDisclosures, 2)
+
+	h.flushCreateDisclosures()
+
+	require.Equal(t, stateInfo, h.state, "the genuine orphan is still reported")
+	report := h.textOverlay.Render()
+	assert.NotContains(t, report, inst.Branch,
+		"a branch a live row holds is that row's, whatever a file written before it says")
+	assert.Contains(t, report, stranded.Branch, "and the real orphan is not screened away with it")
+}
+
+// TestCreateDisclosureBacklogPutsWhatCannotBeReReadFirst: the reconcile's undisclosed entries
+// exist nowhere but in that slice, because the write is what failed. flushCreateDisclosures
+// caps what one report names and decides by position, so appended they sat behind every
+// disk-backed entry and went to the held tail — and a crash before the second pass takes them
+// with it, where a disk-backed entry is read again by the next launch.
+func TestCreateDisclosureBacklogPutsWhatCannotBeReReadFirst(t *testing.T) {
+	onDisk := []outbox.DisclosureEntry{
+		{Path: "/spool/1.json", Disclosure: orphanDisclosure("on-disk")},
+	}
+	undisclosed := []outbox.DisclosureEntry{
+		{Path: "/spool/2.json", Disclosure: orphanDisclosure("memory-only")},
+	}
+
+	got := createDisclosureBacklog(onDisk, undisclosed)
+
+	require.Len(t, got, 2)
+	assert.Equal(t, "memory-only", got[0].Disclosure.Title,
+		"the entry with no file takes the slot the cap might not reach twice")
+	assert.Equal(t, "on-disk", got[1].Disclosure.Title)
 }

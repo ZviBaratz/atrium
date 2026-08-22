@@ -150,14 +150,25 @@ func disclosurePath(record string) string { return record + disclosureSuffix }
 // the terminal mark is the guard, and a guard that only appears when there happens to be a
 // branch to name is not one.
 //
-// Every giving-up, and not only every giving-up on a claim. A record answered at the drain's
-// gates has built nothing, so it has no inventory — but it is still a file that can outlive
-// the Reject meant to remove it, and several of those gates are facts about the FLEET rather
-// than about the request: a rate limit resets, a session cap is raised, a title is freed by a
-// kill. Re-drained hours later against a fleet that has moved on, the same record passes and
-// the session is built for a caller that read the refusal and exited non-zero. The mark is
-// what makes an unlink that failed harmless in that direction too; app.flushCreateDisclosures
-// is where an inventory-less one stops short of a modal.
+// Every giving-up, and not only every giving-up on a claim. A record can outlive the Reject
+// meant to remove it just as a claim can, and several of the drain's gates are facts about
+// the FLEET rather than about the request: a rate limit resets, a session cap is raised, a
+// title is freed by a kill. Re-drained hours later against a fleet that has moved on, the
+// same record passes and the session is built for a caller that read the refusal and exited
+// non-zero. The mark is what makes an unlink that failed harmless in that direction too;
+// app.flushCreateDisclosures is where an inventory-less one stops short of a modal.
+//
+// A record refused at those gates usually has nothing to name, and that is a usually rather
+// than a rule: one the startup reconcile re-queued to finish an interrupted build carries
+// the branch that build made, in an evidence block that outlives the licence to adopt it
+// (app.rejectCreateRequest). What a giving-up owes is separately the mark and, when it has
+// one, the inventory — which is why neither is inferred from the other here.
+//
+// What does NOT write one is a giving-up that stays true however often it is repeated. An
+// expired record is expired again on the next tick and an undecodable one is still
+// undecodable, so the arms that dispose of those get no guard from a mark and would mint a
+// file per record per tick for a cron backlog (app.drainCreateRequests). They write one only
+// when they have an inventory to report, where the file is a report and not a guard.
 // It stamps Version and CreatedAt on the Disclosure it is given rather than on a copy, so
 // the caller that buffers the same value for this process's own report (app.discloseCreate‑
 // Leftovers) shows the record that was written rather than one missing both fields.
@@ -213,19 +224,52 @@ const (
 // question is whether the request has already been given up on, and a mark nobody can read
 // still answers that. Only a stat that fails for some other reason (a stale NFS handle, an
 // I/O error) is DisclosureUnknown, and the callers hold rather than guess.
+//
+// A file that vanishes BETWEEN the two calls is NoDisclosure, not an unreadable mark. The
+// window is real — another atrium's reader clears a delivered disclosure — and reading it as
+// terminal would answer a healthy request with a receipt saying an earlier atrium gave up
+// without recording why, and unlink it. errors.Is reaches the ENOENT through readDisclosure's
+// wrapping, which is what that wrapping is for.
 func DisclosureFor(record string) (Disclosure, DisclosureState) {
-	path := disclosurePath(record)
-	if _, err := os.Stat(path); err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return Disclosure{}, NoDisclosure
-		}
-		return Disclosure{}, DisclosureUnknown
+	if state := DisclosureMark(record); state != HasDisclosure {
+		return Disclosure{}, state
 	}
-	e := readDisclosure(path)
-	if e.Err != nil {
+	e := readDisclosure(disclosurePath(record))
+	switch {
+	case errors.Is(e.Err, fs.ErrNotExist):
+		return Disclosure{}, NoDisclosure
+	case e.Err != nil:
 		return Disclosure{}, HasDisclosure
 	}
 	return e.Disclosure, HasDisclosure
+}
+
+// DisclosureMark answers only whether a record has been given up on, without reading the
+// file. It is the half of DisclosureFor that decides, and the whole of what a caller needs
+// when it has already established that it will not act this tick.
+//
+// Separated because the read is not free and the decision does not need it.
+// app.drainCreateRequests probes every record in the spool on a walk that runs twice a
+// second, and its disposal budget means most of a backlog is skipped after the probe — so
+// folding the read in paid a ReadFile and an Unmarshal per skipped record, on the Bubble Tea
+// update goroutine, for a body it discarded. The stat is what says the record must not be
+// touched; the body is only wording for the receipt.
+//
+// An invalid record path is DisclosureUnknown rather than an error, which keeps this a
+// two-line call at both sites. Every derived name (a claim, a receipt, another disclosure)
+// answers "I could not establish this", so a caller that passes one licenses nothing — the
+// iota-0 rule, applied where the screen would otherwise have to be a third return value.
+func DisclosureMark(record string) DisclosureState {
+	if err := validRecord(record); err != nil {
+		return DisclosureUnknown
+	}
+	if _, err := os.Stat(disclosurePath(record)); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return NoDisclosure
+		}
+		return DisclosureUnknown
+	}
+	return HasDisclosure
 }
 
 // ListDisclosures returns every disclosure in the create spool, oldest first.
@@ -288,6 +332,16 @@ func ListDisclosures() ([]DisclosureEntry, error) {
 // lands, and reading the kept case as done drops the only handle it had — leaving a
 // disclosure that says a live session's branch belongs to nothing.
 func ClearDisclosure(record string) (removed bool, err error) {
+	// Screened for validRecord's reason, and here it is not only about what a bad path
+	// could MINT: os.Remove on a name that can never exist returns ENOENT, which the rule
+	// below reports as "the withdrawal landed". app.withdrawUnrecordedCreates reads that as
+	// done and drops the only handle it had on a disclosure naming a live session's branch,
+	// worktree and tmux session. A caller holding both a record path and its claim path a
+	// few lines apart (app.applyCreateClaim) is one typo from that, so the guard is here
+	// rather than trusted to the call sites.
+	if err := validRecord(record); err != nil {
+		return false, err
+	}
 	if recordStillSpooled(record) {
 		return false, nil
 	}
@@ -343,26 +397,31 @@ func SweepDisclosures(now time.Time) {
 // discloseClearedRequest records what an `atrium reset` is about to strand by destroying a
 // create request, and returns without writing when nothing is owed.
 //
-// mark is the difference between the two arms of Clear that call it. A CLAIM always gets
-// one, including one with nothing to name: the mark is what keeps a claim whose unlink
-// failed from being re-judged into a rebuild on the next launch, and Disclose's whole
-// argument is that a guard which only appears when there happens to be a branch to name is
-// not one. A plain RECORD gets one only when it names a branch, because a record with none
-// built nothing — reset removes it and there is nothing left to guard.
+// Both arms of Clear write one, and neither conditions it on having something to name. The
+// mark is what keeps a spool file whose unlink failed from being executed by the next
+// atrium, and Disclose's whole argument is that a guard appearing only when there happens to
+// be a branch to name is not one. The claim arm needs it against a re-judged rebuild; the
+// record arm needs it because reset's own message to the operator is "discarded", and a
+// record that survives its Reject is one the next TUI takes through the gates for a caller
+// that has already exited non-zero. Neither is idempotent the way an expiry is (see
+// Disclose), so neither can go without.
 //
-// A record CAN name a branch, and that is the case this arm exists for: an interrupted
-// build that reconcileCreateClaims re-queued to adopt its own orphan is back at the record
-// name, with the claim's evidence block still on it, and applyCreateClaim released that
-// branch's worktree registration on its way past. Reset it in that window and the branch has
-// no row, no claim, no request and no registration — #731's hole 1 with reset's name on it.
+// A record CAN name a branch, and that is the case the record arm exists for beyond the
+// mark: an interrupted build that reconcileCreateClaims re-queued to adopt its own orphan is
+// back at the record name, with the claim's evidence block still on it, and applyCreateClaim
+// released that branch's worktree registration on its way past. Reset it in that window and
+// the branch has no row, no claim, no request and no registration — #731's hole 1 with
+// reset's name on it.
 //
-// The branch comes from the claim's own evidence block and is the only artifact named. It is
-// what survives a reset (see Clear); the worktree DIRECTORY and the agent are what reset
-// destroys, so naming them would send the reader after two things that are already gone.
-// What reset does NOT clear is git's stale registration of that directory — `worktree prune`
-// is repo-scoped through rows reset has just deleted — so the reason says so, because
-// `git branch -D` on such a branch fails with a path that no longer exists and nothing else
-// would tell the reader why.
+// The branch is the only artifact named because it is the only one a spool file records.
+// ClaimMeta carries SessionBranch and BranchExisted; the worktree directory and the tmux
+// name were never on the wire, so this cannot name them whatever their fate. It is not a
+// claim that they are gone: Clear runs BEFORE tmux.CleanupSessions and git.CleanupWorktrees
+// in reset's own sequence, either of which can fail and abort the reset with the directory
+// and the agent still standing. What reset does NOT clear even when it completes is git's
+// stale registration of that directory — `worktree prune` is repo-scoped through rows reset
+// has just deleted — so the reason says so, because `git branch -D` on such a branch fails
+// with a path that no longer exists and nothing else would tell the reader why.
 //
 // Any disclosure already there wins, readable or not. The pair "claim plus disclosure" is a
 // refusal whose unlink failed, and that refusal wrote its account with the full inventory in
@@ -370,21 +429,21 @@ func SweepDisclosures(now time.Time) {
 // partial one. One this atrium cannot decode wins for the sharper reason: it may be a newer
 // atrium's, and replacing it would be answering "I cannot read this" by destroying it. A
 // state that could not be established wins too — the same rule one step out.
-func discloseClearedRequest(record string, e CreateEntry, mark bool) error {
+func discloseClearedRequest(record string, e CreateEntry) error {
+	if DisclosureMark(record) != NoDisclosure {
+		return nil
+	}
 	branch := ""
 	if e.Err == nil && e.Request.Claim != nil {
 		branch = e.Request.Claim.SessionBranch
 	}
-	if !mark && branch == "" {
-		return nil
-	}
-	if _, state := DisclosureFor(record); state != NoDisclosure {
-		return nil
-	}
 	d := Disclosure{Reason: clearReason}
 	if e.Err == nil {
-		// An undecodable file yields no identity, and the mark is still owed. The log line
-		// Clear's caller writes is the only account of which request it was.
+		// An undecodable file yields no identity, and the mark is still owed. Nothing else
+		// records which request it was either: reset prints a count and logs a count, so an
+		// undecodable record is cleared with the file name as the only trace, in the spool
+		// directory the operator can go and look at. The mark is written for its guard job
+		// alone, and Leftovers() keeps it out of the reader's report.
 		d.Title, d.Repo = e.Request.Title, e.Request.Path
 	}
 	if branch != "" {

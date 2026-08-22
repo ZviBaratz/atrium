@@ -401,12 +401,11 @@ type home struct {
 	//
 	// One bool rather than a set keyed by path, and it can be answering for more than one
 	// request: claims accumulate across crashes and claimDefer leaves them, so several Adopt
-	// records can be queued at once. createTmuxHeld covers several at once too — its log line
-	// prints how many — and the difference is that it can say so, where this one cannot: tmux
-	// is one fact about the machine and each of these is a different repo. Two held together
-	// are reported as one hold naming one error, which is the whole cost. What it must not do
+	// records can be queued at once. Two held together are reported as one hold naming one
+	// error, which is the whole cost — tmux is one fact about the machine, where each of these
+	// is a different repo, so there is no single error that covers them. What it must not do
 	// is lift while one of them is still held — see noteAdoptHold, which is why the lift takes
-	// a second argument.
+	// a second argument. createMarkHeld below takes the same pair for the same reason.
 	createAdoptHeld bool
 	// createMarkHeld is the same one-log-per-transition flag for a record whose terminal
 	// mark could not be looked for at all — a spool the stat fails on. Separate from the two
@@ -927,12 +926,9 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 	// one belongs in this launch's report rather than the next one's. Buffered rather than
 	// surfaced, for the reason the park reports below are — there is no frame yet.
 	//
-	// The disclosures the reconcile could not WRITE are appended, because this read cannot
-	// find them: there is no file. They are the same refusals with the richest inventory —
-	// a branch, a registered worktree, a running agent — and a full disk is no reason to
-	// withhold them from the only party who can act (discloseCreateLeftovers' rule, applied
-	// where a free function cannot buffer for itself).
-	pendingDisclosures := append(loadCreateDisclosures(), undisclosed...)
+	// The disclosures the reconcile could not WRITE are folded in here, because this read
+	// cannot find them: there is no file. See createDisclosureBacklog for the order.
+	pendingDisclosures := createDisclosureBacklog(loadCreateDisclosures(), undisclosed)
 
 	h := assembleHome(ctx, program, autoYes, version, binName, appConfig, appState, storage, instances)
 	// Buffered rather than surfaced here: newHome runs before the program starts, so

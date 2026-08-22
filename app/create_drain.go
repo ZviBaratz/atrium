@@ -196,8 +196,11 @@ func (m *home) drainCreateRequests() tea.Cmd {
 
 	if len(entries) == 0 {
 		// Through the transition rather than around it: an empty spool holds nothing, so
-		// this is where a hold whose request expired or was reset away is lifted.
+		// this is where a hold whose request expired or was reset away is lifted. Both
+		// holds, because both are lifted by the record going away and neither can see
+		// that from inside a walk that does not run.
 		m.noteAdoptHold(nil, false)
+		m.noteUnreadableMark("", false)
 		return nil
 	}
 
@@ -222,8 +225,12 @@ func (m *home) drainCreateRequests() tea.Cmd {
 	switch {
 	case tmuxDown != nil && !m.createTmuxHeld:
 		m.createTmuxHeld = true
-		log.WarningLog.Printf("holding %d create request(s) until tmux is usable again: %v",
-			len(entries), tmuxDown)
+		// The count is of the SPOOL, and says so. It was written as the number of requests
+		// held, which it is not: the disposals the paragraph above exempts are in it, and
+		// they are answered on this very tick. Naming the spool depth is the true statement
+		// and the useful one — it is what an operator wants to know while tmux is down.
+		log.WarningLog.Printf("holding create requests until tmux is usable again "+
+			"(%d record(s) in the spool): %v", len(entries), tmuxDown)
 	case tmuxDown == nil && m.createTmuxHeld:
 		m.createTmuxHeld = false
 		log.InfoLog.Printf("tmux is usable again; resuming create requests")
@@ -250,6 +257,14 @@ func (m *home) drainCreateRequests() tea.Cmd {
 	// walk on its transitions, for adoptHoldErr's reason: the condition is a broken spool
 	// rather than anything about the request, and the walk runs twice a second.
 	var markUnreadable string
+	// Whether any record reached the end of this walk without its mark being established —
+	// adoptPending's job for the other flag, and needed for the same reason. markUnreadable
+	// going empty says nothing on its own: the composite break below leaves the whole tail
+	// of the spool unprobed and a poisoned path is never probed at all, so both arrive here
+	// with it empty while a record is still held. Read as "the spool can be stat'd again",
+	// that logs a resume for a request nobody looked at and clears the flag the next genuine
+	// hold needed.
+	var markPending bool
 	anyAdopt := func(rest []outbox.CreateEntry) bool {
 		for _, e := range rest {
 			if e.Err == nil && e.Request.Adopt {
@@ -269,12 +284,18 @@ func (m *home) drainCreateRequests() tea.Cmd {
 		//
 		// Only a spool with 50+ disposable records reaches this; a healthy backlog
 		// leaves disposed at 0 and is bounded by the per-arm `continue`s below instead,
-		// walking the remaining entries to a map lookup and one os.Stat apiece (the
-		// terminal-mark check, which is above every budget because what it decides is
-		// whether the record may be touched at all). Not worth a cleverer condition
-		// while ListCreates has already opened and decoded every one of them anyway.
+		// walking the remaining entries to a map lookup and one os.Stat apiece — the
+		// terminal-mark probe, which is above every budget except this break because what
+		// it decides is whether the record may be touched at all. Not worth a cleverer
+		// condition while ListCreates has already opened and decoded every one of them
+		// anyway.
+		//
+		// This break is what makes the two hold flags need their pending companions: the
+		// tail it leaves is neither re-checked nor probed, so both conditions arrive at
+		// the notices below looking clear.
 		if (started >= createStartBudget || gated >= createGateBudget) && disposed >= createDisposalBudget {
 			adoptPending = adoptPending || anyAdopt(entries[i:])
+			markPending = true
 			break
 		}
 		// No in-flight check here, and that is the claim doing the work rather than an
@@ -292,6 +313,7 @@ func (m *home) drainCreateRequests() tea.Cmd {
 		// is load-bearing for that case and not only for an unlink that failed.
 		if m.outboxPoisoned[e.Path] {
 			adoptPending = adoptPending || anyAdopt(entries[i:i+1])
+			markPending = true
 			continue
 		}
 
@@ -312,24 +334,75 @@ func (m *home) drainCreateRequests() tea.Cmd {
 		// the tmux probe's distinction one more time: destroying it would answer a caller
 		// with a reason nobody wrote, and executing it would build the session an earlier
 		// launch may already have refused. Held, the record keeps its place and its TTL.
-		d, marked := outbox.DisclosureFor(e.Path)
-		if marked == outbox.DisclosureUnknown {
-			markUnreadable = e.Path
-			adoptPending = adoptPending || e.Request.Adopt
-			continue
-		}
-		if marked == outbox.HasDisclosure {
-			if disposed >= createDisposalBudget {
+		//
+		// Its TTL, and that is why the hold is conditional on the record not being past it.
+		// The hold is a `continue` ABOVE every arm below, so a record it covers reaches no
+		// disposal either: nothing sweeps a record (sweepSuffixed only ever walks the two
+		// suffixed kinds) and nothing poisons its path, so a spool the stat keeps failing on
+		// held it for the life of this TUI and of every one after it — re-listed and
+		// re-probed twice a second, with `atrium reset` the only way out. Past the horizon
+		// the disposal wins instead: a second receipt for a caller that may already have one
+		// is a duplicate 24 hours late, against a file no atrium can ever let go.
+		//
+		// "Past the horizon" needs a timestamp to be past it, which is why this reads e.Err
+		// rather than folding it in as another way of being disposable. An undecodable record
+		// has no CreatedAt — e.Request is the zero value — and reading that as "spooled at the
+		// epoch, therefore expired" is the mistake this whole probe exists to stop, one type
+		// down: it converts "I could not find out how old this is" into the answer that
+		// destroys the record. So a record that can be decoded gets the horizon the paragraph
+		// above promises, and one that cannot, whose mark ALSO cannot be stat'd, is held
+		// indefinitely and `atrium reset` is its remedy. Two independent failures of the same
+		// spool are what it takes to reach that, and the cost of being there is two syscalls
+		// per tick rather than anything destroyed.
+		//
+		// Probed rather than read, and the body fetched only by the arm that uses it. The
+		// walk stats every record in the spool twice a second while its disposal budget
+		// skips most of a backlog, so folding the read in charged a ReadFile and an
+		// Unmarshal per skipped record for a Disclosure it discarded (outbox.DisclosureMark).
+		disposable := e.Err == nil && e.Request.Expired(now)
+		mark := outbox.DisclosureMark(e.Path)
+		if mark == outbox.DisclosureUnknown {
+			markPending = true
+			if !disposable {
+				markUnreadable = e.Path
 				adoptPending = adoptPending || e.Request.Adopt
 				continue
 			}
-			reason := answeredReason(d)
-			log.WarningLog.Printf("dropping a create request for %q that atrium had already "+
-				"given up on: %s", e.Request.Title, reason)
-			m.discardSpoolFile(e.Path, func() error { return outbox.Reject(e.Path, reason) })
-			m.clearMarkOverADroppedRecord(e.Path)
-			disposed++
-			continue
+		}
+		if mark == outbox.HasDisclosure {
+			// Charged here rather than in the skip below, because the DROP is the path that
+			// needs it: discardSpoolFile's unlink is the very call that failed when this mark
+			// was written, so the record routinely survives this arm and is never re-checked
+			// — the arm returns above the re-check. Read from the skip alone, a failed drop
+			// logged a resume for a request still held and left the flag clear for the next
+			// genuine hold to go unlogged. Over-reporting pending costs one resume line the
+			// log never prints, which is the direction noteAdoptHold already documents.
+			adoptPending = adoptPending || e.Request.Adopt
+			if disposed >= createDisposalBudget {
+				continue
+			}
+			// NoDisclosure here means the file went between the probe and the read — another
+			// atrium's reader clearing a delivered mark — so there is no mark after all and
+			// the ordinary arms below judge the record. Answering it terminal on the strength
+			// of a stat that is no longer true would hand a healthy request a receipt saying
+			// an earlier atrium gave up without recording why.
+			if d, state := outbox.DisclosureFor(e.Path); state != outbox.NoDisclosure {
+				reason := answeredReason(d)
+				// The record's own title, falling back to the mark's. An undecodable record
+				// has none — e.Request is the zero value on that arm — and this line is the
+				// only account of the drop that survives it: the record and the mark are both
+				// destroyed two calls later.
+				title := e.Request.Title
+				if title == "" {
+					title = d.Title
+				}
+				log.WarningLog.Printf("dropping a create request for %q that atrium had already "+
+					"given up on: %s", title, reason)
+				m.discardSpoolFile(e.Path, func() error { return outbox.Reject(e.Path, reason) })
+				m.clearMarkOverADroppedRecord(e.Path)
+				disposed++
+				continue
+			}
 		}
 
 		// Discards, gate evaluations and starts draw on separate budgets, so a backlog
@@ -337,20 +410,31 @@ func (m *home) drainCreateRequests() tea.Cmd {
 		// and cannot buy itself unbounded git either. Each arm charges its own budget,
 		// so which one paid is read at the call site rather than through a parameter.
 		// The request as THIS tick will execute it, plus the branch a refusal of it owes a
-		// disclosure. Adopt can be withdrawn below and the branch usually cannot: the
-		// licence to skip the branch gate is about now, while the branch itself was made
-		// by an interrupted build whose worktree registration applyCreateClaim already
-		// released on this request's behalf. Reading the flag for both — which this did —
-		// makes every withdrawal a silent orphan, which is the hole this is here to close
-		// (see rejectCreateRequest). The one withdrawal that clears the branch too is the
-		// one where git says it is gone.
+		// disclosure. Adopt can be withdrawn and the branch usually cannot: the licence to
+		// skip the branch gate is about now, while the branch itself was made by an
+		// interrupted build whose worktree registration applyCreateClaim already released
+		// on this request's behalf. Reading the flag for both — which this did — makes
+		// every withdrawal a silent orphan, which is the hole this is here to close (see
+		// rejectCreateRequest). The one withdrawal that clears the branch too is the one
+		// where git says it is gone.
+		//
+		// So the branch comes from the evidence block and not from the flag, and it has to:
+		// outbox.WithdrawAdoption persists the cleared flag, so a record that reaches a
+		// later tick or a later launch after a withdrawal landed reads Adopt false while
+		// its branch is still standing. Guarded on the flag, that record named no branch
+		// anywhere — and it is the one the arm below has just released the registration
+		// for. What the evidence block over-reports instead is a branch a successful
+		// teardown deleted, which costs the reader one row saying so.
 		req := e.Request
-		orphan := ""
-		if req.Adopt {
-			orphan = claimedBranch(req)
-		}
+		orphan := claimedBranch(req)
 		reject := func(reason string) {
 			m.rejectCreateRequest(e.Path, req, orphan, reason)
+		}
+		// The disposal arms answer differently. See disposeCreateRequest: they are terminal
+		// however often they repeat, so a mark buys them no guard, and one per record per
+		// tick is what a cron backlog would mint.
+		dispose := func(reason string) {
+			m.disposeCreateRequest(e.Path, req, orphan, reason)
 		}
 
 		switch {
@@ -364,9 +448,10 @@ func (m *home) drainCreateRequests() tea.Cmd {
 			// spool's own name format, so this can only discard our own.
 			//
 			// e.Request is the zero value on this arm, so orphan is empty and stays
-			// that way: a record nobody can decode names no branch to disclose.
+			// that way: a record nobody can decode names no branch to disclose. With
+			// nothing to report and no guard to buy, this arm writes no mark at all.
 			log.ErrorLog.Printf("discarding an unreadable create request: %v", e.Err)
-			reject("the request could not be read")
+			dispose("the request could not be read")
 			disposed++
 
 		case e.Request.Expired(now):
@@ -375,14 +460,16 @@ func (m *home) drainCreateRequests() tea.Cmd {
 				continue
 			}
 			// Disclosed without a re-check, deliberately. This arm is the one that
-			// destroys the record permanently — the recovery is one-shot — so an Adopt
-			// branch it does not name is named nowhere ever again, while a branch named
-			// after somebody deleted it costs the reader one row that says so. The
-			// asymmetry is the whole argument for over-reporting (see outbox.Disclosure).
+			// destroys the record permanently — the recovery is one-shot — so a branch it
+			// does not name is named nowhere ever again, while a branch named after
+			// somebody deleted it costs the reader one row that says so. The asymmetry is
+			// the whole argument for over-reporting (see outbox.Disclosure). It is also
+			// why this arm keeps its disclosure while the mark it no longer writes goes:
+			// what it has is a report, and the report is owed.
 			age := now.Sub(e.Request.CreatedAt).Round(time.Minute)
 			log.WarningLog.Printf("discarding a create request for %q: spooled %s ago, past the %s horizon",
 				e.Request.Title, age, outbox.TTL)
-			reject(fmt.Sprintf("the request was spooled %s ago, past the %s horizon", age, outbox.TTL))
+			dispose(fmt.Sprintf("the request was spooled %s ago, past the %s horizon", age, outbox.TTL))
 			disposed++
 
 		default:
@@ -471,7 +558,7 @@ func (m *home) drainCreateRequests() tea.Cmd {
 	}
 
 	m.noteAdoptHold(adoptHoldErr, adoptPending)
-	m.noteUnreadableMark(markUnreadable)
+	m.noteUnreadableMark(markUnreadable, markPending)
 
 	// No title in either notice: a request's title has no length ceiling this side of
 	// the wire format, and the notice row truncates its tail. Prose says why; the log
@@ -907,16 +994,24 @@ func (m *home) clearMarkOverADroppedRecord(record string) {
 // runs twice a second and a spool that cannot be stat'd stays that way.
 //
 // Worth a line at all because the record is neither executed nor answered while this holds:
-// its caller's --wait blocks to its own deadline and the file sits until the TTL, which is
-// the one skip in the walk with no other trace. `atrium doctor` reports the data dir; this
-// says which file.
-func (m *home) noteUnreadableMark(record string) {
+// its caller's --wait blocks to its own deadline, and the file sits until the spool horizon
+// past which the disposal arms take it — or indefinitely, for the one record that has no
+// readable timestamp to be past it (see the probe in the walk). That is the one skip in the
+// walk with no other trace. `atrium doctor` reports the data dir; this line says which file.
+//
+// pending is noteAdoptHold's second argument for noteAdoptHold's reason, and this flag needed
+// it as much: the walk's composite break leaves the whole tail of the spool unprobed and a
+// poisoned path is never probed at all, so a held record can reach the end of a tick with no
+// record name to report. Lifting on that logs a resume nobody earned and clears the flag the
+// next genuine hold needed. The lift wants both — nothing failed to be probed, and nothing
+// was left unprobed — and an empty spool is where it reliably gets them.
+func (m *home) noteUnreadableMark(record string, pending bool) {
 	switch {
 	case record != "" && !m.createMarkHeld:
 		m.createMarkHeld = true
 		log.ErrorLog.Printf("holding create request %s: cannot tell whether atrium has already "+
 			"given up on it", filepath.Base(record))
-	case record == "" && m.createMarkHeld:
+	case record == "" && !pending && m.createMarkHeld:
 		m.createMarkHeld = false
 		log.InfoLog.Printf("create requests can be checked for a terminal mark again; resuming")
 	}
@@ -1082,9 +1177,12 @@ func (m *home) settleCreateRequest(inst *session.Instance, startErr error) {
 // and here there is deliberately none: naming a branch the caller has just deleted would put
 // a modal in front of the user for artifacts that are gone.
 //
-// discloseUnrecordedSession is the other caller. It has an inventory and a live session, so
-// it writes its own disclosure and shares only the answer-and-drop half below — a second
-// write from here would overwrite the full account with an empty one.
+// discloseUnrecordedSession is the sibling this used to be reached through, and no longer is:
+// it has an inventory and a live session, so it writes its own disclosure and calls only the
+// answer-and-drop half below, because a second write from here would overwrite the full
+// account with an empty one. Which leaves this function one caller — settleCreateRequest's
+// startErr arm — and the split kept anyway, since what separates them is which disclosure is
+// owed rather than how many places ask.
 func (m *home) failCreateRequest(inst *session.Instance, reason string) {
 	path, ok := m.createsInFlight[inst]
 	if !ok {
@@ -1186,10 +1284,12 @@ func (m *home) discloseUnrecordedSession(inst *session.Instance, reason string) 
 // refusal that follows a withdrawal is a refusal of a request whose worktree registration
 // was already released. Reading the flag left the two withdrawals silent: a branch that moved
 // under the same name, and a record from an atrium too old to carry a pin (which
-// internal/outbox's createVersion promises is covered). The disposal arms were never among
-// them — they never reach the re-check, so the flag they read is still the one the record
-// arrived with. The caller passes "" for the one case where there is genuinely nothing to
-// name.
+// internal/outbox's createVersion promises is covered). It could not be repaired by reading
+// the flag more carefully either, because outbox.WithdrawAdoption persists the withdrawal —
+// so a record that comes back round on a later tick, or after a crash, reads Adopt false with
+// its branch still standing. The caller derives the branch from the claim's evidence block
+// instead, which the withdrawal does not touch, and passes "" for the one case where git has
+// said there is genuinely nothing to name.
 //
 // A disclosure is written even then, with nothing in it, and that is the mark rather than the
 // report. discardSpoolFile's unlink can fail, and most of the gates above are facts about the
@@ -1207,5 +1307,39 @@ func (m *home) rejectCreateRequest(path string, r outbox.Request, orphanBranch, 
 		Branch: orphanBranch,
 		Reason: reason,
 	})
+	m.discardSpoolFile(path, func() error { return outbox.Reject(path, reason) })
+}
+
+// disposeCreateRequest is rejectCreateRequest for the two arms whose answer does not depend
+// on anything that can change: a record past the spool horizon, and one nothing can decode.
+//
+// It differs in exactly one way — the mark is written only when there is something to report
+// — and the difference is not a saving, it is what the mark is FOR. rejectCreateRequest marks
+// unconditionally because most of the gates above it are facts about the FLEET: a rate limit
+// resets, a cap is raised, a title is freed, and a record that survived its own Reject is
+// then let through for a caller that already exited non-zero. Neither of these arms has that
+// property. Re-drained, an expired record is expired again and an undecodable one is still
+// undecodable, so the arm answers the same way for as long as the file exists and a mark
+// guards nothing.
+//
+// What it would cost instead is a file per record per tick. createDisposalBudget allows 50,
+// the walk runs twice a second, and a two-day cron backlog cleared while the TUI sits behind
+// the welcome modal — where flushCreateDisclosures returns early and clears nothing — mints a
+// disclosure and two fsyncs apiece on top of each receipt, all of it on the Bubble Tea update
+// goroutine. That is the synchronous freeze createDisposalBudget exists to bound, one layer
+// out from where it can see it.
+//
+// The report survives the mark going, because the two jobs are separate (outbox.Disclose).
+// An expired Adopt record still names its branch here: this arm destroys the record
+// permanently, so a branch it does not name is named nowhere ever again.
+func (m *home) disposeCreateRequest(path string, r outbox.Request, orphanBranch, reason string) {
+	if orphanBranch != "" {
+		m.discloseCreateLeftovers(path, outbox.Disclosure{
+			Title:  r.Title,
+			Repo:   r.Path,
+			Branch: orphanBranch,
+			Reason: reason,
+		})
+	}
 	m.discardSpoolFile(path, func() error { return outbox.Reject(path, reason) })
 }

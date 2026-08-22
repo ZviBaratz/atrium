@@ -376,11 +376,19 @@ func TestClearDisclosesTheBranchOfTheRecordItDestroys(t *testing.T) {
 		"because reset leaves git's registration of a directory it removed")
 }
 
-// TestClearLeavesNoMarkForARequestThatBuiltNothing is the other side of that decision. An
-// ordinary queued request has no evidence block, so it made no branch, and reset removes the
-// file outright — there is nothing left for a mark to guard. Writing one anyway would put a
-// file in the spool for every request reset ever cleared, each one kept until the TTL.
-func TestClearLeavesNoMarkForARequestThatBuiltNothing(t *testing.T) {
+// TestClearMarksAnOrdinaryRecordWithNothingToName is the record-shaped twin of the guard
+// below, and it used to be the exception: an ordinary queued request has no evidence block, so
+// it named no branch and got no mark, on the reasoning that reset removes the file and leaves
+// nothing to guard.
+//
+// The reasoning skipped the step that makes hole 3 a hole. Reject writes the receipt and THEN
+// unlinks, and the unlink can fail — a sticky-bit spool directory, an immutable file, an NFS
+// EPERM — which reset itself prints a warning for. The record then outlives a reset that told
+// its operator "discarded", state.json is empty so no title collides with it, and the next TUI
+// takes it through the gates and builds the session for a caller that already exited non-zero.
+// The mark is the only thing that stops that, and it is not a report: Leftovers() is false, so
+// the reader drops it unshown and it costs the user nothing.
+func TestClearMarksAnOrdinaryRecordWithNothingToName(t *testing.T) {
 	sandbox(t)
 	record, err := WriteCreate(req("fix-auth", "/repo/web"))
 	require.NoError(t, err)
@@ -389,8 +397,11 @@ func TestClearLeavesNoMarkForARequestThatBuiltNothing(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, removed)
 
-	_, state := DisclosureFor(record)
-	assert.Equal(t, NoDisclosure, state)
+	d, state := DisclosureFor(record)
+	require.Equal(t, HasDisclosure, state, "or a record that survives its Reject is executed")
+	assert.Equal(t, "fix-auth", d.Title)
+	assert.Empty(t, d.Branch, "it built nothing, so there is nothing to name")
+	assert.False(t, d.Leftovers(), "which is what keeps it out of the reader's report")
 }
 
 // TestClearMarksAClaimWithNothingToName is the guard half of the same rule, and the case it
@@ -468,4 +479,54 @@ func TestWithdrawAdoptionIsANoOpForAnOrdinaryRequest(t *testing.T) {
 	after, err := os.Stat(record)
 	require.NoError(t, err)
 	assert.Equal(t, before.ModTime(), after.ModTime(), "nothing was rewritten")
+}
+
+// TestClearDisclosureRefusesADerivedPath: every entry point that writes or removes derives a
+// second path by concatenation, so one handed a path already carrying a suffix mints a name no
+// walk in this package matches. That is the class validRecord closes, and these two readers of
+// the derived suffix were outside it.
+//
+// For this one the miss is worse than an unreachable file. os.Remove on a name that can never
+// exist returns ENOENT, which ClearDisclosure's already-gone rule reports as removed=true — and
+// app.withdrawUnrecordedCreates reads that as done and drops the only handle it had on a
+// disclosure naming a live session's branch, worktree and tmux session, with no error logged.
+// app.applyCreateClaim handles a record path and its claim path within a few lines, so passing
+// the latter is a live hazard rather than a hypothetical one.
+func TestClearDisclosureRefusesADerivedPath(t *testing.T) {
+	sandbox(t)
+	record := claimed(t, req("fix-auth", "/repo/web"), meta())
+	d := Disclosure{Title: "fix-auth", Branch: "zvi/fix-auth", Reason: "the row could not be written"}
+	require.NoError(t, Disclose(record, &d))
+
+	removed, err := ClearDisclosure(ClaimPath(record))
+
+	require.Error(t, err, "a derived path is not a record")
+	assert.False(t, removed, "and above all it did not report a withdrawal that never happened")
+	assert.Equal(t, HasDisclosure, DisclosureMark(record),
+		"the real mark is untouched, so the caller that keeps its handle still has one")
+}
+
+// TestDisclosureForReadsAVanishedMarkAsAbsent is the window between the stat and the read, and
+// the direction it must fall.
+//
+// Presence is a stat and content is a read (see DisclosureFor), which is what keeps fd
+// exhaustion from reporting every request terminal. The cost of the split is that another
+// atrium's reader can clear a delivered mark in between. Reported as HasDisclosure with a zero
+// Disclosure, that answers a healthy request with "a previous atrium gave up on this request
+// and could not record why" and unlinks it — so the vanished case is absence, not an unreadable
+// mark.
+func TestDisclosureForReadsAVanishedMarkAsAbsent(t *testing.T) {
+	sandbox(t)
+	record, err := WriteCreate(req("fix-auth", "/repo/web"))
+	require.NoError(t, err)
+	d := Disclosure{Title: "fix-auth", Reason: "gave up"}
+	require.NoError(t, Disclose(record, &d))
+	require.Equal(t, HasDisclosure, DisclosureMark(record), "precondition: the stat sees it")
+
+	// What the reader's unlink leaves behind, between one call and the next.
+	require.NoError(t, os.Remove(record+disclosureSuffix))
+
+	_, state := DisclosureFor(record)
+	assert.Equal(t, NoDisclosure, state,
+		"a mark that is gone is no mark, not a mark nobody could read")
 }

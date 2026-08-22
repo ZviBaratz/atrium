@@ -552,8 +552,10 @@ const reportLineBudget = 100
 // 64, derived from the overlay and not chosen: TextOverlay.boxWidth is
 // min(natural+4, terminalWidth-4) and its wrap width is boxWidth-4, so a report wider than
 // the cap renders at terminalWidth-8 — 72 columns at an 80-column terminal, and 64 at 72.
-// Nothing in the Go suite can see a wrap, so the lines that must survive one are asserted
-// against this instead (see TestCreateDisclosureReportFitsANarrowTerminal).
+// Nothing in the Go suite can see a wrap, so the lines that must survive one are built where a
+// test can enumerate them (app.createDisclosureTrailer) and asserted against this in cells
+// rather than runes — see TestCreateDisclosureTrailerFitsANarrowTerminal, and the scan it
+// replaced, which measured runes and skipped the one long line the report actually builds.
 const reportNarrowWidth = 64
 
 // clipReportLine keeps the head of a value whose identity is at its front — a name, a

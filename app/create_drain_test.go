@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -19,7 +20,9 @@ import (
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/internal/outbox"
 	"github.com/ZviBaratz/atrium/internal/testutil"
+	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/ui"
 
 	"github.com/stretchr/testify/assert"
@@ -1923,9 +1926,14 @@ func TestCreateDrainMarksAnOrdinaryRefusalWithoutReportingIt(t *testing.T) {
 	assert.False(t, d.Leftovers(), "and there is nothing for a modal to name")
 	assert.Contains(t, d.Reason, titleErrAlreadyUsed)
 
-	// Buffered so the flush is what clears the file, and dropped there without a report —
-	// see TestFlushCreateDisclosuresDropsAMarkWithNothingToShow.
-	require.Len(t, h.pendingCreateDisclosures, 1)
+	// Not buffered at all, which is the other half of "not reported". A mark with nothing to
+	// name has no reader, so the two things a buffered entry buys — a place in the report, and
+	// clearMarkOverADroppedRecord's promise not to delete a file nobody has seen — are both
+	// vacuous for it, while the slice it sat in has no ceiling and is emptied only by a flush
+	// that returns early behind any overlay. Its guard job is held by ClearDisclosure's own
+	// recordStillSpooled check instead, which is where it belongs.
+	assert.Empty(t, h.pendingCreateDisclosures,
+		"a mark nobody will read does not need a place in the report to keep guarding")
 	h.flushCreateDisclosures()
 	assert.Equal(t, stateDefault, h.state, "and no modal comes of it")
 }
@@ -2607,4 +2615,275 @@ func TestCreateDrainKeepsTheAdoptionHoldBehindASpentDisposalBudget(t *testing.T)
 	assert.FileExists(t, adopting, "precondition: the budget ran out before this one")
 	assert.True(t, h.createAdoptHeld,
 		"an adoption this tick never re-checked is not the re-check starting to work")
+}
+
+// TestCreateDrainHoldsAnAdoptionWhoseRepoCannotBeRead is the worst outcome in this file, and
+// it arrives through a probe that looks conservative.
+//
+// recheckAdoption folds "git could not be asked" and "git says there is no repository here"
+// apart with git.ProbeGitRepo, so a re-queued adoption whose repo was DELETED is answered in
+// one tick instead of held for the whole 24h horizon. But git prints the same sentence and the
+// same 128 for a real repository whose .git it cannot read, so an unreadable repo took that
+// same arm: adoptionGone, the licence withdrawn ON DISK by WithdrawAdoption, orphan struck off
+// the disclosure, and the request handed to the gates. There targetValidity reads
+// git.IsGitRepo — false — so direct is true, executeCreateRequest's isolation guard passes
+// because git DID answer, and an agent is launched with no worktree in the user's own
+// checkout, on the branch they had checked out, while the one recovery a stranded create gets
+// is spent and the orphan branch is named nowhere.
+//
+// Held instead, which is what the pre-#731 drain did for this case and what tmux off PATH
+// still does: a fact about the machine, no fault of the request, and the next tick can see it
+// come back. TestProbeGitRepoWillNotCallAnUnreadableRepoAPlainDirectory is the unit half.
+func TestCreateDrainHoldsAnAdoptionWhoseRepoCannotBeRead(t *testing.T) {
+	h := drainHome(t)
+	branch := h.appConfig.BranchPrefix + "fix-auth"
+	repo := gitRepoWithBranch(t, branch)
+	tip, err := git.LookupLocalBranchTip(t.Context(), repo, branch)
+	require.NoError(t, err)
+	require.NotEmpty(t, tip, "precondition: the pin is a real commit, so nothing else withdraws it")
+	record := spoolCreate(t, outbox.Request{
+		Title: "fix-auth", Path: repo, Adopt: true, AdoptTip: tip,
+		Claim: &outbox.ClaimMeta{At: time.Now(), SessionBranch: branch},
+	})
+	gitDir := filepath.Join(repo, ".git")
+	require.NoError(t, os.Chmod(gitDir, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(gitDir, 0o755) })
+	if _, err := git.LookupLocalBranchTip(t.Context(), repo, branch); err == nil {
+		t.Skip("this user can read the repository through mode 000")
+	}
+
+	assert.Nil(t, h.drainCreateRequests(), "nothing created, nothing refused")
+
+	assert.Zero(t, h.list.NumInstances(),
+		"and above all no session in the user's own checkout, with no worktree of its own")
+	assertCreateQueued(t, record)
+	assert.True(t, h.createAdoptHeld, "the hold is logged once rather than twice a second")
+	entries, err := outbox.ListCreates()
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.True(t, entries[0].Request.Adopt,
+		"and the licence is still on disk: a withdrawal here is permanent and the repo may come back")
+}
+
+// TestCreateDrainNamesTheBranchAfterAWithdrawalHasLanded: the branch a refusal discloses comes
+// from the claim's evidence block and not from Request.Adopt, and it has to, because
+// outbox.WithdrawAdoption persists the cleared flag.
+//
+// So a record that comes back round after a withdrawal landed — the tick's Claim rename failed,
+// or the process died between the two writes — reads Adopt false with its branch still standing,
+// and applyCreateClaim has already released that branch's worktree registration on this
+// request's behalf. Guarded on the flag, that record named no branch anywhere: no row, no claim,
+// no request, no registration, and nothing that mentions it. The recovery is one-shot, so the
+// state was permanent — #731's hole 1, reached from the one direction the flag could not see.
+func TestCreateDrainNamesTheBranchAfterAWithdrawalHasLanded(t *testing.T) {
+	h := drainHome(t)
+	branch := h.appConfig.BranchPrefix + "fix-auth"
+	repo := gitRepoWithBranch(t, branch)
+	// Adopt false with the evidence block intact: the state a landed withdrawal leaves.
+	record := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: repo,
+		Claim: &outbox.ClaimMeta{At: time.Now(), SessionBranch: branch}})
+	addInstance(t, h, "fix-auth", repo) // so a gate refuses it for the title
+
+	refuseDrain(t, h)
+
+	d := disclosed(t, record)
+	assert.Equal(t, branch, d.Branch,
+		"the branch an interrupted build made outlives the licence to adopt it")
+	assert.True(t, d.Leftovers(), "or the reader drops it and nobody is ever told")
+}
+
+// TestCreateDrainGivesAnUnreadableMarkAHorizon: the terminal-mark probe holds the record above
+// every arm below it, so a record it covers reaches no disposal either — and nothing sweeps a
+// record. sweepSuffixed only ever walks the two suffixed kinds and no arm poisons the path, so
+// a spool the stat keeps failing on held it for the life of this TUI and of every one after,
+// re-listed and re-probed twice a second, with `atrium reset` the only way out.
+//
+// Past the horizon the disposal wins: a second receipt for a caller that may already have one
+// is a duplicate 24 hours late, against a file no atrium can ever let go. The symlink loop is
+// how one file's stat is made to fail while the directory stays writable — the mark cannot be
+// read, and the record beside it can.
+func TestCreateDrainGivesAnUnreadableMarkAHorizon(t *testing.T) {
+	h := drainHome(t)
+	record := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: gitRepoWithBranch(t, ""),
+		CreatedAt: time.Now().Add(-2 * outbox.TTL)})
+	loopTheMarkOf(t, record)
+
+	h.drainCreateRequests()
+
+	assert.NoFileExists(t, record, "a record nothing can ever answer for is not immortal")
+	reason, ok := outbox.Rejection(record)
+	require.True(t, ok, "and its caller is told why")
+	assert.Contains(t, reason, "horizon")
+}
+
+// TestCreateDrainHoldsAFreshRecordWhoseMarkCannotBeRead is the other side of that horizon, and
+// the control for it: under the horizon the hold is what it always was. Without both, the
+// disposal above reads as "an unreadable mark is disposed of", which is the behaviour the whole
+// probe exists to prevent.
+func TestCreateDrainHoldsAFreshRecordWhoseMarkCannotBeRead(t *testing.T) {
+	h := drainHome(t)
+	record := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: gitRepoWithBranch(t, "")})
+	loopTheMarkOf(t, record)
+
+	assert.Nil(t, h.drainCreateRequests(), "nothing created, nothing refused")
+
+	assertCreateQueued(t, record)
+	assert.True(t, h.createMarkHeld)
+	assert.Zero(t, h.list.NumInstances())
+}
+
+// loopTheMarkOf points a record's disclosure path at itself, so os.Stat on it fails with ELOOP
+// while the record beside it and the directory around it stay perfectly readable. That
+// separation is the point: a chmod on the spool directory breaks the record's own read too, so
+// the entry arrives undecodable and exercises a different arm.
+func loopTheMarkOf(t *testing.T, record string) {
+	t.Helper()
+	mark := record + ".disclosure"
+	require.NoError(t, os.Symlink(filepath.Base(mark), mark))
+	if _, err := os.Stat(mark); err == nil {
+		t.Skip("this filesystem resolves a self-referential symlink")
+	}
+	require.Equal(t, outbox.DisclosureUnknown, outbox.DisclosureMark(record),
+		"precondition: the mark cannot be looked for")
+}
+
+// TestCreateDrainKeepsTheMarkHoldBehindASpentDisposalBudget is
+// TestCreateDrainKeepsTheAdoptionHoldBehindASpentDisposalBudget for the other flag, and it is
+// the assertion that was missing when the flag was added.
+//
+// noteAdoptHold was given a `pending` companion because every skip in the walk arrives at the
+// notices with err nil while the held request is still queued. createMarkHeld was given none —
+// and the composite break above the mark probe is the largest such skip there is: it leaves the
+// whole tail of the spool unprobed, so markUnreadable is "" for a record still held. Read as
+// "the spool can be stat'd again", that logs a resume nobody earned and clears the flag the
+// next genuine hold needed, which is the one thing an edge-triggered flag exists to prevent.
+// The next tick re-logs the hold, so the ERROR/INFO pair flaps at 2Hz.
+func TestCreateDrainKeepsTheMarkHoldBehindASpentDisposalBudget(t *testing.T) {
+	h := drainHome(t)
+	// Oldest first, so the walk spends its whole disposal budget, then a gate, before it
+	// reaches the held record — which is what makes the composite break fire on it.
+	for i := range createDisposalBudget {
+		spoolCreate(t, outbox.Request{
+			Title: fmt.Sprintf("expired-%02d", i), Path: t.TempDir(),
+			CreatedAt: time.Now().Add(-2 * outbox.TTL),
+		})
+	}
+	repo := gitRepoWithBranch(t, "")
+	addInstance(t, h, "taken", repo)
+	spoolCreate(t, outbox.Request{Title: "taken", Path: repo}) // charges the gate budget
+	held := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: repo})
+	loopTheMarkOf(t, held)
+	// The flag as an earlier tick left it: state about the log line, so a test may set it the
+	// way a hold would have.
+	h.createMarkHeld = true
+
+	h.drainCreateRequests()
+
+	require.FileExists(t, held, "precondition: the break came before this one was probed")
+	assert.True(t, h.createMarkHeld,
+		"a record this tick never probed is not the spool becoming readable again")
+}
+
+// TestCreateDrainLiftsTheMarkHoldWhenTheSpoolEmpties is the lift the pending companion must not
+// break, and the place it reliably happens. drainCreateRequests returns early on an empty
+// spool, before the walk that would otherwise set the flags, so the transition has to be driven
+// through that return — which is where the adopt flag's lift already lives and where the mark
+// flag's was missing entirely. Without it the flag stays true forever once set, and the next
+// genuinely unreadable mark is held in total silence.
+func TestCreateDrainLiftsTheMarkHoldWhenTheSpoolEmpties(t *testing.T) {
+	h := drainHome(t)
+	h.createMarkHeld = true
+
+	h.drainCreateRequests()
+
+	assert.False(t, h.createMarkHeld,
+		"an empty spool holds nothing, so this is where a reset-away hold is lifted")
+}
+
+// TestCreateDrainKeepsTheAdoptionHoldWhenADropFails is the arm the adopt flag's own companion
+// did not cover. The terminal-mark arm returns ABOVE the re-check, so a record it drops is
+// never re-checked — and the drop is the very call that failed when the mark was written, so
+// the record routinely survives it. Charged from the budget-spent skip alone, a failed drop
+// logged "resuming" for a request still held and cleared the flag; on every later tick the
+// poisoned path then sets pending with err nil, so no case matches and the genuine hold is
+// never re-logged.
+func TestCreateDrainKeepsTheAdoptionHoldWhenADropFails(t *testing.T) {
+	h := drainHome(t)
+	branch := h.appConfig.BranchPrefix + "fix-auth"
+	record := spoolCreate(t, outbox.Request{
+		Title: "fix-auth", Path: gitRepoWithBranch(t, branch), Adopt: true,
+		AdoptTip: strings.Repeat("a", 40),
+		Claim:    &outbox.ClaimMeta{At: time.Now(), SessionBranch: branch},
+	})
+	require.NoError(t, outbox.Disclose(record, &outbox.Disclosure{
+		Title: "fix-auth", Reason: "an earlier launch gave up on this"}))
+	// The unlink fails for the reason the mark exists: a spool that cannot be written. Set
+	// after the mark, so the mark itself is on disk.
+	dir := filepath.Dir(record)
+	require.NoError(t, os.Chmod(dir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if err := os.Remove(record); err == nil {
+		t.Skip("this user can unlink through a read-only directory")
+	}
+	h.createAdoptHeld = true
+
+	h.drainCreateRequests()
+
+	require.FileExists(t, record, "precondition: the drop failed, so the record is still held")
+	assert.True(t, h.createAdoptHeld,
+		"a record the mark arm returns above is never re-checked, so it is never answered for")
+}
+
+// TestCreateDrainMintsNoMarkForAnExpiredRecordWithNothingToName: the two disposal arms are
+// terminal however often they repeat — an expired record is expired again on the next tick and
+// an undecodable one is still undecodable — so a mark buys them no guard at all. What it would
+// cost is a file and two fsyncs per record per tick: createDisposalBudget allows 50, the walk
+// runs twice a second, and a cron backlog cleared while the TUI sits behind the welcome modal
+// (where flushCreateDisclosures returns early and clears nothing) mints them without bound, on
+// the Bubble Tea update goroutine. That is the synchronous freeze createDisposalBudget exists
+// to bound, one layer out from where it can see it.
+//
+// TestCreateDrainRejectsExpiredRequest is the other half: the same arm DOES write one when it
+// has a branch to name, because that file is a report and the report is owed.
+func TestCreateDrainMintsNoMarkForAnExpiredRecordWithNothingToName(t *testing.T) {
+	h := drainHome(t)
+	var records []string
+	for i := range 3 {
+		records = append(records, spoolCreate(t, outbox.Request{
+			Title: fmt.Sprintf("expired-%d", i), Path: t.TempDir(),
+			CreatedAt: time.Now().Add(-2 * outbox.TTL),
+		}))
+	}
+
+	h.drainCreateRequests()
+
+	for _, record := range records {
+		assert.NoFileExists(t, record, "precondition: the arm ran")
+		assert.Equal(t, outbox.NoDisclosure, outbox.DisclosureMark(record),
+			"a mark that guards nothing is a file per record per tick")
+	}
+	assert.Empty(t, h.pendingCreateDisclosures, "and nothing buffered for a report either")
+}
+
+// TestCreateDrainNamesTheMarksTitleForAnUndecodableRecord: the log line in the terminal-mark
+// arm is the only account of the drop that survives it — the record and the mark are both
+// destroyed two calls later. It took its title from the RECORD, which is the zero value on the
+// undecodable arm, while the mark beside it held the answer all along.
+func TestCreateDrainNamesTheMarksTitleForAnUndecodableRecord(t *testing.T) {
+	h := drainHome(t)
+	record := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: gitRepoWithBranch(t, "")})
+	require.NoError(t, outbox.Disclose(record, &outbox.Disclosure{
+		Title: "fix-auth", Reason: "an earlier launch gave up on this"}))
+	require.NoError(t, os.WriteFile(record, []byte("{not json"), 0o644))
+
+	var buf bytes.Buffer
+	prev := log.WarningLog.Writer()
+	log.WarningLog.SetOutput(&buf)
+	t.Cleanup(func() { log.WarningLog.SetOutput(prev) })
+
+	h.drainCreateRequests()
+
+	assert.NoFileExists(t, record, "precondition: the mark arm dropped it")
+	assert.Contains(t, buf.String(), `"fix-auth"`,
+		"the only surviving account of the drop names which request it was")
 }

@@ -271,13 +271,17 @@ func classifyCreateClaim(ctx context.Context, e outbox.CreateEntry, instances []
 		// got FURTHEST — branch, worktree and a running agent — and it is the one arm that
 		// deliberately frees none of them, so a report that omits the directory names the
 		// wrong obstacle: the user kills the tmux session, tries `git branch -d`, and meets
-		// "already used by worktree" against a path nothing told them about.
-		return claimJudgement{verdict: claimRefused, tmuxName: name, branch: claimedBranch(e.Request),
-			worktree: strandedWorktreePath(ctx, e.Request.Path, claimedBranch(e.Request)),
+		// "already used by worktree" against a path nothing told them about. Which is why
+		// the probe returns two things: a directory Atrium minted is a leftover and goes in
+		// the field, and one it did not is still the obstacle and goes in the sentence (see
+		// strandedWorktree).
+		branch := claimedBranch(e.Request)
+		wt, wtNote := strandedWorktree(ctx, e.Request.Path, branch)
+		return claimJudgement{verdict: claimRefused, tmuxName: name, branch: branch, worktree: wt,
 			reason: fmt.Sprintf("a previous atrium was interrupted while creating this "+
 				"session, and its agent is still running in tmux session %q with nothing in "+
-				"atrium's records pointing at it; attach to it or kill it (`tmux -L %s kill-session "+
-				"-t %s`) before creating this title again", name, config.RuntimeName(), name)}
+				"atrium's records pointing at it%s; attach to it or kill it (`tmux -L %s kill-session "+
+				"-t %s`) before creating this title again", name, wtNote, config.RuntimeName(), name)}
 	}
 
 	// A claim with no evidence block. Claim() always writes one, so this is a
@@ -328,16 +332,16 @@ func classifyCreateClaim(ctx context.Context, e outbox.CreateEntry, instances []
 		// on a false hit THIS repo's branch is a genuine orphan, and a refusal that names
 		// nothing leaves it stranded with a mark that has nothing to report. So the
 		// same-repo hit discloses nothing and the cross-repo one discloses what it found.
-		where := ""
+		where, wtNote := "", ""
 		j := claimJudgement{verdict: claimRefused}
 		if !sameRepo {
 			where = " (in another repository — refused anyway, see branchOwner)"
 			j.branch = branch
-			j.worktree = strandedWorktreePath(ctx, e.Request.Path, branch)
+			j.worktree, wtNote = strandedWorktree(ctx, e.Request.Path, branch)
 		}
 		j.reason = fmt.Sprintf(
 			"a previous atrium was interrupted while creating this session, and branch %q now "+
-				"belongs to session %q%s; pick another title", branch, owner, where)
+				"belongs to session %q%s%s; pick another title", branch, owner, where, wtNote)
 		return j
 	}
 	if e.Request.Claim.BranchExisted && !e.Request.Adopt {
@@ -377,8 +381,8 @@ func classifyCreateClaim(ctx context.Context, e outbox.CreateEntry, instances []
 		// struct's worktree field reaches renders it as a leftover to be removed by hand,
 		// and this directory is the opposite: a checkout somebody made on purpose, at a path
 		// Atrium never minted. The branch IS this build's leaving and is disclosed; the
-		// reason says what is holding it. strandedWorktreePath screens for the same thing on
-		// the arm that reaches a directory without a verdict.
+		// reason says what is holding it. strandedWorktree makes the same split for the arms
+		// that reach a directory without a verdict of their own.
 		return claimJudgement{verdict: claimRefused, branch: branch,
 			reason: fmt.Sprintf("a previous atrium was interrupted while creating this session, "+
 				"and branch %q is checked out at %s, which is not a worktree Atrium manages; "+
@@ -402,27 +406,41 @@ func answeredReason(d outbox.Disclosure) string {
 	return "a previous atrium gave up on this request and could not record why"
 }
 
-// strandedWorktreePath is StrandedWorktreeFor reduced to a directory Atrium minted, for a
-// report rather than for a verdict: an error or an unreadable repo yields "" and the caller
-// says one thing less, where a verdict must defer instead (see claimDefer).
+// strandedWorktree splits what holds branch into the two places a report can put it: the
+// Disclosure.Worktree field, which only ever renders as a leftover to go and remove, and a
+// clause in the reason, which can describe a directory without asking anyone to delete it.
 //
-// It screens for `managed`, and that screening is the whole of it. Every field this feeds
-// renders as a leftover to go and remove, and parseWorktreeList returns the PRIMARY worktree
-// too — so a branch the user has checked out in their own clone resolves to that clone's
-// path. Unscreened, a create whose agent is still running reports the user's main checkout
-// under a header saying nothing in atrium's records points at it, and whether it does so is
-// decided only by whether a tmux session happened to outlive its TUI. The sibling arm that
-// meets the same directory through a verdict refuses to put it in this field for exactly that
-// reason (see classifyCreateClaim's unmanaged-worktree arm).
-func strandedWorktreePath(ctx context.Context, repo, branch string) string {
+// The split is the whole of it, and dropping either half is a defect the other cannot cover.
+// parseWorktreeList returns the PRIMARY worktree too, so a branch the user has checked out in
+// their own clone resolves to that clone's path — put in the field, a create whose agent
+// outlived its TUI reports the user's main checkout under a header saying nothing in atrium's
+// records points at it. Left out altogether, the reader kills the tmux session, runs
+// `git branch -d`, and meets git's "already used by worktree" against a path the report
+// deliberately withheld. So a path Atrium minted is a leftover and goes in the field; any
+// other path is an obstacle and goes in the sentence.
+//
+// `managed` false covers "somewhere else" and "could not be classified" alike —
+// underManagedWorktrees returns (wt, false, nil) when it cannot resolve the data dir — and
+// both belong in the sentence for the same reason: naming a directory is safe, telling
+// somebody to remove one is not.
+//
+// An error yields neither: for a report, not for a verdict, so a repo that cannot be read
+// costs the reader one clause, where a verdict must defer instead (see claimDefer). This is
+// the same division classifyCreateClaim's unmanaged-worktree arm makes by hand, which is why
+// that arm names its directory in the reason and leaves the field to the branch.
+func strandedWorktree(ctx context.Context, repo, branch string) (field, note string) {
 	if branch == "" {
-		return ""
+		return "", ""
 	}
 	wt, managed, err := git.StrandedWorktreeFor(ctx, repo, branch)
-	if err != nil || !managed {
-		return ""
+	switch {
+	case err != nil || wt == "":
+		return "", ""
+	case !managed:
+		return "", fmt.Sprintf(", and it is checked out at %s, which is not a worktree Atrium "+
+			"manages", wt)
 	}
-	return wt
+	return wt, ""
 }
 
 // claimedBranch returns the session branch a claim recorded, tolerating a claim that has

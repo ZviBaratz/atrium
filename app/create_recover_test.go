@@ -941,29 +941,32 @@ func TestExpiredAdoptableClaimDisclosesWhatItAbandons(t *testing.T) {
 	assert.True(t, d.Leftovers(), "or the reader drops it and nobody is told")
 }
 
-// TestStrandedWorktreePathIgnoresACheckoutTheUserMade is the screening the field's only other
-// reader already applies, arriving here late.
+// TestStrandedWorktreeDescribesACheckoutTheUserMadeWithoutClaimingIt pins both halves of the
+// split, because either half alone is a defect.
 //
 // Every path Disclosure.Worktree reaches renders it as a leftover to go and remove, and
 // parseWorktreeList returns the PRIMARY worktree too — so a branch the user has checked out in
-// their own clone resolves to that clone. Unscreened, a create whose agent outlived its TUI
+// their own clone resolves to that clone. In the field, a create whose agent outlived its TUI
 // reports the user's main checkout under a header saying nothing in atrium's records points at
-// it, and whether it does is decided only by whether a tmux session happened to still be
-// running: the sibling arm that meets the same directory through a verdict refuses to put it in
-// this field, and TestReconcileDisclosesTheOrphanItRefusesFor asserts exactly that.
+// it. Dropped altogether — which is what screening alone did — the reader kills the tmux
+// session, runs `git branch -d`, and meets git's "already used by worktree" against a path the
+// report withheld. So: not in the field, and still in the sentence.
 //
 // TestReconcileRefusesWhileTheAgentIsStillRunning is the positive half — a worktree Atrium
-// minted, through this same function, and named.
-func TestStrandedWorktreePathIgnoresACheckoutTheUserMade(t *testing.T) {
+// minted, through this same function, in the field.
+func TestStrandedWorktreeDescribesACheckoutTheUserMadeWithoutClaimingIt(t *testing.T) {
 	sandboxSpool(t)
 	branch := strandPrefix + "fix-auth"
 	repo := gitRepoWithBranch(t, branch)
 	mine := worktreeOn(t, repo, branch, filepath.Join(t.TempDir(), "my-own-checkout"))
 	require.DirExists(t, mine)
 
-	got := strandedWorktreePath(context.Background(), repo, branch)
+	field, note := strandedWorktree(context.Background(), repo, branch)
 
-	assert.Empty(t, got, "a checkout the user made is not a leftover to remove")
+	assert.Empty(t, field, "a checkout the user made is not a leftover to remove")
+	assert.Contains(t, note, "not a worktree Atrium manages",
+		"but it is still what blocks `git branch -d`, so the sentence says so")
+	assert.Contains(t, note, filepath.Base(mine), "and names it")
 }
 
 // TestReconcileDisclosesTheBranchOfACrossRepoFalseHit: branchOwner reports a row in ANOTHER
