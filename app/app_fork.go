@@ -54,7 +54,7 @@ func (m *home) firstFreeTitle(stem, path string, direct bool) string {
 		return stem
 	}
 	for n := 2; n <= variantTitleScan; n++ {
-		cand := fmt.Sprintf("%s-%d", stem, n)
+		cand := session.VariantTitle(stem, n)
 		if m.variantTitleConflict(cand, path, direct) == "" {
 			return cand
 		}

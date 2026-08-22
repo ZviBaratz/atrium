@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 	"time"
 
@@ -255,8 +256,19 @@ func TestUnclaimedRequestStaysByteIdenticalGuardsTheWireFormat(t *testing.T) {
 	var got map[string]any
 	require.NoError(t, json.Unmarshal(raw, &got))
 
-	for _, k := range []string{"claim", "adopt"} {
-		_, present := got[k]
-		assert.False(t, present, "%q must be omitted from an unclaimed request", k)
+	// The exact key set, not a list of keys to look for. The list version passed for
+	// adopt_tip and would have passed for batch, because a field nobody remembered to
+	// name is a field it cannot see — which is the drift it exists to catch.
+	assert.Equal(t, []string{"created_at", "path", "title", "version"}, sortedKeys(got),
+		"an unclaimed request carries exactly the fields it carried before Claim, Adopt, "+
+			"AdoptTip and Batch existed")
+}
+
+func sortedKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
 	}
+	sort.Strings(keys)
+	return keys
 }

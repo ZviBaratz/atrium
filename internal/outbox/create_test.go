@@ -25,6 +25,7 @@ func TestWriteCreateThenListRoundTrip(t *testing.T) {
 		Branch:  "release/2.0",
 		Prompt:  "start on the parser",
 		Force:   true,
+		Batch:   "0123456789abcdef",
 	})
 	require.NoError(t, err)
 	assert.FileExists(t, name)
@@ -41,6 +42,7 @@ func TestWriteCreateThenListRoundTrip(t *testing.T) {
 	assert.Equal(t, "release/2.0", got.Branch)
 	assert.Equal(t, "start on the parser", got.Prompt)
 	assert.True(t, got.Force)
+	assert.Equal(t, "0123456789abcdef", got.Batch)
 	assert.Equal(t, name, entries[0].Path)
 }
 
@@ -495,4 +497,19 @@ func TestWriteCreateTrimsTheTitleItStores(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(raw), `"title":"fix-auth"`)
 	assert.NotContains(t, string(raw), `"title":"  fix-auth`)
+}
+
+// TestNewBatchIDsDiffer: the id is what tells one fan-out's members from another's, so
+// two invocations must not share one. Non-empty is asserted alongside, because ""
+// carries the opposite meaning — "not part of a batch" — and a minter that quietly
+// returned it would make every member a singleton with no error anywhere.
+func TestNewBatchIDsDiffer(t *testing.T) {
+	first, err := NewBatchID()
+	require.NoError(t, err)
+	second, err := NewBatchID()
+	require.NoError(t, err)
+
+	assert.NotEmpty(t, first)
+	assert.NotEmpty(t, second)
+	assert.NotEqual(t, first, second)
 }
