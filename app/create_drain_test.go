@@ -1913,6 +1913,7 @@ func TestCreateDrainDisclosesTheOrphanWhenItRefusesAnAdoption(t *testing.T) {
 // refusal and exited non-zero.
 func TestCreateDrainMarksAnOrdinaryRefusalWithoutReportingIt(t *testing.T) {
 	h := drainHome(t)
+	warnings := captureWarnings(t)
 	repo := gitRepoWithBranch(t, "")
 	addInstance(t, h, "fix-auth", repo)
 	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: repo})
@@ -1936,6 +1937,14 @@ func TestCreateDrainMarksAnOrdinaryRefusalWithoutReportingIt(t *testing.T) {
 		"a mark nobody will read does not need a place in the report to keep guarding")
 	h.flushCreateDisclosures()
 	assert.Equal(t, stateDefault, h.state, "and no modal comes of it")
+	// Nor does it claim, at WARNING, that a title collision left artifacts. One wording for
+	// both cases printed `left artifacts belonging to no session (branch "", worktree "",
+	// tmux "")` for the overwhelming majority of giving-ups — the opposite of what happened,
+	// on the level an operator greps, burying the one case where it is true.
+	assert.NotContains(t, warnings.String(), "left artifacts belonging to no session",
+		"a refusal that built nothing did not leave artifacts")
+	assert.Contains(t, warnings.String(), "refusing a create request",
+		"precondition: this arm's own warning did reach the buffer")
 }
 
 // TestCreateDrainRechecksTheAdoptionPin is #731's second hole. The evidence licensing an
@@ -2876,14 +2885,23 @@ func TestCreateDrainNamesTheMarksTitleForAnUndecodableRecord(t *testing.T) {
 		Title: "fix-auth", Reason: "an earlier launch gave up on this"}))
 	require.NoError(t, os.WriteFile(record, []byte("{not json"), 0o644))
 
-	var buf bytes.Buffer
-	prev := log.WarningLog.Writer()
-	log.WarningLog.SetOutput(&buf)
-	t.Cleanup(func() { log.WarningLog.SetOutput(prev) })
+	warnings := captureWarnings(t)
 
 	h.drainCreateRequests()
 
 	assert.NoFileExists(t, record, "precondition: the mark arm dropped it")
-	assert.Contains(t, buf.String(), `"fix-auth"`,
+	assert.Contains(t, warnings.String(), `"fix-auth"`,
 		"the only surviving account of the drop names which request it was")
+}
+
+// captureWarnings redirects the WARNING log for the duration of one test. Two of the fixes in
+// this file are about what a line SAYS rather than about what a file contains, and nothing else
+// in the package can see that.
+func captureWarnings(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := log.WarningLog.Writer()
+	log.WarningLog.SetOutput(&buf)
+	t.Cleanup(func() { log.WarningLog.SetOutput(prev) })
+	return &buf
 }
