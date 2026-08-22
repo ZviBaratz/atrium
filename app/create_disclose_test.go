@@ -322,14 +322,22 @@ func TestCreateDisclosureReportFitsANarrowTerminal(t *testing.T) {
 		assert.LessOrEqual(t, len([]rune(line)), reportNarrowWidth,
 			"%q must arrive unwrapped on a 72-column terminal", line)
 	}
-	// The command row is the one indented line that must also fit, and it is the whole point
-	// of the guard. Measured for the longest socket name any install can have.
-	for _, socket := range []string{"atrium", "claudesquad"} {
-		cmd := fmt.Sprintf("    tmux -L %s kill-session -t <name>", socket)
-		assert.LessOrEqual(t, len([]rune(cmd)), reportNarrowWidth, cmd)
+	// The two trailer lines measured for both socket names an install can have, because the
+	// report only ever renders one of them and the legacy name is ten runes longer. The
+	// command's own line is indented, so the loop above skips it — and it is the whole point
+	// of the guard.
+	for _, socket := range []string{config.RuntimeName(), "atrium", "claudesquad"} {
+		for _, line := range []string{
+			fmt.Sprintf("Those tmux sessions are on socket %q. To kill one:", socket),
+			fmt.Sprintf("    tmux -L %s kill-session -t <name>", socket),
+		} {
+			assert.LessOrEqual(t, len([]rune(line)), reportNarrowWidth, line)
+		}
 	}
-	require.Contains(t, report, "kill-session -t <name>",
-		"precondition: the fixture reaches the trailer this guards")
+	// And these are the lines the report actually builds — the two above are the same
+	// expressions with the socket varied, so this is what ties them to the code.
+	require.Contains(t, report, fmt.Sprintf("on socket %q. To kill one:", config.RuntimeName()))
+	require.Contains(t, report, fmt.Sprintf("    tmux -L %s kill-session -t <name>", config.RuntimeName()))
 }
 
 // TestFlushCreateDisclosuresKeepsTheFileGuardingAClaim is #731's third hole approached from
