@@ -96,6 +96,12 @@ const (
 	// indistinguishable from — which is the bar, and not a claim that a batch is
 	// atomic across versions.
 	//
+	// BatchSize rides along on the same argument and degrades better still: an atrium
+	// too old to know it never holds an assembling batch, which is what every atrium
+	// did before the field existed, and a newer one reading a record without it reads
+	// zero and does the same. The field only ever ADDS a hold, and a hold is not a
+	// verdict.
+	//
 	// The asymmetry that argument does not cover is a *downgrade* while a claim is
 	// on disk: an older atrium has no ListClaims, so it neither drains nor settles
 	// that file, and a `--wait` blocked on it sees the record gone. Downgrading
@@ -176,6 +182,49 @@ type Request struct {
 	// instead of creating from the tail as the cap closes. Every other gate stays per
 	// member, because every other gate is a fact about one request.
 	Batch string `json:"batch,omitempty"`
+	// BatchSize is how many records the invocation that wrote this one committed to
+	// the spool, and it exists because a batch does not become visible all at once.
+	//
+	// Each member is published by its own os.Rename (config.WriteFileAtomic), so a
+	// drain tick landing between two of them sees a batch smaller than the one being
+	// written — and charges the cap for what it can see. A batch of three whose first
+	// member is gated alone is charged as a batch of one, fits, and is CREATED: the
+	// head of a batch the whole-batch gate would have refused, which is the outcome
+	// that gate exists to prevent. The window is N members' worth of writes and fsyncs
+	// against a poll tick, so it is small and it is not zero.
+	//
+	// A declared count is what closes it: the drain holds a member whose batch is short
+	// of this rather than gating it (app.batchStillAssembling), so the cap is charged
+	// for the batch as its author wrote it. Zero means "not declared" — every record
+	// written before this field existed, and every hand-written one — and holds
+	// nothing, which is the pre-field behaviour.
+	//
+	// A count alone would be read wrong, and BatchIndex is what makes it readable. A
+	// batch shrinks below its declared size for two opposite reasons, and only one of
+	// them is a reason to wait: it is still arriving, or it is being consumed — the
+	// drain builds one member per tick, so a batch of three is short for most of its
+	// own life. See BatchIndex for the half that tells those apart.
+	//
+	// It is never used as a length, an index or a capacity. Nothing allocates from it
+	// and nothing waits for a member it names but cannot find, so a wrong value costs
+	// at most one hold that expires.
+	BatchSize int `json:"batch_size,omitempty"`
+	// BatchIndex is this record's 1-based position in the batch its writer committed,
+	// and its whole job is to say whether this member is the batch's HEAD.
+	//
+	// Members are written in order, so at any moment mid-publish the records on disk
+	// are 1..k: an incomplete batch always still has its head pending. A batch the
+	// drain is partway through never does — the head was the first thing gated, and it
+	// is now a session, a claim or a receipt. So "short of its size AND headed by
+	// member 1" is arriving, and "short of its size without its head" is being
+	// consumed, which is the distinction a count alone cannot draw and the reason
+	// app.batchStillAssembling is a predicate rather than a piece of remembered state.
+	//
+	// Zero means "not declared" and never holds, alongside BatchSize. Nothing orders,
+	// renders or indexes by it — ListCreates' oldest-first ordering is the record
+	// timestamps' business, and this field is compared against 1 and against nothing
+	// else.
+	BatchIndex int `json:"batch_index,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 

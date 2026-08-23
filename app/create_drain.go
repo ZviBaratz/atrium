@@ -165,12 +165,71 @@ const createRecheckBudget = 2
 //
 // It is bounded anyway, at the largest batch this atrium's own `atrium new` can mint.
 // Anything wider was hand-written or came from a build with a different limit, and
-// answering five hundred records inside one Update — a disclosure, a receipt and two
-// unlinks apiece — is the freeze createDisposalBudget exists to prevent. Spreading the
-// remainder over later ticks is safe in a way spreading a *creation* would not be: a
-// refusal is never a spawn, and each later tick re-charges the cap for what is still
-// pending, so a batch under the budget cannot slip through while its siblings wait.
+// answering five hundred records inside one Update — a receipt and an unlink apiece,
+// through outbox.Reject — is the freeze createDisposalBudget exists to prevent.
+//
+// A batch wider than the budget is therefore NOT refused whole, and the honest statement
+// of what happens is the opposite of reassuring: each later tick re-charges the cap for
+// what is still pending, so a batch of 26 under a cap with room for 5 has 21 members
+// answered on the first tick and the remaining 5 fit — and are created, from the tail,
+// with 21 callers holding receipts saying the batch was refused whole. Nothing this
+// atrium can produce reaches that, because parseVariantSpec is held to the same constant;
+// a hand-written spool can, and #783 is where raising the ceiling has to answer for it.
 const createBatchRefusalBudget = session.MaxVariantBatch
+
+// createBatchAssemblyWindow is how long a batch may be short of the size its author
+// declared before the drain gates it on what is actually there.
+//
+// It bounds the hold that closes the publish race outbox.Request.BatchSize documents, and
+// every way it can be wrong is a wait rather than a wrong verdict. A batch genuinely still
+// being written finishes inside it by orders of magnitude — a handful of atomic writes
+// against a window measured in seconds. A batch that will never reach its declared size
+// waits this out and is then charged for its real membership: a rollback whose withdrawal
+// failed, a member the disposal arm answered, a sibling too corrupt to decode, or the
+// ordinary mid-batch case where a member is already a live session. That last one is why
+// the hold cannot simply be "wait until the batch is complete" — for a batch the drain is
+// partway through, complete never comes again.
+const createBatchAssemblyWindow = 3 * time.Second
+
+// batchStillAssembling reports whether the pending members of one batch are only part of
+// the batch its author committed, because the rest of it is still being written.
+//
+// It answers about the BATCH and not about whichever member the walk is holding, which is
+// what makes one verdict cover the whole of it on one tick. Asked per member instead, it
+// says "wait" for the head and "go ahead" for everything behind it — so the walk holds the
+// head, reaches member 2, gates that, and refuses the batch it had just decided to wait
+// for. The sibs slice is the same list for every member, so every member of a batch gets
+// the same answer without a per-tick set to remember it in.
+//
+// Two conditions, and neither is enough alone. A batch is short of its declared size for
+// most of its own life — the drain builds one member per tick, so a batch of three spends
+// two ticks short — and holding for that would stall the feature rather than protect it.
+// What separates "still arriving" from "being consumed" is the HEAD: members are written
+// in order, so an incomplete batch always still has member 1 pending, and a batch the
+// drain has started on never does. Hence the BatchIndex test, which is a property of the
+// records and needs nothing remembered between ticks.
+//
+// The clock is the head's own CreatedAt, which is the batch's first write. It bounds the
+// hold for a batch that will never reach its declared size — a rollback whose withdrawal
+// failed, a sibling too corrupt to decode, a member an earlier launch gave up on and
+// pendingBatchMembers therefore does not count — which would otherwise wait for its TTL.
+//
+// Nothing is logged for a hold. It is normally shorter than one poll tick, so a line per
+// tick per assembling batch would be noise about a condition that resolves before anyone
+// could act on it; and the hold spends no budget, runs no git and writes nothing, so there
+// is no side effect for a reader to have to account for later.
+func batchStillAssembling(sibs []outbox.CreateEntry, now time.Time) bool {
+	if len(sibs) == 0 {
+		return false
+	}
+	// The oldest pending member: pendingBatchMembers preserves ListCreates' oldest-first
+	// order, and WriteCreate names each record after its own CreatedAt.
+	head := sibs[0].Request
+	if head.BatchIndex != 1 || head.BatchSize <= len(sibs) {
+		return false
+	}
+	return now.Sub(head.CreatedAt) < createBatchAssemblyWindow
+}
 
 // drainCreateRequests creates the sessions spooled by `atrium new` and returns a
 // command that boots them plus a notice, or nil when there was nothing to do.
@@ -447,6 +506,13 @@ func (m *home) drainCreateRequests() tea.Cmd {
 				log.WarningLog.Printf("dropping a create request for %q that atrium had already "+
 					"given up on: %s", title, reason)
 				m.discardSpoolFile(e.Path, func() error { return outbox.Reject(e.Path, reason) })
+				// Recorded before the mark is cleared, and that order is the whole point:
+				// clearMarkOverADroppedRecord is about to make this path read NoDisclosure,
+				// so a batch gated LATER in this same walk would find nothing to skip it by
+				// and refuse it a second time — replacing the account whoever gave up wrote
+				// with a cap reason, at a path whose record is already gone. The mark skip
+				// in pendingBatchMembers cannot cover this one; only the walk knows.
+				answeredInBatch[e.Path] = true
 				m.clearMarkOverADroppedRecord(e.Path)
 				disposed++
 				continue
@@ -592,11 +658,29 @@ func (m *home) drainCreateRequests() tea.Cmd {
 			// are ordinary requests everywhere else in this walk; this is the one place
 			// they are read as a group, so a batch that does not fit is refused whole
 			// rather than created from the tail as the cap closes (#761).
+			//
+			// Never for a member that is adopting, though, and that exception is the
+			// same one refuseBatchSiblings makes for a sibling: the batch charge exists
+			// to produce a refusal, and refusing an adopting request is destructive
+			// beyond the record (see rejectCreateRequest) with a one-shot recovery.
+			// Charging one for it is what this line did before batches existed, so an
+			// adopting request re-queued into a batch — Requeue rewrites in place and
+			// keeps its Batch — is gated on exactly the terms it was gated on before.
+			// It costs the batch's whole-or-nothing promise for that member, which is
+			// the trade the sibling skip already makes and which #782 records.
 			adding := 1
 			var sibs []outbox.CreateEntry
-			if req.Batch != "" {
-				sibs = m.pendingBatchMembers(entries, req.Batch, now)
+			if req.Batch != "" && !req.Adopt {
+				sibs = m.pendingBatchMembers(entries, req.Batch, now, answeredInBatch)
 				adding = len(sibs)
+				// Held rather than gated, and held before the gate is charged: no git
+				// ran, no budget was spent and nothing was decided, so the next tick
+				// judges this member against a batch that has finished arriving. The
+				// alternative is to charge the cap for a fraction of a batch, which is
+				// precisely how a whole-or-nothing gate creates one from the head.
+				if batchStillAssembling(sibs, now) {
+					continue
+				}
 			}
 			gated++
 			inst, cmd, verdict := m.executeCreateRequest(req, adding)
@@ -778,12 +862,30 @@ func (m *home) stagedSpawnPlan() bool {
 //     capCount. Poisoning lasts for the life of the process, so counting one would
 //     over-charge every later member of that batch on every tick until the TTL.
 //
-// It deliberately does not stat for a terminal mark. That is a read per sibling on a
-// walk that runs twice a second, and over-counting a marked record charges the cap
-// conservatively — which refuses rather than admits, the safe direction for a gate.
-// refuseBatchSiblings does stat, because there the answer decides whether to overwrite
-// somebody else's account of a failure.
-func (m *home) pendingBatchMembers(entries []outbox.CreateEntry, id string, now time.Time) []outbox.CreateEntry {
+// Two more are excluded for the same reason, and both cost a lookup rather than being
+// read off the entry:
+//
+//   - one this walk has already answered, which is still in the listing because the
+//     listing was taken before the walk began.
+//   - one carrying a terminal mark, which an earlier tick or an earlier process gave up
+//     on and whose caller has already been told.
+//
+// Statting for the mark is not the extravagance an earlier version of this comment
+// called it: it is a read per member of ONE batch, on the one tick that batch is gated,
+// not a read per record on every walk. It buys the thing the count and the refusal have
+// to agree about — refuseBatchSiblings skips exactly these, so counting them would
+// charge the cap for members it will not answer, and leave the log announcing a fan-out
+// wider than the one it made.
+//
+// Over-counting is not the safe direction, either, whatever a gate's usual arithmetic
+// says. The refusal this count produces is destructive — a receipt written and the
+// record unlinked, per rejectCreateRequest — so charging for a member nobody will create
+// does not withhold a session, it destroys a request that had room for one. #701 is the
+// entry for that shape: a false-positive gate whose abort is destructive is not
+// conservative.
+func (m *home) pendingBatchMembers(
+	entries []outbox.CreateEntry, id string, now time.Time, answered map[string]bool,
+) []outbox.CreateEntry {
 	if id == "" {
 		return nil
 	}
@@ -792,7 +894,10 @@ func (m *home) pendingBatchMembers(entries []outbox.CreateEntry, id string, now 
 		if e.Err != nil || e.Request.Batch != id {
 			continue
 		}
-		if e.Request.Expired(now) || m.outboxPoisoned[e.Path] {
+		if e.Request.Expired(now) || m.outboxPoisoned[e.Path] || answered[e.Path] {
+			continue
+		}
+		if outbox.DisclosureMark(e.Path) != outbox.NoDisclosure {
 			continue
 		}
 		members = append(members, e)
@@ -815,22 +920,33 @@ func (m *home) pendingBatchMembers(entries []outbox.CreateEntry, id string, now 
 //     (see rejectCreateRequest): its worktree registration has already been released, and
 //     the recovery is one-shot. The gated member's own path re-checks the pin before it
 //     refuses; a sibling reached from here has not, so it is left for its own gate, where
-//     recheckAdoption runs and a cap that is still full refuses it with the evidence in
-//     hand.
+//     recheckAdoption runs with the evidence in hand.
+//
+//     What that skip does NOT buy is a later refusal. On its own tick the adopting
+//     sibling is the only member of its batch still pending, so it is charged as a batch
+//     of one and a cap that blocked N can admit it — one session out of a batch whose
+//     every receipt says it was refused whole, with a hole in its numbering. That is the
+//     price of not spending a one-shot recovery, it is paid the same way at the gated
+//     member's own charge, and #782 is where it is recorded rather than left to be
+//     discovered.
+//
 //   - one that already carries a terminal mark. Whoever gave up on it wrote the account
 //     of what it left behind, and re-writing that from a request this drain never
 //     executed would replace it with less — the same argument the walk's own mark arm
-//     makes.
+//     makes. pendingBatchMembers has already dropped these from the count; the stat here
+//     is a re-read, because executeCreateRequest runs git between the two and a mark can
+//     land in that window.
 //
-// answeredInBatch is the caller's record of what this walk has already dealt with. Every
-// sibling refused here is still in the listing the walk is iterating, and that walk must
-// not judge it a second time.
+// answeredInBatch is the caller's record of what this walk has already dealt with, read
+// as well as written: a member the walk disposed of earlier is still in the listing this
+// fan-out was built from, and a sibling refused here is still in the listing the walk has
+// yet to reach. Neither may be judged twice.
 func (m *home) refuseBatchSiblings(
 	sibs []outbox.CreateEntry, gated, reason string, answeredInBatch map[string]bool,
 ) int {
 	answered := 0
 	for _, sib := range sibs {
-		if sib.Path == gated || sib.Request.Adopt {
+		if sib.Path == gated || sib.Request.Adopt || answeredInBatch[sib.Path] {
 			continue
 		}
 		if answered >= createBatchRefusalBudget {
@@ -883,13 +999,12 @@ func createCapRefusal(reason string) createVerdict {
 
 // hardCapReason is the explicit-cap refusal a spooled request's receipt carries.
 //
-// Byte-identical to hardCapMessage for a request charged for itself, which is what
-// keeps the three other call sites of that wording and this one from drifting apart for
-// the ordinary case. A batch adds what a batch needs and hardCapMessage cannot carry:
-// how many sessions were asked for, how much room there is, and that the whole batch
-// was refused rather than partly created — because a caller told only "you can't create
-// more than 4 sessions" cannot tell a refusal of its batch from a refusal of one
-// variant.
+// Byte-identical to hardCapMessage for a request charged for itself, which is what keeps
+// that wording's other call sites and this one from drifting apart for the ordinary case.
+// A batch adds what a batch needs and hardCapMessage cannot carry: how many sessions this
+// refusal is answering, how much room there is, and that they were refused together —
+// because a caller told only "you can't create more than 4 sessions" cannot tell a
+// refusal of its batch from a refusal of one variant.
 //
 // No width budget applies. The ~32-cell bound the create form's variant refusals are
 // held to is the overlay's; this is a receipt, printed by `atrium new --wait` into a
@@ -898,7 +1013,7 @@ func hardCapReason(limit, count, adding int) string {
 	if adding <= 1 {
 		return hardCapMessage(limit)
 	}
-	return fmt.Sprintf("%s, and %s: the whole batch was refused rather than partly created",
+	return fmt.Sprintf("%s, and %s: they were refused together rather than created until the cap closed",
 		hardCapMessage(limit), capRoomClause(limit, count, adding))
 }
 
@@ -907,20 +1022,32 @@ func softCapReason(limit, count, adding int) string {
 	if adding <= 1 {
 		return fmt.Sprintf("%s — pass --force to create anyway", hostCapacityLine(limit, count))
 	}
-	return fmt.Sprintf("%s, and %s — pass --force to create the batch anyway",
+	return fmt.Sprintf("%s, and %s — pass --force to create them anyway",
 		hostCapacityLine(limit, count), capRoomClause(limit, count, adding))
 }
 
-// capRoomClause states the batch's need against the room left, written once for both
-// reasons above. The room is floored at zero: count can exceed limit (a cap lowered
-// under a running fleet, or a soft cap already crossed with --force), and "-2 free"
-// would read as a number the caller could act on.
+// capRoomClause states what this refusal is answering against the room left, written once
+// for both reasons above.
+//
+// "still queued" rather than "asked for", because adding counts the members of the batch
+// that are still PENDING, which is the only number the drain has. Once any member has
+// been created — the room taken by somebody at the keyboard between two ticks, which
+// TestCreateDrainRefusesTheRemainderWhenCapacityIsTakenMidBatch is exactly — the count
+// this receipt carries is smaller than what the command line asked for, and claiming
+// otherwise would have a script sizing its retry off a number that frees the wrong number
+// of slots and leaks the created member's worktree and branch. For the same reason the
+// reasons above say the pending members were refused TOGETHER rather than that the whole
+// batch was: the second is a claim about members this drain may never have seen.
+//
+// The room is floored at zero: count can exceed limit (a cap lowered under a running
+// fleet, or a soft cap already crossed with --force), and "-2 free" would read as a
+// number the caller could act on.
 func capRoomClause(limit, count, adding int) string {
 	free := limit - count
 	if free < 0 {
 		free = 0
 	}
-	return fmt.Sprintf("this atrium new asked for %d sessions with room for %d", adding, free)
+	return fmt.Sprintf("%d sessions from this atrium new are still queued with room for %d", adding, free)
 }
 
 // executeCreateRequest runs every gate the create form runs and, if they all

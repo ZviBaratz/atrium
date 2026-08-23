@@ -11,6 +11,7 @@ package app
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/ZviBaratz/atrium/internal/outbox"
 	"github.com/stretchr/testify/assert"
@@ -24,7 +25,8 @@ func spoolBatchOf(t *testing.T, dir, batch, stem string, n int, force bool) []st
 	records := make([]string, 0, n)
 	for i := 1; i <= n; i++ {
 		records = append(records, spoolCreate(t, outbox.Request{
-			Title: fmt.Sprintf("%s-%d", stem, i), Path: dir, Batch: batch, Force: force,
+			Title: fmt.Sprintf("%s-%d", stem, i), Path: dir, Batch: batch,
+			BatchSize: n, BatchIndex: i, Force: force,
 		}))
 	}
 	return records
@@ -78,9 +80,16 @@ func TestCreateDrainBatchRefusalNamesTheBatch(t *testing.T) {
 	refuseDrain(t, h)
 
 	reason := refusalFor(t, records[0])
-	assert.Contains(t, reason, "asked for 3 sessions")
+	assert.Contains(t, reason, "3 sessions from this atrium new are still queued")
 	assert.Contains(t, reason, "room for 2")
-	assert.Contains(t, reason, "whole batch")
+	assert.Contains(t, reason, "refused together")
+	// Never "the whole batch was refused", which is a claim about members this drain may
+	// never have seen: the count in the receipt is what is still PENDING, and a batch one
+	// of whose members was already created carries a smaller number than the command line
+	// asked for. TestCreateDrainRefusesTheRemainderWhenCapacityIsTakenMidBatch is that
+	// batch; this assertion is what stops its receipt from asserting the opposite.
+	assert.NotContains(t, reason, "whole batch")
+	assert.NotContains(t, reason, "asked for 3 sessions")
 }
 
 // TestCreateDrainRefusesAWholeBatchOverTheSoftCap: the host-derived cap has an accept
@@ -98,7 +107,7 @@ func TestCreateDrainRefusesAWholeBatchOverTheSoftCap(t *testing.T) {
 	for _, record := range records {
 		reason := refusalFor(t, record)
 		assert.Contains(t, reason, "--force")
-		assert.Contains(t, reason, "asked for 3 sessions")
+		assert.Contains(t, reason, "3 sessions from this atrium new are still queued")
 	}
 }
 
@@ -183,8 +192,20 @@ func TestCreateDrainRefusesTheRemainderWhenCapacityIsTakenMidBatch(t *testing.T)
 	refuseDrain(t, h)
 	assert.Nil(t, titled(h, "bake-2"))
 	assert.Nil(t, titled(h, "bake-3"))
-	assert.Contains(t, refusalFor(t, records[1]), "max_sessions")
-	assert.Contains(t, refusalFor(t, records[2]), "max_sessions")
+	for _, record := range records[1:] {
+		reason := refusalFor(t, record)
+		assert.Contains(t, reason, "max_sessions")
+		// The receipt counts what is still queued — two — and never claims the whole
+		// batch was refused, because one member of it is a live session with a worktree
+		// and a branch. A script sizing its retry off "asked for 3" would free the wrong
+		// number of slots and leak bake-1.
+		assert.Contains(t, reason, "2 sessions from this atrium new are still queued")
+		// Not "3", which is what the command line asked for. The limit's own "more than
+		// 3 sessions" is in this same string, so the clause is named rather than the
+		// number: a bare NotContains("3 sessions") would fail on the cap's own wording.
+		assert.NotContains(t, reason, "3 sessions from this atrium new")
+		assert.NotContains(t, reason, "whole batch")
+	}
 }
 
 // TestCreateDrainBatchRefusalLeavesAnAdoptSiblingAlone.
@@ -350,4 +371,204 @@ func TestCreateDrainDoesNotReJudgeTheSiblingsItJustRefused(t *testing.T) {
 			"the mark this tick wrote is left for the next launch's flush, as every "+
 				"inventory-less mark is — clearing it here means the walk re-judged the member")
 	}
+}
+
+// spoolBatchMembers spools the members of one batch named by their 1-based indices,
+// against a declared size — the shape a batch has while it is still being written, or
+// after the drain has taken some of it. Separate from spoolBatchOf, which always writes a
+// complete one, because "which members are on disk" is the only variable the assembly
+// hold reads.
+func spoolBatchMembers(t *testing.T, dir, batch, stem string, size int, created time.Time, idx ...int) []string {
+	t.Helper()
+	records := make([]string, 0, len(idx))
+	for _, i := range idx {
+		// Staggered per index, because writeRecord builds the record NAME from CreatedAt
+		// and ListCreates is oldest-first: members sharing one timestamp are ordered by
+		// their random nonce instead, so which member the walk gates would be a coin
+		// toss and the head rule under test would be exercised at random.
+		records = append(records, spoolCreate(t, outbox.Request{
+			Title: fmt.Sprintf("%s-%d", stem, i), Path: dir, Batch: batch,
+			BatchSize: size, BatchIndex: i,
+			CreatedAt: created.Add(time.Duration(i) * time.Millisecond),
+		}))
+	}
+	return records
+}
+
+// TestCreateDrainHoldsABatchThatIsStillArriving is the publish race, and it is written to
+// fail on a CREATION rather than on a wrong verdict.
+//
+// A batch becomes visible one atomic rename at a time, so a tick landing mid-spool sees a
+// batch smaller than the one being written. Charged for what it can see, the head of a
+// three-member batch fits under a cap with room for one — and is created: the head of a
+// batch the whole-batch gate would have refused, which is the outcome that gate exists to
+// prevent. Held instead, nothing is decided until the batch has finished arriving.
+func TestCreateDrainHoldsABatchThatIsStillArriving(t *testing.T) {
+	h := drainHome(t)
+	limit := 2
+	h.appConfig.MaxSessions = &limit
+	addInstance(t, h, "already-here", t.TempDir())
+
+	dir := t.TempDir()
+	arrived := spoolBatchMembers(t, dir, "b1", "bake", 3, time.Now(), 1, 2)
+
+	assert.Nil(t, h.drainCreateRequests(), "an assembling batch is held, and a hold is not an outcome")
+	assert.Equal(t, 1, h.list.NumInstances(), "nothing is created from a batch that is still arriving")
+	assert.Equal(t, 2, createSpoolCount(t), "and nothing is answered either — both members wait")
+	for _, record := range arrived {
+		_, rejected := outbox.Rejection(record)
+		assert.False(t, rejected, "a hold writes no receipt: the caller has not been refused yet")
+	}
+
+	// The last member lands, and the batch is judged as the batch it was written to be.
+	rest := spoolBatchMembers(t, dir, "b1", "bake", 3, time.Now(), 3)
+	refuseDrain(t, h)
+	assert.Equal(t, 1, h.list.NumInstances())
+	for _, record := range append(arrived, rest...) {
+		assert.Contains(t, refusalFor(t, record), "max_sessions")
+	}
+}
+
+// TestCreateDrainGatesAnAssemblingBatchOnceItsWindowPasses is the other end of the hold. A
+// batch that will NEVER reach its declared size — a rollback whose withdrawal failed, a
+// sibling too corrupt to decode — must not wait for its TTL, so the hold is bounded and
+// what is actually there is then charged.
+func TestCreateDrainGatesAnAssemblingBatchOnceItsWindowPasses(t *testing.T) {
+	h := drainHome(t)
+	limit := 2
+	h.appConfig.MaxSessions = &limit
+	addInstance(t, h, "already-here", t.TempDir())
+
+	dir := t.TempDir()
+	stale := time.Now().Add(-createBatchAssemblyWindow - time.Minute)
+	records := spoolBatchMembers(t, dir, "b1", "bake", 3, stale, 1, 2)
+
+	refuseDrain(t, h)
+	assert.Equal(t, 1, h.list.NumInstances())
+	for _, record := range records {
+		assert.Contains(t, refusalFor(t, record), "max_sessions")
+	}
+}
+
+// TestCreateDrainDoesNotHoldABatchMissingItsHead pins the half of batchStillAssembling a
+// count alone cannot express.
+//
+// A batch is short of its declared size for most of its own life, because the drain builds
+// one member per tick; holding for that would stall the feature rather than protect it.
+// Members are written in order, so an incomplete batch still has its head, and a batch
+// being consumed does not — which is what BatchIndex is read for. Here the head is gone
+// and the tail is charged immediately.
+func TestCreateDrainDoesNotHoldABatchMissingItsHead(t *testing.T) {
+	h := drainHome(t)
+	limit := 2
+	h.appConfig.MaxSessions = &limit
+	addInstance(t, h, "already-here", t.TempDir())
+
+	dir := t.TempDir()
+	records := spoolBatchMembers(t, dir, "b1", "bake", 3, time.Now(), 2, 3)
+
+	refuseDrain(t, h)
+	for _, record := range records {
+		assert.Contains(t, refusalFor(t, record), "max_sessions")
+	}
+}
+
+// TestCreateDrainChargesOneForAnAdoptingGatedMember is a regression guard, and the
+// behaviour it pins is what this line did before batches existed.
+//
+// The batch charge exists to produce a refusal, and refusing an adopting request is
+// destructive beyond the record: applyCreateClaim has already released its worktree
+// registration and the recovery is one-shot, so the branch would be invisible to
+// `atrium ls`, to `atrium reap` and to `git worktree list` permanently. Charged for its
+// batch the head here is blocked; charged for itself it fits, which is the answer the
+// same request got before it had siblings. refuseBatchSiblings makes the same exception
+// for a sibling — this is the gated member's half of it, and #782 records what it costs.
+func TestCreateDrainChargesOneForAnAdoptingGatedMember(t *testing.T) {
+	h := drainHome(t)
+	limit := 3
+	h.appConfig.MaxSessions = &limit
+	addInstance(t, h, "already-here", t.TempDir())
+
+	repo := gitRepoWithBranch(t, h.appConfig.BranchPrefix+"bake-1")
+	adopting := adoptedRequest(t, h, "bake-1", repo)
+	adopting.Batch, adopting.BatchSize, adopting.BatchIndex = "b1", 3, 1
+	head := spoolCreate(t, adopting)
+	for i := 2; i <= 3; i++ {
+		spoolCreate(t, outbox.Request{
+			Title: fmt.Sprintf("bake-%d", i), Path: repo, Batch: "b1", BatchSize: 3, BatchIndex: i,
+		})
+	}
+
+	require.NotNil(t, h.drainCreateRequests())
+	assert.NotNil(t, titled(h, "bake-1"),
+		"charged for itself the adopting head fits; charged for its batch of three it would not")
+	_, rejected := outbox.Rejection(head)
+	assert.False(t, rejected, "and a fit is not a refusal, so its one-shot recovery is unspent")
+}
+
+// TestCreateDrainBatchRefusalKeepsAMarkedSiblingsAccount: whoever gave up on a member
+// wrote the account of what it left behind — a branch, a worktree, a tmux session — and
+// overwriting that with "the cap was full" would replace a report of real debris with a
+// reason this drain invented for a request it never executed.
+//
+// The mark is on the LAST member, so the walk has not reached it when the head is gated:
+// this is refuseBatchSiblings' own skip under test, not the walk's mark arm.
+func TestCreateDrainBatchRefusalKeepsAMarkedSiblingsAccount(t *testing.T) {
+	h := drainHome(t)
+	limit := 1
+	h.appConfig.MaxSessions = &limit
+	addInstance(t, h, "already-here", t.TempDir())
+
+	dir := t.TempDir()
+	// Stale, because a marked member is invisible to the charge and so makes its batch
+	// look short of its declared size — which is the assembly hold's cue, not this test's.
+	stale := time.Now().Add(-createBatchAssemblyWindow - time.Minute)
+	records := spoolBatchMembers(t, dir, "b1", "bake", 3, stale, 1, 2, 3)
+	require.NoError(t, outbox.Disclose(records[2], &outbox.Disclosure{
+		Title: "bake-3", Repo: dir, Branch: "zvi/bake-3",
+		Reason: "an earlier atrium gave up after making the branch",
+	}))
+
+	refuseDrain(t, h)
+	assert.Contains(t, refusalFor(t, records[0]), "max_sessions")
+	assert.Contains(t, refusalFor(t, records[1]), "max_sessions")
+
+	kept := refusalFor(t, records[2])
+	assert.Contains(t, kept, "gave up after making the branch",
+		"the marked member keeps the account whoever gave up on it wrote")
+	assert.NotContains(t, kept, "max_sessions",
+		"a batch refusal must not overwrite it with a reason this drain never executed")
+}
+
+// TestCreateDrainDoesNotRefuseAMemberItDroppedThisTick is the same skip from the other
+// side, and it is the case the mark stat alone cannot cover.
+//
+// The walk's own mark arm drops a record and then calls clearMarkOverADroppedRecord — so a
+// member dropped EARLIER in this tick reads NoDisclosure by the time a batch gated later
+// fans its refusal out, and the stat that is supposed to protect it finds nothing. Only
+// the walk knows, which is why it records what it answered.
+func TestCreateDrainDoesNotRefuseAMemberItDroppedThisTick(t *testing.T) {
+	h := drainHome(t)
+	limit := 1
+	h.appConfig.MaxSessions = &limit
+	addInstance(t, h, "already-here", t.TempDir())
+
+	dir := t.TempDir()
+	stale := time.Now().Add(-createBatchAssemblyWindow - time.Minute)
+	records := spoolBatchMembers(t, dir, "b1", "bake", 3, stale, 1, 2, 3)
+	// On the FIRST member, so the walk drops it before it gates anything.
+	require.NoError(t, outbox.Disclose(records[0], &outbox.Disclosure{
+		Title: "bake-1", Repo: dir, Branch: "zvi/bake-1",
+		Reason: "an earlier atrium gave up after making the branch",
+	}))
+
+	refuseDrain(t, h)
+	dropped := refusalFor(t, records[0])
+	assert.Contains(t, dropped, "gave up after making the branch")
+	assert.NotContains(t, dropped, "max_sessions",
+		"a member this tick already answered must not be answered again by its batch")
+	assert.Equal(t, outbox.NoDisclosure, outbox.DisclosureMark(records[0]),
+		"and no fresh mark is minted at a path whose record this tick destroyed")
+	assert.Contains(t, refusalFor(t, records[1]), "max_sessions")
+	assert.Contains(t, refusalFor(t, records[2]), "max_sessions")
 }

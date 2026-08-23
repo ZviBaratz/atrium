@@ -249,16 +249,21 @@ requests three sessions sharing one prompt, one base branch and one repo, which 
 the bake-off primitive — race three claudes, or claude against codex, then keep the
 best diff. N sessions cannot share one branch, so the title becomes a *stem* and the
 variants are named `bake-1`, `bake-2`, `bake-3`, skipping any name a session or a
-local branch in the target repo already owns. Nothing is silent about it: the
-derived names are printed as they are queued, so the caller knows its branches
-without waiting. A fan-out of one keeps the bare title, so `--variants claude:1` is
-exactly `--profile claude`.
+local branch in the target repo already owns. Nothing is silent about it: each
+derived title is printed as it is queued, and `--wait` names the branch each one was
+given. Asking which names are taken means asking a repository, so a fan-out of two
+or more needs a git target; a fan-out of one derives nothing, keeps the bare title,
+and is exactly `--profile claude`.
 
 Each variant is spooled as an ordinary request carrying its own final title and
 program, sharing one batch id — so every gate, receipt and recovery path treats it
 as the single create it is, and only the session cap reads the batch as a batch. The
 cap is charged for the whole batch: it fits, or it is refused whole with a receipt
-for every member, rather than creating variants until the cap closes. Two things a
+for every member, rather than creating variants until the cap closes. The charge is
+live, so if something else takes the room after part of a batch is already built —
+somebody at the keyboard, another script — the rest is refused together rather than
+trickling in, and each receipt counts what was still queued rather than what was
+asked for. Two things a
 fan-out cannot promise, both because the drain builds one spooled session at a time:
 a `--wait` has to be sized for every build in series, and with no `--branch` each
 variant starts from the target's HEAD at *its own* creation time — so pass

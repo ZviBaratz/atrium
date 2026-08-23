@@ -41,10 +41,18 @@ const (
 // create is unchanged), app.firstFreeTitle treats the bare stem as the 1 and starts
 // suffixing at 2, and main's fan-out never reaches here for a total of one.
 //
-// It deliberately does not bound the result against MaxTitleLen. A stem at the cap
-// overflows at n = 10 — the suffix is two runes wider than the one before it — and the
-// two callers report that differently: a create form has a title row to put a verdict
-// in, while `atrium new` owes its caller an error naming how many runes to drop.
+// It deliberately does not bound the result against MaxTitleLen: a numbered suffix can
+// push a derived title over the cap, and how soon depends on the stem.
+// TestVariantTitleCanOutgrowMaxTitleLen owns that fact, and owning it there rather than
+// here is the point — a stem at the cap overflows at the very FIRST variant, which is not
+// what an eye reading the scheme expects and not something a sentence should be trusted
+// to keep saying correctly.
+//
+// One caller checks. main.planVariantTitles terminates its scan on the first over-length
+// candidate and refuses the fan-out; app.planVariantTitles does not check at all, so the
+// create form makes sessions whose titles its own rename field cannot re-enter. That is
+// atrium#784 — a gap, not a division of labour, and the reason this function must not
+// read as though the rule were enforced somewhere on its behalf.
 func VariantTitle(stem string, n int) string {
 	return fmt.Sprintf("%s-%d", stem, n)
 }

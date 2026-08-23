@@ -52,17 +52,21 @@ var (
 			"claude:2,codex:1 creates three — sharing this prompt, this base branch and\n" +
 			"this repo. N sessions cannot share one branch, so the title becomes a stem:\n" +
 			"the variants are named <title>-1, <title>-2 and so on, skipping any name a\n" +
-			"session or a local branch in the target repo already owns. They are printed\n" +
-			"as they are queued, so which branch you got is never left to be guessed at.\n" +
-			"A fan-out of one keeps the bare title, so --variants claude:1 is exactly\n" +
-			"--profile claude. The derived names meet the same length limit the title\n" +
-			"does, so a long title can be refused for a suffix a plain one would never\n" +
-			"need. --variants names profiles and chooses what to run, so it cannot be\n" +
-			"combined with --program or --profile.\n\n" +
+			"session or a local branch in the target repo already owns. Each derived title\n" +
+			"is printed as it is queued, and --wait names the branch each one was given.\n" +
+			"Asking which names are taken means asking a repository, so a fan-out of two\n" +
+			"or more needs a git target; a fan-out of one keeps the bare title, derives\n" +
+			"nothing, and is exactly --profile claude. The derived names meet the same\n" +
+			"length limit the title does, so a long title can be refused for a suffix a\n" +
+			"plain one would never need. --variants names profiles and chooses what to\n" +
+			"run, so it cannot be combined with --program or --profile.\n\n" +
 			"The session cap is charged to the whole batch: it fits, or it is refused\n" +
 			"whole with a receipt for every member, rather than creating variants until\n" +
-			"the cap closes. --force answers the host-capacity question for the batch\n" +
-			"exactly as it does for one session. A batch is built one session at a time,\n" +
+			"the cap closes. The charge is live, so room taken after part of a batch is\n" +
+			"already built leaves the rest refused together, each receipt counting what\n" +
+			"was still queued rather than what was asked for. --force answers the\n" +
+			"host-capacity question for the batch exactly as it does for one session.\n" +
+			"A batch is built one session at a time,\n" +
 			"so --wait over a fan-out has to be sized for all of its builds in series;\n" +
 			"and with no --branch each variant starts from the target's HEAD at its own\n" +
 			"creation time, so pass --branch when the comparison must share a start point.\n\n" +
@@ -79,15 +83,16 @@ var (
 				return err
 			}
 			return runNew(cmd.OutOrStdout(), cmd.ErrOrStderr(), newRequest{
-				title:    args[0],
-				path:     newPathFlag,
-				program:  newProgramFlag,
-				profile:  newProfileFlag,
-				variants: newVariantsFlag,
-				branch:   newBranchFlag,
-				prompt:   prompt,
-				force:    newForceFlag,
-				wait:     newWaitFlag,
+				title:       args[0],
+				path:        newPathFlag,
+				program:     newProgramFlag,
+				profile:     newProfileFlag,
+				variants:    newVariantsFlag,
+				variantsSet: cmd.Flags().Changed("variants"),
+				branch:      newBranchFlag,
+				prompt:      prompt,
+				force:       newForceFlag,
+				wait:        newWaitFlag,
 			})
 		},
 	}
@@ -102,13 +107,18 @@ type newRequest struct {
 	path    string
 	program string
 	profile string
-	// variants is the raw --variants spec, unparsed. Empty is the single-session form,
-	// which is every path this command had before #761.
-	variants string
-	branch   string
-	prompt   string
-	force    bool
-	wait     time.Duration
+	// variants is the raw --variants spec, unparsed, and variantsSet is whether the flag
+	// was given at all. Both, because "" is a value a caller can pass: `--variants
+	// "$VARIANTS"` with the variable unset reaches here as the empty string, and reading
+	// that as "no fan-out" hands a script one session where it asked for N, with no error
+	// and no warning. Unset is the single-session form, which is every path this command
+	// had before #761.
+	variants    string
+	variantsSet bool
+	branch      string
+	prompt      string
+	force       bool
+	wait        time.Duration
 }
 
 // firstPrompt returns the session's first prompt: the second argument, or stdin
@@ -183,10 +193,12 @@ func runNew(out, errOut io.Writer, r newRequest) error {
 	// is: loadStoredConfig, not config.LoadConfig, for the reasons that function
 	// documents — the loader sweeps in-flight temp files and seeds a config.json.
 	cfg := loadStoredConfig()
-	// Still resolved ahead of the target, as it was before --variants existed, so a
-	// profile typo is reported before a bad --path rather than behind it. It returns ""
-	// for a fan-out, whose programs come from the spec instead.
-	program, err := resolveNewProgram(cfg, r.program, r.profile)
+	// What to run is settled ahead of the target, as --profile's answer was before
+	// --variants existed, so a profile typo is reported before a bad --path rather than
+	// behind it. Resolving the whole spec here rather than inside the plan is what keeps
+	// that true for a fan-out: the profile table is the same table either way, and a name
+	// that is not in it is a mistake about the command line.
+	programs, err := resolveCreatePrograms(cfg, r)
 	if err != nil {
 		return err
 	}
@@ -200,21 +212,19 @@ func runNew(out, errOut io.Writer, r newRequest) error {
 		return err
 	}
 
-	reqs, err := planCreateRequests(context.Background(), cfg, r, program, title, path, instances)
+	reqs, err := planCreateRequests(context.Background(), cfg, r, programs, title, path, instances)
 	if err != nil {
 		return err
 	}
-	records, err := spoolBatch(reqs)
+	members, err := spoolBatch(reqs)
 	if err != nil {
 		return err
 	}
 
 	// Printed only once the whole batch is committed, so a rollback leaves no line
 	// claiming a variant was queued that has just been withdrawn.
-	members := make([]spooledVariant, 0, len(reqs))
-	for i, req := range reqs {
-		members = append(members, spooledVariant{title: req.Title, record: records[i]})
-		_, _ = fmt.Fprintf(out, "queued: create %q in %s\n", req.Title, path)
+	for _, member := range members {
+		_, _ = fmt.Fprintf(out, "queued: create %q in %s\n", member.title, path)
 	}
 
 	// Once for the command, not once per member: the warning is about what is draining
@@ -224,6 +234,25 @@ func runNew(out, errOut io.Writer, r newRequest) error {
 		return waitForCreates(out, members, path, r.wait)
 	}
 	return nil
+}
+
+// resolveCreatePrograms settles what each requested session will run, and settles it
+// against nothing but the config: one program for the single-session form, one per
+// variant in spec order for a fan-out. Length is what the plan below reads it by, so
+// "how many sessions" and "what each runs" are one answer rather than two.
+func resolveCreatePrograms(cfg *config.Config, r newRequest) ([]string, error) {
+	if !r.fansOut() {
+		program, err := resolveNewProgram(cfg, r.program, r.profile)
+		if err != nil {
+			return nil, err
+		}
+		return []string{program}, nil
+	}
+	specs, err := parseVariantSpec(r.variants)
+	if err != nil {
+		return nil, err
+	}
+	return resolveVariantPrograms(cfg, specs)
 }
 
 // planCreateRequests turns the command line into the records to spool: one for an
@@ -237,7 +266,7 @@ func runNew(out, errOut io.Writer, r newRequest) error {
 // contract that a batch of one is not a batch.
 func planCreateRequests(
 	ctx context.Context, cfg *config.Config, r newRequest,
-	program, title, path string, instances []session.InstanceData,
+	programs []string, title, path string, instances []session.InstanceData,
 ) ([]outbox.Request, error) {
 	// Tail only, for runSend's reason: trailing newlines are an artifact of how the text
 	// arrived (a heredoc, a pipe), while leading whitespace could be meaningful. Trimmed
@@ -249,22 +278,6 @@ func planCreateRequests(
 		Force:  r.force,
 	}
 
-	if r.variants == "" {
-		if err := checkTitleFree(cfg.BranchPrefix, title, path, instances); err != nil {
-			return nil, err
-		}
-		base.Title, base.Program = title, program
-		return []outbox.Request{base}, nil
-	}
-
-	specs, err := parseVariantSpec(r.variants)
-	if err != nil {
-		return nil, err
-	}
-	programs, err := resolveVariantPrograms(cfg, specs)
-	if err != nil {
-		return nil, err
-	}
 	if len(programs) == 1 {
 		if err := checkTitleFree(cfg.BranchPrefix, title, path, instances); err != nil {
 			return nil, err
@@ -285,6 +298,10 @@ func planCreateRequests(
 	for i, program := range programs {
 		member := base
 		member.Title, member.Program, member.Batch = titles[i], program, batch
+		// Declared per member rather than inferred by the drain, which cannot infer it:
+		// a batch becomes visible one atomic rename at a time, so what a drain tick can
+		// COUNT is not what this command committed to. See outbox.Request.BatchSize.
+		member.BatchSize, member.BatchIndex = len(programs), i+1
 		reqs = append(reqs, member)
 	}
 	return reqs, nil
@@ -349,8 +366,15 @@ func resolveNewProgram(cfg *config.Config, program, profile string) (string, err
 // It runs before anything is loaded or resolved, and that ordering is the point: a caller
 // who passed contradictory flags AND a bad path should hear about the flags, which is the
 // mistake they can see in their own command line.
+// fansOut reports whether this command line asked for a fan-out. The flag being GIVEN
+// decides, not what it was given, so an explicitly empty --variants reaches
+// parseVariantSpec and is refused there rather than quietly meaning "one session". A
+// non-empty spec answers yes on its own, for a runNew caller that did not come through
+// cobra and has no Changed to read.
+func (r newRequest) fansOut() bool { return r.variantsSet || r.variants != "" }
+
 func checkProgramFlags(r newRequest) error {
-	if r.variants == "" {
+	if !r.fansOut() {
 		return nil
 	}
 	if r.program != "" {

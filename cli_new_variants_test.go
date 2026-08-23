@@ -1,8 +1,13 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io"
+	"math"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -256,7 +261,11 @@ func TestNewVariantsRefusesATargetItCannotReadBranchesOf(t *testing.T) {
 
 	_, _, err := newSession(t, newRequest{title: "bake", path: tempRepo(t), variants: "claude:2"})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "a fan-out needs a git repository")
+	assert.Contains(t, err.Error(), "is not a git repository, and a fan-out needs one")
+	// Never the wording reserved for a git that could not be RUN. The two are told apart
+	// by git.ProbeGitRepo, and conflating them sends a CI retry after a missing .git for
+	// a fork failure or a cold checkout that clears by itself.
+	assert.NotContains(t, err.Error(), "could not read the branches")
 	assert.Empty(t, spooledCreates(t))
 }
 
@@ -356,11 +365,14 @@ func TestNewVariantsWaitReportsEverySessionCreated(t *testing.T) {
 	assert.Contains(t, waitErr.Error(), "already used by another session")
 }
 
-// TestNewVariantsWaitTimesOutNamingTheTally: nothing drains, so every member is still
-// queued. The tally is what separates "the batch was refused" from "the batch is still
-// going up", and the copy has to say a batch is built one session at a time — a --wait
-// sized for one create is the mistake this message exists to answer.
-func TestNewVariantsWaitTimesOutNamingTheTally(t *testing.T) {
+// TestNewVariantsWaitTimesOutNamingTheBatch: nothing drains, so every member is still
+// queued. Each member's message names the batch it belongs to and says a batch is built
+// one session at a time — a --wait sized for one create is the mistake this copy exists
+// to answer — and the tally is left to the returned error, which is taken once every
+// member has been accounted for. A per-member count could only ever report the members
+// awaited BEFORE it, which for the first is always zero while later members go on
+// printing their own "created" lines.
+func TestNewVariantsWaitTimesOutNamingTheBatch(t *testing.T) {
 	sandboxDataDir(t)
 	fanOutConfig(t)
 	repo := gitRepoWithBranches(t)
@@ -375,8 +387,12 @@ func TestNewVariantsWaitTimesOutNamingTheTally(t *testing.T) {
 	assert.NotContains(t, out, "created ")
 	assert.Contains(t, waitErr.Error(), "2 of 2 requested sessions were not created")
 	assert.Contains(t, waitErr.Error(), `without session "bake-1" appearing`)
-	assert.Contains(t, waitErr.Error(), "0 of 2 were created")
+	assert.Contains(t, waitErr.Error(), "one of 2 this atrium new asked for")
 	assert.Contains(t, waitErr.Error(), "one session at a time")
+	// waitForCreate's clause, kept word for word: a member held in the outbox for the
+	// length of its own build is the common reason a batch outruns its --wait, and
+	// dropping it would have a member mid-build read as untouched.
+	assert.Contains(t, waitErr.Error(), "being built right now")
 }
 
 // runNewWait drives waitForCreates over already-spooled records, which is what the
@@ -419,6 +435,18 @@ func TestNewFlagErrorsPrecedeTargetErrors(t *testing.T) {
 			newRequest{title: "bake", path: missing, program: "codex", profile: "codex"}},
 		{"unknown profile", `no profile "nope"`,
 			newRequest{title: "bake", path: missing, profile: "nope"}},
+		// The same mistake through the flag this feature adds. It reached the profile
+		// table only inside the plan before, which runs AFTER the target is resolved —
+		// so a --variants typo was reported behind a bad --path while the identical
+		// --profile typo was reported ahead of it, and the comment at resolveNewProgram
+		// claimed otherwise for both.
+		{"unknown variant profile", `no profile "nope"`,
+			newRequest{title: "bake", path: missing, variants: "nope:2"}},
+		// An explicitly empty spec is a mistake about the command line too, and the one
+		// most likely to arrive from a script: `--variants "$VARIANTS"` with the variable
+		// unset. Read as "no fan-out" it would hand back one session, silently.
+		{"empty variants", "--variants was given no profiles",
+			newRequest{title: "bake", path: missing, variantsSet: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, _, err := newSession(t, tc.r)
@@ -428,4 +456,78 @@ func TestNewFlagErrorsPrecedeTargetErrors(t *testing.T) {
 				"the argv mistake outranks the one about the world")
 		})
 	}
+}
+
+// TestParseVariantSpecCannotOverflowItsTotal: the ceiling used to be tested after the
+// loop, so two counts near the top of int summed to a NEGATIVE total, passed
+// `total > MaxVariantBatch`, and handed resolveVariantPrograms a loop that allocates one
+// string per requested session until the process dies. Both entries are individually
+// refusable, which is the point — the bound has to bite before the addition, not after it.
+func TestParseVariantSpecCannotOverflowItsTotal(t *testing.T) {
+	huge := strconv.Itoa(math.MaxInt/2 + 1)
+	specs, err := parseVariantSpec("claude:" + huge + ",codex:" + huge)
+	require.Error(t, err)
+	assert.Nil(t, specs)
+	assert.Contains(t, err.Error(), "at most")
+
+	// The control: one such entry was always refused, so a guard that only covered the
+	// single-entry case would look identical from here.
+	_, err = parseVariantSpec("claude:" + huge)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "at most")
+}
+
+// TestNewVariantsRefusesAnEmptySpecFromArgv drives the flag rather than the struct,
+// because the defect it guards is in the wiring: "" is both the flag's default and a
+// value a caller can pass, so only cobra's Changed can tell "no --variants" from
+// "--variants with nothing in it". Reading them as the same thing hands a script one
+// session where it asked for N.
+func TestNewVariantsRefusesAnEmptySpecFromArgv(t *testing.T) {
+	sandboxDataDir(t)
+	fanOutConfig(t)
+	restoreRootCmd(t)
+
+	cmd := rootCmd
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"new", "bake", "--path", tempRepo(t), "--variants", ""})
+	err := cmd.Execute()
+
+	require.Error(t, err, `--variants "" is a mistake about the command line, not a singleton`)
+	assert.Contains(t, err.Error(), "--variants was given no profiles")
+	assert.Empty(t, spooledCreates(t))
+}
+
+// TestSpoolBatchNamesAMemberItCouldNotWithdraw is the rollback's own failure path, and
+// the case it must not report as a clean withdrawal is the one it exists for: a running
+// drain CLAIMS a record, which renames it out from under this command. os.Remove then
+// sees ENOENT — which outbox.Remove would answer nil to, leaving the caller told nothing
+// was queued while that session, its branch and its worktree come up minutes later.
+func TestSpoolBatchNamesAMemberItCouldNotWithdraw(t *testing.T) {
+	sandboxDataDir(t)
+
+	write := writeCreateRecord
+	t.Cleanup(func() { writeCreateRecord = write })
+	calls := 0
+	writeCreateRecord = func(r outbox.Request) (string, error) {
+		calls++
+		if calls == 2 {
+			return "", errors.New("disk full")
+		}
+		record, err := write(r)
+		if err != nil {
+			return "", err
+		}
+		// Stand in for the drain claiming it between the two writes.
+		require.NoError(t, os.Rename(record, outbox.ClaimPath(record)))
+		return record, nil
+	}
+
+	_, err := spoolBatch([]outbox.Request{
+		{Title: "bake-1", Path: t.TempDir()}, {Title: "bake-2", Path: t.TempDir()},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `failed to queue variant "bake-2"`)
+	assert.Contains(t, err.Error(), `queued variant "bake-1" was claimed by a running atrium`,
+		"a claimed member is being built, which is exactly what the caller has to be told")
 }

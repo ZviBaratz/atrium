@@ -16,10 +16,12 @@ func TestVariantTitleIsTheSuffixScheme(t *testing.T) {
 	require.Equal(t, "fix-auth-10", VariantTitle("fix-auth", 10))
 }
 
-// TestVariantTitleCanOutgrowMaxTitleLen pins the hazard every caller's length check
-// exists for: a stem at the cap is not a stem a batch can be derived from, because the
-// suffix grows a rune at every power of ten. Asserted rather than left to a comment so
-// a later change to either constant cannot quietly make the checks dead code.
+// TestVariantTitleCanOutgrowMaxTitleLen pins the hazard main.planVariantTitles' length
+// check exists for: a stem at the cap is not a stem a batch can be derived from, because
+// the suffix grows a rune at every power of ten. Asserted rather than left to a comment
+// so a later change to either constant cannot quietly make that check dead code — and
+// asserted HERE because the other derivation, app.planVariantTitles, does not check at
+// all (atrium#784), so a claim about "every caller" would be false.
 func TestVariantTitleCanOutgrowMaxTitleLen(t *testing.T) {
 	stem := strings.Repeat("a", MaxTitleLen)
 	require.Len(t, []rune(stem), MaxTitleLen)

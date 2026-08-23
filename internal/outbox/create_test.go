@@ -19,13 +19,14 @@ func req(title, path string) Request {
 func TestWriteCreateThenListRoundTrip(t *testing.T) {
 	sandbox(t)
 	name, err := WriteCreate(Request{
-		Title:   "fix-auth",
-		Path:    "/repo/web",
-		Program: "codex",
-		Branch:  "release/2.0",
-		Prompt:  "start on the parser",
-		Force:   true,
-		Batch:   "0123456789abcdef",
+		Title:     "fix-auth",
+		Path:      "/repo/web",
+		Program:   "codex",
+		Branch:    "release/2.0",
+		Prompt:    "start on the parser",
+		Force:     true,
+		Batch:     "0123456789abcdef",
+		BatchSize: 3,
 	})
 	require.NoError(t, err)
 	assert.FileExists(t, name)

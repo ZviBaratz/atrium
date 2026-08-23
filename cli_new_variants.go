@@ -23,6 +23,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -49,9 +51,11 @@ type variantSpec struct {
 // is the whole default_program, so a colon in a profile name is reachable on a default
 // install and a first-colon split would make the only configured profile unnameable.
 //
-// A profile name containing a comma cannot be expressed at all, and is refused saying so
-// rather than mis-split: the separator has to be something, and a name with a comma in it
-// is still reachable one session at a time through --profile.
+// A profile name containing a comma cannot be expressed at all, and there is no refusal
+// that says so: the separator has to be something, and such a name splits into entries
+// here rather than being recognised, so what the caller sees is whichever refusal the
+// halves earn — an unknown profile, most often. The remedy is --profile, which takes a
+// name whole, one session at a time.
 //
 // Every refusal names the entry it is about. Nothing here consults the config, so a
 // mistyped grammar is reported before an unknown-profile error can mask it.
@@ -82,6 +86,17 @@ func parseVariantSpec(raw string) ([]variantSpec, error) {
 		if count < 1 {
 			return nil, fmt.Errorf("--variants entry %q asks for %d sessions; a count is at least 1", entry, count)
 		}
+		// Bounded per entry, and the total bounded inside the loop rather than after it,
+		// because the addition below is the part that can wrap: two counts near the top of
+		// int sum to a NEGATIVE total, which passes a ceiling test spelled `total >
+		// MaxVariantBatch` and hands resolveVariantPrograms a loop that allocates one
+		// string per requested session until the process dies. One entry can never exceed
+		// the bound the whole batch is held to, so applying it here costs nothing and
+		// leaves no addition that can reach a number the ceiling cannot see.
+		if count > session.MaxVariantBatch {
+			return nil, fmt.Errorf("--variants entry %q asks for %d sessions; one atrium new fans out "+
+				"to at most %d", entry, count, session.MaxVariantBatch)
+		}
 		for _, seen := range specs {
 			if seen.profile == name {
 				// Refused rather than summed, so the total the caller reads off their own
@@ -91,10 +106,10 @@ func parseVariantSpec(raw string) ([]variantSpec, error) {
 		}
 		specs = append(specs, variantSpec{profile: name, count: count})
 		total += count
-	}
-	if total > session.MaxVariantBatch {
-		return nil, fmt.Errorf("--variants asks for %d sessions; one atrium new fans out to at most %d",
-			total, session.MaxVariantBatch)
+		if total > session.MaxVariantBatch {
+			return nil, fmt.Errorf("--variants asks for %d sessions; one atrium new fans out to at most %d",
+				total, session.MaxVariantBatch)
+		}
 	}
 	return specs, nil
 }
@@ -140,6 +155,10 @@ func resolveVariantPrograms(cfg *config.Config, specs []variantSpec) ([]string, 
 func planVariantTitles(
 	ctx context.Context, prefix, stem string, total int, path string, instances []session.InstanceData,
 ) ([]string, error) {
+	branches, err := variantBranchSet(ctx, path)
+	if err != nil {
+		return nil, err
+	}
 	titles := make([]string, 0, total)
 	for n := 1; len(titles) < total && n <= total+session.VariantTitleScan; n++ {
 		cand := session.VariantTitle(stem, n)
@@ -147,19 +166,19 @@ func planVariantTitles(
 		// once one is over the cap every later one is too, and reporting this as "not
 		// enough free names" would send the caller looking for a collision that is not
 		// there.
+		// How much shorter deliberately goes unstated. The obvious arithmetic — this
+		// candidate's overflow — is a lower bound and nothing more: a stem trimmed by
+		// exactly that much overflows again at the next wider suffix, so a caller who
+		// followed the number would be refused a second time by the same rule.
 		if got := len([]rune(cand)); got > session.MaxTitleLen {
-			return nil, fmt.Errorf("variant %q is %d characters; the limit is %d, so a fan-out of "+
-				"%d needs a title at least %d shorter",
-				cand, got, session.MaxTitleLen, total, got-session.MaxTitleLen)
+			return nil, fmt.Errorf("variant %q is %d characters and the limit is %d: a fan-out of %d "+
+				"needs a title with room for a numbered suffix, so shorten %q",
+				cand, got, session.MaxTitleLen, total, stem)
 		}
 		if checkTitleFree(prefix, cand, path, instances) != nil {
 			continue
 		}
-		taken, err := variantBranchTaken(ctx, prefix, cand, path)
-		if err != nil {
-			return nil, err
-		}
-		if taken {
+		if branches[git.BranchNameForSession(prefix, cand)] {
 			continue
 		}
 		titles = append(titles, cand)
@@ -171,27 +190,32 @@ func planVariantTitles(
 	return titles, nil
 }
 
-// variantBranchTaken reports whether candidate's session branch already exists in the
-// target repo, and errors when git could not be asked.
+// variantBranchSet reads the target repo's local branches once, so the suffix scan can
+// ask about a name without asking git, and refuses the fan-out when git could not be
+// asked at all.
 //
-// git.LookupLocalBranch rather than git.LocalBranchExists, and the difference is the
-// whole reason this function exists: LocalBranchExists is `err == nil`, so it answers
-// "free" for a repo it cannot read — and this caller acts on the negative by CHOOSING
-// the name, which would hand every variant a name the drain then refuses. A repo git
-// cannot read is also the answer to a target that is not a repository, and a fan-out
-// needs one: every variant wants its own worktree, which is the same refusal the create
-// form makes for a direct target.
+// git.LocalBranchSet rather than git.LocalBranchExists per candidate, and the difference
+// is not only the forks: LocalBranchExists is `err == nil`, so it answers "free" for a
+// repo it cannot read — and this caller acts on the negative by CHOOSING the name, which
+// would hand every variant a name the drain then refuses.
 //
-// Reached only for candidates the in-memory check already cleared, so the common case
-// costs one git invocation per variant and nothing for a run without --variants.
-func variantBranchTaken(ctx context.Context, prefix, candidate, path string) (bool, error) {
-	exists, err := git.LookupLocalBranch(ctx, path, git.BranchNameForSession(prefix, candidate))
-	if err != nil {
-		return false, fmt.Errorf("could not read the branches of %s to pick free variant names, so "+
-			"--variants has nothing to derive them against (a fan-out needs a git repository, one "+
-			"worktree per variant): %w", path, err)
+// git.ProbeGitRepo separates the two things that failure can mean, and it exists for
+// exactly this decision. A fan-out does need a git repository — every variant wants its
+// own worktree, the same refusal the create form makes for a direct target — but saying
+// so about a target that IS one, when git merely could not be run (off PATH mid-upgrade,
+// a fork failure under memory pressure, a cold checkout past gitLocalTimeout), sends a CI
+// retry after a missing .git for a condition that clears by itself.
+func variantBranchSet(ctx context.Context, path string) (map[string]bool, error) {
+	branches, err := git.LocalBranchSet(ctx, path)
+	if err == nil {
+		return branches, nil
 	}
-	return exists, nil
+	if isRepo, known := git.ProbeGitRepo(ctx, path); known && !isRepo {
+		return nil, fmt.Errorf("%s is not a git repository, and a fan-out needs one: every variant "+
+			"gets its own worktree, so --variants has no branches to derive free names against "+
+			"(one session at a time works there — drop --variants)", path)
+	}
+	return nil, fmt.Errorf("could not read the branches of %s to pick free variant names: %w", path, err)
 }
 
 // writeCreateRecord is the seam spoolBatch writes through.
@@ -210,32 +234,60 @@ var writeCreateRecord = outbox.WriteCreate
 // logged and dropped: those members may still be created, minutes after their caller was
 // told the command failed, and that is precisely the thing a caller has to be able to
 // find out about.
-func spoolBatch(reqs []outbox.Request) ([]string, error) {
-	records := make([]string, 0, len(reqs))
+func spoolBatch(reqs []outbox.Request) ([]spooledVariant, error) {
+	members := make([]spooledVariant, 0, len(reqs))
 	for _, r := range reqs {
 		record, err := writeCreateRecord(r)
 		if err != nil {
 			errs := []error{fmt.Errorf("failed to queue variant %q: %w", r.Title, err)}
-			return nil, errors.Join(append(errs, withdrawSpooled(records)...)...)
+			return nil, errors.Join(append(errs, withdrawSpooled(members)...)...)
 		}
-		records = append(records, record)
+		members = append(members, spooledVariant{title: r.Title, record: record})
 	}
-	return records, nil
+	return members, nil
 }
 
-// withdrawSpooled removes records this command wrote and has decided not to leave
-// behind. outbox.Remove rather than DiscardCreate: nothing has claimed them — the drain
-// claims only what it is about to build — and a record that is already gone is not an
-// error.
-func withdrawSpooled(records []string) []error {
+// withdrawSpooled takes back the members this command wrote before it gave up, and names
+// every one it could not.
+//
+// os.Remove rather than outbox.Remove, whose "already gone is not an error" is the one
+// reading this caller must not make. A record vanishes from under this command for
+// exactly one ordinary reason: a running drain CLAIMED it, which is to say the session is
+// being built right now — the outcome the whole withdrawal exists to warn about.
+// Swallowing it would let the command exit non-zero saying nothing was queued while a
+// session, a branch and a worktree come up minutes later with nothing pointing at them.
+//
+// Nothing is un-claimed from here, and nothing tries. A claimed record belongs to the
+// drain holding it and the session behind it is real; the honest answer is to say so and
+// let the caller go and look. DiscardCreate is the recovery for a claim, and it is the
+// drain's to run — see rejectCreateRequest for what spending it costs.
+func withdrawSpooled(members []spooledVariant) []error {
 	var errs []error
-	for _, record := range records {
-		if err := outbox.Remove(record); err != nil {
-			errs = append(errs, fmt.Errorf("a queued variant could not be withdrawn and may still "+
-				"be created: %w", err))
+	for _, member := range members {
+		err := os.Remove(member.record)
+		switch {
+		case err == nil:
+		case !errors.Is(err, fs.ErrNotExist):
+			errs = append(errs, fmt.Errorf("queued variant %q could not be withdrawn and may still "+
+				"be created: %w", member.title, err))
+		case claimExists(member.record):
+			errs = append(errs, fmt.Errorf("queued variant %q was claimed by a running atrium before "+
+				"this command could take it back, so that session is being created now", member.title))
+		default:
+			errs = append(errs, fmt.Errorf("queued variant %q left the outbox before this command "+
+				"could take it back, so it may already have been created", member.title))
 		}
 	}
 	return errs
+}
+
+// claimExists reports whether a running drain holds the claim for record. Best-effort by
+// construction — it is read after the record has already gone, to say which of two things
+// took it — so an unreadable claim path answers "not claimed" and the caller falls back
+// to the wider wording, which is true either way.
+func claimExists(record string) bool {
+	_, err := os.Stat(outbox.ClaimPath(record))
+	return err == nil
 }
 
 // spooledVariant pairs a member's title with the record `--wait` watches for it. The
@@ -272,18 +324,16 @@ func waitForCreates(out io.Writer, members []spooledVariant, repo string, timeou
 	}
 
 	deadline := time.Now().Add(timeout)
-	created := 0
 	var failures []error
 	for _, member := range members {
 		err := awaitSpool(member.record, outbox.ClaimPath(member.record), time.Until(deadline),
-			batchWaitCopy(member.title, timeout, len(members), &created))
+			batchWaitCopy(member.title, timeout, len(members)))
 		if err == nil {
 			d, storeErr := storedSession(member.title, repo)
 			if storeErr != nil {
 				failures = append(failures, storeErr)
 				continue
 			}
-			created++
 			_, _ = fmt.Fprintf(out, "created %q%s\n", member.title, createdBranchClause(d))
 			continue
 		}
@@ -296,16 +346,29 @@ func waitForCreates(out io.Writer, members []spooledVariant, repo string, timeou
 		len(failures), len(members), errors.Join(failures...))
 }
 
-// batchWaitCopy is one member's wording. created is read at the deadline rather than
-// captured, so the tally names what had landed by then — the number a caller needs to
-// tell "the batch was refused" from "the batch is still going up".
-func batchWaitCopy(title string, timeout time.Duration, total int, created *int) spoolWaitCopy {
+// batchWaitCopy is one member's wording, and it deliberately carries no tally of what the
+// batch has achieved.
+//
+// It could not carry an honest one. Members are awaited in variant order, so at the moment
+// one times out this loop has not looked at anything after it — a count taken here is the
+// members BEFORE this one that landed, which for the first member is always zero, and the
+// loop then goes on to print `created` lines for the ones it had not reached. The command
+// would exit saying nothing was created two lines under its own stdout saying otherwise.
+// waitForCreates' return value is the tally, and it is taken once every member has been
+// accounted for.
+//
+// The "queued, or being built right now" clause is waitForCreate's and is kept word for
+// word: a member held in the outbox for the length of its own build is the common reason a
+// batch outruns its --wait, and dropping the clause would read as untouched.
+func batchWaitCopy(title string, timeout time.Duration, total int) spoolWaitCopy {
 	return spoolWaitCopy{
 		refused: fmt.Sprintf("atrium did not create %q", title),
 		timedOut: func() string {
-			return joinTimedOut(fmt.Sprintf("waited %s without session %q appearing; %d of %d were "+
-				"created, and the rest are still in the outbox — a batch is built one session at a "+
-				"time, so it needs a --wait sized for all of them", timeout, title, *created, total),
+			return joinTimedOut(fmt.Sprintf("waited %s without session %q appearing; it is one of %d "+
+				"this atrium new asked for and is still in the outbox — either queued, or being built "+
+				"right now, since a create is held there until its worktree, branch and agent exist. A "+
+				"batch is built one session at a time, so it needs a --wait sized for all of them",
+				timeout, title, total),
 				"A running atrium drains it on its next tick, or on detach if its terminal is "+
 					"handed to a session; otherwise the next one to start does")
 		},

@@ -125,3 +125,28 @@ func commitOn(t *testing.T, repo, branch string) {
 	_, err = localGit(context.Background(), repo, "worktree", "remove", "--force", wt)
 	require.NoError(t, err)
 }
+
+// TestLocalBranchSetAnswersTheWholeNamespaceAtOnce pins what the per-name siblings above
+// cannot be asked cheaply: a caller scanning a numbered series needs every local branch,
+// and getting them one fork at a time costs it a subprocess and a gitLocalTimeout per
+// candidate. The set has to hold exactly the local heads — nested refs included, since a
+// name derived from a prefix can be one — and it has to keep "git could not be asked" out
+// of the answer, because its caller acts on the negative by CHOOSING a name.
+func TestLocalBranchSetAnswersTheWholeNamespaceAtOnce(t *testing.T) {
+	repo := strandedRepo(t, "", "")
+	requireBranch(t, repo, "zvi/fix-auth")
+	// A sibling rather than a child of the branch above: refs/heads/zvi/fix-auth and
+	// refs/heads/zvi/fix-auth/wip cannot both exist, so asking for both is a git error
+	// rather than a fixture.
+	requireBranch(t, repo, "zvi/bake/wip")
+
+	names, err := LocalBranchSet(context.Background(), repo)
+	require.NoError(t, err)
+	assert.True(t, names["zvi/fix-auth"])
+	assert.True(t, names["zvi/bake/wip"],
+		"a nested ref is a local head like any other, and a derived name can be one")
+	assert.False(t, names["zvi/nope"], "and a name nothing owns is simply absent")
+
+	_, err = LocalBranchSet(context.Background(), t.TempDir())
+	require.Error(t, err, "a directory that is not a repository must not answer 'no branches'")
+}
