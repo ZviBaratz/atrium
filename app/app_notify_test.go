@@ -98,14 +98,14 @@ func TestNotifyStateThrottle(t *testing.T) {
 	st := &notifyState{}
 	// First of each edge passes; an immediate repeat of the same edge is throttled;
 	// the other edge is tracked independently.
-	require.False(t, st.throttled(notify.EventFinished), "first finish passes")
-	require.True(t, st.throttled(notify.EventFinished), "immediate second finish is throttled")
-	require.False(t, st.throttled(notify.EventNeedsInput), "needs-input has its own budget")
-	require.True(t, st.throttled(notify.EventNeedsInput), "immediate second needs-input is throttled")
+	require.False(t, st.throttled(notify.EventFinished, notifyThrottle), "first finish passes")
+	require.True(t, st.throttled(notify.EventFinished, notifyThrottle), "immediate second finish is throttled")
+	require.False(t, st.throttled(notify.EventNeedsInput, notifyThrottle), "needs-input has its own budget")
+	require.True(t, st.throttled(notify.EventNeedsInput, notifyThrottle), "immediate second needs-input is throttled")
 
 	// After the throttle window elapses, the edge fires again.
 	st.lastFinished = time.Now().Add(-2 * notifyThrottle)
-	require.False(t, st.throttled(notify.EventFinished), "finish passes again once the window elapsed")
+	require.False(t, st.throttled(notify.EventFinished, notifyThrottle), "finish passes again once the window elapsed")
 }
 
 // newNotifyHome builds a home with a bell notifier writing to buf, a real list, and an

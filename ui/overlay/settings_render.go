@@ -1102,6 +1102,7 @@ var inertReasons = map[string]string{
 	"notifications_finished":  "needs Notifications",
 	"notify_when_focused":     "needs Notifications",
 	"notify_command":          "needs desktop mode",
+	"notify_throttle_seconds": "needs Notifications",
 	"fast_forward_local_base": "needs Update base on create",
 	"daemon_poll_interval":    "needs Auto-yes",
 	"agent_oom_margin":        "Linux only",

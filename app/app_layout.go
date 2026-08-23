@@ -9,6 +9,7 @@ import (
 	"github.com/ZviBaratz/atrium/cmd"
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/log"
+	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/tmux"
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/theme"
@@ -373,6 +374,18 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 		if m.list != nil {
 			m.list.SetContextIndicator(m.appConfig.GetContextIndicator())
 		}
+	case "context_warn_percent", "context_danger_percent":
+		// Both keys re-seed the pair, not just the one that moved: the accessors hold
+		// warn ≤ danger, so raising danger can also raise the warn band it was
+		// capping, and pushing only the edited half would leave the renderer with the
+		// stale other one until the next restart.
+		if m.list != nil {
+			m.list.SetContextThresholds(m.appConfig.GetContextWarnPercent(), m.appConfig.GetContextDangerPercent())
+		}
+	case "pending_watchdog_minutes":
+		// The cap lives in the session package, which owns the reconciliation; the
+		// running poll goroutines pick the new value up on their next Pending poll.
+		session.SetPendingWatchdog(time.Duration(m.appConfig.GetPendingWatchdogMinutes()) * time.Minute)
 	case "os_chrome":
 		// Recompute now rather than waiting a tick: enabling shows the current fleet
 		// on the next frame, and disabling zeroes the title and bar, which the

@@ -3,9 +3,11 @@ package ui
 import (
 	"testing"
 
+	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/session/transcript"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
+	"charm.land/bubbles/v2/spinner"
 	"github.com/mattn/go-runewidth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -68,7 +70,7 @@ func TestContextChip_UnknownModelDegradesToACount(t *testing.T) {
 	// And the colour must not claim urgency it cannot know about: 283k could be
 	// 28% of 1M or 141% of 200K, so an unknown ceiling stays dim at any count.
 	th := theme.Current()
-	assert.Equal(t, th.Palette.FgDim, contextColor(th, transcript.Usage{ContextTokens: 990_000, Model: "claude-opus-99"}, contextModePercent),
+	assert.Equal(t, th.Palette.FgDim, contextColor(th, transcript.Usage{ContextTokens: 990_000, Model: "claude-opus-99"}, contextModePercent, 0, 0),
 		"an unknown ceiling must stay dim however large the count")
 }
 
@@ -150,6 +152,10 @@ func TestContextChip_BarFloorAndEmptyRamp(t *testing.T) {
 // TestContextColor_Thresholds pins where the chip changes colour. The number
 // carries the same signal, so colour is reinforcement — but the thresholds are
 // what make "which session is about to compact?" answerable by scanning.
+//
+// It drives the UNSET pair (0, 0), so what it pins is the built-in 75/90 a user who
+// configures nothing gets — the fallback contextBands substitutes, not the constants
+// directly. TestContextColor_ConfiguredThresholds covers the configured pair.
 func TestContextColor_Thresholds(t *testing.T) {
 	th := theme.Current()
 	for _, tc := range []struct {
@@ -164,7 +170,7 @@ func TestContextColor_Thresholds(t *testing.T) {
 		{900_000, th.Palette.Danger, "at the danger threshold"},
 		{999_323, th.Palette.Danger, "the corpus peak"},
 	} {
-		assert.Equalf(t, tc.want, contextColor(th, opusUsage(tc.tokens), contextModePercent), tc.label)
+		assert.Equalf(t, tc.want, contextColor(th, opusUsage(tc.tokens), contextModePercent, 0, 0), tc.label)
 	}
 }
 
@@ -432,7 +438,100 @@ func TestContextColorCostIsAlwaysDim(t *testing.T) {
 		// The occupancy reading is deliberately one that would paint Danger, so
 		// this fails if the cost branch ever falls through to the percentage ladder.
 		u := transcript.Usage{ContextTokens: 999_000, Model: "claude-opus-5"}
-		assert.Equalf(t, th.Palette.FgDim, contextColor(th, u, contextModeCost),
+		assert.Equalf(t, th.Palette.FgDim, contextColor(th, u, contextModeCost, 0, 0),
 			"a $%v cost chip must stay dim", usd)
 	}
+}
+
+// TestContextColor_ConfiguredThresholds is the #799 half of the colour ladder: the bands
+// are user-configurable, and this drives a pair (50/60) far from the built-in 75/90 so a
+// renderer that ignored its arguments and read the constants would paint every row here
+// wrong rather than coincidentally right.
+//
+// The occupancies are chosen against BOTH ladders. 55% is Attention under the configured
+// pair and dim under the built-in one; 65% is Danger configured and dim built-in; 80% is
+// Danger configured and merely Attention built-in. No row can pass on the wrong ladder.
+func TestContextColor_ConfiguredThresholds(t *testing.T) {
+	th := theme.Current()
+	const warn, danger = 50, 60
+	for _, tc := range []struct {
+		tokens int
+		want   theme.Color
+		label  string
+	}{
+		{400_000, th.Palette.FgDim, "40% is below the configured warn band"},
+		{490_000, th.Palette.FgDim, "just under the configured warn band"},
+		{500_000, th.Palette.Attention, "at the configured warn band — dim on the built-in ladder"},
+		{550_000, th.Palette.Attention, "inside the configured warn band"},
+		{600_000, th.Palette.Danger, "at the configured danger band — dim on the built-in ladder"},
+		{800_000, th.Palette.Danger, "well past it — only Attention on the built-in ladder"},
+	} {
+		assert.Equalf(t, tc.want, contextColor(th, opusUsage(tc.tokens), contextModePercent, warn, danger),
+			tc.label)
+	}
+}
+
+// TestContextBands_FallBackAndOrder pins what the renderer does with the pairs it can be
+// handed. It takes plain ints from whoever calls List.SetContextThresholds and cannot know
+// they came through the clamping config accessor, so the two properties it must hold on
+// its own are: a zero (nobody configured this) means the documented default, and warn
+// never rises above danger whatever it is passed.
+func TestContextBands_FallBackAndOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		warn, danger         int
+		wantWarn, wantDanger int
+	}{
+		{"unset falls back to the documented pair", 0, 0, contextWarnPct, contextDangerPct},
+		{"an unset warn keeps its default under a configured danger", 0, 95, contextWarnPct, 95},
+		{"an unset warn is held down by a low configured danger", 0, 40, 40, 40},
+		{"an unset danger keeps its default over a configured warn", 30, 0, 30, contextDangerPct},
+		{"an ordered pair survives", 50, 60, 50, 60},
+		{"an inverted pair collapses onto danger", 95, 60, 60, 60},
+		{"negatives are treated as unset, not as bands", -5, -5, contextWarnPct, contextDangerPct},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			warn, danger := contextBands(tc.warn, tc.danger)
+			assert.Equal(t, tc.wantWarn, warn, "warn band")
+			assert.Equal(t, tc.wantDanger, danger, "danger band")
+			assert.LessOrEqual(t, warn, danger, "the ladder must never invert")
+		})
+	}
+}
+
+// TestSetContextThresholdsReachesTheChip closes the gap the two tests above leave: both
+// call contextColor and contextBands directly, so a List setter that stored the pair in
+// the wrong fields — or a renderer that never read them — would pass both. This drives the
+// real row render and reads the colour off the painted chip.
+func TestSetContextThresholdsReachesTheChip(t *testing.T) {
+	th := theme.Current()
+	u := opusUsage(550_000) // 55%: dim on the built-in ladder, Attention on 50/60
+
+	r := &InstanceRenderer{}
+	require.Equal(t, th.Palette.FgDim, contextColor(th, u, contextModePercent, r.contextWarnPct, r.contextDangerPct),
+		"before configuring, 55% is unremarkable — so the assertion below cannot pass by default")
+
+	var sp spinner.Model
+	l := NewList(&sp)
+	l.SetContextThresholds(50, 60)
+	assert.Equal(t, 50, l.renderer.contextWarnPct, "the warn band lands in the warn field")
+	assert.Equal(t, 60, l.renderer.contextDangerPct, "and the danger band in the danger field")
+	assert.Equal(t, th.Palette.Attention,
+		contextColor(th, u, contextModePercent, l.renderer.contextWarnPct, l.renderer.contextDangerPct),
+		"the configured pair is what the renderer hands the colour ladder")
+}
+
+// TestContextDefaultsMatchTheConfigAccessors pins ui's fallback bands against config's
+// defaults. The duplicate is deliberate — SetContextThresholds takes plain ints and the
+// renderer has no way to ask config what an unset band means, so it needs its own answer —
+// but a duplicate nothing compares is just two numbers waiting to disagree, and the
+// symptom would be a chip that recolours at 75% for a user who configured nothing and at
+// whatever config had drifted to for everyone else.
+//
+// config is imported by the test alone; the ui package still needs none.
+func TestContextDefaultsMatchTheConfigAccessors(t *testing.T) {
+	assert.Equal(t, config.DefaultContextWarnPercent(), contextWarnPct,
+		"ui's fallback warn band and config's default must be one value")
+	assert.Equal(t, config.DefaultContextDangerPercent(), contextDangerPct,
+		"ui's fallback danger band and config's default must be one value")
 }

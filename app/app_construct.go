@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"os"
+	"time"
 
 	"github.com/ZviBaratz/atrium/cmd"
 	"github.com/ZviBaratz/atrium/config"
@@ -89,6 +90,13 @@ func assembleHome(
 	// Seed the session chip (off/count/percent/bar/cost; see
 	// config.GetContextIndicator).
 	h.list.SetContextIndicator(appConfig.GetContextIndicator())
+	// Seed the context chip's colour bands (#799). The accessors clamp and hold
+	// warn ≤ danger, so the renderer receives a coherent pair.
+	h.list.SetContextThresholds(appConfig.GetContextWarnPercent(), appConfig.GetContextDangerPercent())
+	// Install the user's Pending watchdog cap on the session package, which owns the
+	// reconciliation. Package-level because the cap is fleet-wide, not per-instance;
+	// the daemon does the same at its own startup, since it polls without a TUI.
+	session.SetPendingWatchdog(time.Duration(appConfig.GetPendingWatchdogMinutes()) * time.Minute)
 	// Seed the hint bar's chrome-free flag: with hint_bar off the menu row stays
 	// reserved but renders blank, so notices ride it without a shift (#438).
 	h.menu.SetQuiet(!appConfig.GetHintBar())

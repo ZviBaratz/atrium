@@ -233,6 +233,53 @@ func boolRow(key string, category settingCategory, label, summary, detail string
 	}
 }
 
+// cadenceNote is the one-clause reminder, repeated across the four exposed cadence
+// knobs (#799), that the boundary around them is deliberate. Verbatim in each of their
+// details rather than paraphrased five ways, so a reader who opens two of them learns
+// the rule once and a grep finds every site.
+const cadenceNote = "One of four exposed cadences; the rest are tuned for correctness, not taste."
+
+// cadenceRow builds a kindInt row over a clamping config accessor: get reports the
+// EFFECTIVE value (so the panel shows what is in force, never a stored value the
+// accessor would rewrite), set stores a pointer, and reset clears it back to nil.
+//
+// lo/hi are the accessor's own bounds, and the row REFUSES a value outside them rather
+// than echoing back a number the accessor would silently clamp — the same contract
+// MaxProjectSearchDepth exists for. validate is an optional extra predicate for a row
+// whose bound depends on another field; nil where the range is the whole rule.
+func cadenceRow(key string, category settingCategory, label, summary, detail string,
+	def, lo, hi int,
+	get func(c *config.Config) int,
+	set func(c *config.Config, v *int),
+	validate func(c *config.Config, n int) error,
+) settingRow {
+	value := func(c *config.Config) string { return strconv.Itoa(get(c)) }
+	return settingRow{
+		key: key, category: category, label: label, kind: kindInt,
+		scope: scopeGlobal, timing: timingLive,
+		summary: summary, detail: detail,
+		get:            value,
+		defaultDisplay: func() string { return strconv.Itoa(def) },
+		reset:          func(c *config.Config) { set(c, nil) },
+		set: func(c *config.Config, v string) error {
+			n, err := strconv.Atoi(strings.TrimSpace(v))
+			if err != nil {
+				return fmt.Errorf("%s must be a whole number", label)
+			}
+			if n < lo || n > hi {
+				return fmt.Errorf("%s must be between %d and %d", label, lo, hi)
+			}
+			if validate != nil {
+				if err := validate(c, n); err != nil {
+					return err
+				}
+			}
+			set(c, &n)
+			return nil
+		},
+	}
+}
+
 // Placeholder value displays, shared between a row's get and its defaultDisplay so
 // the two cannot disagree about what an unset field looks like. The panel shows these
 // in the value column where the stored value is empty but a default is in force.
@@ -787,6 +834,40 @@ func newSettingRows(cfg *config.Config) []settingRow {
 				}
 			},
 		},
+		cadenceRow("context_warn_percent", catSessionList, "Context warn at",
+			"How full the context window must be before the chip turns amber.",
+			"A percentage of the model's window, so it only applies where the window is "+
+				"known. Held at or below Context danger at, which outranks it. "+cadenceNote,
+			config.DefaultContextWarnPercent(), 1, 100,
+			(*config.Config).GetContextWarnPercent,
+			func(c *config.Config, v *int) { c.ContextWarnPercent = v },
+			func(c *config.Config, n int) error {
+				if n > c.GetContextDangerPercent() {
+					return fmt.Errorf("warn must not exceed the danger threshold (%d)", c.GetContextDangerPercent())
+				}
+				return nil
+			}),
+		cadenceRow("context_danger_percent", catSessionList, "Context danger at",
+			"How full the context window must be before the chip turns red.",
+			"A percentage of the model's window, so it only applies where the window is "+
+				"known. Lowering it past Context warn at pulls that band down with it. "+cadenceNote,
+			config.DefaultContextDangerPercent(), 1, 100,
+			(*config.Config).GetContextDangerPercent,
+			func(c *config.Config, v *int) { c.ContextDangerPercent = v },
+			func(c *config.Config, n int) error {
+				if n < 1 {
+					return fmt.Errorf("danger must be at least 1")
+				}
+				return nil
+			}),
+		cadenceRow("diff_refresh_seconds", catSessionList, "Diff chip refresh",
+			"How stale a background session's +/- chip may get, in seconds.",
+			"Backstops the writers no agent status can see: the terminal tab's shell, a "+
+				"commit in the agent's own pane, an editor, a session sharing a linked path. "+
+				"Lower costs a git walk per background session per sweep. "+cadenceNote,
+			config.DefaultDiffRefreshSeconds(), 1, config.MaxDiffRefreshSeconds(),
+			(*config.Config).GetDiffRefreshSeconds,
+			func(c *config.Config, v *int) { c.DiffRefreshSeconds = v }, nil),
 
 		// ── Notifications ─────────────────────────────────────────────────────
 		{
@@ -873,6 +954,17 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			timingLive, false,
 			(*config.Config).GetNotifyWhenFocused,
 			func(c *config.Config, v bool) { c.NotifyWhenFocused = v }),
+			func(c *config.Config) bool {
+				return c.GetNotifications() != config.NotificationsOff
+			}),
+		withActiveWhen(cadenceRow("notify_throttle_seconds", catNotifications, "Notify throttle",
+			"Minimum gap between two of the same signal for one session, in seconds.",
+			"Each event keeps its own budget, so a question is never swallowed by a "+
+				"finish moments earlier. 0 signals every edge, which is only noisy for an "+
+				"agent whose state Atrium has to guess at. "+cadenceNote,
+			config.DefaultNotifyThrottleSeconds(), 0, config.MaxNotifyThrottleSeconds(),
+			(*config.Config).GetNotifyThrottleSeconds,
+			func(c *config.Config, v *int) { c.NotifyThrottleSeconds = v }, nil),
 			func(c *config.Config) bool {
 				return c.GetNotifications() != config.NotificationsOff
 			}),
@@ -1135,6 +1227,15 @@ func newSettingRows(cfg *config.Config) []settingRow {
 				return nil
 			},
 		},
+		cadenceRow("pending_watchdog_minutes", catAdvanced, "Pending watchdog",
+			"How long a session may wait on background work before Atrium gives up.",
+			"Past the cap Atrium stops believing the agent's in-flight record and marks "+
+				"the session finished. A dead pane is already caught in seconds, so this "+
+				"only backstops an alive-but-stuck one, and it outranks any per-agent "+
+				"default. "+cadenceNote,
+			config.DefaultPendingWatchdogMinutes(), 1, config.MaxPendingWatchdogMinutes(),
+			(*config.Config).GetPendingWatchdogMinutes,
+			func(c *config.Config, v *int) { c.PendingWatchdogMinutes = v }, nil),
 		// The resolved config.json path, so the file the panel writes is discoverable
 		// from inside the panel. Memoized rather than re-resolved per render, since
 		// GetConfigDir stats the filesystem; see configFilePath for why the memo has to

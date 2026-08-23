@@ -82,6 +82,17 @@ func effectivePollInterval(ms int) time.Duration {
 	return time.Duration(ms) * time.Millisecond
 }
 
+// effectivePendingWatchdog converts the configured pending_watchdog_minutes into the
+// duration the session package's watchdog runs on. It exists for the same reason
+// effectivePollInterval does — the unit conversion is the whole defect surface, and a
+// helper is something a test can call without standing up a daemon (#799).
+//
+// The accessor already clamps to a positive range, so this is a pure conversion; the
+// clamp is not repeated here, because a second copy of a bound is a second thing to drift.
+func effectivePendingWatchdog(cfg *config.Config) time.Duration {
+	return time.Duration(cfg.GetPendingWatchdogMinutes()) * time.Minute
+}
+
 // RunDaemon runs the daemon process which iterates over all sessions and runs AutoYes mode on them.
 // It's expected that the main process kills the daemon when the main process starts.
 // ctx carries the daemon's shutdown signal (main installs signal.NotifyContext for
@@ -152,6 +163,13 @@ func RunDaemon(ctx context.Context, cfg *config.Config) error {
 	}
 
 	pollInterval := effectivePollInterval(cfg.DaemonPollInterval)
+
+	// The daemon runs Instance.ApplyPaneState, so it runs the Pending watchdog too —
+	// and it is a separate process with its own config load, so the TUI's install of
+	// this cap does not reach it. Without this a headless stretch would reconcile
+	// stuck Pending rows on the built-in 30-minute default while the TUI used the
+	// user's value, which is one behaviour under two clocks (#799).
+	session.SetPendingWatchdog(effectivePendingWatchdog(cfg))
 
 	// If we get an error for a session, it's likely that we'll keep getting the error. Log every 30 seconds.
 	everyN := log.NewEvery(60 * time.Second)

@@ -664,4 +664,36 @@ type Config struct {
 	// without focus-events on) always notify — an unknown focus is never treated as
 	// focused, so this can never cause permanent silence.
 	NotifyWhenFocused bool `json:"notify_when_focused,omitempty"`
+	// NotifyThrottleSeconds is the minimum spacing between two notifications of the
+	// same edge for the same session. Edges already fire only on status transitions,
+	// so this guards a markerless agent's classifier flapping (prompt detection
+	// flipping NeedsInput↔Running) rather than a chatty agent. nil defaults to 3;
+	// 0 disables the throttle so every edge signals; larger values clamp
+	// (GetNotifyThrottleSeconds).
+	NotifyThrottleSeconds *int `json:"notify_throttle_seconds,omitempty"`
+	// ContextWarnPercent is how full a session's context window must be before the
+	// list's context chip turns Attention-coloured. nil defaults to 75; values
+	// outside [1,100] clamp; a value above ContextDangerPercent collapses to it, so
+	// the warn band narrows to nothing rather than inverting the ladder
+	// (GetContextWarnPercent). Only reachable where the model's window is known —
+	// a count from an unknown model has no ceiling to be near.
+	ContextWarnPercent *int `json:"context_warn_percent,omitempty"`
+	// ContextDangerPercent is how full a session's context window must be before the
+	// list's context chip turns Danger-coloured. nil defaults to 90; values outside
+	// [1,100] clamp (GetContextDangerPercent). It outranks ContextWarnPercent: the
+	// two are one ladder, and the top rung is the one a user must not lose.
+	ContextDangerPercent *int `json:"context_danger_percent,omitempty"`
+	// PendingWatchdogMinutes is the wall-clock cap a session may sit Pending —
+	// waiting on background sub-agent work — before the watchdog force-reconciles it
+	// to done. nil defaults to 30; values outside [1,1440] clamp. There is no "off"
+	// rung: the watchdog is what keeps an alive-but-stuck row from reading "busy"
+	// forever (GetPendingWatchdogMinutes). A value set here outranks an agent
+	// adapter's own cap, so a knob the user set is never silently inert.
+	PendingWatchdogMinutes *int `json:"pending_watchdog_minutes,omitempty"`
+	// DiffRefreshSeconds bounds how stale a background session's +/- chip may get.
+	// It backstops every writer the agent's own status cannot see — the terminal
+	// tab's shell, a `git commit` in the agent's pane, an editor, a sibling session
+	// sharing a link_path. nil defaults to 15; values outside [1,3600] clamp
+	// (GetDiffRefreshSeconds). Lower costs a diff walk per session per sweep.
+	DiffRefreshSeconds *int `json:"diff_refresh_seconds,omitempty"`
 }

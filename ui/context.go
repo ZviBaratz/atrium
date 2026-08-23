@@ -44,16 +44,41 @@ const (
 	contextModeCost    = "cost"
 )
 
-// Attention thresholds for the chip's colour, as percentages of the window.
-// Reachable whenever the ceiling is KNOWN, in every mode — a `count`-mode chip
-// on a known model tints too, and should: "900k" is as urgent as "90%", and the
-// mode chooses how the number reads, not whether the urgency is real. What
-// stays dim unconditionally is a count from an UNKNOWN model, which has no
-// ceiling to be near (see contextColor).
+// Default attention thresholds for the chip's colour, as percentages of the
+// window. Reachable whenever the ceiling is KNOWN, in every mode — a
+// `count`-mode chip on a known model tints too, and should: "900k" is as urgent
+// as "90%", and the mode chooses how the number reads, not whether the urgency
+// is real. What stays dim unconditionally is a count from an UNKNOWN model,
+// which has no ceiling to be near (see contextColor).
+//
+// Since #799 both are user-configurable (config.GetContextWarnPercent /
+// GetContextDangerPercent, plumbed through InstanceRenderer). These stay as the
+// fallback a zero band resolves to, so the numbers a caller gets when it
+// configures nothing are stated in one place and can be asserted.
 const (
 	contextWarnPct   = 75
 	contextDangerPct = 90
 )
+
+// contextBands resolves the configured warn/danger pair, substituting the
+// package defaults for a zero (unset) band and holding warn at or below danger.
+//
+// The ordering rule is a second copy of the one in config.GetContextWarnPercent,
+// on purpose rather than trusted: ui takes plain ints from whoever calls
+// SetContextThresholds and has no way to know they came through that accessor, and
+// an inverted pair paints Attention above the point that should read Danger — the
+// one failure the renderer must not have. The [1,100] range clamp is NOT repeated
+// here; a band outside it still paints a coherent ladder, so it stays the
+// accessor's business alone.
+func contextBands(warn, danger int) (int, int) {
+	if danger <= 0 {
+		danger = contextDangerPct
+	}
+	if warn <= 0 {
+		warn = contextWarnPct
+	}
+	return min(warn, danger), danger
+}
 
 // contextChip returns the chip text for one session under mode, and whether
 // there is anything to draw at all. It never returns a zero: absent is the
@@ -152,7 +177,9 @@ func contextLevel(pct, rungs int) int {
 // ceiling, so "three quarters gone" is a fact about the session. Spend has none:
 // $5 is alarming on one plan and rounding on another, and any threshold Atrium
 // picked would be a guess dressed as a warning. The number is the whole signal.
-func contextColor(th *theme.Theme, u transcript.Usage, mode string) theme.Color {
+// warn and danger are the configured bands; either at zero falls back to the
+// package default (see contextBands).
+func contextColor(th *theme.Theme, u transcript.Usage, mode string, warn, danger int) theme.Color {
 	if mode == contextModeCost {
 		return th.Palette.FgDim
 	}
@@ -160,10 +187,11 @@ func contextColor(th *theme.Theme, u transcript.Usage, mode string) theme.Color 
 	if !known {
 		return th.Palette.FgDim
 	}
+	warn, danger = contextBands(warn, danger)
 	switch pct := contextPercent(u.ContextTokens, window); {
-	case pct >= contextDangerPct:
+	case pct >= danger:
 		return th.Palette.Danger
-	case pct >= contextWarnPct:
+	case pct >= warn:
 		return th.Palette.Attention
 	default:
 		return th.Palette.FgDim
