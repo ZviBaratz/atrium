@@ -568,12 +568,26 @@ func (c *Config) GetBranchPrefix() string {
 	return c.BranchPrefix
 }
 
-// GetKillDoubleTapConfirm reports whether a second press of the kill key confirms
-// the kill dialog. A nil KillDoubleTapConfirm (e.g. an older config file with no
-// such key) — or a nil Config — defaults to on.
-func (c *Config) GetKillDoubleTapConfirm() bool {
+// GetDoubleTapConfirm reports whether a second press of the key that opened a
+// confirmation also confirms it. An explicit DoubleTapConfirm wins. When it is nil
+// (a config predating the key, or one written when the shortcut was kill-only) the
+// deprecated KillDoubleTapConfirm decides, so a user who turned the kill double-tap
+// OFF does not silently regain it — now on every keyed confirmation rather than on
+// kill alone — the first time they upgrade. A nil Config, or neither field set,
+// defaults to on.
+//
+// The fallback is deliberately asymmetric with the setting it replaces: the old key
+// gated the kill dialog alone and the new one gates every keyed confirmation, so
+// honoring a legacy `false` errs toward the safer answer while honoring a legacy
+// `true` would only re-state the default. Both are honored anyway, because a bool read through boolOr cannot tell
+// the two apart, and a ladder that dropped the true case would be a second rule to
+// remember for no gain.
+func (c *Config) GetDoubleTapConfirm() bool {
 	if c == nil {
 		return true
+	}
+	if c.DoubleTapConfirm != nil {
+		return *c.DoubleTapConfirm
 	}
 	return boolOr(c.KillDoubleTapConfirm, true)
 }

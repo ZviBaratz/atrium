@@ -1055,14 +1055,17 @@ func settingRowByKey(t *testing.T, cfg *config.Config, key string) settingRow {
 func TestReadmeSettingsExceptionsMatchTheRowSchema(t *testing.T) {
 	// Keys with no settingRow: six lists *of records* — `profiles`, the three
 	// account lists, `custom_commands` and `repo_scripts` — which one value per row
-	// cannot express, `keybindings`, which is a whole keymap, plus the deprecated
-	// `nerd_font` that `glyph_set` supersedes. Not all are unreachable: `profiles`
-	// has its own record editor on the rail, and the account lists have the Accounts
-	// overlay. `custom_commands`, `repo_scripts` and `keybindings` are config.json-only.
+	// cannot express, `keybindings`, which is a whole keymap, plus the deprecated keys
+	// whose successors own the row instead (`nerd_font` → `glyph_set`,
+	// `kill_double_tap_confirm` → `double_tap_confirm`). Not all are unreachable:
+	// `profiles` has its own record editor on the rail, the account lists have the
+	// Accounts overlay, and the deprecated pair are edited through their successors.
+	// `custom_commands`, `repo_scripts` and `keybindings` are config.json-only.
 	// Keep in sync with the legend under "#### Configuration reference".
 	exceptions := map[string]bool{
 		"profiles": true, "claude_accounts": true, "gh_accounts": true, "agy_accounts": true,
 		"custom_commands": true, "repo_scripts": true, "keybindings": true, "nerd_font": true,
+		"kill_double_tap_confirm": true,
 	}
 
 	rows := map[string]bool{}

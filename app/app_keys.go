@@ -840,7 +840,19 @@ func (m *home) pushSelected() (tea.Model, tea.Cmd) {
 	}
 
 	// Show confirmation modal; the push runs off the UI thread only on confirm.
-	message := fmt.Sprintf("Push changes from session '%s'?", selected.DisplayName())
+	//
+	// The clause names the two things confirming does that the question does not, and
+	// that no row on screen shows: the commit (only when there is one to make) and the
+	// browser tab. Read off the cached diff stats, never a fresh git call — this is the
+	// UI thread, and GetDiffStats is the same poll-maintained snapshot killDataWarning
+	// keys off. A nil snapshot (never polled) reads as clean, which is the quiet answer:
+	// a clause promising a commit that does not happen is worse than a missing one.
+	dirty := false
+	if stats := selected.GetDiffStats(); stats != nil {
+		dirty = stats.Dirty
+	}
+	message := fmt.Sprintf("Push changes from session '%s'?%s",
+		selected.DisplayName(), pushConsequenceClause(dirty))
 	confirm := m.confirmWorktreeAction(message, "pushing…", selected, func(worktree *git.Worktree) tea.Msg {
 		// Default commit message with timestamp.
 		commitMsg := fmt.Sprintf("[atrium] update from '%s' on %s", selected.DisplayName(), time.Now().Format(time.RFC822))
@@ -849,13 +861,34 @@ func (m *home) pushSelected() (tea.Model, tea.Cmd) {
 		}
 		return pushedMsg{}
 	})
-	// Verb label only, deliberately scoped that way (#399). Note for whoever revisits
-	// this: PushChanges commits any uncommitted work first (with the auto message
-	// above) and then opens the branch in a browser, neither of which this question
-	// names — by the confirmation-voice rule in app_feedback.go that is a candidate
-	// clause, left out of a copy-only PR rather than decided silently.
 	m.confirmationOverlay.SetConfirmLabel("push")
+	m.armDoubleTap(keys.PrimaryKey(keys.KeySubmit))
 	return m, confirm
+}
+
+// pushConsequenceClause is the parenthetical on the push confirmation: what
+// confirming does beyond pushing, and that the session row cannot show (#469).
+//
+// Two effects, one of them conditional. PushChanges commits any uncommitted work
+// first, under a generated message the user never sees and cannot edit — a no-op on a
+// clean worktree, so the surprise lands exactly on the user who had work in progress,
+// and the clause appears exactly there. Then it opens the branch in a browser, which
+// happens every time and is named every time.
+//
+// It borrows killDataWarning's data and its question-first-with-a-parenthetical shape
+// — the confirmation-voice rule in app_feedback.go, and #469's preferred option of the
+// three it offered — but not its risk-only rule: killDataWarning's whole clause
+// vanishes when nothing is at risk, and this one never can, because the browser tab
+// opens on every push. Only the commit half is conditional.
+//
+// It says "your uncommitted work" rather than naming the commit message: the message
+// is `[atrium] update from '<name>' on <time>`, and quoting it would cost two rendered
+// lines to tell the user something they cannot act on from inside the dialog.
+func pushConsequenceClause(dirty bool) string {
+	if dirty {
+		return " (commits your uncommitted work first, then opens the branch in your browser)"
+	}
+	return " (opens the branch in your browser)"
 }
 
 // mergeSelected confirms and squash-merges the selected session's open PR, gated
@@ -898,6 +931,7 @@ func (m *home) mergeSelected() (tea.Model, tea.Cmd) {
 		return prMergedMsg{number: number, instance: selected}
 	})
 	m.confirmationOverlay.SetConfirmLabel(fmt.Sprintf("merge PR #%d", number))
+	m.armDoubleTap(keys.PrimaryKey(keys.KeyMerge))
 	return m, confirm
 }
 
@@ -950,6 +984,7 @@ func (m *home) createPRForSelected() (tea.Model, tea.Cmd) {
 	// The label names only what this action does: CreateBlockedReason above already
 	// refused an unpushed branch, so the PR is all that gets created here (#399).
 	m.confirmationOverlay.SetConfirmLabel("create the PR")
+	m.armDoubleTap(keys.PrimaryKey(keys.KeyCreate))
 	return m, confirm
 }
 

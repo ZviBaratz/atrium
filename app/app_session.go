@@ -573,6 +573,11 @@ func (m *home) resumeSelected(selected *session.Instance) tea.Cmd {
 			fmt.Sprintf("Resume session '%s'?\n%s", selected.DisplayName(), clause),
 			resumeLabel, action)
 		m.confirmationOverlay.SetConfirmLabel("resume")
+		// The single-resume double-tap exists only on this branch, because this is the
+		// only branch with a dialog: every resume that fits the host budget runs on the
+		// first press and has nothing to confirm. So r r is not a second gesture to
+		// learn — it is the same r, pressed again, when the first one asked a question.
+		m.armDoubleTap(keys.PrimaryKey(keys.KeyResume))
 		return cmd
 	}
 	return m.beginAsyncAction(string(resumeLabel), action)
@@ -702,7 +707,7 @@ func (m *home) resumeAll() tea.Cmd {
 	if len(paused) == 0 {
 		return m.handleInfoNotice("no paused sessions to resume")
 	}
-	return m.resumeInstances(paused, resumeConfirmMessage("paused", len(paused)))
+	return m.resumeInstances(paused, resumeConfirmMessage("paused", len(paused)), keys.PrimaryKey(keys.KeyResumeAll))
 }
 
 // resumeConfirmMessage is the batch-resume question for n sessions described by kind
@@ -757,7 +762,12 @@ func resumeConfirmMessage(kind string, n int) string {
 // grows that population without creating a session, and the confirmation the user
 // already has to answer is where the cost belongs. Computed here, in the shared core,
 // so resumeAll and resumeMarked cannot drift — the reason SetConfirmLabel is here too.
-func (m *home) resumeInstances(insts []*session.Instance, message string) tea.Cmd {
+//
+// altConfirmKey is the key that opened the dialog, for the double-tap, and it is a
+// parameter for the same reason killInstances' is: the two entry points are different
+// keys (the resume-all chord from the list, the plain resume key from visual mode),
+// and the dialog must echo the one the user actually pressed.
+func (m *home) resumeInstances(insts []*session.Instance, message, altConfirmKey string) tea.Cmd {
 	if clause := m.resumeCapNotice(len(insts)); clause != "" {
 		message += "\n" + clause
 	}
@@ -788,6 +798,7 @@ func (m *home) resumeInstances(insts []*session.Instance, message string) tea.Cm
 	// shared core, so both entry points get the same label from the same count
 	// (confirmAction created m.confirmationOverlay synchronously above).
 	m.confirmationOverlay.SetConfirmLabel(fmt.Sprintf("resume %d session%s", len(insts), plural(len(insts))))
+	m.armDoubleTap(altConfirmKey)
 	return cmd
 }
 
@@ -857,7 +868,7 @@ func (m *home) pauseAll() tea.Cmd {
 	if len(active) == 0 {
 		return m.handleInfoNotice("no active sessions to pause")
 	}
-	return m.pauseInstances(active, pauseConfirmMessage("active", len(active)))
+	return m.pauseInstances(active, pauseConfirmMessage("active", len(active)), keys.PrimaryKey(keys.KeyPauseAll))
 }
 
 // pauseConfirmMessage is the batch-pause question for n sessions described by kind
@@ -914,7 +925,11 @@ func pauseConfirmMessage(kind string, n int) string {
 // branch is kept, the WIP is committed onto it, and the resume relaunches the agent
 // back into its conversation. The danger border is for losing work, not for stopping
 // a process.
-func (m *home) pauseInstances(insts []*session.Instance, message string) tea.Cmd {
+//
+// altConfirmKey is the key that opened the dialog, for the double-tap — a parameter
+// for the reason killInstances' and resumeInstances' are: pauseAll and pauseMarked
+// are reached by different keys.
+func (m *home) pauseInstances(insts []*session.Instance, message, altConfirmKey string) tea.Cmd {
 	action := func() tea.Msg {
 		var res batchPauseDoneMsg
 		for _, inst := range insts {
@@ -940,6 +955,7 @@ func (m *home) pauseInstances(insts []*session.Instance, message string) tea.Cmd
 	// shared core, so both entry points get the same label from the same count
 	// (confirmAction created m.confirmationOverlay synchronously above).
 	m.confirmationOverlay.SetConfirmLabel(fmt.Sprintf("pause %d session%s", len(insts), plural(len(insts))))
+	m.armDoubleTap(altConfirmKey)
 	return cmd
 }
 
@@ -1098,7 +1114,7 @@ func (m *home) reapStrandedShell(inst *session.Instance, worktreeGone bool) {
 // land mid-flight and the costliest to leave un-joined at quit.
 //
 // altConfirmKey is the key that opened the dialog, which double-taps to confirm when
-// kill_double_tap_confirm is on. It is a parameter rather than keys.KillKey() because
+// double_tap_confirm is on. It is a parameter rather than keys.KillKey() because
 // visual mode advertises plain "x" and accepts ctrl+x too, so the key the dialog must
 // echo is the one the user pressed — hard-coding the chord would print "(or ctrl+x)"
 // at someone who never pressed it.
@@ -1158,12 +1174,9 @@ func (m *home) killInstances(insts []*session.Instance, message string, altConfi
 	// Kill is destructive, so it wears the danger border (confirmAction created
 	// m.confirmationOverlay synchronously above).
 	m.confirmationOverlay.SetDestructive()
-	// Mirror confirmKill's double-tap shortcut: with kill_double_tap_confirm on,
-	// pressing the opening key again confirms the batch dialog, matching single-kill
-	// muscle memory (x x, or Ctrl+X Ctrl+X).
-	if altConfirmKey != "" && m.appConfig.GetKillDoubleTapConfirm() {
-		m.confirmationOverlay.SetConfirmAltKey(altConfirmKey)
-	}
+	// Mirror confirmKill's double-tap shortcut: pressing the opening key again confirms
+	// the batch dialog, matching single-kill muscle memory (x x, or Ctrl+X Ctrl+X).
+	m.armDoubleTap(altConfirmKey)
 	return cmd
 }
 
@@ -1184,7 +1197,7 @@ func (m *home) pauseMarked() tea.Cmd {
 		return m.handleInfoNotice("no marked sessions to pause")
 	}
 	m.exitVisualMode()
-	return m.pauseInstances(insts, pauseConfirmMessage("marked", len(insts)))
+	return m.pauseInstances(insts, pauseConfirmMessage("marked", len(insts)), keys.PrimaryKey(keys.KeyPause))
 }
 
 // resumeMarked resumes the paused subset of the multi-select-marked sessions.
@@ -1200,7 +1213,7 @@ func (m *home) resumeMarked() tea.Cmd {
 		return m.handleInfoNotice("no marked sessions to resume")
 	}
 	m.exitVisualMode()
-	return m.resumeInstances(insts, resumeConfirmMessage("marked", len(insts)))
+	return m.resumeInstances(insts, resumeConfirmMessage("marked", len(insts)), keys.PrimaryKey(keys.KeyResume))
 }
 
 // killMarked tears down the killable subset of the multi-select-marked sessions
@@ -2441,12 +2454,10 @@ func (m *home) confirmKill(inst *session.Instance) tea.Cmd {
 	// border (the default is accent); confirmAction created m.confirmationOverlay
 	// synchronously above.
 	m.confirmationOverlay.SetDestructive()
-	// Opt-in: a second press of the kill key confirms the dialog, so Ctrl+X Ctrl+X
-	// kills in one motion. Scoped to the kill dialog (other confirmations still
-	// require 'y').
-	if m.appConfig.GetKillDoubleTapConfirm() {
-		m.confirmationOverlay.SetConfirmAltKey(keys.KillKey())
-	}
+	// A second press of the kill key confirms, so Ctrl+X Ctrl+X kills in one motion.
+	// The chord rather than a threaded key: this dialog also opens from the in-session
+	// key and the auto-open path, neither of which is a list keypress at all.
+	m.armDoubleTap(keys.KillKey())
 	return cmd
 }
 
@@ -2536,6 +2547,45 @@ func (m *home) confirmAction(message string, label busyLabel, action tea.Cmd) te
 // beside the dispatch, rather than where the dialog is built.
 func (m *home) armOnConfirm(arm func()) {
 	m.pendingConfirmArm = arm
+}
+
+// armDoubleTap lets a second press of key — the key that OPENED the confirmation —
+// confirm it, when double_tap_confirm is on. Call it after confirmAction, which
+// creates the overlay.
+//
+// It is the whole of #520's counter-proposal to #391's per-dialog opt-outs: the
+// friction those were meant to relieve is repetition, and a double-tap makes the
+// repeated action one motion while leaving the box — and the consequence copy on it —
+// exactly where it was. An opt-out would have deleted the dialog and, with it, the
+// unpushed-commit count that is the only warning of what a kill costs.
+//
+// key is passed in rather than derived, because the key the dialog must echo is the
+// one the user pressed and several verbs have two entry points: visual mode kills on
+// plain "x" as well as the chord, and the batch pause/resume dialogs open from either
+// the all-sessions chord or the marked-set key. Every caller reads it from the
+// registry (keys.PrimaryKey / keys.KillKey), never as a literal, so the shortcut
+// follows a rebind instead of listening for a key nobody presses.
+//
+// Three refusals, all silent — an un-armed double-tap costs a shortcut, never an
+// answer, because y is always there:
+//
+//   - An empty key. The action is unbound, so there is no second press to make.
+//   - A nil overlay. confirmAction always leaves one, so this is a caller bug, not a
+//     state; it is guarded rather than dereferenced because the panic would land in
+//     the frame after the mistake.
+//   - A key the dialog already ANSWERS. HandleKeyPress tests the alt key before the
+//     cancel key, so an override that put pause on n would make the n this dialog
+//     advertises confirm the pause instead of cancelling it. Answers is the same
+//     predicate handleConfirmState defers its settings deep link to, for the same
+//     reason: the dialog answers for the keys it prints.
+func (m *home) armDoubleTap(key string) {
+	if key == "" || m.confirmationOverlay == nil || !m.appConfig.GetDoubleTapConfirm() {
+		return
+	}
+	if m.confirmationOverlay.Answers(key) {
+		return
+	}
+	m.confirmationOverlay.SetConfirmAltKey(key)
 }
 
 // resolveSpawnPool returns the pool a plan rotates within: the picker's chosen

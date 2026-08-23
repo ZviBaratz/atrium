@@ -95,10 +95,16 @@ func (m *home) moveAndPersist(move func() bool) (tea.Model, tea.Cmd) {
 // a blocker that is off-screen at the moment of asking: the work a kill would destroy
 // (killDataWarning), the gitignored files a pause deletes (pauseConfirmMessage), CI
 // still running behind a merge, the host capacity a create (overCapMessage) or a
-// resume (resumeCapClause) would exceed. Nothing invisible, no parenthetical:
-// create-PR does exactly what it says, because the branch was already pushed before
-// the key was even offered (PRStatus.CreateBlockedReason), so it gains a verb label
-// and nothing else.
+// resume (resumeCapClause) would exceed, the commit and the browser tab a push makes
+// on the way (pushConsequenceClause). Nothing invisible, no parenthetical: create-PR
+// does exactly what it says, because the branch was already pushed before the key was
+// even offered (PRStatus.CreateBlockedReason), so it gains a verb label and nothing
+// else.
+//
+// Push used to be listed there beside create-PR, and it was wrong: the audit that
+// wrote this rule read "Push … ?" as naming its destination when it names its SOURCE,
+// and passed over the two effects above. A dialog that hides something is not
+// identified by how complete its sentence sounds (#469).
 //
 // The converse is #399's amended AC #2, which the refusal notices obey: a refusal the
 // user can SEE stays silent — a cluster already at the top of the order, a lone repo
@@ -111,7 +117,8 @@ func (m *home) moveAndPersist(move func() bool) (tea.Model, tea.Cmd) {
 // confirmation in the app it rewrote three messages — batch pause, batch resume, and
 // the merge caveat — and left the rest as they were: kill (single and batch),
 // cleanup-after-merge, the quit pair, over-cap create, all-accounts-exhausted, the
-// branch-busy resume, push and create-PR. The kill dialog is not
+// branch-busy resume, and create-PR. Push was in that untouched list and should not
+// have been; #469 rewrote it later. The kill dialog is not
 // consequence-*first* and was never meant to be — it is question-first with a
 // risk-only parenthetical, and that shape is what the others adopted.
 

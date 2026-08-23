@@ -1629,7 +1629,9 @@ Every `config.json` key, its default, and where it is documented above. Nearly a
 are also editable live from the Settings panel (`,`). The exceptions are the three
 account lists — `claude_accounts`, `gh_accounts`, `agy_accounts` — which the
 one-value-per-row panel cannot express and which are managed from the Accounts
-overlay instead, and the deprecated `nerd_font`, which `glyph_set` supersedes.
+overlay instead, and the two deprecated keys whose successors own the row instead:
+`nerd_font` (superseded by `glyph_set`) and `kill_double_tap_confirm` (superseded by
+`double_tap_confirm`).
 `profiles`, `custom_commands` and `repo_scripts` are lists of records too: the panel
 gives `profiles` a record editor of its own under Profiles rather than a row, and the
 other two are edited in `config.json` directly. `keybindings` is the same case one
@@ -1655,7 +1657,8 @@ Advanced — shown in the Category column below. The seven keys with no panel ro
 | `tmux_config_override` | Advanced | string | `""` | path to a custom tmux config for sessions |
 | `auto_attach` | Sessions | bool | `true` | attach to a new session as soon as it starts ([Auto-attach](#auto-attach)) |
 | `show_release_notes_after_update` | Updates | bool | `true` | "what's new" overlay once after an update |
-| `kill_double_tap_confirm` | Input | bool | `true` | a second `ctrl-x` confirms the kill dialog |
+| `double_tap_confirm` | Input | bool | `true` | a second press of the key that opened a confirmation confirms it, so `ctrl-x` `ctrl-x` kills and `P` `P` pushes in one motion. It gates the shortcut, not the dialog: the box and its warning are shown either way, and `y` still confirms. Armed on the kill, push, create-PR, merge, batch-pause, batch-resume and over-capacity-resume dialogs |
+| `kill_double_tap_confirm` | — | bool | `true` | *deprecated* — superseded by `double_tap_confirm`; still read for back-compat (it decides when `double_tap_confirm` is unset, so an explicit `false` is not silently undone) |
 | `theme` | Appearance | string | `"auto"` | color palette + border style. The default, `auto`, follows the terminal's own background (dark → `tokyo-night`, light → `tokyo-night-day`, no answer → `tokyo-night`). Name a palette to pin one: `tokyo-night` / `catppuccin-mocha` for a dark terminal, `tokyo-night-day` / `catppuccin-latte` for a light one, `unicode` (tokyo-night with square borders). A palette named explicitly never auto-switches |
 | `splash` | Appearance | string | random | empty-state splash pattern (`""`/`"random"` = fresh each launch; `"off"` = no animation, just the wordmark) |
 | `glyph_set` | Appearance | string | `"plain"` | icon fidelity rung: `nerd` (vendor Nerd-Font icons, needs a patched font), `plain` (Unicode that renders on any font — the default), `ascii` (7-bit floor for terminals where even plain Unicode shows tofu) |
