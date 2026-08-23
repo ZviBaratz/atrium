@@ -684,8 +684,10 @@ func TestCreateDrainChargesOneForAGatedAdoptionWhosePinIsGone(t *testing.T) {
 func TestPendingBatchMembersAlwaysCountsTheGatedMember(t *testing.T) {
 	h := drainHome(t)
 	gated := filepath.Join(t.TempDir(), "0000000000000000001-ab.json")
-	// A zero CreatedAt is past every TTL, so this entry is expired, poisoned and already
-	// answered — three of the four exclusions, without touching the disk for the fourth.
+	// Poisoned AND already answered at once — two of the exclusions a sibling is held to,
+	// either of which alone would drop this entry were it not the gated one. Not expired:
+	// outbox.expired reads a zero CreatedAt as "no timestamp" rather than as the epoch, on
+	// purpose, so the zero request here is the youngest kind rather than the oldest.
 	entries := []outbox.CreateEntry{{Path: gated, Request: outbox.Request{Title: "bake-1", Batch: "b1"}}}
 	h.outboxPoisoned = map[string]bool{gated: true}
 

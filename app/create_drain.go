@@ -702,9 +702,9 @@ func (m *home) drainCreateRequests() tea.Cmd {
 			// req.Adopt = false into, so reading it here asks "is this member adopting
 			// NOW", and the answer for a re-queued adoption whose pin has since gone is
 			// no — handing the whole-batch charge to the one member whose refusal spends a
-			// one-shot recovery. The record on disk is what the exception is about, it is
-			// what refuseBatchSiblings reads for a sibling, and reading it here is what
-			// makes the two the same test rather than two tests that agree by inspection.
+			// one-shot recovery, which is exactly what the exception is for. What the
+			// record on disk says is what the exception is about, and it is the same field
+			// pendingBatchMembers reads to keep an adopting SIBLING out of the count.
 			if req.Batch != "" && !e.Request.Adopt {
 				// Held rather than gated, and held before the gate is charged: no git
 				// ran, no budget was spent and nothing was decided, so the next tick
@@ -911,8 +911,8 @@ func (m *home) stagedSpawnPlan() bool {
 // count+adding <= Limit, so an adding of zero is an ACCEPT at exactly a hard cap — the one
 // verdict hardCapMessage tells the caller exists nowhere.
 //
-// Five kinds of entry are in the listing and are not members this batch is about to add,
-// and counting one charges the cap for a session nobody will create:
+// What is in the listing and is not a member this batch is about to add is excluded, and
+// counting any of it charges the cap for a session nobody will create:
 //
 //   - an undecodable record, which has no Batch to read at all and is therefore
 //     invisible here rather than excluded. That is the one direction this cannot fix: a
@@ -932,10 +932,11 @@ func (m *home) stagedSpawnPlan() bool {
 //     on and whose caller has already been told.
 //   - one carrying Adopt, which refuseBatchSiblings cannot answer.
 //
-// That set is exactly what refuseBatchSiblings skips, and the agreement is the point
-// rather than a coincidence worth noting: the count decides what the cap is charged for
-// and the skip decides who is answered for it, so a member in one and not the other is
-// charged for and then not refused. It is then the only member of its batch left pending,
+// None of it reaches refuseBatchSiblings, which is the agreement that matters and is why
+// that function tests nothing but the gated member: the count decides what the cap is
+// charged for, the list decides who is answered for it, and they cannot disagree while
+// they are the same list. A member counted here and not answered there is charged for and
+// then not refused. It is then the only member of its batch left pending,
 // is charged as a batch of one on its own tick, and is admitted into room the cap has just
 // destroyed its siblings to protect. Adopt is where that stops being theoretical, because
 // refusing an adopting request spends a one-shot recovery and so cannot be done from here
@@ -1122,11 +1123,13 @@ func softCapReason(limit, count, adding int) string {
 // fleet, or a soft cap already crossed with --force), and "-2 free" would read as a
 // number the caller could act on.
 //
-// adding is what was CHARGED, and it equals what is answered because pendingBatchMembers
-// builds the list refuseBatchSiblings refuses — with one exception, and it is the one
-// createBatchRefusalBudget already documents: past the budget the later members of an
-// over-wide hand-written batch keep this wording without having been refused alongside
-// anything. Nothing atrium mints reaches it, and #783 owns the ceiling.
+// adding is what was CHARGED, and it is also what is answered, because pendingBatchMembers
+// builds the one list refuseBatchSiblings then refuses. There is a single exception and
+// createBatchRefusalBudget already owns it: past that budget the refusal stops early, so
+// the receipts that were written say more members were refused together than actually
+// were, and the members past it are re-charged on a later tick instead. Only a
+// hand-written batch wider than session.MaxVariantBatch reaches it — parseVariantSpec
+// holds this atrium to the same constant — and #783 is where raising it has to answer.
 func capRoomClause(limit, count, adding int) string {
 	free := limit - count
 	if free < 0 {
