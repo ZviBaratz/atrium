@@ -346,6 +346,12 @@ func TestDriveAgentCapEnvRejectsBadEntries(t *testing.T) {
 		{"tmux pane", "TMUX_PANE=%1", "belongs to the harness"},
 		{"duplicate", "A=1\nA=2", "sets A twice"},
 		{"carriage return", "A=1\r", "carriage return"},
+		// The pair rule's guard used to be keyed on the NAME, so the empty spelling
+		// satisfied it — while gemini's homedir() returns GEMINI_CLI_HOME only
+		// `if (envHome)`, which makes an empty value identical to unset and re-aims
+		// migrateFromFileStorage's rm at the real ~/.gemini/oauth_creds.json. Same
+		// destination as the missing half, reached through a check that passed (#765).
+		{"empty gemini cli home", "GEMINI_CLI_HOME=\nGEMINI_FORCE_FILE_STORAGE=true", "EMPTY GEMINI_CLI_HOME"},
 	} {
 		// Both entry points, every entry. `up` validates the VARIABLE; every native rung of
 		// a ladder reaches new-session through load_cap_env, which validates the FILE. One
