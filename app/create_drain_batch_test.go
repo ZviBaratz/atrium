@@ -572,3 +572,34 @@ func TestCreateDrainDoesNotRefuseAMemberItDroppedThisTick(t *testing.T) {
 	assert.Contains(t, refusalFor(t, records[1]), "max_sessions")
 	assert.Contains(t, refusalFor(t, records[2]), "max_sessions")
 }
+
+// TestCreateDrainDoesNotChargeForAMemberItDroppedThisTick is the count's half of the same
+// problem TestCreateDrainDoesNotRefuseAMemberItDroppedThisTick covers for the refusal.
+//
+// A member the walk gave up on earlier in this tick is still in the listing the fan-out is
+// built from, and its mark is gone by then — clearMarkOverADroppedRecord ran. Counted, it
+// charges the cap for a session nobody will ever create, and that over-charge is not the
+// safe direction: the refusal it produces unlinks a record and writes a receipt, so it
+// does not withhold a session, it destroys a request that had room for one (#701).
+//
+// Here the room is exact. Charged for the two members that are really pending the batch
+// fits and the next one is created; charged for three it is refused, and the caller loses
+// two sessions to a member that was already answered.
+func TestCreateDrainDoesNotChargeForAMemberItDroppedThisTick(t *testing.T) {
+	h := drainHome(t)
+	limit := 2
+	h.appConfig.MaxSessions = &limit
+
+	dir := t.TempDir()
+	records := spoolBatchMembers(t, dir, "b1", "bake", 3, time.Now(), 1, 2, 3)
+	require.NoError(t, outbox.Disclose(records[0], &outbox.Disclosure{
+		Title: "bake-1", Repo: dir, Branch: "zvi/bake-1",
+		Reason: "an earlier atrium gave up after making the branch",
+	}))
+
+	require.NotNil(t, h.drainCreateRequests())
+	assert.NotNil(t, titled(h, "bake-2"),
+		"charged for the two members still pending the batch fits; charged for three it does not")
+	_, rejected := outbox.Rejection(records[1])
+	assert.False(t, rejected)
+}

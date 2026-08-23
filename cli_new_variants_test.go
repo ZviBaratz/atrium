@@ -7,7 +7,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -464,15 +463,21 @@ func TestNewFlagErrorsPrecedeTargetErrors(t *testing.T) {
 // string per requested session until the process dies. Both entries are individually
 // refusable, which is the point — the bound has to bite before the addition, not after it.
 func TestParseVariantSpecCannotOverflowItsTotal(t *testing.T) {
-	huge := strconv.Itoa(math.MaxInt/2 + 1)
-	specs, err := parseVariantSpec("claude:" + huge + ",codex:" + huge)
-	require.Error(t, err)
+	// A first entry that exactly fills the ceiling without tripping it, then one large
+	// enough to wrap the sum. This shape is what the per-entry bound is for, and picking
+	// it took a mutation: two halves of MaxInt are BOTH caught by the running total,
+	// because the first alone is already over the ceiling — so a spec built that way
+	// stays refused with the per-entry bound deleted and proves nothing about it.
+	specs, err := parseVariantSpec(
+		fmt.Sprintf("claude:%d,codex:%d", session.MaxVariantBatch, math.MaxInt))
+	require.Error(t, err, "a count that wraps the total must be refused, not summed into a negative")
 	assert.Nil(t, specs)
 	assert.Contains(t, err.Error(), "at most")
 
-	// The control: one such entry was always refused, so a guard that only covered the
-	// single-entry case would look identical from here.
-	_, err = parseVariantSpec("claude:" + huge)
+	// The control: a single such entry was always refused, by the running total rather
+	// than by the bound above. Without it a guard covering only this case would look
+	// identical from here.
+	_, err = parseVariantSpec(fmt.Sprintf("claude:%d", math.MaxInt))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "at most")
 }
