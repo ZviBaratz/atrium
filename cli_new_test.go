@@ -634,6 +634,16 @@ func resetNewFlags() {
 	newVariantsFlag = ""
 	newForceFlag = false
 	newWaitFlag = 0
+	// The variables above are not the whole of a flag's state, and --variants is the one
+	// flag that proves it: cobra records Changed during parsing and never clears it, and
+	// runNew reads --variants THROUGH Changed rather than through its value, because ""
+	// is both the flag's default and a value a caller can pass. Left set, a run that
+	// passed --variants makes the next Execute in this package a fan-out with an empty
+	// spec whatever newVariantsFlag says — verified: the run after
+	// TestNewCommandProfileFlagIsWired's third leg is answered "--variants chooses the
+	// profiles itself" instead of with its own profile error. Latent until -shuffle
+	// reorders the package, which is restoreRootCmd's whole argument one field further in.
+	newCmd.Flags().Lookup("variants").Changed = false
 }
 
 // restoreRootCmd undoes what driving rootCmd through Execute leaves on it. The flag

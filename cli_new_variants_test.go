@@ -536,3 +536,31 @@ func TestSpoolBatchNamesAMemberItCouldNotWithdraw(t *testing.T) {
 	assert.Contains(t, err.Error(), `queued variant "bake-1" was claimed by a running atrium`,
 		"a claimed member is being built, which is exactly what the caller has to be told")
 }
+
+// TestResetNewFlagsClearsTheVariantsChangedBit guards the half of --variants' state that
+// is not a package variable.
+//
+// runNew reads the flag through cobra's Changed rather than through its value, because ""
+// is both the default and something a caller can pass. Changed is written during parsing
+// and never cleared, so without this reset the run AFTER any run that passed --variants is
+// a fan-out with an empty spec — it is answered "--variants chooses the programs itself"
+// instead of with its own error, whatever newVariantsFlag holds. Ordinary sequencing in
+// this package reaches it, and -shuffle decides which test pays.
+func TestResetNewFlagsClearsTheVariantsChangedBit(t *testing.T) {
+	sandboxDataDir(t)
+	restoreRootCmd(t)
+
+	cmd := rootCmd
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"new", "bake", "--path", tempRepo(t), "--variants", "nope:2"})
+	require.Error(t, cmd.Execute())
+	resetNewFlags()
+
+	cmd.SetArgs([]string{"new", "fix-auth", "--path", tempRepo(t), "--profile", "nope"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `no profile "nope"`,
+		"the next run must be judged on its own argv, not on the flag the last one set")
+	assert.NotContains(t, err.Error(), "--variants")
+}
