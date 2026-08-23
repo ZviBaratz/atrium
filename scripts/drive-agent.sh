@@ -393,7 +393,7 @@ load_run() {
 # advertises by name as where the environment is recorded — an invitation to hand-edit it,
 # and a hand-edited TMUX_TMPDIR in the pane points a nested tmux at the live fleet.
 validate_cap_env() {
-	local line name seen=""
+	local line name value seen="" valued="" home_note
 	# `|| [[ -n "$line" ]]` because read returns non-zero on a final line with no trailing
 	# newline while still having assigned it. Without it a hand-edited cap-env whose last
 	# line lacks the newline loses that entry HERE and again in load_cap_env, so the entry
@@ -405,6 +405,7 @@ validate_cap_env() {
 		[[ "$line" == *=* ]] ||
 			die "ATR_CAP_ENV entry is not an assignment: $line"
 		name="${line%%=*}"
+		value="${line#*=}"
 		[[ "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] ||
 			die "ATR_CAP_ENV name is not a shell identifier: $name"
 		# TMUX_TMPDIR is this file's one safety invariant (see the header). Letting a
@@ -424,6 +425,9 @@ validate_cap_env() {
 		*" $name "*) die "ATR_CAP_ENV sets $name twice" ;;
 		esac
 		seen="$seen $name "
+		# Names carrying a NON-EMPTY value, tracked separately because the pair rule
+		# below needs the value and every other refusal here needs only the name.
+		[[ -z "$value" ]] || valued="$valued $name "
 		# A CR would be invisible in cap-env and in emit's disclosure line, and would
 		# reach the child as part of the value. The one corruption with no visual cue
 		# is the one to refuse by name.
@@ -438,14 +442,27 @@ validate_cap_env() {
 	# developer's own refresh token. The recipe `help` prints IS that pair, and the file it
 	# writes invites hand-editing, so commenting out one line is the whole distance to it.
 	#
-	# Refused on PRESENCE rather than on a truthy value: the bundle's own coercion is not
-	# worth reimplementing here, and GEMINI_FORCE_FILE_STORAGE=false has no use this harness
-	# needs to support.
+	# The TRIGGER is presence and the GUARD is a non-empty value, and that asymmetry is the
+	# rule rather than an inconsistency in it. GEMINI_FORCE_FILE_STORAGE is read as a truthy
+	# string, so its empty spelling is falsy and harmless — triggering on presence there
+	# costs only GEMINI_FORCE_FILE_STORAGE=false, which this harness has no use for.
+	# GEMINI_CLI_HOME is the opposite: homedir() returns it only `if (envHome)`, so an empty
+	# value is INDISTINGUISHABLE from unset and hands the deletion the real $HOME. Keying the
+	# guard on the name alone let `GEMINI_CLI_HOME=` satisfy the pair while being exactly the
+	# state it exists to refuse (#765). A whitespace-only value is a different shape and is
+	# not refused here: it is truthy, so gemini uses it as the directory and never reaches
+	# the real one.
 	case "$seen" in
 	*" GEMINI_FORCE_FILE_STORAGE "*)
-		case "$seen" in
+		case "$valued" in
 		*" GEMINI_CLI_HOME "*) ;;
-		*) die "ATR_CAP_ENV sets GEMINI_FORCE_FILE_STORAGE without GEMINI_CLI_HOME — that points gemini's credential migration at your REAL ~/.gemini/oauth_creds.json, which it deletes. Set both or neither (see \`help\`)." ;;
+		*)
+			home_note="without GEMINI_CLI_HOME"
+			case "$seen" in
+			*" GEMINI_CLI_HOME "*) home_note="with an EMPTY GEMINI_CLI_HOME, which gemini reads as unset — an empty value is not a weaker isolation than a path, it is the same as omitting the line" ;;
+			esac
+			die "ATR_CAP_ENV sets GEMINI_FORCE_FILE_STORAGE $home_note — that points gemini's credential migration at your REAL ~/.gemini/oauth_creds.json, which it deletes. Give GEMINI_CLI_HOME a path you own, or set neither (see \`help\`)."
+			;;
 		esac
 		;;
 	esac
