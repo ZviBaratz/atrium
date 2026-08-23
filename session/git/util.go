@@ -289,6 +289,37 @@ func LookupLocalBranchTip(ctx context.Context, repoPath, branch string) (string,
 	return "", nil
 }
 
+// LocalBranchSet returns the local branches of the repo at repoPath as a set, keyed the
+// way BranchNameForSession spells one. An error means the repository could not be read,
+// on LookupLocalBranch's terms — never that it has none.
+//
+// One subprocess for the whole question, where the siblings above answer about one name.
+// A caller walking a numbered series for the first free name has a scan bound of its own —
+// larger than VariantTitleScan where the batch size is added to it — and asks the same
+// unchanging question of each candidate, so per-name lookups cost it a
+// fork and a gitLocalTimeout apiece; main.planVariantTitles is that caller. A caller with
+// one name in hand should still use LookupLocalBranch, which reads one ref instead of
+// every head.
+//
+// %(refname) rather than %(refname:short), which abbreviates against the rest of the ref
+// namespace and can hand back a name that is only unambiguous today. The caller is
+// comparing against a name it built from a prefix, so the full ref is cut to size here
+// and nothing is left for git to decide.
+func LocalBranchSet(ctx context.Context, repoPath string) (map[string]bool, error) {
+	out, err := localGit(ctx, repoPath, "for-each-ref", "--format=%(refname)", "refs/heads/")
+	if err != nil {
+		return nil, fmt.Errorf("failed to list the branches of %s: %w", repoPath, err)
+	}
+	names := map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		name, ok := strings.CutPrefix(strings.TrimSpace(line), "refs/heads/")
+		if ok && name != "" {
+			names[name] = true
+		}
+	}
+	return names, nil
+}
+
 // RepoGroupKey predicts the repo-group key the session list will file a session
 // under when created from path: the repo root's basename when path is inside a
 // git repo (even a subdirectory), else the directory's own basename (how direct

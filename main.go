@@ -696,6 +696,8 @@ func init() {
 	newCmd.Flags().StringVar(&newPathFlag, "path", "", "Repo to create the session in (default: the current directory)")
 	newCmd.Flags().StringVar(&newProgramFlag, "program", "", "Program to run in the session (default: Atrium's configured program)")
 	newCmd.Flags().StringVar(&newProfileFlag, "profile", "", "Named profile whose program to run, instead of --program")
+	newCmd.Flags().StringVar(&newVariantsFlag, "variants", "",
+		"Create several sessions from one prompt, e.g. --variants claude:2,codex:1")
 	newCmd.Flags().StringVar(&newBranchFlag, "branch", "", "Existing base branch to start the session on")
 	newCmd.Flags().BoolVar(&newForceFlag, "force", false,
 		"Create even past host capacity, or on a fully rate-limited account pool")

@@ -1552,16 +1552,18 @@ func composeProgramFlags(program, model, mode, effort string) (string, error) {
 }
 
 const (
-	// maxVariantBatch caps how many sessions a single create-form submit may fan out
-	// to (#387) — a fixed sanity bound on one batch, independent of max_sessions. The
-	// effective session cap (SessionCap: the host-derived soft default or an explicit
-	// value) is enforced separately and is usually the tighter limit. The per-profile
-	// stepper is bounded too, but a multi-profile total is enforced here.
-	maxVariantBatch = 20
-	// variantTitleScan bounds how far past the requested count the suffix search
-	// probes for free <title>-N names, so a repo dense with orphan <title>-N branches
-	// cannot loop unboundedly. Generous — the common case finds names immediately.
-	variantTitleScan = 100
+	// maxVariantBatch is session.MaxVariantBatch under the name this package's
+	// refusals and their width tests already spell. The rule moved to session when
+	// `atrium new --variants` had to enforce it too (#761); this is a citation of the
+	// owner, not a second copy. The per-profile stepper is bounded separately, but a
+	// multi-profile total is enforced here.
+	maxVariantBatch = session.MaxVariantBatch
+	// variantTitleScan is session.VariantTitleScan under this package's name. Not for
+	// maxVariantBatch's reason — no refusal here interpolates it and no width test
+	// spells it; it is a loop bound in the two suffix searches this package runs, and
+	// the alias is for reading beside its neighbour rather than for anything a test
+	// asserts.
+	variantTitleScan = session.VariantTitleScan
 )
 
 // variantTitleConflict reports why candidate cannot be used as a new session title
@@ -1627,7 +1629,7 @@ func (m *home) planVariantTitles(stem string, total int, path string, direct boo
 	}
 	titles := make([]string, 0, total)
 	for n := 1; len(titles) < total && n <= total+variantTitleScan; n++ {
-		cand := fmt.Sprintf("%s-%d", stem, n)
+		cand := session.VariantTitle(stem, n)
 		if m.variantTitleConflict(cand, path, direct) != "" {
 			continue
 		}

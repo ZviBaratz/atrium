@@ -46,6 +46,8 @@ package outbox
 // in as a record.
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -83,6 +85,23 @@ const (
 	// That is the same pre-#716 refusal, and it leaves a disclosure naming the branch, so
 	// the one thing an upgrade mid-recovery costs is a rebuild the user is told about.
 	//
+	// Batch (#761) stays at 1 on the same terms, and its degradation is the cleanest
+	// of the three: an atrium too old to know the field decodes each member as an
+	// ordinary single-session request — its own final title, its own program — and
+	// creates it. That is byte-for-byte what N separate `atrium new` invocations
+	// produce today. What is lost is the whole-batch cap, so under a soft cap with no
+	// --force an old drain creates members until the cap is crossed and refuses the
+	// rest, leaving a bake-off with gaps in its numbering and a receipt for each
+	// refusal. Worse than a new atrium, no worse than the invocations it is
+	// indistinguishable from — which is the bar, and not a claim that a batch is
+	// atomic across versions.
+	//
+	// BatchSize rides along on the same argument and degrades better still: an atrium
+	// too old to know it never holds an assembling batch, which is what every atrium
+	// did before the field existed, and a newer one reading a record without it reads
+	// zero and does the same. The field only ever ADDS a hold, and a hold is not a
+	// verdict.
+	//
 	// The asymmetry that argument does not cover is a *downgrade* while a claim is
 	// on disk: an older atrium has no ListClaims, so it neither drains nor settles
 	// that file, and a `--wait` blocked on it sees the record gone. Downgrading
@@ -91,6 +110,13 @@ const (
 	createVersion = 1
 
 	createDirName = "create"
+
+	// batchIDBytes of randomness (16 hex characters) behind NewBatchID. Wider than
+	// writeRecord's nonce because it disambiguates over a much longer window: a
+	// record name is unique among records written in one nanosecond, while a batch id
+	// has to stay distinct from every other batch still in the spool, which is a
+	// 24-hour horizon (TTL).
+	batchIDBytes = 8
 
 	// claimedSuffix marks a request some atrium has taken and is building right now.
 	//
@@ -111,6 +137,12 @@ const (
 // (git.BranchNameForSession, tmux.QualifiedSessionName), it is also the branch the
 // caller is choosing. The drain refuses a collision rather than suffixing, for
 // that reason.
+//
+// A fan-out does not weaken that (#761). `atrium new --variants` derives the suffixed
+// titles itself, before it spools, and each member arrives here as an ordinary request
+// naming the branch it will get — so what reaches the drain is still N titles it may
+// refuse, never a stem it is asked to invent names from. Batch is what tells it those
+// N belong together.
 type Request struct {
 	Version int `json:"version"`
 	// Path is the repository the session is created in. A path that is not a git
@@ -133,7 +165,67 @@ type Request struct {
 	// the host-derived soft session cap and a fully rate-limited account pool.
 	// It deliberately does not reach the explicit hard cap, which refuses in the
 	// TUI too.
-	Force     bool      `json:"force,omitempty"`
+	Force bool `json:"force,omitempty"`
+
+	// Batch groups the records one `atrium new --variants` invocation wrote: N
+	// requests sharing a prompt, a base branch and a repository, each carrying its
+	// own final title and program (#761).
+	//
+	// The value is opaque. Nothing renders it, nothing parses it and nothing derives
+	// a path from it — it is compared for equality and no more, which is why it needs
+	// no validation beyond what JSON gives it. Empty means "not part of a batch", and
+	// that is what makes a fan-out of one identical on the wire to an ordinary
+	// create.
+	//
+	// The drain reads it for exactly one purpose: charging the session cap to the
+	// batch rather than to each member, so a batch that does not fit is refused whole
+	// instead of creating from the tail as the cap closes. Every other gate stays per
+	// member, because every other gate is a fact about one request.
+	Batch string `json:"batch,omitempty"`
+	// BatchSize is how many records the invocation that wrote this one committed to
+	// the spool, and it exists because a batch does not become visible all at once.
+	//
+	// Each member is published by its own os.Rename (config.WriteFileAtomic), so a
+	// drain tick landing between two of them sees a batch smaller than the one being
+	// written — and charges the cap for what it can see. A batch of three whose first
+	// member is gated alone is charged as a batch of one, fits, and is CREATED: the
+	// head of a batch the whole-batch gate would have refused, which is the outcome
+	// that gate exists to prevent. The window is N members' worth of writes and fsyncs
+	// against a poll tick, so it is small and it is not zero.
+	//
+	// A declared count is what closes it: the drain holds a member whose batch is short
+	// of this rather than gating it (app.batchStillAssembling), so the cap is charged
+	// for the batch as its author wrote it. Zero means "not declared" — every record
+	// written before this field existed, and every hand-written one — and holds
+	// nothing, which is the pre-field behaviour.
+	//
+	// A count alone would be read wrong, and BatchIndex is what makes it readable. A
+	// batch shrinks below its declared size for two opposite reasons, and only one of
+	// them is a reason to wait: it is still arriving, or it is being consumed — the
+	// drain builds one member per tick, so a batch of three is short for most of its
+	// own life. See BatchIndex for the half that tells those apart.
+	//
+	// It is never used as a length, an index or a capacity. Nothing allocates from it
+	// and nothing waits for a member it names but cannot find, so a wrong value costs
+	// at most one hold that expires.
+	BatchSize int `json:"batch_size,omitempty"`
+	// BatchIndex is this record's 1-based position in the batch its writer committed,
+	// and its whole job is to say whether this member is the batch's HEAD.
+	//
+	// Members are written in order, so at any moment mid-publish the records on disk
+	// are 1..k: an incomplete batch always still has its head pending. A batch the
+	// drain is partway through never does — the head was the first thing gated, and it
+	// is now a session, a claim or a receipt. So "short of its size AND headed by
+	// member 1" is arriving, and "short of its size without its head" is being
+	// consumed, which is the distinction a count alone cannot draw and the reason
+	// app.batchStillAssembling is a predicate rather than a piece of remembered state.
+	//
+	// Zero means "not declared" and never holds, alongside BatchSize. Nothing orders,
+	// renders or indexes by it — ListCreates' oldest-first ordering is the record
+	// timestamps' business, and this field is compared against 1 and against nothing
+	// else.
+	BatchIndex int `json:"batch_index,omitempty"`
+
 	CreatedAt time.Time `json:"created_at"`
 
 	// Claim is the evidence the drain recorded when it took this request, and is
@@ -262,8 +354,28 @@ func FirstControlRune(title string) (rune, bool) {
 	return 0, false
 }
 
+// NewBatchID mints the identifier the members of one fan-out share.
+//
+// Random rather than derived from the title, the path or the clock: two invocations
+// against the same repo with the same stem in the same second must not be read as one
+// batch, and nothing anywhere reads meaning out of the value. It lives here rather
+// than in the CLI because the field's owner owns its shape — a caller that minted its
+// own could collide with a future one that stops being opaque.
+func NewBatchID() (string, error) {
+	id := make([]byte, batchIDBytes)
+	if _, err := rand.Read(id); err != nil {
+		return "", fmt.Errorf("outbox: generate batch id: %w", err)
+	}
+	return hex.EncodeToString(id), nil
+}
+
 // WriteCreate commits r to the create spool and returns the path it was written
 // to. It stamps Version and, unless the caller supplied one, CreatedAt.
+//
+// It stamps CreatedAt per call, and a fan-out must let it: a batch that shared one
+// timestamp would leave the order of its own members to writeRecord's random nonce,
+// so ListCreates would hand the drain the variants in an arbitrary order rather than
+// the one the caller was shown.
 func WriteCreate(r Request) (string, error) {
 	if strings.TrimSpace(r.Title) == "" || !filepath.IsAbs(r.Path) {
 		return "", errors.New("outbox: a create request needs a title and an absolute path")

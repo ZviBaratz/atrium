@@ -85,8 +85,9 @@ const guidePage = "You are an AI agent running inside an Atrium session. Atrium 
 	"  start from where you stopped, pass `--branch` naming your own branch.\n" +
 	"\n" +
 	"  A title is a branch: the branch and tmux names derive from it, and a title\n" +
-	"  whose names are already taken is refused rather than quietly suffixed. An\n" +
-	"  over-long title is refused too, and the error names the limit.\n" +
+	"  whose names are already taken is refused rather than quietly suffixed — with\n" +
+	"  one exception, `--variants`, which `atrium new --help` owns. An over-long\n" +
+	"  title is refused too, and the error names the limit.\n" +
 	"\n" +
 	"NOT YOURS TO RUN\n" +
 	"\n" +

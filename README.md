@@ -91,7 +91,7 @@ if one is missing from this table.
 | `ls` | List sessions, as a table or as JSON for scripts |
 | `peek` | Print what a session's pane is showing, without attaching |
 | `send` | Queue a prompt for a session |
-| `new` | Create a session without a TUI |
+| `new` | Create one or more sessions without a TUI |
 | `guide` | Print what an agent running inside a session can do |
 | `doctor` | Check core dependencies (tmux, git, gh) and agent CLI heuristic versions |
 | `reap` | List tmux servers Atrium left behind, and stop them on request |
@@ -204,7 +204,8 @@ describes a tree that has moved on. Sending to a paused session is allowed — t
 queue is persisted, so the prompt waits for the resume.
 
 **`atrium new`** creates a session — worktree, branch and agent — from a script,
-a CI job, or an agent working through a queue of issues.
+a CI job, or an agent working through a queue of issues, and with `--variants`
+creates several of them from one prompt.
 
 ```bash
 atrium new fix-auth                              # in the current repo
@@ -213,12 +214,13 @@ atrium new fix-auth --path ~/src/web --profile codex
 atrium new fix-auth --branch release/2.0         # base it on an existing branch
 atrium new fix-auth --program codex              # one agent, without a profile
 atrium new fix-auth --wait 60s                   # block, then print the branch
+atrium new bake "fix the parser" --variants claude:2,codex:1   # a bake-off
 ```
 
-`--program` and `--profile` are mutually exclusive, and with neither the session
-runs whatever the TUI's own new-session key would run. `--branch` chooses the
-*start point* only: the session still gets its own branch, derived from the title
-like any other.
+`--program`, `--profile` and `--variants` all name what to run, so exactly one of
+them may be passed; with none, the session runs whatever the TUI's own
+new-session key would run. `--branch` chooses the *start point* only: the session
+still gets its own branch, derived from the title like any other.
 
 It is a producer on the same terms as `send`, and for the same reason: the TUI is
 the only thing that creates sessions, so `new` spools a request to
@@ -240,6 +242,34 @@ title whose derived names are already taken is **refused**, never silently
 suffixed, because a caller that asked for `fix-auth` and got `fix-auth-2` would
 push to a branch it never named. Run inside a session's worktree — where an agent
 usually is — `new` targets that worktree's *repo*, and says so on stderr.
+
+`--variants` is the one exception, and it is an exception because it is asked for.
+It is the headless half of the create form's fan-out: `--variants claude:2,codex:1`
+requests three sessions sharing one prompt, one base branch and one repo, which is
+the bake-off primitive — race three claudes, or claude against codex, then keep the
+best diff. N sessions cannot share one branch, so the title becomes a *stem* and the
+variants are named `bake-1`, `bake-2`, `bake-3`, skipping any name a session or a
+local branch in the target repo already owns. Nothing is silent about it: each
+derived title is printed as it is queued, and `--wait` names the branch each one was
+given. Asking which names are taken means asking a repository, so a fan-out of two
+or more needs a git target; a fan-out of one derives nothing, keeps the bare title,
+and is exactly `--profile claude`.
+
+Each variant is spooled as an ordinary request carrying its own final title and
+program, sharing one batch id — so every gate, receipt and recovery path treats it
+as the single create it is, and only the session cap reads the batch as a batch. The
+cap is charged for the whole batch: it fits, or it is refused whole, each member
+answered with its own receipt, rather than creating variants until the cap closes.
+The charge is live, so if something else takes the room after part of a batch is
+already built — somebody at the keyboard, another script — the rest is refused
+together rather than trickling in, and each receipt counts what was still queued
+rather than what was asked for. One member is left out of both the count and the
+refusal: a variant Atrium is recovering from an interrupted build, which is answered
+at its own gate instead. Two things a fan-out cannot promise, both because the drain
+builds one spooled session at a time:
+a `--wait` has to be sized for every build in series, and with no `--branch` each
+variant starts from the target's HEAD at *its own* creation time — so pass
+`--branch` when the comparison depends on a common start point.
 
 Two of the TUI's gates ask the user a question rather than refusing: crossing the
 host-derived session cap, and routing to a fully rate-limited account pool. A

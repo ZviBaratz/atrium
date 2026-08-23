@@ -41,12 +41,21 @@ import (
 // to their callers as arbitrary-looking failures.
 //
 // Spooled, and only spooled: it is seeded from createsInFlight, which holdCreateRequest
-// alone writes, so it does not see the TUI's own starts. A variant fan-out spawns up to
-// maxVariantBatch sessions in one keypress, all in one repo, and this constant neither
-// counts nor limits them — a human asking for twenty is not the accident this guards
-// against, and refusing a spooled create because a fan-out is mid-flight would make
-// `atrium new` fail for a reason its caller cannot see. The number to hold in mind is
-// therefore "one from the spool, plus whatever the keyboard started".
+// alone writes, so it does not see the TUI's own starts. A variant fan-out from the
+// KEYPRESS spawns up to session.MaxVariantBatch sessions inside one Update, all in one
+// repo, and this constant neither counts nor limits them — a human asking for twenty is
+// not the accident this guards against, and refusing a spooled create because a fan-out
+// is mid-flight would make `atrium new` fail for a reason its caller cannot see. The
+// number to hold in mind is therefore "one from the spool, plus whatever the keyboard
+// started".
+//
+// A spooled fan-out (`atrium new --variants`) is on the other side of that line, and
+// deliberately: its members are ordinary records, so they are counted and limited here
+// like any other, one per tick. Deliberate rather than accidental they may be, but they
+// are also N worktree setups the caller is not watching, and staggering them is what
+// keeps them off one index.lock. What it costs is stated where the caller can act on
+// it — a --wait over a batch has to be sized for N builds in series, which is newCmd's
+// Long to say.
 //
 // Counting in-flight starts is the whole point. A per-tick budget looks identical in a
 // single-tick test and delivers only a ~500ms stagger in production, because tick N+1
@@ -144,6 +153,106 @@ const createDisposalBudget = 50
 // Accepted rather than solved, because solving it means per-record state about a condition
 // that is usually a drive coming back in a few seconds.
 const createRecheckBudget = 2
+
+// createBatchRefusalBudget caps how many of one batch's other members a single cap
+// refusal answers in one tick (#761).
+//
+// A batch that does not fit has to be refused whole, or the cap creates it from the
+// tail: charged for the pending members, member 1 is refused, then member 2, and then
+// member 3 fits in the room the first two did not take. So the refusal fans out — and
+// the fan-out is receipts and unlinks rather than git, which is why it is not charged
+// to createGateBudget.
+//
+// It is bounded anyway, at the largest batch this atrium's own `atrium new` can mint.
+// Anything wider was hand-written or came from a build with a different limit, and
+// answering five hundred records inside one Update is the freeze createDisposalBudget
+// exists to prevent. Priced honestly, that is a DISCLOSURE and then a receipt and an
+// unlink apiece: rejectCreateRequest writes the disclosure unconditionally before it
+// rejects, and each atomic write fsyncs the file and its directory. disposeCreateRequest
+// makes the same argument for the same reason and does count the disclosure ("a
+// disclosure and two fsyncs apiece on top of each receipt"); the two are the same cost
+// and this one used to name half of it.
+//
+// A batch wider than the budget is therefore NOT refused whole, and the honest statement
+// of what happens is the opposite of reassuring: each later tick re-charges the cap for
+// what is still pending, so a batch of 26 under a cap with room for 5 has 21 members
+// answered on the first tick and the remaining 5 fit — and are created, from the tail,
+// with 21 callers holding receipts saying the batch was refused whole. Nothing this
+// atrium can produce reaches that, because parseVariantSpec is held to the same constant;
+// a hand-written spool can, and #783 is where raising the ceiling has to answer for it.
+const createBatchRefusalBudget = session.MaxVariantBatch
+
+// createBatchAssemblyWindow is how long a batch may be short of the size its author
+// declared before the drain gates it on what is actually there.
+//
+// It bounds the hold that closes the publish race outbox.Request.BatchSize documents.
+// Being too LONG is only ever a wait: a batch that will never reach its declared size
+// waits the window out and is then charged for its real membership. Being too SHORT is a
+// wrong verdict, and the window is fixed while the spool it is racing is not — measured
+// from the head's first write, a fan-out whose tail lands later than this (serial atomic
+// writes, two fsyncs each, against a slow or network-backed data dir) is charged for the
+// prefix that had arrived and created from its head, which is the race this exists to
+// close. #786 is where a quiescence-based bound has to answer for it. A batch genuinely still
+// being written finishes inside it by orders of magnitude — a handful of atomic writes
+// against a window measured in seconds. A batch that will never reach its declared size
+// waits this out and is then charged for its real membership: a rollback whose withdrawal
+// failed, a member the disposal arm answered, a sibling too corrupt to decode, or the
+// ordinary mid-batch case where a member is already a live session. That last one is why
+// the hold cannot simply be "wait until the batch is complete" — for a batch the drain is
+// partway through, complete never comes again.
+const createBatchAssemblyWindow = 3 * time.Second
+
+// batchStillAssembling reports whether the pending members of one batch are only part of
+// the batch its author committed, because the rest of it is still being written.
+//
+// It answers about the BATCH and not about whichever member the walk is holding, which is
+// what makes one verdict cover the whole of it on one tick. Asked per member instead, it
+// says "wait" for the head and "go ahead" for everything behind it — so the walk holds the
+// head, reaches member 2, gates that, and refuses the batch it had just decided to wait
+// for. The sibs slice is the same list for every member, so every member of a batch gets
+// the same answer without a per-tick set to remember it in.
+//
+// Two conditions, and neither is enough alone. A batch is short of its declared size for
+// most of its own life — the drain builds one member per tick, so a batch of three spends
+// two ticks short — and holding for that would stall the feature rather than protect it.
+// What separates "still arriving" from "being consumed" is the HEAD: members are written
+// in order, so an incomplete batch always still has member 1 pending, and a batch the
+// drain has started on never does. Hence the BatchIndex test, which is a property of the
+// records and needs nothing remembered between ticks.
+//
+// The clock is the head's own CreatedAt, which is the batch's first write. It bounds the
+// hold for a batch that will never reach its declared size — a rollback whose withdrawal
+// failed, a sibling too corrupt to decode, a member an earlier launch gave up on and
+// pendingBatchMembers therefore does not count — which would otherwise wait for its TTL.
+//
+// Nothing is logged for a hold. It is normally shorter than one poll tick, so a line per
+// tick per assembling batch would be noise about a condition that resolves before anyone
+// could act on it; and the hold spends no budget, runs no git and writes nothing, so there
+// is no side effect for a reader to have to account for later.
+func batchStillAssembling(sibs []outbox.CreateEntry, now time.Time) bool {
+	if len(sibs) == 0 {
+		return false
+	}
+	// The oldest pending member: pendingBatchMembers preserves ListCreates' oldest-first
+	// order, and WriteCreate names each record after its own CreatedAt.
+	head := sibs[0].Request
+	if head.BatchIndex != 1 || head.BatchSize <= len(sibs) {
+		return false
+	}
+	// A head stamped AHEAD of this clock is not assembling, and the explicit test is what
+	// keeps the window a window. now.Sub is a signed difference, so a future timestamp
+	// satisfies "< the window" for as long as it stays in the future, while Request.Expired
+	// — a difference the same way round, against the TTL — stays false for exactly as long.
+	// The two together are a record that is held above every disposal arm and can never age
+	// out of the hold: no session, no receipt, no verdict, and `atrium reset` the only exit.
+	// A data dir shared with a host whose clock runs fast reaches it without anything being
+	// corrupt. Read as not-assembling, it is charged for its real membership instead, which
+	// is the ordinary wrong-value outcome the window is documented to degrade to.
+	if now.Before(head.CreatedAt) {
+		return false
+	}
+	return now.Sub(head.CreatedAt) < createBatchAssemblyWindow
+}
 
 // drainCreateRequests creates the sessions spooled by `atrium new` and returns a
 // command that boots them plus a notice, or nil when there was nothing to do.
@@ -277,6 +386,19 @@ func (m *home) drainCreateRequests() tea.Cmd {
 	// Gate refusals only. A disposal is charged to disposed and stays off this counter
 	// deliberately — see the notice below for why an expired file must not raise one.
 	var refused int
+	// refusedRecords counts the requests answered, where refused counts the gate
+	// verdicts that answered them. They are the same number until a batch is refused
+	// for the session cap, which is one verdict fanned out across every pending member
+	// of that batch — so the notice reads this one and the budget reasoning above still
+	// reads the other.
+	var refusedRecords int
+	// The batch members a cap refusal has already answered on this tick, so the rest of
+	// the walk does not re-judge them from the listing it was handed before the refusal.
+	answeredInBatch := map[string]bool{}
+	// Batches this tick has decided to wait for, keyed by batch id. A memo and nothing
+	// more — see the batch arm in the walk for why recomputing it per member is quadratic
+	// in the size of the spool.
+	heldBatches := map[string]bool{}
 
 	for i, e := range entries {
 		// Nothing more can be gated (so nothing more can be started or refused) and
@@ -314,6 +436,18 @@ func (m *home) drainCreateRequests() tea.Cmd {
 		if m.outboxPoisoned[e.Path] {
 			adoptPending = adoptPending || anyAdopt(entries[i:i+1])
 			markPending = true
+			continue
+		}
+
+		// Already answered by a batch refusal earlier in THIS walk. The listing was taken
+		// before the fan-out ran, so the siblings it refused are still in it — and reaching
+		// them again would find the mark it just wrote and take the arm below for a request
+		// this tick gave up on a moment ago: a second receipt for a caller that may already
+		// have read and cleared the first, a disposal budget spent undoing this tick's own
+		// work, and a log line saying "atrium had already given up on" a refusal it is still
+		// in the middle of making. Their marks are left to be cleared where every other
+		// inventory-less mark is, at the next launch's flush.
+		if answeredInBatch[e.Path] {
 			continue
 		}
 
@@ -399,6 +533,13 @@ func (m *home) drainCreateRequests() tea.Cmd {
 				log.WarningLog.Printf("dropping a create request for %q that atrium had already "+
 					"given up on: %s", title, reason)
 				m.discardSpoolFile(e.Path, func() error { return outbox.Reject(e.Path, reason) })
+				// Recorded before the mark is cleared, and that order is the whole point:
+				// clearMarkOverADroppedRecord is about to make this path read NoDisclosure,
+				// so a batch gated LATER in this same walk would find nothing to skip it by
+				// and refuse it a second time — replacing the account whoever gave up wrote
+				// with a cap reason, at a path whose record is already gone. The mark skip
+				// in pendingBatchMembers cannot cover this one; only the walk knows.
+				answeredInBatch[e.Path] = true
 				m.clearMarkOverADroppedRecord(e.Path)
 				disposed++
 				continue
@@ -540,12 +681,81 @@ func (m *home) drainCreateRequests() tea.Cmd {
 					orphan = ""
 				}
 			}
+			// The cap is charged to the batch, not to the member. A fan-out's records
+			// are ordinary requests everywhere else in this walk; this is the one place
+			// they are read as a group, so a batch that does not fit is refused whole
+			// rather than created from the tail as the cap closes (#761).
+			//
+			// Never for a member that is adopting, though, and that exception is the
+			// same one refuseBatchSiblings makes for a sibling: the batch charge exists
+			// to produce a refusal, and refusing an adopting request is destructive
+			// beyond the record (see rejectCreateRequest) with a one-shot recovery.
+			// Charging one for it is what this line did before batches existed, so an
+			// adopting request re-queued into a batch — Requeue rewrites in place and
+			// keeps its Batch — is gated on exactly the terms it was gated on before.
+			// It costs the batch's whole-or-nothing promise for that member, which is
+			// the trade the sibling skip already makes and which #782 records.
+			adding := 1
+			var sibs []outbox.CreateEntry
+			// e.Request.Adopt rather than req.Adopt, and the two differ exactly where it
+			// matters. req is a copy the adoptionGone arm above has already written
+			// req.Adopt = false into, so reading it here asks "is this member adopting
+			// NOW", and the answer for a re-queued adoption whose pin has since gone is
+			// no — handing the whole-batch charge to the one member whose refusal spends a
+			// one-shot recovery, which is exactly what the exception is for. What the
+			// record on disk says is what the exception is about, and it is the same field
+			// pendingBatchMembers reads to keep an adopting SIBLING out of the count.
+			if req.Batch != "" && !e.Request.Adopt {
+				// Held rather than gated, and held before the gate is charged: no git
+				// ran, no budget was spent and nothing was decided, so the next tick
+				// judges this member against a batch that has finished arriving. The
+				// alternative is to charge the cap for a fraction of a batch, which is
+				// precisely how a whole-or-nothing gate creates one from the head.
+				//
+				// Remembered per batch for the rest of the tick, because a hold is the one
+				// verdict that does not spend the gate budget: without this every later
+				// member of a held batch re-walks the whole listing and re-stats every
+				// sibling, which is a quadratic in the size of the spool run synchronously
+				// on the update goroutine and charged to no budget at all. The answer is
+				// the same for every member of one batch on one tick by construction —
+				// batchStillAssembling is about the batch, and now does not move — so the
+				// memo cannot say anything the recomputation would not have.
+				if heldBatches[req.Batch] {
+					continue
+				}
+				members, unreadable := m.pendingBatchMembers(entries, req.Batch, e.Path, now, answeredInBatch)
+				// A member whose mark could not be stat'd is neither counted nor refusable,
+				// and the batch cannot be judged as a whole while one of its members cannot
+				// be judged at all. Charging around it under-counts, and an under-counted
+				// batch is created from its head — the exact partial spawn the charge
+				// exists to prevent — so the whole batch waits on the same terms the walk
+				// gives that member on its own account. Bounded by the record's TTL: past
+				// it the disposal arm answers it and it leaves the batch.
+				if unreadable || batchStillAssembling(members, now) {
+					heldBatches[req.Batch] = true
+					continue
+				}
+				sibs = members
+				adding = len(sibs)
+			}
 			gated++
-			inst, cmd, reason := m.executeCreateRequest(req)
-			if reason != "" {
-				log.WarningLog.Printf("refusing a create request for %q: %s", req.Title, reason)
-				reject(reason)
+			inst, cmd, verdict := m.executeCreateRequest(req, adding)
+			if verdict.reason != "" {
+				reject(verdict.reason)
 				refused++
+				refusedRecords++
+				// adding > 1 rather than req.Batch != "", and the difference is the case
+				// that matters: a batch whose other members have all been claimed,
+				// created or disposed of has nobody left to answer, and adding == 1 says
+				// exactly that without a second predicate to keep in step.
+				if verdict.bySessionCap && adding > 1 {
+					sibsRefused := m.refuseBatchSiblings(sibs, e.Path, verdict.reason, answeredInBatch)
+					refusedRecords += sibsRefused
+					log.WarningLog.Printf("refusing %d create requests from one atrium new batch, "+
+						"starting with %q: %s", sibsRefused+1, req.Title, verdict.reason)
+				} else {
+					log.WarningLog.Printf("refusing a create request for %q: %s", req.Title, verdict.reason)
+				}
 				continue
 			}
 			// The request deliberately stays on disk — as a claim — until the start
@@ -586,21 +796,30 @@ func (m *home) drainCreateRequests() tea.Cmd {
 		//
 		// No "and N refused" clause either, because a tick cannot do both: reaching
 		// either outcome costs a gate evaluation, and createGateBudget allows one per
-		// tick, so refused is necessarily 0 here. A disposal can share the tick, but that
-		// is deliberately not an event this notice reports (see below).
+		// tick, so refused is necessarily 0 here — and so is refusedRecords, which only
+		// ever grows alongside it. A disposal can share the tick, but that is
+		// deliberately not an event this notice reports (see below).
 		cmds = append(cmds, m.showMenuNotice("created a session from atrium new", ui.NoticeInfo))
+	case refusedRecords > 1:
+		// A whole batch, answered by one verdict. It gets its own spelling rather than a
+		// count for the reason the singular one below gives: nothing bounds a batch this
+		// side of the wire format, so an interpolated number is one the row's truncation
+		// could take. Naming the batch is what a reader needs — a cap they can raise
+		// refused several requests at once, not one they might scroll past.
+		return m.flashNotice("refused a batch of create requests from atrium new", ui.NoticeError)
 	case refused > 0:
 		// A refusal reaches the person who ran `atrium new` as a receipt, but the
 		// person at the TUI is the one who can fix a cap or a taken title, and to them
 		// a silent tick is indistinguishable from no request at all.
 		//
-		// Singular, with no count, because refused can only ever be 1: the default arm
-		// spends a gate to reach a refusal and createGateBudget allows one per tick — the
-		// same fact the create branch above uses to know refused is 0 there. A `%d` and a
-		// plural() here would be printing a number that cannot vary and pluralising a
-		// word that cannot become plural, which reads to a later editor as evidence that
-		// a tick can refuse several. A backlog is refused one per tick instead, each
-		// replacing this toast rather than adding to it.
+		// Singular, with no count, because this arm is reached only when exactly one
+		// REQUEST was answered. refused — the verdicts — can still only ever be 1: the
+		// default arm spends a gate to reach a refusal and createGateBudget allows one
+		// per tick, the same fact the create branch above uses to know it is 0 there.
+		// What #761 separated out is that one verdict can now answer several requests,
+		// which is what refusedRecords measures and what the arm above reports; an
+		// unrelated backlog is still refused one per tick, each replacing this toast
+		// rather than adding to it.
 		//
 		// That argument is what scopes this to gate refusals. A disposal — an expired
 		// or undecodable file — is nobody's to fix, least of all from here, so counting
@@ -682,6 +901,243 @@ func (m *home) stagedSpawnPlan() bool {
 	return m.pendingOverCap != nil || m.pendingExhausted != nil
 }
 
+// pendingBatchMembers returns the entries of this tick's listing that belong to batch id
+// and are both still awaiting a verdict and refusable, plus whether the batch has a member
+// this could not judge at all.
+//
+// The gated member is in the list by construction rather than by passing the filters a
+// second time, so the count has a floor of one and an ordinary request is never charged as
+// a batch of none. That floor is load-bearing rather than tidy: capVerdict tests
+// count+adding <= Limit, so an adding of zero is an ACCEPT at exactly a hard cap — the one
+// verdict hardCapMessage tells the caller exists nowhere.
+//
+// What is in the listing and is not a member this batch is about to add is excluded, and
+// counting any of it charges the cap for a session nobody will create:
+//
+//   - an undecodable record, which has no Batch to read at all and is therefore
+//     invisible here rather than excluded. That is the one direction this cannot fix: a
+//     corrupted sibling silently shrinks its own batch, so a batch of five is charged
+//     for four and creates four. The disposal arm answers that member with a receipt,
+//     so the caller is told; the batch is simply smaller than it asked to be.
+//   - an expired one, which this tick's disposal arm is about to discard.
+//   - a poisoned one. Both of poisoning's writers reach this, and they are not the same
+//     event: claimCreateRequest poisons a record whose session is already being built and
+//     already counts toward capCount, while discardSpoolFile poisons one whose refusal or
+//     disposal could not be unlinked, where no session exists and nothing counts toward
+//     anything. The exclusion is right for both — neither is a session this batch is about
+//     to add — so do not narrow this to the capCount reason on the strength of the first.
+//   - one this walk has already answered, which is still in the listing because the
+//     listing was taken before the walk began.
+//   - one carrying a terminal mark, which an earlier tick or an earlier process gave up
+//     on and whose caller has already been told.
+//   - one carrying Adopt, which refuseBatchSiblings cannot answer.
+//
+// None of it reaches refuseBatchSiblings, which is the agreement that matters and is why
+// that function tests nothing but the gated member: the count decides what the cap is
+// charged for, the list decides who is answered for it, and they cannot disagree while
+// they are the same list. A member counted here and not answered there is charged for and
+// then not refused. It is then the only member of its batch left pending,
+// is charged as a batch of one on its own tick, and is admitted into room the cap has just
+// destroyed its siblings to protect. Adopt is where that stops being theoretical, because
+// refusing an adopting request spends a one-shot recovery and so cannot be done from here
+// at all.
+//
+// unreadable is the member this cannot classify at all: a mark whose stat failed with
+// something other than ENOENT, which is neither "no mark" nor a terminal one. The walk
+// holds such a record rather than answering it, and a batch containing one is not
+// under-counted so much as unjudgeable — the caller waits, on the same TTL the walk's own
+// hold runs on, rather than charging a cap around a member that may still become a
+// session.
+//
+// The mark stat is a read per member of ONE batch on the ticks that batch is gated, not a
+// read per record on every walk — and the caller memoises a hold, so a batch that is
+// waiting is not re-walked once per member of it.
+//
+// Over-counting is not the safe direction, either, whatever a gate's usual arithmetic
+// says. The refusal this count produces is destructive — a receipt written and the record
+// unlinked, per rejectCreateRequest — so charging for a member nobody will create does not
+// withhold a session, it destroys a request that had room for one. #701 is the entry for
+// that shape: a false-positive gate whose abort is destructive is not conservative.
+func (m *home) pendingBatchMembers(
+	entries []outbox.CreateEntry, id, gated string, now time.Time, answered map[string]bool,
+) (members []outbox.CreateEntry, unreadable bool) {
+	if id == "" {
+		return nil, false
+	}
+	members = make([]outbox.CreateEntry, 0, len(entries))
+	for _, e := range entries {
+		if e.Err != nil || e.Request.Batch != id {
+			continue
+		}
+		if e.Path == gated {
+			// Counted without being re-judged, which is what makes the count's floor a
+			// property of how this list is built rather than a check someone has to keep.
+			// The walk established this member's age, its poisoning and its mark before it
+			// reached the gate; asking again can only produce a SECOND answer, and a second
+			// answer that disagrees drops the gated member from its own batch.
+			members = append(members, e)
+			continue
+		}
+		if e.Request.Expired(now) || m.outboxPoisoned[e.Path] || answered[e.Path] {
+			continue
+		}
+		if e.Request.Adopt {
+			continue
+		}
+		if mark := outbox.DisclosureMark(e.Path); mark != outbox.NoDisclosure {
+			unreadable = unreadable || mark == outbox.DisclosureUnknown
+			continue
+		}
+		members = append(members, e)
+	}
+	return members, unreadable
+}
+
+// refuseBatchSiblings answers every other pending member of a batch the session cap has
+// just refused, with the reason the gated member was given, and returns how many it
+// answered.
+//
+// The fan-out is the whole of "a batch either fits or is refused whole". Refuse only the
+// member that was gated and the cap creates the batch from its tail: charged for three
+// pending members it refuses the first, then charged for two it refuses the second, and
+// then charged for one the third fits in the room the other two did not take.
+//
+// This refuses everything it is handed but the gated member, and that is not a simpler
+// rule than the one it replaced — it is the same rule kept in one place. pendingBatchMembers
+// builds the list, and what it leaves out (a terminal mark, a member this walk already
+// answered, one carrying Adopt) is exactly what must not be refused here. Re-testing any of
+// it would be re-deriving a decision rather than defending against one: the count and the
+// refusal describe the same members BECAUSE they are the same list, so a member that is
+// charged for is answered and a member that is not answered was never charged for. Guards
+// written here as well have twice survived mutation, each masked by the list already being
+// right; the count is the half that has to be, since it decides what the cap is charged
+// for.
+//
+// What the Adopt exclusion does NOT buy is a later refusal. On its own tick the adopting
+// member is the only member of its batch still pending, so it is charged as a batch of one
+// and a cap that blocked N can admit it — one session out of a batch whose every receipt
+// says its members were refused together, with a hole in its numbering. That is the price
+// of not spending a one-shot recovery (see rejectCreateRequest), it is paid identically at
+// the gated member's own charge, and #782 is where it is recorded rather than left to be
+// discovered.
+//
+// answeredInBatch is WRITTEN here, and that half is load-bearing: every sibling refused
+// below is still in the listing the walk has yet to reach, and it must not be judged a
+// second time.
+func (m *home) refuseBatchSiblings(
+	sibs []outbox.CreateEntry, gated, reason string, answeredInBatch map[string]bool,
+) int {
+	answered := 0
+	for _, sib := range sibs {
+		if sib.Path == gated {
+			continue
+		}
+		if answered >= createBatchRefusalBudget {
+			break
+		}
+		// Recorded before the refusal rather than after it: what the caller must not do is
+		// reach this entry again from the listing it is walking, and a discard that fails
+		// leaves the record there to be reached.
+		answeredInBatch[sib.Path] = true
+		// Per member, never copied from the gated one: an adopting member carries its own
+		// orphan, and the gated member's has already been cleared by the adoptionGone arm
+		// where git said there was nothing to name.
+		m.rejectCreateRequest(sib.Path, sib.Request, claimedBranch(sib.Request), reason)
+		answered++
+	}
+	return answered
+}
+
+// createVerdict is what executeCreateRequest decided about one request.
+//
+// Two fields rather than the bare reason string it used to return, because the caller
+// has a second question the string cannot answer without being parsed: was it the
+// SESSION CAP that refused? That is the one refusal a batch shares — a cap is a fact
+// about the fleet, and a batch charged for its pending members either fits or does not
+// — so it is the one the drain fans out across the rest of the batch. Every other
+// refusal here is a fact about one request (its title, its path, its account pool) and
+// answers only the member it was reached for.
+type createVerdict struct {
+	// reason is the wording the caller's rejection receipt carries. "" is the success
+	// sentinel, unchanged: executeCreateRequest's zero verdict means it started.
+	reason string
+	// bySessionCap says the session cap refused. False on the zero value, so a verdict
+	// built anywhere but the two cap gates fans out to nobody.
+	bySessionCap bool
+}
+
+// createRefusal is a verdict nobody but this request is owed.
+func createRefusal(reason string) createVerdict { return createVerdict{reason: reason} }
+
+// createCapRefusal is a verdict the whole batch is owed. Reached only from the two session-cap
+// gates: an exhausted account pool is deliberately NOT one of them, because --force
+// answers it per request and the pool it names may differ between members of a mixed
+// fan-out.
+func createCapRefusal(reason string) createVerdict {
+	return createVerdict{reason: reason, bySessionCap: true}
+}
+
+// hardCapReason is the explicit-cap refusal a spooled request's receipt carries.
+//
+// Byte-identical to hardCapMessage for a request charged for itself, which is what keeps
+// that wording's other call sites and this one from drifting apart for the ordinary case.
+// A batch adds what a batch needs and hardCapMessage cannot carry: how many sessions this
+// refusal is answering, how much room there is, and that they were refused together —
+// because a caller told only "you can't create more than 4 sessions" cannot tell a
+// refusal of its batch from a refusal of one variant.
+//
+// No width budget applies. The ~32-cell bound the create form's variant refusals are
+// held to is the overlay's; this is a receipt, printed by `atrium new --wait` into a
+// terminal.
+func hardCapReason(limit, count, adding int) string {
+	if adding <= 1 {
+		return hardCapMessage(limit)
+	}
+	return fmt.Sprintf("%s, and %s: they were refused together rather than created until the cap closed",
+		hardCapMessage(limit), capRoomClause(limit, count, adding))
+}
+
+// softCapReason is the host-capacity refusal, on hardCapReason's terms.
+func softCapReason(limit, count, adding int) string {
+	if adding <= 1 {
+		return fmt.Sprintf("%s — pass --force to create anyway", hostCapacityLine(limit, count))
+	}
+	return fmt.Sprintf("%s, and %s — pass --force to create them anyway",
+		hostCapacityLine(limit, count), capRoomClause(limit, count, adding))
+}
+
+// capRoomClause states what this refusal is answering against the room left, written once
+// for both reasons above.
+//
+// "still queued" rather than "asked for", because adding counts the members of the batch
+// that are still PENDING, which is the only number the drain has. Once any member has
+// been created — the room taken by somebody at the keyboard between two ticks, which
+// TestCreateDrainRefusesTheRemainderWhenCapacityIsTakenMidBatch is exactly — the count
+// this receipt carries is smaller than what the command line asked for, and claiming
+// otherwise would have a script sizing its retry off a number that frees the wrong number
+// of slots and leaks the created member's worktree and branch. For the same reason the
+// reasons above say the pending members were refused TOGETHER rather than that the whole
+// batch was: the second is a claim about members this drain may never have seen.
+//
+// The room is floored at zero: count can exceed limit (a cap lowered under a running
+// fleet, or a soft cap already crossed with --force), and "-2 free" would read as a
+// number the caller could act on.
+//
+// adding is what was CHARGED, and it is also what is answered, because pendingBatchMembers
+// builds the one list refuseBatchSiblings then refuses. There is a single exception and
+// createBatchRefusalBudget already owns it: past that budget the refusal stops early, so
+// the receipts that were written say more members were refused together than actually
+// were, and the members past it are re-charged on a later tick instead. Only a
+// hand-written batch wider than session.MaxVariantBatch reaches it — parseVariantSpec
+// holds this atrium to the same constant — and #783 is where raising it has to answer.
+func capRoomClause(limit, count, adding int) string {
+	free := limit - count
+	if free < 0 {
+		free = 0
+	}
+	return fmt.Sprintf("%d sessions from this atrium new are still queued with room for %d", adding, free)
+}
+
 // executeCreateRequest runs every gate the create form runs and, if they all
 // pass, starts the session. It returns the boot command, or a reason the request
 // was refused — a reason written for the person who ran `atrium new`, because it
@@ -694,14 +1150,14 @@ func (m *home) stagedSpawnPlan() bool {
 // tmux is NOT among the gates: it is the one condition here that is about the machine
 // rather than about the request, so drainCreateRequests holds on it instead of calling
 // this at all. Everything below refuses, and a refusal here is destructive.
-func (m *home) executeCreateRequest(r outbox.Request) (*session.Instance, tea.Cmd, string) {
+func (m *home) executeCreateRequest(r outbox.Request, adding int) (*session.Instance, tea.Cmd, createVerdict) {
 	// The CLI bounds the title too, and that is the check a caller normally meets.
 	// This one is for what the CLI cannot speak for: a spool file written by a build
 	// of atrium whose limit differs from this one's. Unbounded, an over-long title
 	// reaches the list as a row nothing can render sensibly. A blank title and a blank
 	// path are refused by readCreate before they get here, mirroring WriteCreate.
 	if n := len([]rune(r.Title)); n > session.MaxTitleLen {
-		return nil, nil, fmt.Sprintf("the title is %d characters; the limit is %d", n, session.MaxTitleLen)
+		return nil, nil, createRefusal(fmt.Sprintf("the title is %d characters; the limit is %d", n, session.MaxTitleLen))
 	}
 
 	// Absolute, because session.NewInstance stores the absolute path. The CLI already
@@ -709,14 +1165,14 @@ func (m *home) executeCreateRequest(r outbox.Request) (*session.Instance, tea.Cm
 	// desynchronise the two.
 	path, err := filepath.Abs(r.Path)
 	if err != nil {
-		return nil, nil, fmt.Sprintf("%q is not a usable path: %v", r.Path, err)
+		return nil, nil, createRefusal(fmt.Sprintf("%q is not a usable path: %v", r.Path, err))
 	}
 
 	// A non-git directory is not an error: it becomes a direct session, exactly as
 	// it does in the form. It simply has no worktree and no branch.
 	valid, direct, _ := targetValidity(m.ctx, path)
 	if !valid {
-		return nil, nil, fmt.Sprintf("%q is not a directory", path)
+		return nil, nil, createRefusal(fmt.Sprintf("%q is not a directory", path))
 	}
 
 	// A direct verdict has to be confirmed, never inferred from a failure to answer.
@@ -735,10 +1191,10 @@ func (m *home) executeCreateRequest(r outbox.Request) (*session.Instance, tea.Cm
 	// user's working tree by the time anyone could look.
 	if direct {
 		if _, known := git.ProbeGitRepo(m.ctx, path); !known {
-			return nil, nil, fmt.Sprintf(
+			return nil, nil, createRefusal(fmt.Sprintf(
 				"could not determine whether %q is a git repository, and creating a session there "+
 					"would have run the agent in it directly rather than in a worktree; nothing was "+
-					"created, so retry", path)
+					"created, so retry", path))
 		}
 	}
 
@@ -747,15 +1203,15 @@ func (m *home) executeCreateRequest(r outbox.Request) (*session.Instance, tea.Cm
 	// `created "x"` with no branch clause — which reads exactly like a legitimate direct
 	// session. Refusing gives the caller the one signal that separates the two.
 	if direct && r.Branch != "" {
-		return nil, nil, fmt.Sprintf(
-			"%q has no git repository to take branch %q from", path, r.Branch)
+		return nil, nil, createRefusal(fmt.Sprintf(
+			"%q has no git repository to take branch %q from", path, r.Branch))
 	}
 
 	// The group is derived here rather than read from m.newSessionGroup, which is
 	// create-form state this path must not touch — see titleConflictIn.
 	group := git.RepoGroupKey(m.ctx, path)
 	if conflict := m.createConflictIn(group, r, path, direct); conflict != "" {
-		return nil, nil, fmt.Sprintf("%s (%q in %s)", conflict, r.Title, path)
+		return nil, nil, createRefusal(fmt.Sprintf("%s (%q in %s)", conflict, r.Title, path))
 	}
 
 	program := r.Program
@@ -772,10 +1228,10 @@ func (m *home) executeCreateRequest(r outbox.Request) (*session.Instance, tea.Cm
 
 	sc := m.sessionCap()
 	count := m.capCount(sc)
-	verdict := capVerdict(sc, count, 1)
+	verdict := capVerdict(sc, count, adding)
 	if verdict == capBlock {
 		// --force is deliberately not consulted: see hardCapMessage.
-		return nil, nil, hardCapMessage(sc.Limit)
+		return nil, nil, createCapRefusal(hardCapReason(sc.Limit, count, adding))
 	}
 
 	// All-exhausted before the soft cap, in that order and not the other way round,
@@ -791,14 +1247,14 @@ func (m *home) executeCreateRequest(r outbox.Request) (*session.Instance, tea.Cm
 	var sel *overlay.AccountSelection
 	if pool, members, exhausted := m.allExhausted(plan); exhausted {
 		if !r.Force {
-			return nil, nil, fmt.Sprintf(
-				"every account in pool %q is rate-limited — pass --force to create anyway", pool)
+			return nil, nil, createRefusal(fmt.Sprintf(
+				"every account in pool %q is rate-limited — pass --force to create anyway", pool))
 		}
 		sel = m.pinSoonestMember(pool, members)
 	}
 
 	if verdict == capConfirm && !r.Force {
-		return nil, nil, fmt.Sprintf("%s — pass --force to create anyway", hostCapacityLine(sc.Limit, count))
+		return nil, nil, createCapRefusal(softCapReason(sc.Limit, count, adding))
 	}
 
 	// Never dependency-isolating: that is a form choice, and shared is the default the
@@ -813,11 +1269,11 @@ func (m *home) executeCreateRequest(r outbox.Request) (*session.Instance, tea.Cm
 		// notice and no receipt. Every error reachable today has a message; the sentinel
 		// should not depend on that staying true.
 		if reason := err.Error(); reason != "" {
-			return nil, nil, reason
+			return nil, nil, createRefusal(reason)
 		}
-		return nil, nil, "the session could not be started"
+		return nil, nil, createRefusal("the session could not be started")
 	}
-	return inst, cmd, ""
+	return inst, cmd, createVerdict{}
 }
 
 // createConflictIn is the conflict gate a spooled request is held to:

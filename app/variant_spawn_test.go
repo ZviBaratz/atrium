@@ -50,6 +50,32 @@ func instanceByTitle(h *home, title string) *session.Instance {
 	return nil
 }
 
+// TestPlanVariantTitlesUsesTheSharedScheme ties this package's suffix search to the
+// owner of the <stem>-N spelling rather than to a literal, so the create form and
+// `atrium new --variants` cannot derive different names for the same batch.
+//
+// It asserts the derived titles equal session.VariantTitle's output, not that they look
+// like "race-1": the literal is pinned once, in session's own test, and a second copy
+// here would be the drift this guard exists to catch.
+func TestPlanVariantTitlesUsesTheSharedScheme(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	h := newCreateFormHome(t)
+	dir := t.TempDir()
+	h.newSessionGroup = filepath.Base(dir)
+
+	titles, conflict := h.planVariantTitles("race", 3, dir, true)
+	require.Empty(t, conflict)
+	require.Equal(t, []string{
+		session.VariantTitle("race", 1),
+		session.VariantTitle("race", 2),
+		session.VariantTitle("race", 3),
+	}, titles)
+
+	// The fork path numbers from 2 (the bare stem is the 1) through the same helper.
+	addDirectInstance(t, h, "race", dir)
+	require.Equal(t, session.VariantTitle("race", 2), h.firstFreeTitle("race", dir, true))
+}
+
 // planVariantTitles must keep the bare title for a single session (the pre-#387
 // contract), derive -1/-2/-N for a batch, skip suffixes already taken, and report a
 // conflict when a bare single title collides.

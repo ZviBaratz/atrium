@@ -36,8 +36,12 @@ func newSession(t *testing.T, r newRequest) (stdout, stderr string, err error) {
 	return out.String(), errOut.String(), err
 }
 
-// tempRepo returns a directory that exists, standing in for a repo. The CLI
-// deliberately runs no git, so a plain directory is the whole fixture.
+// tempRepo returns a directory that exists, standing in for a repo. The single-session
+// path runs no git, so a plain directory is the whole fixture for it.
+//
+// --variants is the exception and needs gitRepoWithBranches instead: deriving variant
+// titles means asking the repo which session branches are taken, and a directory that is
+// not a repository is refused rather than treated as one with no branches.
 func tempRepo(t *testing.T) string {
 	t.Helper()
 	dir, err := filepath.EvalSymlinks(t.TempDir())
@@ -612,14 +616,34 @@ func TestNewCommandProfileFlagIsWired(t *testing.T) {
 	err = cmd.Execute()
 	require.Error(t, err, "--wait must reach the wait loop")
 	assert.Contains(t, err.Error(), "waited 1ms")
+
+	// The third that cannot join either argv above: --variants refuses --program and
+	// --profile, and a flag registered but never read would look identical to one that
+	// works from anywhere else in the suite.
+	resetNewFlags()
+	cmd.SetArgs([]string{"new", "fix-auth", "--path", tempRepo(t), "--variants", "nope:2"})
+	err = cmd.Execute()
+	require.Error(t, err, "--variants must reach resolveVariantPrograms")
+	assert.Contains(t, err.Error(), `no profile "nope"`)
 }
 
 // resetNewFlags clears the package-level flag variables cobra writes into. They
 // outlive a single Execute, so without this one test's --force leaks into the next.
 func resetNewFlags() {
 	newPathFlag, newProgramFlag, newProfileFlag, newBranchFlag = "", "", "", ""
+	newVariantsFlag = ""
 	newForceFlag = false
 	newWaitFlag = 0
+	// The variables above are not the whole of a flag's state, and --variants is the one
+	// flag that proves it: cobra records Changed during parsing and never clears it, and
+	// runNew reads --variants THROUGH Changed rather than through its value, because ""
+	// is both the flag's default and a value a caller can pass. Left set, a run that
+	// passed --variants makes the next Execute in this package a fan-out with an empty
+	// spec whatever newVariantsFlag says — verified: the run after
+	// TestNewCommandProfileFlagIsWired's third leg is answered "--variants chooses the
+	// profiles itself" instead of with its own profile error. Latent until -shuffle
+	// reorders the package, which is restoreRootCmd's whole argument one field further in.
+	newCmd.Flags().Lookup("variants").Changed = false
 }
 
 // restoreRootCmd undoes what driving rootCmd through Execute leaves on it. The flag
