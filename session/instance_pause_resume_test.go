@@ -66,13 +66,19 @@ func newFakeTmuxServer(t *testing.T) *fakeTmuxServer {
 	return s
 }
 
-// Start implements tmux.PtyFactory: `new-session` brings the session up, everything
-// else (the attach-session Restore opens) is recorded and ignored.
+// Start implements tmux.PtyFactory: a `new-session` that SUCCEEDS brings the session
+// up, everything else (the attach-session Restore opens) is recorded and ignored.
+//
+// Gated on the pty's answer rather than on the verb alone, because a fixture whose
+// factory refuses every launch is how the resume paths are driven to fail: flipping
+// first would leave that fake reporting a live session for a launch that never
+// happened, mocking away the very failure it was built to produce.
 func (s *fakeTmuxServer) Start(cmd *exec.Cmd) (*os.File, error) {
-	if tmuxVerb(cmd, "new-session") {
+	f, err := s.pty.Start(cmd)
+	if err == nil && tmuxVerb(cmd, "new-session") {
 		s.alive.Store(true)
 	}
-	return s.pty.Start(cmd)
+	return f, err
 }
 
 func (s *fakeTmuxServer) Close() { s.pty.Close() }
@@ -127,6 +133,18 @@ func newParkedTmuxServer(t *testing.T) *fakeTmuxServer {
 	t.Helper()
 	s := newFakeTmuxServer(t)
 	s.alive.Store(false)
+	return s
+}
+
+// newParkedTmuxServerFailingLaunch is newParkedTmuxServer whose agent will not start:
+// the pty factory refuses every launch. That is the ordinary way a resume's relaunch
+// fails — a program or profile that no longer resolves, a server that will not start a
+// session, resource exhaustion — as distinct from the stale session the close guards
+// against, which fails earlier and for a different reason.
+func newParkedTmuxServerFailingLaunch(t *testing.T, startErr error) *fakeTmuxServer {
+	t.Helper()
+	s := newParkedTmuxServer(t)
+	s.pty = newRecordingPtyFactory(t, startErr)
 	return s
 }
 
@@ -299,23 +317,24 @@ func TestUnwindAutoPauseCommits_PreservesRealCommit(t *testing.T) {
 // TestResumeKeepsTheBranchWhenTheParkedSessionWillNotClose. Resume closes a session an
 // older, detach-only pause left behind (#710) before it relaunches. That close is the one
 // step whose failure must ABORT rather than be walked past, and the reason is entirely in
-// what would come next: the relaunch fails on Start's duplicate-name guard, and
-// recreateSession answers a failed launch by tearing the worktree down through
-// Worktree.Cleanup — `git worktree remove -f` and `git branch -D`, the KILL teardown, with
-// no retention ref because only Kill records one. Against the state a park leaves — the
-// session's whole history on a branch nothing else references — that is the loss.
+// what would come next: the relaunch fails on Start's duplicate-name guard, leaving this
+// call to have re-added the worktree and unwound the auto-commit for a launch that never
+// had a chance. When this guard was written that was the smaller half — recreateSession
+// answered a failed launch by tearing the worktree down through Worktree.Cleanup, `git
+// worktree remove -f` and `git branch -D`, the KILL teardown with no retention ref
+// because only Kill records one, so the session's whole history went with it (#741).
 //
 // So the postcondition is that the park is still a park. The close is ordered above the
-// worktree block for exactly that reason, which makes this assertable as three facts
-// rather than as "the damage was smaller": the branch still holds the auto-commit pause
-// made (nothing unwound it), the worktree is still absent (nothing re-added it), and the
-// kill teardown was never reached at all.
+// worktree block for exactly that reason, which makes this assertable as outcomes rather
+// than as "the damage was smaller": the branch still holds the auto-commit pause made
+// (nothing unwound it) and the worktree is still absent (nothing re-added it).
 //
 // The fixture carries a REAL commit under the auto-pause one so the two are distinguished:
 // unwinding is a soft reset onto the real ancestor, so a tip that is still the auto-commit
 // proves the abort landed before the unwind rather than merely leaving some branch behind.
-// Recording through the real Cleanup rather than replacing it keeps the destruction real:
-// a regression deletes the branch here, it does not merely report a call.
+// Those two facts are what a regression breaks, and they are read off the repository
+// itself — the teardown this guards against is no longer reachable from recreateSession
+// at all (#741), so there is nothing left to count the calls of.
 func TestResumeKeepsTheBranchWhenTheParkedSessionWillNotClose(t *testing.T) {
 	wt := newTestWorktree(t)
 	repoPath := wt.GetRepoPath()
@@ -352,14 +371,6 @@ func TestResumeKeepsTheBranchWhenTheParkedSessionWillNotClose(t *testing.T) {
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", newRecordingPtyFactory(t, nil), stuck)
 	inst := &Instance{Title: "sess", status: Paused, started: true, gitWorktree: wt, tmuxSession: ts}
 
-	rolledBack := false
-	orig := worktreeCleanup
-	t.Cleanup(func() { worktreeCleanup = orig })
-	worktreeCleanup = func(w *git.Worktree) error {
-		rolledBack = true
-		return orig(w)
-	}
-
 	err := inst.Resume()
 
 	require.Error(t, err, "a session that will not close cannot be resumed over")
@@ -372,8 +383,78 @@ func TestResumeKeepsTheBranchWhenTheParkedSessionWillNotClose(t *testing.T) {
 		"the branch moved: the resume got as far as unwinding the auto-commit before it gave up")
 	require.NoDirExists(t, wtPath,
 		"the resume materialized the worktree it then refused to launch into, leaving a park that is no longer a park")
-	require.False(t, rolledBack, "a failed resume must not reach the kill teardown")
 	require.ErrorContains(t, err, "parked with", "the report must name the close, not the relaunch it never tried")
+}
+
+// TestResumeKeepsTheBranchWhenTheRelaunchFails is the other route into the same loss,
+// and the one TestResumeKeepsTheBranchWhenTheParkedSessionWillNotClose cannot reach: the
+// parked session closes cleanly, the worktree comes back, and the AGENT is what will not
+// start — a program or profile that no longer resolves, a tmux server that refuses a
+// session, resource exhaustion (#741).
+//
+// A park removes the worktree, so this is the ORDINARY resume rather than an edge case.
+// Resume re-added it and used to tell recreateSession it could therefore roll it back,
+// which ran Worktree.Cleanup — `git worktree remove -f` and `git branch -D`, the KILL
+// teardown, with no retention ref because only Kill records one. So a mistyped profile
+// took the session's whole history with it.
+//
+// The postcondition is the state the resume found, not a smaller loss: branch, history
+// and the parked work all survive, and a second Resume is the entire retry. The fixture
+// carries a REAL commit under the auto-pause one so the tip reports how far the resume
+// got — landing on the real ancestor is the unwind having run, which is what separates
+// this route from the abort its sibling covers, where the tip is still the auto-commit.
+//
+// The pending-change assertion is the sharp one, and it is why the answer is no rollback
+// at all rather than a gentler one. unwindAutoPauseCommits is a SOFT reset, so by the time
+// the launch fails the parked work exists only as uncommitted changes in the worktree and
+// the branch tip has moved back off it: retaining the branch first would pin a tip that
+// predates that work, and even the pause teardown (Worktree.Remove) discards it.
+func TestResumeKeepsTheBranchWhenTheRelaunchFails(t *testing.T) {
+	wt := newTestWorktree(t)
+	repoPath := wt.GetRepoPath()
+	branch := wt.GetBranchName()
+	wtPath := wt.GetWorktreePath()
+
+	require.NoError(t, os.WriteFile(filepath.Join(wtPath, "work.txt"), []byte("hours of it\n"), 0644))
+	require.NoError(t, wt.CommitChanges("feat: the session's whole history"))
+	realSHA := gitOutput(t, repoPath, "rev-parse", branch)
+
+	// The WIP pause folded into an auto-commit, built by autoMsg so it is the subject
+	// isAutoPauseCommit actually recognizes rather than a hand-typed one that could drift.
+	require.NoError(t, os.WriteFile(filepath.Join(wtPath, "wip.txt"), []byte("unfinished\n"), 0644))
+	require.NoError(t, wt.CommitChanges(autoMsg("02 Jan 06 15:04 MST")))
+	parkSHA := gitOutput(t, repoPath, "rev-parse", branch)
+	require.NotEqual(t, realSHA, parkSHA, "the fixture must have an auto-commit to unwind")
+
+	// The park in full: the worktree is gone and so is the session, so the close is
+	// forgiven and the resume runs its whole worktree block rather than aborting above it.
+	require.NoError(t, wt.Remove())
+
+	srv := newParkedTmuxServerFailingLaunch(t, errors.New("pty boom"))
+	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", srv, srv.exec())
+	inst := &Instance{Title: "sess", status: Paused, started: true, gitWorktree: wt, tmuxSession: ts}
+
+	err := inst.Resume()
+
+	require.Error(t, err, "an agent that will not start must fail the resume")
+	require.True(t, inst.Paused(), "a failed resume must leave the session parked, not Running")
+
+	// BranchTip rather than gitOutput, for the reason its sibling documents: a deleted
+	// branch is the failure under test, and `rev-parse` on one that is gone fails the
+	// test with git's "ambiguous argument" instead of saying what was lost.
+	tip, exists := git.BranchTip(context.Background(), repoPath, branch)
+	require.True(t, exists, "a failed relaunch deleted the session's branch, and every commit on it with it")
+	require.Equal(t, realSHA, tip,
+		"the tip must be the real ancestor: this is the route that runs the unwind, not the one that aborts above it")
+
+	valid, vErr := wt.IsValidWorktree()
+	require.NoError(t, vErr)
+	require.True(t, valid, "the worktree this resume materialized must survive for the retry")
+	onDisk, rErr := os.ReadFile(filepath.Join(wtPath, "wip.txt"))
+	require.NoError(t, rErr, "the parked work must be back on disk")
+	require.Equal(t, "unfinished\n", string(onDisk))
+	require.NotEmpty(t, gitOutput(t, wtPath, "status", "--porcelain"),
+		"and it must be PENDING: the unwind soft-reset it out of history, so nothing else is holding it")
 }
 
 // TestResumeClosesTheParkedSessionEvenWhenLivenessCannotAnswer pins why that close is
