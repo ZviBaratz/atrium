@@ -157,10 +157,9 @@ func startTimeOf(ticks int64) (time.Time, bool) {
 	if !ok {
 		return time.Time{}, false
 	}
-	// Split the conversion rather than multiplying ticks by time.Second, which
-	// overflows int64 on a host up for a few years.
-	return boot.Add(time.Duration(ticks/userHZ)*time.Second +
-		time.Duration(ticks%userHZ)*(time.Second/userHZ)), true
+	// ticksToDuration splits the conversion rather than multiplying ticks by
+	// time.Second, which overflows int64 on a host up for a few years.
+	return boot.Add(ticksToDuration(ticks)), true
 }
 
 // parseStat reads the comm, parent pid and starttime out of a raw /proc/<pid>/stat
