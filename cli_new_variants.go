@@ -45,11 +45,16 @@ type variantSpec struct {
 // parseVariantSpec turns the --variants value into its entries, in the order the caller
 // wrote them — which becomes the order the variants are titled and drained in.
 //
-// The grammar is comma-separated `profile[:count]`, mirroring uzi's `--agents`, and the
-// count splits on the LAST colon rather than the first. That is not pedantry: with no
+// The grammar is comma-separated `profile[:count]`, mirroring uzi's `--agents`. A colon
+// separates the count only when it is the LAST one AND what follows it is a run of
+// digits; otherwise it is part of the profile's name. Neither half is pedantry: with no
 // `profiles` block in config.json, config.GetProfiles synthesizes one profile whose Name
 // is the whole default_program, so a colon in a profile name is reachable on a default
-// install and a first-colon split would make the only configured profile unnameable.
+// install. A first-colon split would make that profile unnameable, and a last-colon split
+// alone would make only its `:count` form nameable — the bare form split into a name and
+// a count of whatever its own tail happened to be, and was refused for a count nobody
+// wrote. What that costs is a mistyped count: `claude:tow` is a profile name now, and its
+// refusal comes from the config lookup rather than from here.
 //
 // A profile name containing a comma cannot be expressed at all, and there is no refusal
 // that says so: the separator has to be something, and such a name splits into entries
@@ -59,6 +64,23 @@ type variantSpec struct {
 //
 // Every refusal names the entry it is about. Nothing here consults the config, so a
 // mistyped grammar is reported before an unknown-profile error can mask it.
+// isCount reports whether s is what the grammar accepts after the last colon: a non-empty
+// run of digits, optionally spaced. Deliberately not strconv.Atoi — a sign or an overflow
+// must not decide that the colon was a separator, since both mean the tail is not the
+// count the caller wrote and the entry reads better as the name it looks like.
+func isCount(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func parseVariantSpec(raw string) ([]variantSpec, error) {
 	if strings.TrimSpace(raw) == "" {
 		return nil, errors.New("--variants was given no profiles; pass e.g. --variants claude:2,codex:1")
@@ -71,12 +93,22 @@ func parseVariantSpec(raw string) ([]variantSpec, error) {
 			return nil, fmt.Errorf("--variants %q has an empty entry; check for a doubled or trailing comma", raw)
 		}
 		name, count := entry, 1
-		if i := strings.LastIndex(entry, ":"); i >= 0 {
+		// A count is a run of DIGITS after the last colon, and a tail that is not one
+		// leaves the colon where it was found: part of the profile's name. Splitting on
+		// the last colon unconditionally is what made the bare form of a colon-bearing
+		// name unreachable — `--variants "claude --model x:y"` split into a profile and a
+		// count of "y" and was refused for a count the caller never wrote, which is the
+		// case the last-colon rule exists to serve. The cost is that a mistyped count is
+		// no longer a grammar error: `claude:tow` is now a profile name, and the caller
+		// hears it from the unknown-profile refusal, which names the entry too.
+		if i := strings.LastIndex(entry, ":"); i >= 0 && isCount(entry[i+1:]) {
 			name = strings.TrimSpace(entry[:i])
 			n, err := strconv.Atoi(strings.TrimSpace(entry[i+1:]))
 			if err != nil {
-				return nil, fmt.Errorf("--variants entry %q has a count that is not a number; "+
-					"the form is profile or profile:count", entry)
+				// All digits and still unparseable is an overflow, which the per-entry
+				// ceiling below would have refused anyway had it been representable.
+				return nil, fmt.Errorf("--variants entry %q asks for more sessions than a count "+
+					"can hold; one atrium new fans out to at most %d", entry, session.MaxVariantBatch)
 			}
 			count = n
 		}
@@ -239,6 +271,14 @@ func spoolBatch(reqs []outbox.Request) ([]spooledVariant, error) {
 	for _, r := range reqs {
 		record, err := writeCreateRecord(r)
 		if err != nil {
+			// Verbatim for a plain `atrium new`, which is routed through here too and whose
+			// caller passed no --variants: naming a feature they are not using is the whole
+			// of what the wrapper would add for them, and the rest of this function's
+			// vocabulary — a withdrawal, members that may still be created — is unreachable
+			// with one request that failed to be written.
+			if len(reqs) == 1 {
+				return nil, err
+			}
 			errs := []error{fmt.Errorf("failed to queue variant %q: %w", r.Title, err)}
 			return nil, errors.Join(append(errs, withdrawSpooled(members)...)...)
 		}
@@ -324,26 +364,40 @@ func waitForCreates(out io.Writer, members []spooledVariant, repo string, timeou
 	}
 
 	deadline := time.Now().Add(timeout)
-	var failures []error
+	// Two piles, because they are two different things to tell a script. awaitSpool
+	// returning nil means the record and its claim are gone with no receipt: the drain
+	// held that record until Start finished and the row was persisted, so the session
+	// EXISTS. A storedSession failure after that is this process being unable to read back
+	// something it has already established was made — which storedSession's own wording
+	// says — and counting it toward "were not created" tells a caller the opposite of what
+	// is known. A CI job that retries on that message creates a duplicate session and
+	// leaks the first one's worktree and branch. waitForCreate, the singular path, returns
+	// the read-back error verbatim; these two agree now.
+	var uncreated, unread []error
 	for _, member := range members {
 		err := awaitSpool(member.record, outbox.ClaimPath(member.record), time.Until(deadline),
 			batchWaitCopy(member.title, timeout, len(members)))
-		if err == nil {
-			d, storeErr := storedSession(member.title, repo)
-			if storeErr != nil {
-				failures = append(failures, storeErr)
-				continue
-			}
-			_, _ = fmt.Fprintf(out, "created %q%s\n", member.title, createdBranchClause(d))
+		if err != nil {
+			uncreated = append(uncreated, err)
 			continue
 		}
-		failures = append(failures, err)
+		d, storeErr := storedSession(member.title, repo)
+		if storeErr != nil {
+			unread = append(unread, storeErr)
+			continue
+		}
+		_, _ = fmt.Fprintf(out, "created %q%s\n", member.title, createdBranchClause(d))
 	}
-	if len(failures) == 0 {
+	var problems []error
+	if len(uncreated) > 0 {
+		problems = append(problems, fmt.Errorf("%d of %d requested sessions were not created: %w",
+			len(uncreated), len(members), errors.Join(uncreated...)))
+	}
+	problems = append(problems, unread...)
+	if len(problems) == 0 {
 		return nil
 	}
-	return fmt.Errorf("%d of %d requested sessions were not created: %w",
-		len(failures), len(members), errors.Join(failures...))
+	return errors.Join(problems...)
 }
 
 // batchWaitCopy is one member's wording, and it deliberately carries no tally of what the

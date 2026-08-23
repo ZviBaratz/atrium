@@ -355,6 +355,13 @@ func resolveNewProgram(cfg *config.Config, program, profile string) (string, err
 	return "", fmt.Errorf("no profile %q (configured: %s)", profile, strings.Join(names, ", "))
 }
 
+// fansOut reports whether this command line asked for a fan-out. The flag being GIVEN
+// decides, not what it was given, so an explicitly empty --variants reaches
+// parseVariantSpec and is refused there rather than quietly meaning "one session". A
+// non-empty spec answers yes on its own, for a runNew caller that did not come through
+// cobra and has no Changed to read.
+func (r newRequest) fansOut() bool { return r.variantsSet || r.variants != "" }
+
 // checkProgramFlags refuses a command line whose flags disagree about what to run.
 //
 // --variants names several programs, so it excludes the two singular flags. Written by
@@ -366,13 +373,6 @@ func resolveNewProgram(cfg *config.Config, program, profile string) (string, err
 // It runs before anything is loaded or resolved, and that ordering is the point: a caller
 // who passed contradictory flags AND a bad path should hear about the flags, which is the
 // mistake they can see in their own command line.
-// fansOut reports whether this command line asked for a fan-out. The flag being GIVEN
-// decides, not what it was given, so an explicitly empty --variants reaches
-// parseVariantSpec and is refused there rather than quietly meaning "one session". A
-// non-empty spec answers yes on its own, for a runNew caller that did not come through
-// cobra and has no Changed to read.
-func (r newRequest) fansOut() bool { return r.variantsSet || r.variants != "" }
-
 func checkProgramFlags(r newRequest) error {
 	if !r.fansOut() {
 		return nil

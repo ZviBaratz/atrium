@@ -65,6 +65,17 @@ func TestParseVariantSpec(t *testing.T) {
 			// which config.GetProfiles synthesizes on an install with no profiles block —
 			// is still nameable.
 			{"claude --model x:y:3", []variantSpec{{"claude --model x:y", 3}}},
+			// And nameable in the BARE form too, which is the half the last-colon split
+			// alone does not buy: the tail has to look like a count for the colon to be
+			// read as a separator, or the only profile a default install configures is
+			// refused for a count its name merely resembles.
+			{"claude --model x:y", []variantSpec{{"claude --model x:y", 1}}},
+			// The same rule from the other side: a tail that is not digits leaves the
+			// colon in the name, so these are profile names to be looked up rather than
+			// grammar errors. The caller hears about them from the unknown-profile
+			// refusal, which names the entry.
+			{"claude:two", []variantSpec{{"claude:two", 1}}},
+			{"claude:-1", []variantSpec{{"claude:-1", 1}}},
 		} {
 			got, err := parseVariantSpec(tc.raw)
 			require.NoError(t, err, tc.raw)
@@ -78,9 +89,9 @@ func TestParseVariantSpec(t *testing.T) {
 			{"   ", "--variants was given no profiles"},
 			{"claude,,codex", "empty entry"},
 			{"claude:2,", "empty entry"},
-			{"claude:two", `"claude:two"`},
 			{"claude:0", `asks for 0 sessions`},
-			{"claude:-1", `asks for -1 sessions`},
+			// All digits and still unparseable is an overflow, not a name.
+			{"claude:99999999999999999999", "than a count can hold"},
 			{":2", "names no profile"},
 			{"claude:1,claude:2", `names profile "claude" twice`},
 			{fmt.Sprintf("claude:%d", session.MaxVariantBatch+1), "fans out to at most"},
@@ -563,4 +574,70 @@ func TestResetNewFlagsClearsTheVariantsChangedBit(t *testing.T) {
 	assert.Contains(t, err.Error(), `no profile "nope"`,
 		"the next run must be judged on its own argv, not on the flag the last one set")
 	assert.NotContains(t, err.Error(), "--variants")
+}
+
+// TestNewVariantsWaitDoesNotCallAnUnreadableSessionUncreated: awaitSpool returning nil is
+// positive evidence that the session EXISTS — the drain holds a record until Start has
+// finished and the row is persisted, so a record and claim that are gone with no receipt
+// mean it was made. A storedSession failure after that is this process failing to read
+// back something already known to exist, and folding it into "were not created" tells a
+// script the opposite of what is known: it retries, creates a duplicate, and leaks the
+// first session's worktree and branch.
+func TestNewVariantsWaitDoesNotCallAnUnreadableSessionUncreated(t *testing.T) {
+	sandboxDataDir(t)
+	fanOutConfig(t)
+	repo := gitRepoWithBranches(t)
+
+	_, _, err := newSession(t, newRequest{title: "bake", path: repo, variants: "claude:2"})
+	require.NoError(t, err)
+	entries := spooledCreates(t)
+	require.Len(t, entries, 2)
+
+	// Both members settle; only the second gets a row. A state.json this process cannot
+	// read back the first from looks exactly like this from here.
+	drainErr := make(chan error, 1)
+	go func() {
+		drainErr <- func() error {
+			if err := writeInstances(
+				session.InstanceData{Title: "bake-2", Path: repo, Branch: "t/bake-2"}); err != nil {
+				return err
+			}
+			for _, e := range entries {
+				if err := outbox.Remove(e.Path); err != nil {
+					return err
+				}
+			}
+			return nil
+		}()
+	}()
+	require.NoError(t, <-drainErr)
+
+	out, waitErr := runNewWait(t, entries, repo, 2*time.Second)
+	require.Error(t, waitErr, "an outcome this process could not read back is still a failure")
+	assert.Contains(t, out, `created "bake-2" on t/bake-2`)
+	assert.Contains(t, waitErr.Error(), `recorded no session "bake-1"`)
+	assert.NotContains(t, waitErr.Error(), "were not created",
+		"the one thing awaitSpool has already established is that it WAS")
+}
+
+// TestNewSpoolFailureForASingletonNamesNoVariant: runNew routes the one-request plan
+// through spoolBatch too, so its vocabulary reaches a caller who passed no --variants.
+// The rest of it — a withdrawal, members that may still be created — cannot happen with a
+// single request that failed to be written, which leaves the noun as the only thing the
+// wrapper adds for them, pointing at a feature they are not using.
+func TestNewSpoolFailureForASingletonNamesNoVariant(t *testing.T) {
+	sandboxDataDir(t)
+	fanOutConfig(t)
+	repo := gitRepoWithBranches(t)
+
+	write := writeCreateRecord
+	t.Cleanup(func() { writeCreateRecord = write })
+	writeCreateRecord = func(outbox.Request) (string, error) {
+		return "", errors.New("no space left on device")
+	}
+
+	_, _, err := newSession(t, newRequest{title: "fix-auth", path: repo})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no space left on device")
+	assert.NotContains(t, err.Error(), "variant")
 }
