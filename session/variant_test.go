@@ -7,9 +7,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestVariantTitleIsTheSuffixScheme pins the literal shape against literals. It is the
-// one place the <stem>-N spelling is written twice on purpose: everywhere else cites
-// VariantTitle, so a change to the scheme has to come through here.
+// TestVariantTitleIsTheSuffixScheme pins the literal shape against literals: the scheme is
+// written out here so a change to VariantTitle has to come through this file. Production
+// code cites VariantTitle rather than spelling it; other tests build expected titles by
+// hand, which is what makes this the assertion that would catch the change rather than
+// merely fail alongside it.
 func TestVariantTitleIsTheSuffixScheme(t *testing.T) {
 	require.Equal(t, "fix-auth-1", VariantTitle("fix-auth", 1))
 	require.Equal(t, "fix-auth-2", VariantTitle("fix-auth", 2))

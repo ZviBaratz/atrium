@@ -294,8 +294,9 @@ func LookupLocalBranchTip(ctx context.Context, repoPath, branch string) (string,
 // on LookupLocalBranch's terms — never that it has none.
 //
 // One subprocess for the whole question, where the siblings above answer about one name.
-// A caller walking a numbered series for the first free name has up to VariantTitleScan
-// candidates and asks the same unchanging question of each, so per-name lookups cost it a
+// A caller walking a numbered series for the first free name has a scan bound of its own —
+// larger than VariantTitleScan where the batch size is added to it — and asks the same
+// unchanging question of each candidate, so per-name lookups cost it a
 // fork and a gitLocalTimeout apiece; main.planVariantTitles is that caller. A caller with
 // one name in hand should still use LookupLocalBranch, which reads one ref instead of
 // every head.

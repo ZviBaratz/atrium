@@ -10,6 +10,7 @@ package app
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -47,7 +48,7 @@ func refusalFor(t *testing.T, record string) string {
 // TestCreateDrainRefusesAWholeBatchOverTheCap is #761's second criterion, and it is
 // written to fail on a PARTIAL spawn rather than on a wrong verdict.
 //
-// Charged for itself, each member of a three-session batch fits under a cap of two with
+// Charged for itself, each member of a three-session batch fits under a cap of three with
 // one live session — so a per-variant charge creates the first, and the second, and only
 // then refuses. Charged for the batch, none of them is created and all three are
 // answered.
@@ -113,22 +114,32 @@ func TestCreateDrainRefusesAWholeBatchOverTheSoftCap(t *testing.T) {
 	}
 }
 
-// TestCreateDrainForceCrossesTheSoftCapForAWholeBatch is the other half: --force is one
-// answer for the whole batch, so the members that follow the first are not asked again.
+// TestCreateDrainForceCrossesTheSoftCapForAWholeBatch is the positive half of the pair
+// above, and it is only worth anything as a pair: the fixture is deliberately the one
+// TestCreateDrainRefusesAWholeBatchOverTheSoftCap refuses — same host cap, same live
+// session, same batch of three — with --force as the single difference. What that pins is
+// that the batch charge does not turn the soft cap into a refusal --force cannot answer.
+//
+// Every member carries its own Force bit and is gated on its own tick; there is no
+// mechanism by which one answer covers the rest, and an earlier version of this comment
+// claimed one. A smaller fixture cannot pin even this much — with a cap a single member
+// already fits under, a batch charge that had been deleted outright would create all three
+// too, and the test would pass over the bug the pair exists to catch.
 func TestCreateDrainForceCrossesTheSoftCapForAWholeBatch(t *testing.T) {
 	h := drainHome(t)
-	h.hostCap = 1
+	h.hostCap = 3 // soft: max_sessions unset
+	addInstance(t, h, "already-here", t.TempDir())
 	dir := t.TempDir()
-	spoolBatchOf(t, dir, "b1", "bake", 2, true)
+	spoolBatchOf(t, dir, "b1", "bake", 3, true)
 
 	// One member per tick: the start budget is on concurrency, so each has to settle
 	// before the next is gated.
-	require.NotNil(t, h.drainCreateRequests())
-	require.NotNil(t, titled(h, "bake-1"))
-	h.settleCreateRequest(titled(h, "bake-1"), nil)
-
-	require.NotNil(t, h.drainCreateRequests())
-	assert.NotNil(t, titled(h, "bake-2"), "--force answered the cap for the batch, not for a variant")
+	for _, title := range []string{"bake-1", "bake-2", "bake-3"} {
+		require.NotNil(t, h.drainCreateRequests(), title)
+		require.NotNil(t, titled(h, title), "%s was refused a cap --force had answered", title)
+		h.settleCreateRequest(titled(h, title), nil)
+	}
+	assert.Equal(t, 4, h.list.NumInstances())
 }
 
 // TestCreateDrainRefusesOnlyTheMemberAConflictBelongsTo pins the scope of "whole": the
@@ -513,8 +524,10 @@ func TestCreateDrainChargesOneForAnAdoptingGatedMember(t *testing.T) {
 // overwriting that with "the cap was full" would replace a report of real debris with a
 // reason this drain invented for a request it never executed.
 //
-// The mark is on the LAST member, so the walk has not reached it when the head is gated:
-// this is refuseBatchSiblings' own skip under test, not the walk's mark arm.
+// The mark is on the LAST member, so the walk has not reached it when the head is gated,
+// and what keeps it out of the refusal is pendingBatchMembers leaving it out of the list —
+// not the walk's mark arm, and not a second test inside refuseBatchSiblings, which owns no
+// skip but the gated member's.
 func TestCreateDrainBatchRefusalKeepsAMarkedSiblingsAccount(t *testing.T) {
 	h := drainHome(t)
 	limit := 1
@@ -697,4 +710,41 @@ func TestCreateDrainDoesNotHoldABatchStampedInTheFuture(t *testing.T) {
 	require.NotNil(t, h.drainCreateRequests())
 	assert.NotNil(t, titled(h, "bake-1"),
 		"a head the clock cannot place is charged for its real membership, not waited on")
+}
+
+// TestCreateDrainHoldsABatchWithAMemberItCannotJudge: DisclosureMark answers Unknown for
+// any stat error that is not ENOENT — the ESTALE/EIO case a network-backed data dir makes
+// real — and that is neither "no mark" nor a terminal one. The walk holds such a record
+// rather than answering it, so a batch containing one cannot be judged as a whole either.
+//
+// Charged around it, the batch is charged for a PREFIX: two members under a cap of two fit
+// where three would not, so the head is created and the whole-or-nothing gate has created a
+// batch from its head — with the unjudgeable member refused alone once the stat recovers.
+//
+// The mark's own path is a self-referential symlink, which stats ELOOP. No BatchSize or
+// BatchIndex on these records, so the assembly window cannot be what holds them: without
+// this hold the fixture creates a session rather than waiting.
+func TestCreateDrainHoldsABatchWithAMemberItCannotJudge(t *testing.T) {
+	h := drainHome(t)
+	limit := 2
+	h.appConfig.MaxSessions = &limit
+	dir := t.TempDir()
+	var records []string
+	for i := 1; i <= 3; i++ {
+		records = append(records, spoolCreate(t, outbox.Request{
+			Title: fmt.Sprintf("bake-%d", i), Path: dir, Batch: "b1",
+		}))
+	}
+	loop := records[2] + ".disclosure"
+	require.NoError(t, os.Symlink(filepath.Base(loop), loop))
+
+	h.drainCreateRequests()
+
+	assert.Equal(t, 0, h.list.NumInstances(),
+		"a batch with a member nobody can judge is not charged for the rest of it")
+	for _, record := range records[:2] {
+		_, rejected := outbox.Rejection(record)
+		assert.False(t, rejected, "and a hold writes no receipt")
+		assert.FileExists(t, record)
+	}
 }

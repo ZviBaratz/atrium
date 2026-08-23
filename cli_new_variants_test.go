@@ -122,12 +122,19 @@ func TestNewVariantsSpoolsOneRecordPerVariant(t *testing.T) {
 	assert.Equal(t, []string{"bake-1", "bake-2", "bake-3"}, spooledTitles(t))
 
 	var programs []string
-	for _, e := range entries {
+	for i, e := range entries {
 		programs = append(programs, e.Request.Program)
 		assert.Equal(t, repo, e.Request.Path)
 		assert.Equal(t, "main", e.Request.Branch)
 		assert.Equal(t, "start on the parser", e.Request.Prompt)
 		assert.True(t, e.Request.Force)
+		// The only production site that stamps these, and the drain's assembly hold is
+		// built entirely out of them: a batch short of its size that still holds member 1
+		// is one the walk waits for. Every app-side test hand-writes them into its own
+		// fixtures, so without this the line that sets them can be deleted and the whole
+		// suite stays green while the publish race silently reopens.
+		assert.Equal(t, 3, e.Request.BatchSize)
+		assert.Equal(t, i+1, e.Request.BatchIndex, "in variant order, so the head is index 1")
 	}
 	assert.Equal(t, []string{"claude", "claude", "codex --full-auto"}, programs,
 		"programs follow spec order, so title i runs program i")
@@ -554,8 +561,9 @@ func TestSpoolBatchNamesAMemberItCouldNotWithdraw(t *testing.T) {
 // runNew reads the flag through cobra's Changed rather than through its value, because ""
 // is both the default and something a caller can pass. Changed is written during parsing
 // and never cleared, so without this reset the run AFTER any run that passed --variants is
-// a fan-out with an empty spec — it is answered "--variants chooses the programs itself"
-// instead of with its own error, whatever newVariantsFlag holds. Ordinary sequencing in
+// a fan-out with an empty spec — the run below passes --profile, so it is answered
+// "--variants chooses the profiles itself" instead of with its own error, whatever
+// newVariantsFlag holds. Ordinary sequencing in
 // this package reaches it, and -shuffle decides which test pays.
 func TestResetNewFlagsClearsTheVariantsChangedBit(t *testing.T) {
 	sandboxDataDir(t)

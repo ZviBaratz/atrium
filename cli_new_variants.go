@@ -418,7 +418,11 @@ func batchWaitCopy(title string, timeout time.Duration, total int) spoolWaitCopy
 	return spoolWaitCopy{
 		refused: fmt.Sprintf("atrium did not create %q", title),
 		timedOut: func() string {
-			return joinTimedOut(fmt.Sprintf("waited %s without session %q appearing; it is one of %d "+
+			// "this atrium new waited", not "waited": members share ONE deadline, so a
+			// member reached after it has expired is sampled once and waits no time at
+			// all. The duration is the whole invocation's and naming its subject is what
+			// keeps it from reading as this member's own.
+			return joinTimedOut(fmt.Sprintf("this atrium new waited %s without session %q appearing; it is one of %d "+
 				"this atrium new asked for and is still in the outbox — either queued, or being built "+
 				"right now, since a create is held there until its worktree, branch and agent exist. A "+
 				"batch is built one session at a time, so it needs a --wait sized for all of them",

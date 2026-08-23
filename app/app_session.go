@@ -1558,8 +1558,11 @@ const (
 	// owner, not a second copy. The per-profile stepper is bounded separately, but a
 	// multi-profile total is enforced here.
 	maxVariantBatch = session.MaxVariantBatch
-	// variantTitleScan is session.VariantTitleScan under this package's name, for
-	// maxVariantBatch's reason.
+	// variantTitleScan is session.VariantTitleScan under this package's name. Not for
+	// maxVariantBatch's reason — no refusal here interpolates it and no width test
+	// spells it; it is a loop bound in the two suffix searches this package runs, and
+	// the alias is for reading beside its neighbour rather than for anything a test
+	// asserts.
 	variantTitleScan = session.VariantTitleScan
 )
 

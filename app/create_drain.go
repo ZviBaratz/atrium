@@ -165,8 +165,13 @@ const createRecheckBudget = 2
 //
 // It is bounded anyway, at the largest batch this atrium's own `atrium new` can mint.
 // Anything wider was hand-written or came from a build with a different limit, and
-// answering five hundred records inside one Update — a receipt and an unlink apiece,
-// through outbox.Reject — is the freeze createDisposalBudget exists to prevent.
+// answering five hundred records inside one Update is the freeze createDisposalBudget
+// exists to prevent. Priced honestly, that is a DISCLOSURE and then a receipt and an
+// unlink apiece: rejectCreateRequest writes the disclosure unconditionally before it
+// rejects, and each atomic write fsyncs the file and its directory. disposeCreateRequest
+// makes the same argument for the same reason and does count the disclosure ("a
+// disclosure and two fsyncs apiece on top of each receipt"); the two are the same cost
+// and this one used to name half of it.
 //
 // A batch wider than the budget is therefore NOT refused whole, and the honest statement
 // of what happens is the opposite of reassuring: each later tick re-charges the cap for
@@ -180,8 +185,14 @@ const createBatchRefusalBudget = session.MaxVariantBatch
 // createBatchAssemblyWindow is how long a batch may be short of the size its author
 // declared before the drain gates it on what is actually there.
 //
-// It bounds the hold that closes the publish race outbox.Request.BatchSize documents, and
-// every way it can be wrong is a wait rather than a wrong verdict. A batch genuinely still
+// It bounds the hold that closes the publish race outbox.Request.BatchSize documents.
+// Being too LONG is only ever a wait: a batch that will never reach its declared size
+// waits the window out and is then charged for its real membership. Being too SHORT is a
+// wrong verdict, and the window is fixed while the spool it is racing is not — measured
+// from the head's first write, a fan-out whose tail lands later than this (serial atomic
+// writes, two fsyncs each, against a slow or network-backed data dir) is charged for the
+// prefix that had arrived and created from its head, which is the race this exists to
+// close. #786 is where a quiescence-based bound has to answer for it. A batch genuinely still
 // being written finishes inside it by orders of magnitude — a handful of atomic writes
 // against a window measured in seconds. A batch that will never reach its declared size
 // waits this out and is then charged for its real membership: a rollback whose withdrawal
@@ -1110,6 +1121,12 @@ func softCapReason(limit, count, adding int) string {
 // The room is floored at zero: count can exceed limit (a cap lowered under a running
 // fleet, or a soft cap already crossed with --force), and "-2 free" would read as a
 // number the caller could act on.
+//
+// adding is what was CHARGED, and it equals what is answered because pendingBatchMembers
+// builds the list refuseBatchSiblings refuses — with one exception, and it is the one
+// createBatchRefusalBudget already documents: past the budget the later members of an
+// over-wide hand-written batch keep this wording without having been refused alongside
+// anything. Nothing atrium mints reaches it, and #783 owns the ceiling.
 func capRoomClause(limit, count, adding int) string {
 	free := limit - count
 	if free < 0 {

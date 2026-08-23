@@ -61,15 +61,18 @@ var (
 			"plain one would never need. --variants names profiles and chooses what to\n" +
 			"run, so it cannot be combined with --program or --profile.\n\n" +
 			"The session cap is charged to the whole batch: it fits, or it is refused\n" +
-			"whole with a receipt for every member, rather than creating variants until\n" +
-			"the cap closes. The charge is live, so room taken after part of a batch is\n" +
-			"already built leaves the rest refused together, each receipt counting what\n" +
-			"was still queued rather than what was asked for. --force answers the\n" +
-			"host-capacity question for the batch exactly as it does for one session.\n" +
-			"A batch is built one session at a time,\n" +
-			"so --wait over a fan-out has to be sized for all of its builds in series;\n" +
-			"and with no --branch each variant starts from the target's HEAD at its own\n" +
-			"creation time, so pass --branch when the comparison must share a start point.\n\n" +
+			"whole, each member answered with its own receipt, rather than creating\n" +
+			"variants until the cap closes. The charge is live, so room taken after part\n" +
+			"of a batch is already built leaves the rest refused together, and each\n" +
+			"receipt counts what was still queued rather than what was asked for. One\n" +
+			"member is left out of both the count and the refusal: a variant atrium is\n" +
+			"recovering from an interrupted build, which is answered at its own gate\n" +
+			"instead. --force answers the host-capacity question for the batch exactly\n" +
+			"as it does for one session. A batch is built one session at a time, so\n" +
+			"--wait over a fan-out has to be sized for all of its builds in series; and\n" +
+			"with no --branch each variant starts from the target's HEAD at its own\n" +
+			"creation time, so pass --branch when the comparison must share a start\n" +
+			"point.\n\n" +
 			"The first prompt is optional, as it is in the create form. Pass \"-\" to read it\n" +
 			"from stdin, which is what makes a multi-line prompt practical to pipe in; omit\n" +
 			"the argument entirely and the session starts with no prompt at all.",

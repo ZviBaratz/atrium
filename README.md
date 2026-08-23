@@ -258,13 +258,15 @@ and is exactly `--profile claude`.
 Each variant is spooled as an ordinary request carrying its own final title and
 program, sharing one batch id — so every gate, receipt and recovery path treats it
 as the single create it is, and only the session cap reads the batch as a batch. The
-cap is charged for the whole batch: it fits, or it is refused whole with a receipt
-for every member, rather than creating variants until the cap closes. The charge is
-live, so if something else takes the room after part of a batch is already built —
-somebody at the keyboard, another script — the rest is refused together rather than
-trickling in, and each receipt counts what was still queued rather than what was
-asked for. Two things a
-fan-out cannot promise, both because the drain builds one spooled session at a time:
+cap is charged for the whole batch: it fits, or it is refused whole, each member
+answered with its own receipt, rather than creating variants until the cap closes.
+The charge is live, so if something else takes the room after part of a batch is
+already built — somebody at the keyboard, another script — the rest is refused
+together rather than trickling in, and each receipt counts what was still queued
+rather than what was asked for. One member is left out of both the count and the
+refusal: a variant Atrium is recovering from an interrupted build, which is answered
+at its own gate instead. Two things a fan-out cannot promise, both because the drain
+builds one spooled session at a time:
 a `--wait` has to be sized for every build in series, and with no `--branch` each
 variant starts from the target's HEAD at *its own* creation time — so pass
 `--branch` when the comparison depends on a common start point.

@@ -17,19 +17,24 @@ const (
 	// (config.SessionCap: the host-derived soft default or an explicit value) is
 	// enforced separately and is usually the tighter limit.
 	//
-	// Both surfaces enforce it before anything is created: the create form's submit
-	// gate and `atrium new`'s spec parser. The create drain deliberately does not — a
-	// spool record carries no original batch size, only the id its members share, so
-	// the drain's real bound on a batch is the session cap it charges the batch for.
+	// Both creation surfaces enforce it before anything is created: the create form's
+	// submit gate and `atrium new`'s spec parser. The drain does not enforce it as a
+	// ceiling on a batch — a hand-written batch wider than this is charged and refused
+	// like any other, and the session cap is its real bound — but it is not blind to the
+	// size either: outbox.Request.BatchSize records what the invocation committed to the
+	// spool, and app.createBatchRefusalBudget is this constant read as a per-tick bound
+	// on how many members one refusal may answer.
 	MaxVariantBatch = 20
 	// VariantTitleScan bounds how far past the requested count a suffix search probes
 	// for free <stem>-N names, so a repo dense with orphan <stem>-N branches cannot
 	// loop unboundedly. Generous — the common case finds names immediately.
 	//
-	// One number for both searches rather than two: the create form scans the live
-	// instance list and `atrium new` scans the stored one plus the repo's local
-	// branches, and a repo the form calls too dense should not be one the CLI keeps
-	// digging through.
+	// One number for every search rather than one each: the create form scans the live
+	// instance list, `atrium new` scans the stored one plus the repo's local branches,
+	// and the fork path scans for a free `<title>-fork` — and a repo one of them calls
+	// too dense should not be one another keeps digging through. How far past the count
+	// each goes is the caller's own bound, not this one: two of them scan total+this and
+	// the fork scans exactly this.
 	VariantTitleScan = 100
 )
 
@@ -48,11 +53,14 @@ const (
 // what an eye reading the scheme expects and not something a sentence should be trusted
 // to keep saying correctly.
 //
-// One caller checks. main.planVariantTitles terminates its scan on the first over-length
-// candidate and refuses the fan-out; app.planVariantTitles does not check at all, so the
-// create form makes sessions whose titles its own rename field cannot re-enter. That is
-// atrium#784 — a gap, not a division of labour, and the reason this function must not
-// read as though the rule were enforced somewhere on its behalf.
+// One of the three callers named above checks. main.planVariantTitles terminates its scan
+// on the first over-length candidate and refuses the fan-out. app.planVariantTitles does
+// not check at all, so the create form makes sessions whose titles its own rename field
+// cannot re-enter (atrium#784); app.firstFreeTitle does not either, and reaches the same
+// place by a different route, since forkTitleSuffix is itself five runes onto a stem that
+// may already be at the cap (atrium#785). Both are gaps rather than a division of labour,
+// and together they are why this function must not read as though the rule were enforced
+// somewhere on its behalf.
 func VariantTitle(stem string, n int) string {
 	return fmt.Sprintf("%s-%d", stem, n)
 }
