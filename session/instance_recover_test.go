@@ -37,6 +37,15 @@ func newRecordingPtyFactory(t *testing.T, startErr error) *recordingPtyFactory {
 	return f
 }
 
+// setStartErr changes what Start returns from here on, so one fixture can fail a launch
+// and then let the retry through. Taken under the same mutex Start reads the field
+// through: a launch still in flight on another goroutine would otherwise race it.
+func (f *recordingPtyFactory) setStartErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.startErr = err
+}
+
 func (f *recordingPtyFactory) Start(cmd *exec.Cmd) (*os.File, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -269,30 +278,6 @@ func TestRecoverInPlace_FailedRestartDegradesToPaused(t *testing.T) {
 		"recovery must attempt to resume the prior conversation")
 }
 
-// TestRecreateSession_ResumesConversationEvenWhenTheLaunchFails asserts the Resume
-// fallback helper elects StartContinue rather than a blank start, and surfaces the
-// launch failure to Resume's caller.
-//
-// The failing launch is the point: the argv is chosen before the launch is attempted, so
-// a failure must not be able to change which command was carried. This test formerly
-// also asserted that the failure tore the worktree down; that teardown was
-// Worktree.Cleanup, the KILL teardown, and removing it is the fix for #741 —
-// TestRecreateSession_KeepsTheWorktreeWhenTheLaunchFails now owns the outcome.
-func TestRecreateSession_ResumesConversationEvenWhenTheLaunchFails(t *testing.T) {
-	wt := newTestWorktree(t)
-	cfgDir := t.TempDir()
-	writeClaudeTranscript(t, cfgDir, wt.GetWorktreePath())
-	pty := newRecordingPtyFactory(t, fmt.Errorf("pty boom"))
-	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, deadExec())
-	inst := &Instance{Title: "sess", started: true, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
-
-	err := inst.recreateSession()
-
-	require.Error(t, err, "a failed launch must surface an error to Resume's caller")
-	require.Contains(t, pty.commands()[0], "--continue",
-		"the fallback must resume the prior conversation, not start blank")
-}
-
 // TestRecreateSession_StartsBlankWhenNoConversation asserts the Resume fallback
 // helper starts the agent blank (no `--continue`) when no transcript exists for the
 // worktree — the resume path must not abort on a conversation that was never created.
@@ -389,6 +374,12 @@ func TestRecreateSession_KeepsTheWorktreeWhenTheLaunchFails(t *testing.T) {
 	inst := &Instance{Title: "sess", started: true, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
 
 	require.Error(t, inst.recreateSession(), "the failed launch must still surface")
+
+	// Rides along on the one act rather than in a fixture of its own: the argv is elected
+	// before the launch is attempted, so a failure must not change which command it
+	// carried. TestRecreateSession_StartsBlankWhenNoConversation is the negative.
+	require.Contains(t, pty.commands()[0], "--continue",
+		"the fallback must resume the prior conversation, not start blank")
 
 	valid, vErr := wt.IsValidWorktree()
 	require.NoError(t, vErr)

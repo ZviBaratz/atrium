@@ -144,7 +144,7 @@ func newParkedTmuxServer(t *testing.T) *fakeTmuxServer {
 func newParkedTmuxServerFailingLaunch(t *testing.T, startErr error) *fakeTmuxServer {
 	t.Helper()
 	s := newParkedTmuxServer(t)
-	s.pty = newRecordingPtyFactory(t, startErr)
+	s.pty.setStartErr(startErr)
 	return s
 }
 
@@ -455,6 +455,76 @@ func TestResumeKeepsTheBranchWhenTheRelaunchFails(t *testing.T) {
 	require.Equal(t, "unfinished\n", string(onDisk))
 	require.NotEmpty(t, gitOutput(t, wtPath, "status", "--porcelain"),
 		"and it must be PENDING: the unwind soft-reset it out of history, so nothing else is holding it")
+}
+
+// TestTheFakeServerStaysDownWhenTheLaunchFails pins the one fact fakeTmuxServer models
+// that every failing-launch fixture below rests on: a session comes up only if the launch
+// did.
+//
+// Gated on the verb alone, the fake flipped alive on `new-session` BEFORE the pty had
+// answered, so a fixture built to refuse every launch was asserting against a server that
+// claimed the agent was running. Driving that through Resume cannot show it: tmux's own
+// start answers a pty failure by killing any partial session, and the fake's exec forgives
+// that kill by clearing alive again, so the end state is identical either way. The
+// difference exists only at Start, which is why this is asserted here and not through a
+// resume.
+func TestTheFakeServerStaysDownWhenTheLaunchFails(t *testing.T) {
+	srv := newParkedTmuxServerFailingLaunch(t, errors.New("pty boom"))
+	require.False(t, srv.alive.Load(), "a parked server starts with its session already gone")
+
+	// Never run — the fake only inspects the argv.
+	_, err := srv.Start(exec.CommandContext(context.Background(), "tmux", "new-session", "-d", "-s", "sess"))
+
+	require.Error(t, err, "the fixture exists to fail a launch")
+	require.False(t, srv.alive.Load(),
+		"the fake brought a session up for a launch that never happened")
+}
+
+// TestASecondResumeRecoversTheSessionAFailedOneLeft executes the other half of the
+// contract #741 rests on. Leaving the worktree standing is only acceptable because the
+// retry is a plain second Resume, which three separate comments assert and nothing ran —
+// so the divergence between the first attempt and the retry was unmeasured.
+//
+// The retry takes a different path through Resume than the attempt that failed: the
+// worktree is valid now, so Setup, the unwind and the setup script are all skipped. The
+// tip assertion is what proves the skipped unwind is right rather than merely quiet — a
+// second soft reset would land below the real ancestor and eat a genuine commit.
+func TestASecondResumeRecoversTheSessionAFailedOneLeft(t *testing.T) {
+	wt := newTestWorktree(t)
+	repoPath := wt.GetRepoPath()
+	branch := wt.GetBranchName()
+	wtPath := wt.GetWorktreePath()
+
+	require.NoError(t, os.WriteFile(filepath.Join(wtPath, "work.txt"), []byte("hours of it\n"), 0644))
+	require.NoError(t, wt.CommitChanges("feat: the session's whole history"))
+	realSHA := gitOutput(t, repoPath, "rev-parse", branch)
+	require.NoError(t, os.WriteFile(filepath.Join(wtPath, "wip.txt"), []byte("unfinished\n"), 0644))
+	require.NoError(t, wt.CommitChanges(autoMsg("02 Jan 06 15:04 MST")))
+	require.NoError(t, wt.Remove())
+
+	srv := newParkedTmuxServerFailingLaunch(t, errors.New("pty boom"))
+	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", srv, srv.exec())
+	inst := &Instance{Title: "sess", status: Paused, started: true, gitWorktree: wt, tmuxSession: ts}
+
+	require.Error(t, inst.Resume(), "the first attempt must fail, or there is no retry to test")
+	require.True(t, inst.Paused(), "and must leave the session parked, which is what makes a retry possible")
+
+	// Whatever made the launch fail is fixed: a corrected profile, a server that will
+	// take a session now.
+	srv.pty.setStartErr(nil)
+
+	require.NoError(t, inst.Resume(), "the retry must be a plain second Resume, with no rescue in between")
+	require.Equal(t, Running, inst.GetStatus())
+
+	tip, exists := git.BranchTip(context.Background(), repoPath, branch)
+	require.True(t, exists, "the branch must have survived both attempts")
+	require.Equal(t, realSHA, tip,
+		"the retry unwound a second time: the auto-commit was already gone, so this reset ate a real commit")
+	onDisk, rErr := os.ReadFile(filepath.Join(wtPath, "wip.txt"))
+	require.NoError(t, rErr, "the parked work must still be there after the retry")
+	require.Equal(t, "unfinished\n", string(onDisk))
+	require.NotEmpty(t, gitOutput(t, wtPath, "status", "--porcelain"),
+		"and still pending: the retry must not have committed or discarded it")
 }
 
 // TestResumeClosesTheParkedSessionEvenWhenLivenessCannotAnswer pins why that close is

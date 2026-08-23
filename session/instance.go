@@ -1128,14 +1128,18 @@ func (i *Instance) recoverInPlace() bool {
 //
 // That rollback justified itself as undoing the Setup the same call had just run, the
 // contents having come from the branch so that nothing was lost. It is false at every
-// caller. Resume is the only one; the branch is always the session's history rather
-// than something this call created; and by the time the launch is attempted
-// unwindAutoPauseCommits has soft-reset the parked work OUT of that history and into
-// the worktree, so even the gentler pause teardown (Worktree.Remove) would discard it.
+// caller, and Resume is the only one. The half that holds everywhere is ownership: the
+// branch is always the session's history rather than something this call created, so
+// `branch -D` was never this function's to run.
+//
+// On the park that removed the worktree — the ordinary resume — it is worse than
+// unsound, because unwindAutoPauseCommits has by then soft-reset the parked work OUT of
+// history and into the worktree, so even the gentler pause teardown (Worktree.Remove)
+// would discard it. The other paths here reach no unwind at all: a direct session has
+// no worktree, and a park that left one materialized skips the whole block.
 //
 // What a failed launch leaves behind instead is the worktree still on disk, for the
-// callers that have one — a direct session runs in the user's real directory and has
-// none — and that is a state Resume already meets and reuses in place.
+// callers that have one, and that is a state Resume already meets and reuses in place.
 func (i *Instance) recreateSession() error {
 	ts := i.tmux()
 	if err := i.startResuming(ts, i.WorkingDir()); err != nil {

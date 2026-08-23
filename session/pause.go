@@ -572,10 +572,13 @@ func (i *Instance) Resume() error {
 	//     failed to launch the agent. Since #741 that failure tears nothing down, so the
 	//     directory stays for the retry — and that attempt already ran the unwind below.
 	//
-	// The test is therefore the property rather than the list, with one exception that is
-	// disclosed rather than handled: the unwind is best-effort, so an attempt whose
-	// unwind ERRORED and whose launch then failed leaves behind the one auto-commit this
-	// retry will skip instead of re-attempting (#791).
+	// The test is therefore the property rather than the list. What the second population
+	// costs is disclosed rather than handled, and it is one shape rather than two items:
+	// the retry skips this entire block, so ANYTHING in it that failed on the attempt
+	// before is not attempted again (#791). Both halves are best-effort by design — an
+	// unwind that errored leaves its auto-commit in history, and a setup script that
+	// failed or was aborted leaves the worktree half-provisioned — and neither aborts a
+	// resume, which is exactly why neither gets a second chance here.
 	//
 	// Otherwise materialize it fresh, first guarding against the branch being checked
 	// out elsewhere (base repo or a sibling worktree).
@@ -618,14 +621,18 @@ func (i *Instance) Resume() error {
 		// installed — node_modules, a built binary, a generated .env — so "once per new
 		// worktree" is the rule, and this IS a new worktree. Deliberately inside the
 		// !valid branch: a park that left its worktree materialized skips Setup, and
-		// re-running `npm ci` for it would be a cost with nothing to buy.
+		// re-running `npm ci` for it would be a cost with nothing to buy. That is sound
+		// for a park, which never ran this; it is the weaker half for a resume retrying
+		// after a failed launch, which did — and possibly failed at it (#791).
 		i.RunSetupScript(wt.GetWorktreePath())
 	}
 
 	// Relaunch the agent, resuming its prior conversation rather than starting blank —
-	// never reattaching, for the reason the close above carries. A failure returns with
-	// the branch and the worktree untouched (see recreateSession), so the retry is a
-	// second Resume rather than a rescue.
+	// never reattaching, for the reason the close above carries. A failure TEARS NOTHING
+	// DOWN (see recreateSession) — which is not the same as leaving the session as it was
+	// found: the block above has already re-added the worktree and moved the branch tip
+	// back off pause's auto-commit. What survives is every commit and the restored work,
+	// so the retry is a second Resume rather than a rescue.
 	if err := i.recreateSession(); err != nil {
 		return err
 	}
