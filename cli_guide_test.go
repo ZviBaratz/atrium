@@ -213,3 +213,65 @@ func TestGuideFitsEightyColumns(t *testing.T) {
 			"line exceeds the 80-column budget and will reflow: %q", line)
 	}
 }
+
+// TestGuideAdvertisesRegisteredFlags is TestGuideNamesOnlyRegisteredCommands one level down.
+// That guard holds the page to the commands it names; this one holds it to the FLAGS it names,
+// which is the half #781 made load-bearing — the page's title rule now carries an exception
+// (`--variants`) that did not exist when the page was written, and nothing asserted the flag
+// behind it.
+//
+// The gap was not theoretical. A reader working from the page alone cannot tell a flag that
+// ships from one that was planned: `--variants` reads identically either way, and the whole
+// suite stays green for a page promising a flag `newCmd` does not register. An agent finds out
+// by running it and getting `unknown flag`, which is the same build-clean failure
+// TestBriefAdvertisesARegisteredCommand exists to stop one level up.
+//
+// The pairs are written out for TestGuideNamesOnlyRegisteredCommands' reason: a parser deciding
+// what counts as a flag in prose would quietly stop finding any. Inherited with it is that
+// guard's one-directional caveat — a page naming some OTHER unregistered flag still passes — so
+// the list is only as good as its maintenance. `grep -o -- '--[a-z-]*' cli_guide.go` enumerates
+// what the page actually names; --help is every command's and is not listed here.
+func TestGuideAdvertisesRegisteredFlags(t *testing.T) {
+	for _, tc := range []struct {
+		command string
+		flag    string
+	}{
+		{"ls", "json"},
+		{"reap", "kill"},
+		{"new", "branch"},
+		{"new", "variants"},
+	} {
+		t.Run(tc.command+"/"+tc.flag, func(t *testing.T) {
+			require.Contains(t, guidePage, "--"+tc.flag,
+				"the page is expected to name --%s", tc.flag)
+
+			var registered *cobra.Command
+			for _, c := range rootCmd.Commands() {
+				if c.Name() == tc.command {
+					registered = c
+				}
+			}
+			require.NotNil(t, registered, "rootCmd registers no %q command", tc.command)
+
+			f := registered.Flags().Lookup(tc.flag)
+			require.NotNil(t, f, "the page tells an agent to pass --%s to `atrium %s`, "+
+				"which registers no such flag", tc.flag, tc.command)
+			require.False(t, f.Hidden, "the page points an agent at --%s, so `atrium %s --help` "+
+				"must document it", tc.flag, tc.command)
+		})
+	}
+}
+
+// TestGuideDelegationTargetsDocumentTheirFlag is the other half. The page deliberately keeps no
+// rules of its own — "Each command carries its own --help, and that is where the rules live" —
+// so for `--variants` it states the exception and names `atrium new --help` as the owner. That
+// delegation is only worth anything while the owner actually covers it: a Long trimmed back to
+// the single-session story would leave the page pointing an agent at help that never mentions
+// the flag it was sent to read about, and TestGuideAdvertisesRegisteredFlags above would still
+// pass, because the flag itself would still be registered.
+func TestGuideDelegationTargetsDocumentTheirFlag(t *testing.T) {
+	require.Contains(t, guidePage, "`atrium new --help` owns",
+		"the page must name the owner of the --variants rules it declines to state")
+	require.Contains(t, newCmd.Long, "--variants",
+		"the page defers the --variants rules to `atrium new --help`, which does not state them")
+}
