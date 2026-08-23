@@ -55,6 +55,23 @@ const (
 	// TestFitOverlay_DropsTheHeadingBeforeTheCreateButton, which fail if this section
 	// grows a second RENDERED row, and are indifferent to this number.
 	depsSectionLines = 2
+	// collapsedClaudeSectionLines is the height of the ONE section a non-claude form
+	// renders in place of the three above: the shared label row, the single n/a
+	// sentence, and a divider (see renderCollapsedClaudeFields). No blank row —
+	// nothing there can take focus, so there is no hint to reserve room for.
+	//
+	// Unlike its neighbours this is not added to fitRows' chrome, and the omission is
+	// deliberate rather than an oversight. fitRows runs at SetSize; the collapse is
+	// driven by the variant selection and flips long after it, so a chrome figure
+	// that tracked it would be stale exactly when it mattered. Leaving fitRows
+	// budgeting for the three full sections only ever over-reserves, which costs a
+	// picker row on a tall terminal and can never overflow — and the real bound is
+	// fitOverlay's shedding either way, per depsSectionLines above.
+	//
+	// It is live data even so: TestSessionCreateOverlay_{Model,Mode}SectionHeightConstant
+	// compute the rows the collapse recovers from these constants and check the
+	// rendered form against the answer.
+	collapsedClaudeSectionLines = 3
 )
 
 // SetSize is given the full terminal dimensions. The create form keeps every section at a

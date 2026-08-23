@@ -34,8 +34,6 @@ const createFormTitle = "New session"
 // contract (see SetTargetValidity).
 func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.ClaudeAccount, dirCandidates []string, defaultProgram string, linkPaths []string) *TextInputOverlay {
 	ti := newTextarea("")
-	// The prompt is optional and auto-sent to the agent once the session boots, so say so.
-	ti.Placeholder = PromptPlaceholderOptional
 	bp := NewBranchPicker()
 	dp := NewDirectoryPicker(dirCandidates)
 
@@ -133,6 +131,10 @@ func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.Claude
 		focus:           focusRing{stops: stops},
 		isCreateForm:    true,
 		defaultProgram:  defaultProgram,
+		// The prompt is optional and auto-sent to the agent once the session boots,
+		// so say so — at whatever length the terminal affords (see
+		// promptPlaceholderOptionalRungs).
+		promptRungs: promptPlaceholderOptionalRungs,
 	}
 	overlay.syncClaudeFieldsEnabled()
 	overlay.focusStop(stopDirectory)
@@ -302,19 +304,86 @@ func (t *TextInputOverlay) SelectPath(path string) bool {
 // "Optional" while the submit refuses an empty value is the form contradicting
 // itself at the moment the user is deciding whether to type.
 //
-// The field soft-wraps rather than truncating at 80 columns, so the leading word is
-// the one guaranteed to be read. Both start with it.
+// Each is the WIDEST rung of a ladder (see promptPlaceholderRungs) rather than the
+// string the field always shows: the textarea truncates its placeholder at its own
+// width, silently and with no ellipsis, so at the 42 inner cells an 80-col terminal
+// yields this one rendered as "Optional — sent to the agent once it" — losing the
+// parenthetical that is the only thing on the line telling the user how to leave the
+// field (#690). They stay exported and unchanged because they are the placeholder's
+// identity: what SetPromptPlaceholder is given and what PromptPlaceholder reports.
+//
+// An earlier draft of this comment claimed the field "soft-wraps rather than
+// truncating at 80 columns". It does not, at any width — a create-form prompt is one
+// textarea row at the floor and four on a tall terminal, and the placeholder occupies
+// the first row alone, cut to it.
+//
+// Both ladders keep the leading word on every rung: it is the one thing guaranteed to
+// be read, and it is the fact — optional vs required — that the two placeholders
+// exist to distinguish.
 const (
 	PromptPlaceholderOptional = "Optional — sent to the agent once it starts (Enter or Tab to skip)"
 	PromptPlaceholderFork     = "Required — the fork's first turn, asked as it is created"
 )
 
+// promptPlaceholderOptionalRungs / promptPlaceholderForkRungs are those ladders,
+// widest first. The narrowest rung of each fits the 42 cells an 80-col terminal gives
+// the form, and keeps the clause that carries the instruction: for the optional
+// placeholder that is "(Enter or Tab to skip)", which is what #690 found missing and
+// what the shortest rung is built around rather than what it drops.
+//
+// Registered in hintLadders, so TestHintLadders_OrderedWidestFirst and
+// TestHintLadders_NarrowestRungFitsTheFloor hold them to both of those claims.
+var (
+	promptPlaceholderOptionalRungs = []string{
+		PromptPlaceholderOptional,
+		"Optional — sent once it starts (Enter or Tab to skip)",
+		"Optional (Enter or Tab to skip)",
+	}
+	promptPlaceholderForkRungs = []string{
+		PromptPlaceholderFork,
+		"Required — the fork's first turn",
+	}
+)
+
+// promptPlaceholderRungs returns the ladder whose widest rung is s, or a one-rung
+// ladder for anything else.
+//
+// A lookup rather than a parameter because the placeholder crosses a package boundary
+// as a plain string (app/app_fork.go passes PromptPlaceholderFork), and widening that
+// API to carry rungs would export the ladders for one caller's sake. The fallback is
+// what makes an unrecognised placeholder degrade to today's behaviour — shown whole
+// where it fits, ellipsized by fitPlaceholder where it does not — rather than
+// disappearing. TestPromptPlaceholders_EveryExportedOneHasALadder pins that both
+// exported constants are in fact recognised.
+func promptPlaceholderRungs(s string) []string {
+	for _, rungs := range [][]string{promptPlaceholderOptionalRungs, promptPlaceholderForkRungs} {
+		if rungs[0] == s {
+			return rungs
+		}
+	}
+	return []string{s}
+}
+
 // SetPromptPlaceholder replaces what the empty prompt field says about itself. Used
 // by the fork form, whose prompt is required (see PromptPlaceholderFork).
-func (t *TextInputOverlay) SetPromptPlaceholder(s string) { t.textarea.Placeholder = s }
+//
+// It installs the ladder, not the string: compose() picks the rung at the width it
+// has. Assigning textarea.Placeholder here instead would be overwritten on the next
+// render anyway.
+func (t *TextInputOverlay) SetPromptPlaceholder(s string) {
+	t.promptRungs = promptPlaceholderRungs(s)
+}
 
-// PromptPlaceholder is what the empty prompt field currently says about itself.
-func (t *TextInputOverlay) PromptPlaceholder() string { return t.textarea.Placeholder }
+// PromptPlaceholder is what the empty prompt field says about itself, at full length —
+// the ladder's widest rung, not the rung the current width happens to show. Callers
+// ask this to tell the two placeholders apart (see app/app_fork.go), a question the
+// answer must not depend on the terminal for.
+func (t *TextInputOverlay) PromptPlaceholder() string {
+	if len(t.promptRungs) == 0 {
+		return ""
+	}
+	return t.promptRungs[0]
+}
 
 // SetProjectHint sets (or, with "", clears) the transient note rendered beside the
 // project picker — e.g. "detecting…" while smart dispatch routes in the background.

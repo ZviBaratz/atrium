@@ -1,0 +1,24 @@
+╭──────────────────────────────────────────────╮
+│                                              │
+│  New session                                 │
+│                                              │
+│  Project: /repo/a                            │
+│  ──────────────────────────────────────────  │
+│  Base: HEAD (current branch)                 │
+│  ──────────────────────────────────────────  │
+│  Title  name this session        (required)  │
+│  ──────────────────────────────────────────  │
+│  Prompt                                      │
+│  Optional (Enter or Tab to skip)             │
+│  ──────────────────────────────────────────  │
+│  Variants  → 1 session  ↑↓ count             │
+│                                              │
+│   ✻ Claude ×0  |  ≡ Aider ×1                 │
+│  ──────────────────────────────────────────  │
+│  Model · Effort · Permissions                │
+│    n/a — the program is not Claude Code      │
+│  ──────────────────────────────────────────  │
+│  Tab/↑↓ move · ⌃S create · ⌃R clear          │
+│   Create                                     │
+│                                              │
+╰──────────────────────────────────────────────╯

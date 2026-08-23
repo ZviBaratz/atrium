@@ -830,8 +830,15 @@ func TestSessionCreateOverlay_ModelDisabledForNonClaudeProfile(t *testing.T) {
 	assert.Equal(t, "opus", o.GetModel(), "returning to claude restores the override")
 }
 
-// The model section must hold the form's constant-height invariant: same line count
-// whether or not it holds focus, and whether it is enabled or inert.
+// The model section must hold the form's constant-height invariant — same line
+// count whether or not it holds focus — and, when the whole claude block goes
+// inert, must give back exactly the rows the collapse promises.
+//
+// Those are two different claims and only the first is the "no jump" invariant the
+// form is designed around (focus moves on every Tab; the effective program changes
+// when the user deliberately restacks the variants). Until #797 this test asserted
+// the second as an equality too, and that reading is what the nine repeated n/a
+// rows cost: a form that could not get shorter when it had nothing to say.
 func TestSessionCreateOverlay_ModelSectionHeightConstant(t *testing.T) {
 	o := NewSessionCreateOverlay(mixedProfiles, nil, []string{"/repo/a"}, "", nil)
 	o.SetSize(80, 40)
@@ -842,9 +849,22 @@ func TestSessionCreateOverlay_ModelSectionHeightConstant(t *testing.T) {
 	titleFocused := strings.Count(o.Render(), "\n")
 	assert.Equal(t, modelFocused, titleFocused, "overlay height must not change with model focus")
 
-	selectOnlyNonClaude(o) // Claude ×0, Aider ×1 → model field inert
+	selectOnlyNonClaude(o) // Claude ×0, Aider ×1 → the whole claude block collapses
 	disabled := strings.Count(o.Render(), "\n")
-	assert.Equal(t, titleFocused, disabled, "overlay height must not change when the model field is inert")
+	assert.Equal(t, collapsedClaudeRowsSaved(), titleFocused-disabled,
+		"the collapse must recover exactly the rows the section constants account for")
+}
+
+// collapsedClaudeRowsSaved is what renderCollapsedClaudeFields buys, computed from
+// the size constants rather than written down: three full sections replaced by one.
+// A test asserting the number by hand would keep passing if the collapsed block grew
+// a row.
+//
+// Nine on a terminal with room to spare, six at the 80×24 floor — where fitOverlay
+// has already shed the three blank rows before this can save them (#690 measures it
+// there, and TestCreateForm_FloorGoldens renders it).
+func collapsedClaudeRowsSaved() int {
+	return modelSectionLines + effortSectionLines + modeSectionLines - collapsedClaudeSectionLines
 }
 
 // fitOverlay's height pass must compact a too-tall body down to t.height by shedding
@@ -970,8 +990,9 @@ func TestModeFieldChipRowWidth(t *testing.T) {
 	assert.LessOrEqual(t, lipgloss.Width(row), 41, "chip row must fit 42 inner cells")
 }
 
-// The mode section must hold the form's constant-height invariant: same line
-// count whether or not it holds focus, and whether it is enabled or inert.
+// The mode section's half of the same pair — see
+// TestSessionCreateOverlay_ModelSectionHeightConstant for why the inert case is a
+// shrink rather than an equality.
 func TestSessionCreateOverlay_ModeSectionHeightConstant(t *testing.T) {
 	o := NewSessionCreateOverlay(mixedProfiles, nil, []string{"/repo/a"}, "", nil)
 	o.SetSize(80, 40)
@@ -982,9 +1003,10 @@ func TestSessionCreateOverlay_ModeSectionHeightConstant(t *testing.T) {
 	titleFocused := strings.Count(o.Render(), "\n")
 	assert.Equal(t, modeFocused, titleFocused, "overlay height must not change with mode focus")
 
-	selectOnlyNonClaude(o) // Claude ×0, Aider ×1 → mode field inert
+	selectOnlyNonClaude(o) // Claude ×0, Aider ×1 → the whole claude block collapses
 	disabled := strings.Count(o.Render(), "\n")
-	assert.Equal(t, titleFocused, disabled, "overlay height must not change when the mode field is inert")
+	assert.Equal(t, collapsedClaudeRowsSaved(), titleFocused-disabled,
+		"the collapse must recover exactly the rows the section constants account for")
 }
 
 // Every claude-form configuration must fit an 80×24 terminal — including the

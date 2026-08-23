@@ -51,6 +51,11 @@ type TextInputOverlay struct {
 	// is a dumb view: the app layer computes the verdict (live on keystrokes/path
 	// changes, and again at submit) and pushes it in via SetTitleError. Empty = none.
 	titleError string
+	// promptRungs is the width ladder the prompt textarea's placeholder is fitted
+	// from at compose time (see promptPlaceholderRungs, fitPlaceholder). Its widest
+	// rung is the placeholder's identity — what PromptPlaceholder() reports and what
+	// SetPromptPlaceholder is given. Empty on the overlays that have no placeholder.
+	promptRungs []string
 }
 
 // NewTextInputOverlay creates a new text input overlay with the given title and initial value.

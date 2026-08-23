@@ -196,6 +196,14 @@ func (t *TextInputOverlay) compose() (content string, innerWidth int, divider st
 	// Set component widths to fit within the overlay. The title input's width is
 	// owned by renderCreateForm, which carves the verdict suffix out of it.
 	t.textarea.SetWidth(innerWidth)
+	// The placeholder is picked here, not at SetSize, because this is where the
+	// budget is: the textarea's usable text width is exactly innerWidth (measured —
+	// a placeholder of innerWidth cells renders whole, one more is cut), and
+	// innerWidth is computed two lines up. Assigning every compose is what keeps a
+	// resize from leaving a rung the new width no longer affords.
+	if len(t.promptRungs) > 0 {
+		t.textarea.Placeholder = fitPlaceholder(innerWidth, t.promptRungs...)
+	}
 
 	// Build a horizontal divider line
 	divider = tiDividerStyle().Render(strings.Repeat("─", innerWidth))
@@ -379,14 +387,18 @@ func (t *TextInputOverlay) renderCreateForm(divider string) string {
 	if t.variantPicker != nil {
 		section(t.variantPicker.Render())
 	}
-	if t.modelField != nil {
-		section(t.modelField.Render())
-	}
-	if t.effortField != nil {
-		section(t.effortField.Render())
-	}
-	if t.modeField != nil {
-		section(t.modeField.Render())
+	if t.claudeFieldsCollapsed() {
+		section(renderCollapsedClaudeFields())
+	} else {
+		if t.modelField != nil {
+			section(t.modelField.Render())
+		}
+		if t.effortField != nil {
+			section(t.effortField.Render())
+		}
+		if t.modeField != nil {
+			section(t.modeField.Render())
+		}
 	}
 	if t.hasAccountSection() {
 		section(t.accountPicker.Render())
@@ -414,6 +426,20 @@ func (t *TextInputOverlay) renderCreateForm(divider string) string {
 	b.WriteString(t.renderEnterButton())
 
 	return b.String()
+}
+
+// renderCollapsedClaudeFields renders the two-row block a non-Claude form shows
+// in place of Model, Effort and Permissions: the three labels on one line, then
+// the single claudeFieldNA sentence they used to render one each.
+//
+// Two rows, not three-plus-a-blank. The live fields spend a blank row on a
+// constant-height hint that only a focused field fills (see ModeField.Render);
+// none of these three can take focus while they are inert (stopEnabled skips
+// them), so there is no hint to reserve room for and nothing here changes with
+// focus — the form's height still does not move as Tab walks it.
+func renderCollapsedClaudeFields() string {
+	return mfLabelStyle().Render(collapsedClaudeLabel) + "\n" +
+		mfDimStyle().Render(claudeFieldNA)
 }
 
 // renderEnterButton renders the submit button, highlighted when it holds focus.

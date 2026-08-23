@@ -26,6 +26,11 @@ type EffortField struct {
 	chipRow
 }
 
+// effortLabel is the field's label. A const rather than a literal because the
+// collapsed n/a line names all three claude fields (see collapsedClaudeLabel) and
+// a label spelled twice is a label that can drift.
+const effortLabel = "Effort"
+
 // NewEffortField builds the effort field, starting on the no-op chip.
 func NewEffortField() *EffortField {
 	return &EffortField{chipRow{
@@ -52,7 +57,7 @@ func (f *EffortField) Value() string { return f.selected() }
 // placeholder instead, mirroring the model and mode fields' inert state.
 func (f *EffortField) Render() string {
 	var s strings.Builder
-	s.WriteString(mfLabelStyle().Render("Effort"))
+	s.WriteString(mfLabelStyle().Render(effortLabel))
 	if f.disabled {
 		s.WriteString("\n\n")
 		s.WriteString(mfDimStyle().Render(claudeFieldNA))
