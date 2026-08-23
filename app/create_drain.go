@@ -914,7 +914,7 @@ func (m *home) pendingBatchMembers(
 // pending members it refuses the first, then charged for two it refuses the second, and
 // then charged for one the third fits in the room the other two did not take.
 //
-// Two members are skipped, and both skips are about not destroying something:
+// One member is skipped, and the skip is about not destroying something:
 //
 //   - one carrying Adopt. Refusing an adopting request is destructive beyond the record
 //     (see rejectCreateRequest): its worktree registration has already been released, and
@@ -930,30 +930,28 @@ func (m *home) pendingBatchMembers(
 //     member's own charge, and #782 is where it is recorded rather than left to be
 //     discovered.
 //
-//   - one that already carries a terminal mark. Whoever gave up on it wrote the account
-//     of what it left behind, and re-writing that from a request this drain never
-//     executed would replace it with less — the same argument the walk's own mark arm
-//     makes. pendingBatchMembers has already dropped these from the count; the stat here
-//     is a re-read, because executeCreateRequest runs git between the two and a mark can
-//     land in that window.
+// A member carrying a terminal mark, and one this walk already answered, are skipped too
+// — but not here. pendingBatchMembers excludes both before this list is built, so
+// re-checking them here is unreachable rather than defensive: a per-data-dir flock allows
+// one TUI, and this process is inside executeCreateRequest between the two calls, so
+// nothing else can write a mark in that window. Both guards were written here as well and
+// both survived mutation, each masked by the other; the count is the one that has to be
+// right, since it decides what the cap is charged for, so the count owns the rule and this
+// reads what it was handed.
 //
-// answeredInBatch is the caller's record of what this walk has already dealt with, read
-// as well as written: a member the walk disposed of earlier is still in the listing this
-// fan-out was built from, and a sibling refused here is still in the listing the walk has
-// yet to reach. Neither may be judged twice.
+// answeredInBatch is still WRITTEN here, and that half is load-bearing: every sibling
+// refused below is still in the listing the walk has yet to reach, and it must not be
+// judged a second time.
 func (m *home) refuseBatchSiblings(
 	sibs []outbox.CreateEntry, gated, reason string, answeredInBatch map[string]bool,
 ) int {
 	answered := 0
 	for _, sib := range sibs {
-		if sib.Path == gated || sib.Request.Adopt || answeredInBatch[sib.Path] {
+		if sib.Path == gated || sib.Request.Adopt {
 			continue
 		}
 		if answered >= createBatchRefusalBudget {
 			break
-		}
-		if outbox.DisclosureMark(sib.Path) != outbox.NoDisclosure {
-			continue
 		}
 		// Recorded before the refusal rather than after it: what the caller must not do is
 		// reach this entry again from the listing it is walking, and a discard that fails
