@@ -10,6 +10,8 @@ package app
 
 import (
 	"fmt"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -602,4 +604,97 @@ func TestCreateDrainDoesNotChargeForAMemberItDroppedThisTick(t *testing.T) {
 		"charged for the two members still pending the batch fits; charged for three it does not")
 	_, rejected := outbox.Rejection(records[1])
 	assert.False(t, rejected)
+}
+
+// TestCreateDrainDoesNotChargeTheCapForAnAdoptingSibling: the charge and the refusal have
+// to describe the same members. refuseBatchSiblings cannot answer an adopting member —
+// refusing one spends a one-shot recovery — so counting it charges the cap for a member
+// that is not refused with the batch, and is then admitted alone on its own tick.
+//
+// A cap of two with one live session is the arithmetic that tells them apart: charged for
+// the pending member alone the plain head fits, charged for the batch it does not. Refused,
+// it is destroyed and unlinked while the member its charge was for goes on to be created.
+func TestCreateDrainDoesNotChargeTheCapForAnAdoptingSibling(t *testing.T) {
+	h := drainHome(t)
+	limit := 2
+	h.appConfig.MaxSessions = &limit
+	addInstance(t, h, "already-here", t.TempDir())
+
+	dir := t.TempDir()
+	plain := spoolCreate(t, outbox.Request{Title: "bake-1", Path: dir, Batch: "b1"})
+	spoolCreate(t, outbox.Request{
+		Title: "bake-2", Path: dir, Batch: "b1", Adopt: true, AdoptTip: "deadbeef",
+	})
+
+	require.NotNil(t, h.drainCreateRequests())
+	assert.NotNil(t, titled(h, "bake-1"),
+		"charged for the members that can be refused, the head fits in the room left")
+	reason, rejected := outbox.Rejection(plain)
+	assert.False(t, rejected, "so it is not destroyed for a sibling nobody will refuse: %s", reason)
+}
+
+// TestCreateDrainChargesOneForAGatedAdoptionWhosePinIsGone: the exception for an adopting
+// member is about the record on disk, not about the copy the walk has been editing.
+//
+// recheckAdoption clears req.Adopt in place when the pin no longer holds, and that happens
+// ABOVE the batch charge — so a copy-reading test of "is this member adopting" answers no
+// for the one member whose refusal is still destructive. Its worktree registration was
+// released before the crash that re-queued it, and rejectCreateRequest spends the single
+// recovery whether or not the pin survived.
+func TestCreateDrainChargesOneForAGatedAdoptionWhosePinIsGone(t *testing.T) {
+	h := drainHome(t)
+	limit := 2
+	h.appConfig.MaxSessions = &limit
+	addInstance(t, h, "already-here", t.TempDir())
+
+	repo := gitRepoWithBranch(t, "") // the pinned branch was deleted by hand
+	req := adoptedRequest(t, h, "bake-1", repo)
+	req.AdoptTip, req.Batch = strings.Repeat("0", 40), "b1"
+	head := spoolCreate(t, req)
+	spoolCreate(t, outbox.Request{Title: "bake-2", Path: repo, Batch: "b1"})
+
+	require.NotNil(t, h.drainCreateRequests())
+	assert.NotNil(t, titled(h, "bake-1"),
+		"charged for itself the withdrawn adoption fits; charged for its batch it would not")
+	reason, rejected := outbox.Rejection(head)
+	assert.False(t, rejected, "and its one recovery is not spent on a cap it never crossed: %s", reason)
+}
+
+// TestPendingBatchMembersAlwaysCountsTheGatedMember pins the count's floor as a property of
+// how the list is BUILT, because the alternative is an accept path past a hard cap.
+//
+// capVerdict tests count+adding <= Limit, so an adding of zero allows at exactly the cap —
+// the one verdict hardCapMessage tells the caller exists nowhere. The gated member reaches
+// the charge having already been judged by the walk; every filter here is a SECOND answer
+// about it, and any of them disagreeing empties its batch. This one is handed a gated entry
+// that fails all of them at once.
+func TestPendingBatchMembersAlwaysCountsTheGatedMember(t *testing.T) {
+	h := drainHome(t)
+	gated := filepath.Join(t.TempDir(), "0000000000000000001-ab.json")
+	// A zero CreatedAt is past every TTL, so this entry is expired, poisoned and already
+	// answered — three of the four exclusions, without touching the disk for the fourth.
+	entries := []outbox.CreateEntry{{Path: gated, Request: outbox.Request{Title: "bake-1", Batch: "b1"}}}
+	h.outboxPoisoned = map[string]bool{gated: true}
+
+	members, unreadable := h.pendingBatchMembers(
+		entries, "b1", gated, time.Now(), map[string]bool{gated: true})
+
+	require.Len(t, members, 1, "the gated member is counted whatever a re-judgement says")
+	assert.Equal(t, gated, members[0].Path)
+	assert.False(t, unreadable, "and it is not the member the batch cannot judge")
+}
+
+// TestCreateDrainDoesNotHoldABatchStampedInTheFuture: now.Sub is signed, so a head stamped
+// ahead of this clock satisfies "younger than the window" for as long as it stays ahead —
+// while Request.Expired, the same difference against the TTL, stays false for exactly as
+// long. The hold is a continue above every disposal arm, so together they are a record that
+// gets no session, no receipt and no verdict from this launch or any later one.
+func TestCreateDrainDoesNotHoldABatchStampedInTheFuture(t *testing.T) {
+	h := drainHome(t)
+	dir := t.TempDir()
+	spoolBatchMembers(t, dir, "b1", "bake", 3, time.Now().Add(time.Hour), 1)
+
+	require.NotNil(t, h.drainCreateRequests())
+	assert.NotNil(t, titled(h, "bake-1"),
+		"a head the clock cannot place is charged for its real membership, not waited on")
 }

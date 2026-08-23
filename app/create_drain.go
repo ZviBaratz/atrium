@@ -228,6 +228,18 @@ func batchStillAssembling(sibs []outbox.CreateEntry, now time.Time) bool {
 	if head.BatchIndex != 1 || head.BatchSize <= len(sibs) {
 		return false
 	}
+	// A head stamped AHEAD of this clock is not assembling, and the explicit test is what
+	// keeps the window a window. now.Sub is a signed difference, so a future timestamp
+	// satisfies "< the window" for as long as it stays in the future, while Request.Expired
+	// — a difference the same way round, against the TTL — stays false for exactly as long.
+	// The two together are a record that is held above every disposal arm and can never age
+	// out of the hold: no session, no receipt, no verdict, and `atrium reset` the only exit.
+	// A data dir shared with a host whose clock runs fast reaches it without anything being
+	// corrupt. Read as not-assembling, it is charged for its real membership instead, which
+	// is the ordinary wrong-value outcome the window is documented to degrade to.
+	if now.Before(head.CreatedAt) {
+		return false
+	}
 	return now.Sub(head.CreatedAt) < createBatchAssemblyWindow
 }
 
@@ -372,6 +384,10 @@ func (m *home) drainCreateRequests() tea.Cmd {
 	// The batch members a cap refusal has already answered on this tick, so the rest of
 	// the walk does not re-judge them from the listing it was handed before the refusal.
 	answeredInBatch := map[string]bool{}
+	// Batches this tick has decided to wait for, keyed by batch id. A memo and nothing
+	// more — see the batch arm in the walk for why recomputing it per member is quadratic
+	// in the size of the spool.
+	heldBatches := map[string]bool{}
 
 	for i, e := range entries {
 		// Nothing more can be gated (so nothing more can be started or refused) and
@@ -670,17 +686,46 @@ func (m *home) drainCreateRequests() tea.Cmd {
 			// the trade the sibling skip already makes and which #782 records.
 			adding := 1
 			var sibs []outbox.CreateEntry
-			if req.Batch != "" && !req.Adopt {
-				sibs = m.pendingBatchMembers(entries, req.Batch, now, answeredInBatch)
-				adding = len(sibs)
+			// e.Request.Adopt rather than req.Adopt, and the two differ exactly where it
+			// matters. req is a copy the adoptionGone arm above has already written
+			// req.Adopt = false into, so reading it here asks "is this member adopting
+			// NOW", and the answer for a re-queued adoption whose pin has since gone is
+			// no — handing the whole-batch charge to the one member whose refusal spends a
+			// one-shot recovery. The record on disk is what the exception is about, it is
+			// what refuseBatchSiblings reads for a sibling, and reading it here is what
+			// makes the two the same test rather than two tests that agree by inspection.
+			if req.Batch != "" && !e.Request.Adopt {
 				// Held rather than gated, and held before the gate is charged: no git
 				// ran, no budget was spent and nothing was decided, so the next tick
 				// judges this member against a batch that has finished arriving. The
 				// alternative is to charge the cap for a fraction of a batch, which is
 				// precisely how a whole-or-nothing gate creates one from the head.
-				if batchStillAssembling(sibs, now) {
+				//
+				// Remembered per batch for the rest of the tick, because a hold is the one
+				// verdict that does not spend the gate budget: without this every later
+				// member of a held batch re-walks the whole listing and re-stats every
+				// sibling, which is a quadratic in the size of the spool run synchronously
+				// on the update goroutine and charged to no budget at all. The answer is
+				// the same for every member of one batch on one tick by construction —
+				// batchStillAssembling is about the batch, and now does not move — so the
+				// memo cannot say anything the recomputation would not have.
+				if heldBatches[req.Batch] {
 					continue
 				}
+				members, unreadable := m.pendingBatchMembers(entries, req.Batch, e.Path, now, answeredInBatch)
+				// A member whose mark could not be stat'd is neither counted nor refusable,
+				// and the batch cannot be judged as a whole while one of its members cannot
+				// be judged at all. Charging around it under-counts, and an under-counted
+				// batch is created from its head — the exact partial spawn the charge
+				// exists to prevent — so the whole batch waits on the same terms the walk
+				// gives that member on its own account. Bounded by the record's TTL: past
+				// it the disposal arm answers it and it leaves the batch.
+				if unreadable || batchStillAssembling(members, now) {
+					heldBatches[req.Batch] = true
+					continue
+				}
+				sibs = members
+				adding = len(sibs)
 			}
 			gated++
 			inst, cmd, verdict := m.executeCreateRequest(req, adding)
@@ -845,12 +890,18 @@ func (m *home) stagedSpawnPlan() bool {
 	return m.pendingOverCap != nil || m.pendingExhausted != nil
 }
 
-// pendingBatchMembers returns the entries of this tick's listing that belong to batch
-// id and are still awaiting a verdict, including the one being gated — so the count is
-// never zero and an ordinary request is never charged as a batch of none.
+// pendingBatchMembers returns the entries of this tick's listing that belong to batch id
+// and are both still awaiting a verdict and refusable, plus whether the batch has a member
+// this could not judge at all.
 //
-// Three kinds of entry are in the listing and are not going to become sessions, and
-// counting one charges the cap for a session nobody will ever create:
+// The gated member is in the list by construction rather than by passing the filters a
+// second time, so the count has a floor of one and an ordinary request is never charged as
+// a batch of none. That floor is load-bearing rather than tidy: capVerdict tests
+// count+adding <= Limit, so an adding of zero is an ACCEPT at exactly a hard cap — the one
+// verdict hardCapMessage tells the caller exists nowhere.
+//
+// Five kinds of entry are in the listing and are not members this batch is about to add,
+// and counting one charges the cap for a session nobody will create:
 //
 //   - an undecodable record, which has no Batch to read at all and is therefore
 //     invisible here rather than excluded. That is the one direction this cannot fix: a
@@ -858,51 +909,76 @@ func (m *home) stagedSpawnPlan() bool {
 //     for four and creates four. The disposal arm answers that member with a receipt,
 //     so the caller is told; the batch is simply smaller than it asked to be.
 //   - an expired one, which this tick's disposal arm is about to discard.
-//   - a poisoned one, whose session is already being built and already counts toward
-//     capCount. Poisoning lasts for the life of the process, so counting one would
-//     over-charge every later member of that batch on every tick until the TTL.
-//
-// Two more are excluded for the same reason, and both cost a lookup rather than being
-// read off the entry:
-//
+//   - a poisoned one. Both of poisoning's writers reach this, and they are not the same
+//     event: claimCreateRequest poisons a record whose session is already being built and
+//     already counts toward capCount, while discardSpoolFile poisons one whose refusal or
+//     disposal could not be unlinked, where no session exists and nothing counts toward
+//     anything. The exclusion is right for both — neither is a session this batch is about
+//     to add — so do not narrow this to the capCount reason on the strength of the first.
 //   - one this walk has already answered, which is still in the listing because the
 //     listing was taken before the walk began.
 //   - one carrying a terminal mark, which an earlier tick or an earlier process gave up
 //     on and whose caller has already been told.
+//   - one carrying Adopt, which refuseBatchSiblings cannot answer.
 //
-// Statting for the mark is not the extravagance an earlier version of this comment
-// called it: it is a read per member of ONE batch, on the one tick that batch is gated,
-// not a read per record on every walk. It buys the thing the count and the refusal have
-// to agree about — refuseBatchSiblings skips exactly these, so counting them would
-// charge the cap for members it will not answer, and leave the log announcing a fan-out
-// wider than the one it made.
+// That set is exactly what refuseBatchSiblings skips, and the agreement is the point
+// rather than a coincidence worth noting: the count decides what the cap is charged for
+// and the skip decides who is answered for it, so a member in one and not the other is
+// charged for and then not refused. It is then the only member of its batch left pending,
+// is charged as a batch of one on its own tick, and is admitted into room the cap has just
+// destroyed its siblings to protect. Adopt is where that stops being theoretical, because
+// refusing an adopting request spends a one-shot recovery and so cannot be done from here
+// at all.
+//
+// unreadable is the member this cannot classify at all: a mark whose stat failed with
+// something other than ENOENT, which is neither "no mark" nor a terminal one. The walk
+// holds such a record rather than answering it, and a batch containing one is not
+// under-counted so much as unjudgeable — the caller waits, on the same TTL the walk's own
+// hold runs on, rather than charging a cap around a member that may still become a
+// session.
+//
+// The mark stat is a read per member of ONE batch on the ticks that batch is gated, not a
+// read per record on every walk — and the caller memoises a hold, so a batch that is
+// waiting is not re-walked once per member of it.
 //
 // Over-counting is not the safe direction, either, whatever a gate's usual arithmetic
-// says. The refusal this count produces is destructive — a receipt written and the
-// record unlinked, per rejectCreateRequest — so charging for a member nobody will create
-// does not withhold a session, it destroys a request that had room for one. #701 is the
-// entry for that shape: a false-positive gate whose abort is destructive is not
-// conservative.
+// says. The refusal this count produces is destructive — a receipt written and the record
+// unlinked, per rejectCreateRequest — so charging for a member nobody will create does not
+// withhold a session, it destroys a request that had room for one. #701 is the entry for
+// that shape: a false-positive gate whose abort is destructive is not conservative.
 func (m *home) pendingBatchMembers(
-	entries []outbox.CreateEntry, id string, now time.Time, answered map[string]bool,
-) []outbox.CreateEntry {
+	entries []outbox.CreateEntry, id, gated string, now time.Time, answered map[string]bool,
+) (members []outbox.CreateEntry, unreadable bool) {
 	if id == "" {
-		return nil
+		return nil, false
 	}
-	members := make([]outbox.CreateEntry, 0, len(entries))
+	members = make([]outbox.CreateEntry, 0, len(entries))
 	for _, e := range entries {
 		if e.Err != nil || e.Request.Batch != id {
+			continue
+		}
+		if e.Path == gated {
+			// Counted without being re-judged, which is what makes the count's floor a
+			// property of how this list is built rather than a check someone has to keep.
+			// The walk established this member's age, its poisoning and its mark before it
+			// reached the gate; asking again can only produce a SECOND answer, and a second
+			// answer that disagrees drops the gated member from its own batch.
+			members = append(members, e)
 			continue
 		}
 		if e.Request.Expired(now) || m.outboxPoisoned[e.Path] || answered[e.Path] {
 			continue
 		}
-		if outbox.DisclosureMark(e.Path) != outbox.NoDisclosure {
+		if e.Request.Adopt {
+			continue
+		}
+		if mark := outbox.DisclosureMark(e.Path); mark != outbox.NoDisclosure {
+			unreadable = unreadable || mark == outbox.DisclosureUnknown
 			continue
 		}
 		members = append(members, e)
 	}
-	return members
+	return members, unreadable
 }
 
 // refuseBatchSiblings answers every other pending member of a batch the session cap has
@@ -914,40 +990,34 @@ func (m *home) pendingBatchMembers(
 // pending members it refuses the first, then charged for two it refuses the second, and
 // then charged for one the third fits in the room the other two did not take.
 //
-// One member is skipped, and the skip is about not destroying something:
+// This refuses everything it is handed but the gated member, and that is not a simpler
+// rule than the one it replaced — it is the same rule kept in one place. pendingBatchMembers
+// builds the list, and what it leaves out (a terminal mark, a member this walk already
+// answered, one carrying Adopt) is exactly what must not be refused here. Re-testing any of
+// it would be re-deriving a decision rather than defending against one: the count and the
+// refusal describe the same members BECAUSE they are the same list, so a member that is
+// charged for is answered and a member that is not answered was never charged for. Guards
+// written here as well have twice survived mutation, each masked by the list already being
+// right; the count is the half that has to be, since it decides what the cap is charged
+// for.
 //
-//   - one carrying Adopt. Refusing an adopting request is destructive beyond the record
-//     (see rejectCreateRequest): its worktree registration has already been released, and
-//     the recovery is one-shot. The gated member's own path re-checks the pin before it
-//     refuses; a sibling reached from here has not, so it is left for its own gate, where
-//     recheckAdoption runs with the evidence in hand.
+// What the Adopt exclusion does NOT buy is a later refusal. On its own tick the adopting
+// member is the only member of its batch still pending, so it is charged as a batch of one
+// and a cap that blocked N can admit it — one session out of a batch whose every receipt
+// says its members were refused together, with a hole in its numbering. That is the price
+// of not spending a one-shot recovery (see rejectCreateRequest), it is paid identically at
+// the gated member's own charge, and #782 is where it is recorded rather than left to be
+// discovered.
 //
-//     What that skip does NOT buy is a later refusal. On its own tick the adopting
-//     sibling is the only member of its batch still pending, so it is charged as a batch
-//     of one and a cap that blocked N can admit it — one session out of a batch whose
-//     every receipt says it was refused whole, with a hole in its numbering. That is the
-//     price of not spending a one-shot recovery, it is paid the same way at the gated
-//     member's own charge, and #782 is where it is recorded rather than left to be
-//     discovered.
-//
-// A member carrying a terminal mark, and one this walk already answered, are skipped too
-// — but not here. pendingBatchMembers excludes both before this list is built, so
-// re-checking them here is unreachable rather than defensive: a per-data-dir flock allows
-// one TUI, and this process is inside executeCreateRequest between the two calls, so
-// nothing else can write a mark in that window. Both guards were written here as well and
-// both survived mutation, each masked by the other; the count is the one that has to be
-// right, since it decides what the cap is charged for, so the count owns the rule and this
-// reads what it was handed.
-//
-// answeredInBatch is still WRITTEN here, and that half is load-bearing: every sibling
-// refused below is still in the listing the walk has yet to reach, and it must not be
-// judged a second time.
+// answeredInBatch is WRITTEN here, and that half is load-bearing: every sibling refused
+// below is still in the listing the walk has yet to reach, and it must not be judged a
+// second time.
 func (m *home) refuseBatchSiblings(
 	sibs []outbox.CreateEntry, gated, reason string, answeredInBatch map[string]bool,
 ) int {
 	answered := 0
 	for _, sib := range sibs {
-		if sib.Path == gated || sib.Request.Adopt {
+		if sib.Path == gated {
 			continue
 		}
 		if answered >= createBatchRefusalBudget {
