@@ -297,7 +297,7 @@ var paletteGates = map[keys.KeyName]paletteGate{
 	}),
 
 	keys.KeyCopyBranch: needsSelection(func(inst *session.Instance) string {
-		if inst.Branch == "" {
+		if inst.Branch() == "" {
 			return noBranchReason
 		}
 		return ""

@@ -25,7 +25,7 @@ func renderRow(t *testing.T, branch string, stats *git.DiffStats) string {
 	r.setWidth(80)
 	inst, err := session.NewInstance(session.InstanceOptions{Title: "t", Path: ".", Program: "echo"})
 	require.NoError(t, err)
-	inst.Branch = branch
+	inst.SetBranch(branch)
 	inst.SetDiffStats(stats)
 	return r.Render(inst, 1, false, false)
 }
@@ -94,7 +94,7 @@ func TestRender_DirectSessionShowsMarkerNotBranch(t *testing.T) {
 	// visible name; give this session a distinct label so its branch renders.
 	gitInst, err := session.NewInstance(session.InstanceOptions{Title: "g", Path: ".", Program: "echo"})
 	require.NoError(t, err)
-	gitInst.Branch = "zvi/feature"
+	gitInst.SetBranch("zvi/feature")
 	gitInst.SetDisplayName("Some Label")
 	require.Contains(t, r.Render(gitInst, 1, false, false), "zvi/feature",
 		"a label-renamed git session row shows its branch name")
@@ -118,7 +118,7 @@ func TestRender_StripsConfiguredBranchPrefix(t *testing.T) {
 	// from the title here.
 	inst, err := session.NewInstance(session.InstanceOptions{Title: "t", Path: ".", Program: "echo"})
 	require.NoError(t, err)
-	inst.Branch = "zvi/session-row-redesign"
+	inst.SetBranch("zvi/session-row-redesign")
 	inst.SetDisplayName("Row redesign")
 	out := r.Render(inst, 1, false, false)
 	require.Contains(t, out, "session-row-redesign", "the distinguishing branch part still renders")
@@ -128,7 +128,7 @@ func TestRender_StripsConfiguredBranchPrefix(t *testing.T) {
 	// configured "zvi/" is removed, not any first path segment.
 	other, err := session.NewInstance(session.InstanceOptions{Title: "o", Path: ".", Program: "echo"})
 	require.NoError(t, err)
-	other.Branch = "feature/login"
+	other.SetBranch("feature/login")
 	other.SetDisplayName("Login work")
 	require.Contains(t, r.Render(other, 1, false, false), "feature/login",
 		"a non-matching namespace is left intact")
@@ -145,7 +145,7 @@ func TestRender_GitRowOmitsAgeDirectKeepsIt(t *testing.T) {
 
 	gitInst, err := session.NewInstance(session.InstanceOptions{Title: "g", Path: ".", Program: "echo"})
 	require.NoError(t, err)
-	gitInst.Branch = "feat"
+	gitInst.SetBranch("feat")
 	gitInst.CreatedAt = twoDaysAgo
 	gitInst.SetDiffStats(&git.DiffStats{Added: 5, Removed: 1, Commits: 1})
 	require.NotContains(t, r.Render(gitInst, 1, false, false), "2d",
@@ -170,7 +170,7 @@ func TestRender_NarrowWidthCollapsesBranchSeparator(t *testing.T) {
 
 	inst, err := session.NewInstance(session.InstanceOptions{Title: "t", Path: ".", Program: "echo"})
 	require.NoError(t, err)
-	inst.Branch = "zvi/a-rather-long-branch-name"
+	inst.SetBranch("zvi/a-rather-long-branch-name")
 	inst.SetDisplayName("Renamed") // decouple so the branch flex actually renders
 	inst.SetDiffStats(&git.DiffStats{Added: 1, Removed: 1, Commits: 2})
 
@@ -246,7 +246,7 @@ func TestKillInstance_SelectsPreviousWhenLastRemoved(t *testing.T) {
 	_ = l.KillInstance(l.items[2])
 
 	require.Equal(t, 1, l.selectedIdx, "removing the selected last item selects its neighbour")
-	require.Equal(t, "b", l.items[l.selectedIdx].Title, "selection lands on b, not a")
+	require.Equal(t, "b", l.items[l.selectedIdx].Title(), "selection lands on b, not a")
 }
 
 func TestMoveUp(t *testing.T) {
@@ -256,9 +256,9 @@ func TestMoveUp(t *testing.T) {
 	moved := l.MoveUp()
 	require.True(t, moved)
 	require.Equal(t, 0, l.selectedIdx)
-	require.Equal(t, "b", l.items[0].Title)
-	require.Equal(t, "a", l.items[1].Title)
-	require.Equal(t, "c", l.items[2].Title)
+	require.Equal(t, "b", l.items[0].Title())
+	require.Equal(t, "a", l.items[1].Title())
+	require.Equal(t, "c", l.items[2].Title())
 }
 
 func TestMoveUp_AtTop(t *testing.T) {
@@ -268,7 +268,7 @@ func TestMoveUp_AtTop(t *testing.T) {
 	moved := l.MoveUp()
 	require.False(t, moved)
 	require.Equal(t, 0, l.selectedIdx)
-	require.Equal(t, "a", l.items[0].Title)
+	require.Equal(t, "a", l.items[0].Title())
 }
 
 func TestMoveDown(t *testing.T) {
@@ -278,9 +278,9 @@ func TestMoveDown(t *testing.T) {
 	moved := l.MoveDown()
 	require.True(t, moved)
 	require.Equal(t, 2, l.selectedIdx)
-	require.Equal(t, "a", l.items[0].Title)
-	require.Equal(t, "c", l.items[1].Title)
-	require.Equal(t, "b", l.items[2].Title)
+	require.Equal(t, "a", l.items[0].Title())
+	require.Equal(t, "c", l.items[1].Title())
+	require.Equal(t, "b", l.items[2].Title())
 }
 
 func TestMoveDown_AtBottom(t *testing.T) {
@@ -290,7 +290,7 @@ func TestMoveDown_AtBottom(t *testing.T) {
 	moved := l.MoveDown()
 	require.False(t, moved)
 	require.Equal(t, 2, l.selectedIdx)
-	require.Equal(t, "c", l.items[2].Title)
+	require.Equal(t, "c", l.items[2].Title())
 }
 
 func TestMoveWithSingleItem(t *testing.T) {
@@ -396,7 +396,7 @@ func TestRender_PRBadge(t *testing.T) {
 
 	inst, err := session.NewInstance(session.InstanceOptions{Title: "t", Path: ".", Program: "echo"})
 	require.NoError(t, err)
-	inst.Branch = "feat"
+	inst.SetBranch("feat")
 	inst.SetDiffStats(&git.DiffStats{Added: 1, Removed: 1, Commits: 1})
 
 	inst.SetPRStatus(&git.PRStatus{HasPR: true, Number: 42, CI: git.CIPassing})
@@ -421,7 +421,7 @@ func TestRender_PRBadgeWidthBudget(t *testing.T) {
 
 	inst, err := session.NewInstance(session.InstanceOptions{Title: "t", Path: ".", Program: "echo"})
 	require.NoError(t, err)
-	inst.Branch = "zvi/a-rather-long-branch-name-that-overflows"
+	inst.SetBranch("zvi/a-rather-long-branch-name-that-overflows")
 	inst.SetDiffStats(&git.DiffStats{Added: 12, Removed: 3, Commits: 2})
 	inst.SetPRStatus(&git.PRStatus{HasPR: true, Number: 1234, CI: git.CIFailing})
 
@@ -474,7 +474,7 @@ func TestRender_SessionAgeBudget(t *testing.T) {
 	gitInst, err := session.NewInstance(session.InstanceOptions{Title: "t", Path: ".", Program: "echo"})
 	require.NoError(t, err)
 	gitInst.SetDisplayName("A long enough label to overflow the row")
-	gitInst.Branch = "feature/a-very-long-branch-name-that-overflows"
+	gitInst.SetBranch("feature/a-very-long-branch-name-that-overflows")
 	gitInst.CreatedAt = time.Now().Add(-3 * time.Hour)
 	gitInst.SetDiffStats(&git.DiffStats{Added: 5, Removed: 1, Commits: 1})
 	gitRow := r.Render(gitInst, 0, false, false)

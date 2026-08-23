@@ -36,14 +36,14 @@ func TestNewInstance_DirectFlag(t *testing.T) {
 
 	assert.True(t, inst.IsDirect(), "Direct option must set IsDirect")
 	assert.Nil(t, inst.worktree(), "a direct session has no worktree")
-	assert.Empty(t, inst.Branch, "a direct session has no branch")
+	assert.Empty(t, inst.Branch(), "a direct session has no branch")
 	assert.Equal(t, dir, inst.WorkingDir(), "tmux cwd must be Path for a direct session")
 }
 
 // TestDirectSession_RepoNameIsBasename verifies grouping identity falls back to the
 // directory name (e.g. ~/quantivly/qspace → "qspace") with no git repo.
 func TestDirectSession_RepoNameIsBasename(t *testing.T) {
-	inst := &Instance{Title: "d", status: Running, started: true, direct: true, Path: "/home/user/quantivly/qspace"}
+	inst := &Instance{ident: identity{title: "d"}, status: Running, started: true, direct: true, Path: "/home/user/quantivly/qspace"}
 	name, err := inst.RepoName()
 	require.NoError(t, err)
 	assert.Equal(t, "qspace", name)
@@ -52,7 +52,7 @@ func TestDirectSession_RepoNameIsBasename(t *testing.T) {
 // TestDirectSession_GetGitWorktreeErrors verifies git-dependent app actions get a clean
 // error (not a nil worktree to dereference) for a direct session.
 func TestDirectSession_GetGitWorktreeErrors(t *testing.T) {
-	inst := &Instance{Title: "d", status: Running, started: true, direct: true}
+	inst := &Instance{ident: identity{title: "d"}, status: Running, started: true, direct: true}
 	wt, err := inst.GetGitWorktree()
 	assert.Nil(t, wt)
 	assert.ErrorIs(t, err, ErrNoWorktree)
@@ -61,7 +61,7 @@ func TestDirectSession_GetGitWorktreeErrors(t *testing.T) {
 // TestDirectSession_UpdateDiffStatsNoPanic verifies the poll loop's diff update is a
 // safe no-op for a running direct session (it would otherwise nil-deref the worktree).
 func TestDirectSession_UpdateDiffStatsNoPanic(t *testing.T) {
-	inst := &Instance{Title: "d", status: Running, started: true, direct: true}
+	inst := &Instance{ident: identity{title: "d"}, status: Running, started: true, direct: true}
 	require.NoError(t, inst.UpdateDiffStats())
 	assert.Nil(t, inst.GetDiffStats())
 }
@@ -73,7 +73,7 @@ func TestDirectSession_KillKeepsDirectory(t *testing.T) {
 	marker := filepath.Join(dir, "keep.txt")
 	require.NoError(t, os.WriteFile(marker, []byte("x"), 0644))
 
-	inst := &Instance{Title: "d", status: Running, started: true, direct: true, Path: dir, tmuxSession: directTmux("d")}
+	inst := &Instance{ident: identity{title: "d"}, status: Running, started: true, direct: true, Path: dir, tmuxSession: directTmux("d")}
 	require.NoError(t, inst.Kill())
 
 	_, err := os.Stat(marker)
@@ -86,7 +86,7 @@ func TestDirectSession_KillKeepsDirectory(t *testing.T) {
 // reclaim nothing in exchange — there is no worktree to free.)
 func TestDirectSession_PauseRefused(t *testing.T) {
 	dir := t.TempDir()
-	inst := &Instance{Title: "d", status: Running, started: true, direct: true, Path: dir, tmuxSession: directTmux("d")}
+	inst := &Instance{ident: identity{title: "d"}, status: Running, started: true, direct: true, Path: dir, tmuxSession: directTmux("d")}
 
 	err := inst.Pause()
 	require.Error(t, err, "Pause must be refused for a direct session")
@@ -103,7 +103,7 @@ func TestDirectSession_PauseRefused(t *testing.T) {
 // stops — without removing the user's real directory.
 func TestDirectSession_RecoverLostSessionParks(t *testing.T) {
 	dir := t.TempDir()
-	inst := &Instance{Title: "d", status: Running, started: true, direct: true, Path: dir, tmuxSession: directTmux("d")}
+	inst := &Instance{ident: identity{title: "d"}, status: Running, started: true, direct: true, Path: dir, tmuxSession: directTmux("d")}
 
 	require.NoError(t, inst.RecoverLostSession())
 	assert.True(t, inst.Paused(), "a lost direct session must be parked as Paused")
@@ -116,17 +116,17 @@ func TestDirectSession_RecoverLostSessionParks(t *testing.T) {
 // TestDirectSession_RenameRenamesTmuxOnly verifies a deep rename of a direct session
 // renames the tmux session (no worktree to move) and does not panic.
 func TestDirectSession_RenameRenamesTmuxOnly(t *testing.T) {
-	inst := &Instance{Title: "old", status: Running, started: true, direct: true, Path: t.TempDir(), tmuxSession: directTmux("old")}
+	inst := &Instance{ident: identity{title: "old"}, status: Running, started: true, direct: true, Path: t.TempDir(), tmuxSession: directTmux("old")}
 
 	require.NoError(t, renameAndAdopt(inst, "new"))
-	assert.Equal(t, "new", inst.Title)
-	assert.Empty(t, inst.Branch, "a direct session never gains a branch on rename")
+	assert.Equal(t, "new", inst.Title())
+	assert.Empty(t, inst.Branch(), "a direct session never gains a branch on rename")
 }
 
 // TestDirectSession_RoundTrip verifies the Direct flag survives serialization and that
 // no worktree is written or rehydrated.
 func TestDirectSession_RoundTrip(t *testing.T) {
-	inst := &Instance{Title: "d", status: Paused, started: true, direct: true, Path: t.TempDir(), Program: "claude"}
+	inst := &Instance{ident: identity{title: "d"}, status: Paused, started: true, direct: true, Path: t.TempDir(), Program: "claude"}
 
 	data := inst.ToInstanceData()
 	assert.True(t, data.Direct, "Direct must be persisted")

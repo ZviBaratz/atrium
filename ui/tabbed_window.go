@@ -319,9 +319,10 @@ func (w *TabbedWindow) TerminalCaptureTarget(instance *session.Instance) (*tmux.
 // goroutine: it starts a tmux session, which is exactly the work that must not
 // happen inside Update.
 //
-// title rides along rather than being read off the instance down there, because Title is
-// unguarded and AdoptRename writes it on the update thread (#718). See EnsureSession for
-// what the resulting staleness costs at each use.
+// title rides along rather than being read off the instance down there, because it must be
+// the title as of the frame: AdoptRename writes on the update thread while this runs on the
+// capture goroutine (#718). Guarding the field (#795) made that read safe, not current. See
+// EnsureSession for what the resulting staleness costs at each use.
 func (w *TabbedWindow) EnsureTerminalSession(instance *session.Instance, title string) (string, error) {
 	return w.terminal.EnsureSession(instance, title)
 }

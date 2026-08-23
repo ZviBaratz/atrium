@@ -173,7 +173,7 @@ func (i *Instance) RepairResumingLaunch(within time.Duration) bool {
 	if wt := i.worktree(); wt != nil {
 		valid, err := wt.IsValidWorktree()
 		if err != nil {
-			log.ErrorLog.Printf("cannot validate the worktree for %s, leaving it to be parked: %v", i.Title, err)
+			log.ErrorLog.Printf("cannot validate the worktree for %s, leaving it to be parked: %v", i.Title(), err)
 		}
 		if err != nil || !valid {
 			return false
@@ -190,10 +190,10 @@ func (i *Instance) RepairResumingLaunch(within time.Duration) bool {
 	// relaunching over a session that would not die is how you get two agents or a
 	// launch refused by name.
 	if err := ts.DetachSafely(); err != nil {
-		log.ErrorLog.Printf("failed to detach the dead session for %s: %v", i.Title, err)
+		log.ErrorLog.Printf("failed to detach the dead session for %s: %v", i.Title(), err)
 	}
 	if err := ts.Close(); err != nil {
-		log.ErrorLog.Printf("cannot repair the resuming launch for %s: %v", i.Title, err)
+		log.ErrorLog.Printf("cannot repair the resuming launch for %s: %v", i.Title(), err)
 		return false
 	}
 
@@ -201,10 +201,10 @@ func (i *Instance) RepairResumingLaunch(within time.Duration) bool {
 	// tmux session's environment can only be set as it is born.
 	i.applySessionEnv(workDir)
 	if err := ts.Start(workDir); err != nil {
-		log.ErrorLog.Printf("blank relaunch failed for %s, leaving it to be parked: %v", i.Title, err)
+		log.ErrorLog.Printf("blank relaunch failed for %s, leaving it to be parked: %v", i.Title(), err)
 		return false
 	}
-	log.InfoLog.Printf("%q exited at launch while resuming its conversation; relaunched without resuming", i.Title)
+	log.InfoLog.Printf("%q exited at launch while resuming its conversation; relaunched without resuming", i.Title())
 
 	i.mu.Lock()
 	// Stamped so DiedAtLaunch keeps describing THIS launch: a blank agent that also dies
@@ -380,7 +380,7 @@ func (i *Instance) pause() error {
 		tc.Record("check if worktree is dirty", err)
 	} else if dirty {
 		// Commit changes locally (without pushing to GitHub)
-		commitMsg := fmt.Sprintf("%s'%s' on %s %s", autoPauseCommitPrefix, i.Title, time.Now().Format(time.RFC822), autoPauseCommitSuffix)
+		commitMsg := fmt.Sprintf("%s'%s' on %s %s", autoPauseCommitPrefix, i.Title(), time.Now().Format(time.RFC822), autoPauseCommitSuffix)
 		if tc.Record("commit changes", wt.CommitChanges(commitMsg)) {
 			removeWorktree = false
 		} else {
@@ -460,7 +460,7 @@ func (i *Instance) Resume() error {
 			if err := ts.Restore(); err != nil {
 				log.ErrorLog.Print(err)
 				if closeErr := ts.Close(); closeErr != nil {
-					log.ErrorLog.Printf("failed to close stale session %s: %v", i.Title, closeErr)
+					log.ErrorLog.Printf("failed to close stale session %s: %v", i.Title(), closeErr)
 				}
 				if err := i.recreateSession(false); err != nil {
 					return err
@@ -540,7 +540,7 @@ func (i *Instance) Resume() error {
 	// what refuses a resume. That is the same Record/Wrap split closeParkedSession makes,
 	// spelled out here because this site cannot use teardown.Errors to make it.
 	if err := ts.DetachSafely(); err != nil {
-		log.ErrorLog.Printf("failed to detach the session %s was parked with: %v", i.Title, err)
+		log.ErrorLog.Printf("failed to detach the session %s was parked with: %v", i.Title(), err)
 	}
 	if err := ts.Close(); err != nil {
 		// One line, no newlines: a batch resume renders each failure as a bullet in a
@@ -551,7 +551,7 @@ func (i *Instance) Resume() error {
 		// (doctor.CheckOrphans).
 		return fmt.Errorf("failed to close the session %s was parked with: %w "+
 			"(it stays paused, with its work on branch %s; run `atrium doctor` to check the "+
-			"tmux server, then resume again)", i.Title, err, wt.GetBranchName())
+			"tmux server, then resume again)", i.Title(), err, wt.GetBranchName())
 	}
 
 	// If our own worktree is still materialized on disk, something parked this session

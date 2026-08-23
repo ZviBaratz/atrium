@@ -51,7 +51,7 @@ func requireReturns(t *testing.T, done <-chan struct{}, limit time.Duration, msg
 // script…" forever, with the agent never launched and no timeout to recover it.
 func TestRunSetupScript_ABackgroundedChildDoesNotWedgeTheSession(t *testing.T) {
 	dir := writeRepoScriptConfig(t, config.RepoScript{SetupScript: "sleep 45 & echo started"})
-	inst := &Instance{Title: "web", Path: dir}
+	inst := &Instance{ident: identity{title: "web"}, Path: dir}
 
 	done := runInBackground(t, inst, dir)
 
@@ -76,7 +76,7 @@ func TestAbortSetupScript_KillsTheWholeProcessGroup(t *testing.T) {
 	dir := writeRepoScriptConfig(t, config.RepoScript{
 		SetupScript: `sh -c 'echo $$ > child.pid; sleep 60'; echo done`,
 	})
-	inst := &Instance{Title: "web", Path: dir}
+	inst := &Instance{ident: identity{title: "web"}, Path: dir}
 
 	done := runInBackground(t, inst, dir)
 	child := waitForPID(t, filepath.Join(dir, "child.pid"))

@@ -143,7 +143,7 @@ func TestAccountReorder_ExplainsWhenOnlyOneCluster(t *testing.T) {
 func instanceTitles(h *home) []string {
 	out := make([]string, 0)
 	for _, inst := range h.list.InstancesForPersist() {
-		out = append(out, inst.Title)
+		out = append(out, inst.Title())
 	}
 	return out
 }

@@ -223,7 +223,7 @@ func accountTerm(value string) term {
 func substringTerm(q string) term {
 	return func(i *Instance) bool {
 		match := func(s string) bool { ok, _ := fuzzy.Match(q, s); return ok }
-		return match(i.DisplayName()) || match(i.Branch) || match(i.Note())
+		return match(i.DisplayName()) || match(i.Branch()) || match(i.Note())
 	}
 }
 

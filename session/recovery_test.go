@@ -90,7 +90,7 @@ func recoverableInstanceLaunching(t *testing.T, title string, startErr error) (*
 	}
 	ts := tmux.NewSessionWithDeps(context.Background(), title, "claude", pty, relaunchExec)
 	inst := &Instance{
-		Title: title, status: Running, Program: "claude",
+		ident: identity{title: title}, status: Running, Program: "claude",
 		claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts,
 	}
 	return inst, pty
@@ -106,7 +106,7 @@ func survivingInstance(t *testing.T, title string) (*Instance, *recordingPtyFact
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
 	}
 	ts := tmux.NewSessionWithDeps(context.Background(), title, "claude", pty, aliveExec)
-	return &Instance{Title: title, status: Running, Program: "claude", tmuxSession: ts}, pty
+	return &Instance{ident: identity{title: title}, status: Running, Program: "claude", tmuxSession: ts}, pty
 }
 
 // TestBringOnline_ParksRecoveryPastTheHostBudget is #474 itself: a reboot with more
@@ -201,7 +201,7 @@ func TestBringOnline_SurvivingFleetIsNeverParked(t *testing.T) {
 // something it found already parked.
 func TestBringOnline_PausedSessionsCostNothing(t *testing.T) {
 	parked := &Instance{
-		Title: "already-paused", status: Paused, Program: "claude",
+		ident: identity{title: "already-paused"}, status: Paused, Program: "claude",
 		tmuxSession: tmux.NewSessionWithDeps(context.Background(), "already-paused", "claude",
 			newRecordingPtyFactory(t, nil), deadExec()),
 	}
@@ -323,7 +323,7 @@ func TestNewRecoveryBudget_OnlyTheSoftCapRations(t *testing.T) {
 // the first session it meets.
 func TestNilRecoveryBudgetGrantsEverything(t *testing.T) {
 	var b *recoveryBudget
-	require.True(t, b.spend(&Instance{Title: "anything"}))
+	require.True(t, b.spend(&Instance{ident: identity{title: "anything"}}))
 	b.reserve()
 	b.refund()
 	require.Equal(t, DeferredRecovery{}, b.result())

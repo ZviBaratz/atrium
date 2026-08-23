@@ -248,7 +248,7 @@ func TestUndoFailureReportNamesEverySessionAndWhy(t *testing.T) {
 	require.Contains(t, undoFailureReport(all), "a — its repository is no longer at /gone")
 
 	partial := undoDoneMsg{
-		instances: []*session.Instance{{Title: "b"}},
+		instances: []*session.Instance{titledInstance(t, "b")},
 		failures:  []undoFailure{{"a", "branch moved on"}},
 	}
 	report := undoFailureReport(partial)
@@ -283,7 +283,7 @@ func TestLiveSessionNamesSeesASessionThatHasNotStartedYet(t *testing.T) {
 	require.Empty(t, inst.TmuxSessionName(), "precondition: Start has not minted the name")
 
 	names := h.liveSessionNames()
-	want := tmux.QualifiedSessionName(inst.GroupKey(), inst.Title)
+	want := tmux.QualifiedSessionName(inst.GroupKey(), inst.Title())
 	require.NotEmpty(t, want)
 	assert.Contains(t, names, want, "the fleet must include the name Start is about to take")
 }
@@ -509,7 +509,7 @@ func TestARefusalStepsPastTheWedgedRecord(t *testing.T) {
 // the retained commits do not hold. Reporting that identically to a whole restore
 // would be the same over-claim the confirmation copy avoids.
 func TestRestoredNoticeAdmitsWorkItCouldNotSave(t *testing.T) {
-	inst := &session.Instance{Title: "fix-auth"}
+	inst := titledInstance(t, "fix-auth")
 	one := []*session.Instance{inst}
 
 	assert.Equal(t, "restored 'fix-auth'",
@@ -529,7 +529,7 @@ func TestRestoredNoticeAdmitsWorkItCouldNotSave(t *testing.T) {
 // see until they attach. README and the confirmation copy both say the notice
 // reports this, which is only true if it does.
 func TestRestoredNoticeReportsAnAgentThatCameBackFresh(t *testing.T) {
-	one := []*session.Instance{{Title: "fix-auth"}}
+	one := []*session.Instance{titledInstance(t, "fix-auth")}
 	clean := []undo.Entry{{}}
 
 	assert.Equal(t, "restored 'fix-auth'", restoredNotice(one, clean, 0),
@@ -543,7 +543,7 @@ func TestRestoredNoticeReportsAnAgentThatCameBackFresh(t *testing.T) {
 // as one action, so the notice speaks for the whole group rather than the first
 // session in it.
 func TestRestoredNoticeCountsFreshAgentsAcrossABatch(t *testing.T) {
-	three := []*session.Instance{{Title: "a"}, {Title: "b"}, {Title: "c"}}
+	three := []*session.Instance{titledInstance(t, "a"), titledInstance(t, "b"), titledInstance(t, "c")}
 	clean := []undo.Entry{{}, {}, {}}
 
 	assert.Equal(t, "restored 3 sessions", restoredNotice(three, clean, 0))
@@ -560,10 +560,10 @@ func TestRestoredNoticeCountsFreshAgentsAcrossABatch(t *testing.T) {
 // two columns of padding is the budget.
 func TestRestoredNoticeFitsTheNoticeRow(t *testing.T) {
 	const budget = 80 - 2
-	one := []*session.Instance{{Title: "fix-auth"}}
+	one := []*session.Instance{titledInstance(t, "fix-auth")}
 	ten := make([]*session.Instance, 10)
 	for i := range ten {
-		ten[i] = &session.Instance{Title: "s"}
+		ten[i] = titledInstance(t, "s")
 	}
 	tenClean := make([]undo.Entry, 10)
 
@@ -584,7 +584,7 @@ func TestRestoredNoticeFitsTheNoticeRow(t *testing.T) {
 // would print a loss we never checked for, which is the exact over-claim the
 // confirmation copy refuses to make.
 func TestCountFreshAgentsIgnoresWhatItCannotKnow(t *testing.T) {
-	unrelaunched := []*session.Instance{{Title: "a"}, {Title: "b"}}
+	unrelaunched := []*session.Instance{titledInstance(t, "a"), titledInstance(t, "b")}
 
 	assert.Equal(t, 0, countFreshAgents(unrelaunched))
 	assert.Equal(t, "restored 2 sessions",
@@ -597,7 +597,7 @@ func TestCountFreshAgentsIgnoresWhatItCannotKnow(t *testing.T) {
 // restore can suffer both, and reporting only the first would leave the user to
 // discover the second by attaching.
 func TestRestoredNoticeReportsBothLossesAtOnce(t *testing.T) {
-	one := []*session.Instance{{Title: "fix-auth"}}
+	one := []*session.Instance{titledInstance(t, "fix-auth")}
 
 	assert.Equal(t,
 		"restored 'fix-auth' — uncommitted changes could not be saved and are gone;"+

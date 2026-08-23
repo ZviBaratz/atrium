@@ -48,7 +48,7 @@ func runInstance(t *testing.T, entry config.RepoScript) (*Instance, *fakeTmux) {
 	agent := newFakeTmux(t, "")
 	ts := tmux.NewSessionWithNameAndDeps(context.Background(), "runner", "runner", "claude", agent, agent.exec())
 	inst := &Instance{
-		Title: "runner", status: Running, started: true,
+		ident: identity{title: "runner"}, status: Running, started: true,
 		gitWorktree: wt, tmuxSession: ts, tmuxName: "runner",
 	}
 	// The port is allocated where the worktree is materialized, which in production is
@@ -149,7 +149,7 @@ func TestRunCommand_SurvivesARenameOfTheAgentSession(t *testing.T) {
 	require.Equal(t, "runner_run", owned)
 
 	// What AdoptRename does to the identity: a new title and a new tmux name.
-	inst.AdoptRename(RenamedIdentity{Title: "webui", Branch: inst.Branch, TmuxName: "webui"})
+	inst.AdoptRename(RenamedIdentity{Title: "webui", Branch: inst.Branch(), TmuxName: "webui"})
 
 	assert.Equal(t, owned, inst.RunSessionName(),
 		"the server keeps the name it was started under, not one derived from the new title")

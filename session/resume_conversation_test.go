@@ -32,7 +32,7 @@ func relaunchableInstance(t *testing.T, program, cfgDir string) *Instance {
 	srv := newParkedTmuxServer(t)
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", program, srv, srv.exec())
 	return &Instance{
-		Title: "sess", status: Running, Program: program,
+		ident: identity{title: "sess"}, status: Running, Program: program,
 		claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts,
 	}
 }

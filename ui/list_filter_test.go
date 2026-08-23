@@ -59,7 +59,7 @@ func TestFilter_EmptyQueryRendersAll(t *testing.T) {
 // The match is case-insensitive and also tests the Branch field, not just DisplayName.
 func TestFilter_MatchesBranchCaseInsensitively(t *testing.T) {
 	l, insts := newFilterList(t, "alpha", "bravo")
-	insts[1].Branch = "feature/login"
+	insts[1].SetBranch("feature/login")
 
 	l.SetFilter("LOGIN")
 	out := l.String()

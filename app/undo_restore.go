@@ -201,7 +201,7 @@ func (m *home) liveSessionNames() map[string]struct{} {
 	for _, inst := range m.list.GetInstances() {
 		name := inst.TmuxSessionName()
 		if name == "" {
-			name = tmux.QualifiedSessionName(inst.GroupKey(), inst.Title)
+			name = tmux.QualifiedSessionName(inst.GroupKey(), inst.Title())
 		}
 		if name != "" {
 			live[name] = struct{}{}

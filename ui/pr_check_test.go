@@ -42,7 +42,7 @@ func TestRow_PRChipShowsCIShape(t *testing.T) {
 	r.setWidth(120)
 	inst, err := session.NewInstance(session.InstanceOptions{Title: "t", Path: ".", Program: "echo"})
 	require.NoError(t, err)
-	inst.Branch = "feature"
+	inst.SetBranch("feature")
 
 	inst.SetPRStatus(&git.PRStatus{HasPR: true, Number: 7, State: "OPEN", CI: git.CIFailing})
 	require.Contains(t, ansi.Strip(r.Render(inst, 1, false, false)), "#7✗",

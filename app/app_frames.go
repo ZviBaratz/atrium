@@ -60,10 +60,11 @@ type frameTarget struct {
 	// termInstance is the instance the shell belongs to, needed to create it.
 	termInstance *session.Instance
 	// termTitle is termInstance's Title, snapshotted HERE on the update thread for the
-	// same reason termKey is computed here: Instance.Title is a plain exported field with
-	// no mutex, AdoptRename writes it on this thread, and EnsureSession reads it on the
-	// capture goroutine — an unsynchronised pair, and a torn string header rather than
-	// merely a stale value (#718).
+	// same reason termKey is computed here: EnsureSession runs on the capture goroutine,
+	// and what it needs is the title as of THIS frame, not whichever one wins a race with
+	// AdoptRename. Reading it down there is no longer a data race — the field is guarded
+	// (#795) — but a guarded read is a fresh read, and a shell named from a rename that
+	// landed mid-capture is named from a frame nobody rendered (#718).
 	//
 	// It buys correctness at the cost of freshness: a rename landing between this
 	// resolution and the create makes the shell's tmux window name, and the legacy reap
@@ -150,7 +151,7 @@ func (m *home) resolveFrameTarget() frameTarget {
 		if sess == nil && m.shellStartRefused(selected) {
 			return frameTarget{}
 		}
-		return frameTarget{terminal: sess, termKey: key, termInstance: selected, termTitle: selected.Title}
+		return frameTarget{terminal: sess, termKey: key, termInstance: selected, termTitle: selected.Title()}
 	default:
 		// The diff tab renders from cached git metadata and captures nothing.
 		return frameTarget{}
@@ -269,8 +270,9 @@ func captureTerminalFrame(target frameTarget, ensure terminalEnsurer) paneFrameM
 // the ui type — and so a test can drive the create path without a pane.
 //
 // The title is a parameter rather than something the implementation reads off the
-// instance, because it runs on the capture goroutine and Title is unguarded (#718). See
-// frameTarget.termTitle.
+// instance, because it runs on the capture goroutine and must use the title as of the
+// frame rather than whichever one a concurrent rename leaves (#718; the field itself is
+// guarded since #795). See frameTarget.termTitle.
 type terminalEnsurer func(inst *session.Instance, title string) (string, error)
 
 // armFrameCapture dispatches the next capture, or lets the chain end when there

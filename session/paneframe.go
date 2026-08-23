@@ -93,7 +93,7 @@ func (i *Instance) NotePaneFrameFailure(err error, at time.Time) {
 	}
 	_, frameAt, _ := i.PaneFrame()
 	log.WarningLog.Printf("pane capture failed: title=%q status=%d age=%s err=%v",
-		i.Title, i.GetStatus(), at.Sub(frameAt), err)
+		i.Title(), i.GetStatus(), at.Sub(frameAt), err)
 }
 
 // PaneFrame returns the last successfully captured frame, when it was captured,

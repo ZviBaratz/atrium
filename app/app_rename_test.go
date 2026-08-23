@@ -33,7 +33,7 @@ func TestDeepRename_RejectsDuplicateTitle(t *testing.T) {
 	h, insts := newRenameTestHome(t)
 	require.Error(t, h.validateDeepRename(insts[0], "beta"))
 	// The instance is untouched.
-	require.Equal(t, "alpha", insts[0].Title)
+	require.Equal(t, "alpha", insts[0].Title())
 }
 
 func TestDeepRename_RejectsEmptyTitle(t *testing.T) {

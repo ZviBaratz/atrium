@@ -55,7 +55,7 @@ func (i *Instance) PrepareUndo(ref string) (UndoCapture, error) {
 	}
 	wt := i.worktree()
 	if wt == nil {
-		return UndoCapture{}, fmt.Errorf("cannot prepare undo for %s: no worktree", i.Title)
+		return UndoCapture{}, fmt.Errorf("cannot prepare undo for %s: no worktree", i.Title())
 	}
 
 	// The dirty check is unconditional; only the commit is gated. Cleanup removes the
@@ -69,14 +69,14 @@ func (i *Instance) PrepareUndo(ref string) (UndoCapture, error) {
 	if err != nil {
 		// Best-effort: an unreadable worktree must not stop the kill the user
 		// asked for. The entry records that the tree was not preserved.
-		log.WarningLog.Printf("undo %s: cannot check for uncommitted changes: %v", i.Title, err)
+		log.WarningLog.Printf("undo %s: cannot check for uncommitted changes: %v", i.Title(), err)
 	} else if dirty {
 		capture.Dirty = true
 		if !wt.IsExistingBranch() {
 			msg := fmt.Sprintf("%s'%s' on %s %s",
-				autoPauseCommitPrefix, i.Title, time.Now().Format(time.RFC822), autoPauseCommitSuffix)
+				autoPauseCommitPrefix, i.Title(), time.Now().Format(time.RFC822), autoPauseCommitSuffix)
 			if err := wt.CommitChanges(msg); err != nil {
-				log.WarningLog.Printf("undo %s: cannot commit uncommitted changes: %v", i.Title, err)
+				log.WarningLog.Printf("undo %s: cannot commit uncommitted changes: %v", i.Title(), err)
 			} else {
 				capture.Committed = true
 			}

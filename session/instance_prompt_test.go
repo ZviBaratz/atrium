@@ -131,7 +131,7 @@ func lastArg(args []string) string { return args[len(args)-1] }
 func newPromptInstance(t *testing.T, name string, fake *fakeAgentPane) *Instance {
 	t.Helper()
 	return &Instance{
-		Title:       name,
+		ident:       identity{title: name},
 		status:      Loading,
 		started:     true,
 		tmuxSession: tmux.NewSessionWithDeps(context.Background(), name, "claude", tmux.MakePtyFactory(), fake.exec()),
@@ -247,7 +247,7 @@ func TestPendingPromptSurvivesRoundTrip(t *testing.T) {
 
 func TestSendPrompt_NotStartedErrorsHard(t *testing.T) {
 	fake := &fakeAgentPane{}
-	inst := &Instance{Title: "unstarted", status: Ready,
+	inst := &Instance{ident: identity{title: "unstarted"}, status: Ready,
 		tmuxSession: tmux.NewSessionWithDeps(context.Background(), "unstarted", "claude", tmux.MakePtyFactory(), fake.exec())}
 
 	err := inst.SendPrompt("x")

@@ -85,7 +85,7 @@ func newCustomCommandHome(t *testing.T, cmds []customcmd.Command) (*home, *sessi
 
 	inst := newGateInstance(t, h, "live")
 	inst.SetStatus(session.Ready)
-	inst.Branch = "zvi/live"
+	inst.SetBranch("zvi/live")
 	return h, inst
 }
 
@@ -118,14 +118,16 @@ func drain(t *testing.T, h *home, cmd tea.Cmd) {
 	t.Fatal("message chain did not settle — a cmd is looping")
 }
 
-// TestCustomCommandSpecCarriesOnlyStrings is the thread-safety argument, asserted
+// TestCustomCommandSpecCarriesOnlyStrings is the argument for the type shape, asserted
 // rather than commented.
 //
-// Instance's Title, Branch, displayName and Path are unguarded fields read on the
-// update thread. A spec field that could hold an *Instance — or anything else with a
-// pointer into the model — would let the goroutine read them while a rename or a
-// restore writes them, and the race detector only sees it if a test happens to
-// interleave the two. The type shape is what makes it impossible instead of unlikely.
+// A spec field that could hold an *Instance — or anything else with a pointer into the
+// model — would let the goroutine read the session's name and path while a rename or a
+// restore writes them. For Path that is still a data race. For the identity family it is
+// no longer one (#795), but it is still the wrong value: the command must run under the
+// name the user launched it from, not whichever side of a concurrent rename it lands on.
+// Either way the detector sees it only if a test happens to interleave the two, and the
+// type shape is what makes it impossible instead of unlikely.
 func TestCustomCommandSpecCarriesOnlyStrings(t *testing.T) {
 	typ := reflect.TypeOf(customCommandSpec{})
 	require.Positive(t, typ.NumField(), "the spec must have fields for this to prove anything")
@@ -140,7 +142,8 @@ func TestCustomCommandSpecCarriesOnlyStrings(t *testing.T) {
 				f.Name, f.Type.Elem().Kind())
 		default:
 			t.Errorf("field %q is a %s — only strings and string slices may cross to "+
-				"the goroutine, because Instance's fields are unguarded", f.Name, f.Type.Kind())
+				"the goroutine, because a pointer into the model reads it at the wrong "+
+				"instant — and, for Path, unguarded", f.Name, f.Type.Kind())
 		}
 	}
 }
@@ -201,7 +204,7 @@ func TestCustomCommandCtxCarriesTheSelection(t *testing.T) {
 
 	h := newCreateFormHome(t)
 	inst := newGateInstance(t, h, "mapped")
-	inst.Branch = "zvi/mapped"
+	inst.SetBranch("zvi/mapped")
 
 	ctx := customCommandCtx(inst)
 	assert.Equal(t, "mapped", ctx.Session.Title)
@@ -340,7 +343,7 @@ func TestCustomCommandRunsWithTheResolvedContext(t *testing.T) {
 	spec := (*calls)[0].spec
 	assert.Equal(t, "echo '"+inst.Path+"'", spec.script, "quote must have shell-escaped the path")
 	assert.Equal(t, inst.Path, spec.dir, "repo context runs in the repository root")
-	assert.Equal(t, inst.Title, spec.session, "the record must be attributed to the session")
+	assert.Equal(t, inst.Title(), spec.session, "the record must be attributed to the session")
 	assert.Contains(t, spec.env, "ATRIUM_REPO="+inst.Path)
 	assert.Contains(t, spec.env, "ATRIUM_TITLE=live")
 }
@@ -401,7 +404,7 @@ func TestCustomCommandEnvGateDoesNotOverReachAPopulatedField(t *testing.T) {
 		Command: `git -C "$ATRIUM_REPO" log --oneline "$ATRIUM_BRANCH"`, Output: "background",
 	})
 	h, inst := newCustomCommandHome(t, cmds)
-	require.NotEmpty(t, inst.Branch, "the fixture must carry a branch for this to test anything")
+	require.NotEmpty(t, inst.Branch(), "the fixture must carry a branch for this to test anything")
 	calls := stubRunner(t, nil)
 
 	assert.Empty(t, customCommandInertReason(cmds[0], inst, customCommandCtx(inst)))
@@ -861,7 +864,7 @@ func TestCustomCommandStaleSelectionIsRegated(t *testing.T) {
 	require.Empty(t, h.customCommandRows[0].inert, "the row opened runnable")
 
 	// The selection stops satisfying the command while the menu is up.
-	inst.Branch = ""
+	inst.SetBranch("")
 	_, _ = h.handleKeyPress(runeKey("a"))
 
 	assert.Empty(t, *calls, "the run must re-check the gate, not trust the row it was drawn from")

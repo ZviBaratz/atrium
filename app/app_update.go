@@ -331,7 +331,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// and surface the loss like the manual send path rather than leaving the session
 		// Ready-but-idle with no sign the prompt was lost.
 		msg.instance.ClearPrompt(msg.prompt)
-		return m, m.handleError(fmt.Errorf("failed to deliver prompt to %q: %w", msg.instance.Title, msg.err))
+		return m, m.handleError(fmt.Errorf("failed to deliver prompt to %q: %w", msg.instance.Title(), msg.err))
 	case tea.MouseMsg:
 		return m.handleMouse(msg)
 	case branchSearchDebounceMsg:
@@ -934,14 +934,14 @@ func (m *home) reconcileInFlightStarts(ctx context.Context) {
 			// the dead ctx and couldn't clean up. Rebind to a live ctx and retry.
 			inst.RebindBaseContext(context.WithoutCancel(ctx))
 			if err := inst.Kill(); err != nil {
-				log.WarningLog.Printf("shutdown: teardown of in-flight session %q: %v", inst.Title, err)
+				log.WarningLog.Printf("shutdown: teardown of in-flight session %q: %v", inst.Title(), err)
 			}
 			m.settleCreateRequest(inst, errors.New("atrium exited before it finished starting"))
 		default:
 			// Ctx still live: the force-quit abandon, or a rare non-signal event-loop
 			// error from p.Run(). Kill's teardown works as-is, no rebind needed.
 			if err := inst.Kill(); err != nil {
-				log.WarningLog.Printf("exit: teardown of in-flight session %q: %v", inst.Title, err)
+				log.WarningLog.Printf("exit: teardown of in-flight session %q: %v", inst.Title(), err)
 			}
 			m.settleCreateRequest(inst, errors.New("atrium exited before it finished starting"))
 		}

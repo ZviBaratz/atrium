@@ -596,7 +596,7 @@ func TestEnsureSessionReapsLegacyTermSession(t *testing.T) {
 	defer func() { _ = instance.Kill() }()
 
 	// The shell session exactly as the pre-upgrade code minted it.
-	legacy := tmux.NewSession(context.Background(), termLegacyName(instance.Title), "sleep 300")
+	legacy := tmux.NewSession(context.Background(), termLegacyName(instance.Title()), "sleep 300")
 	require.NoError(t, legacy.Start(t.TempDir()))
 	t.Cleanup(func() { _ = legacy.Close() })
 
@@ -606,7 +606,7 @@ func TestEnsureSessionReapsLegacyTermSession(t *testing.T) {
 
 	// EnsureSession is the create path — it now runs on the app's capture
 	// goroutine rather than inside UpdateContent, so drive it directly.
-	key, err := tp.EnsureSession(instance, instance.Title)
+	key, err := tp.EnsureSession(instance, instance.Title())
 	require.NoError(t, err)
 	require.NotEmpty(t, key)
 
@@ -662,7 +662,7 @@ func TestEnsureSessionDropsAShellReapedMidCreate(t *testing.T) {
 	// closes nothing and only its generation bump records that it ran.
 	tp.beforeInstall = func() { tp.CloseForInstance(instance) }
 
-	key, err := tp.EnsureSession(instance, instance.Title)
+	key, err := tp.EnsureSession(instance, instance.Title())
 	require.NoError(t, err)
 
 	// assert, not require, deliberately: the socket check below is the one that is
@@ -697,7 +697,7 @@ func TestEnsureSessionDropsAShellWhoseInstancePausedMidCreate(t *testing.T) {
 	// fails if the status arm is dropped even though the reap arm survives.
 	tp.beforeInstall = func() { instance.SetStatus(session.Paused) }
 
-	key, err := tp.EnsureSession(instance, instance.Title)
+	key, err := tp.EnsureSession(instance, instance.Title())
 	require.NoError(t, err)
 
 	tp.mu.Lock()
@@ -723,7 +723,7 @@ func TestEnsureSessionInstallsAnUnraceedShell(t *testing.T) {
 	tp.SetSize(80, 30)
 	t.Cleanup(tp.Close)
 
-	key, err := tp.EnsureSession(instance, instance.Title)
+	key, err := tp.EnsureSession(instance, instance.Title())
 	require.NoError(t, err)
 	require.Equal(t, terminalKey(instance), key)
 
@@ -756,7 +756,7 @@ func TestEnsureSessionKeepsAnAdoptedShellWhileAnotherInstanceIsReaped(t *testing
 	// Round one creates the shell. Dropping the cache entry without closing the
 	// session reproduces what a crashed run leaves on the socket: alive, and named
 	// by nothing in this process.
-	key, err := tp.EnsureSession(instance, instance.Title)
+	key, err := tp.EnsureSession(instance, instance.Title())
 	require.NoError(t, err)
 	require.NotEmpty(t, key)
 	tp.mu.Lock()
@@ -766,7 +766,7 @@ func TestEnsureSessionKeepsAnAdoptedShellWhileAnotherInstanceIsReaped(t *testing
 	// Round two adopts it, with an unrelated instance's teardown landing in the
 	// same window the guards above use.
 	tp.beforeInstall = func() { tp.CloseForInstance(bystander) }
-	key, err = tp.EnsureSession(instance, instance.Title)
+	key, err = tp.EnsureSession(instance, instance.Title())
 	require.NoError(t, err)
 
 	// The socket first: it is the assertion about the consequence.
@@ -797,7 +797,7 @@ func TestEnsureSessionDropsAShellWhoseWholePaneClosedMidCreate(t *testing.T) {
 
 	tp.beforeInstall = tp.Close
 
-	key, err := tp.EnsureSession(instance, instance.Title)
+	key, err := tp.EnsureSession(instance, instance.Title())
 	require.NoError(t, err)
 
 	tp.mu.Lock()

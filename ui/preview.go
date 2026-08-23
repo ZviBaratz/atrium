@@ -36,7 +36,7 @@ func logPreviewFallback(instance *session.Instance, reason string, err error) {
 	_, frameAt, captured := instance.PaneFrame()
 	log.InfoLog.Printf(
 		"preview fallback (%s): title=%q status=%d started=%t captured=%t frameAt=%s err=%v",
-		reason, instance.Title, instance.GetStatus(), instance.Started(), captured,
+		reason, instance.Title(), instance.GetStatus(), instance.Started(), captured,
 		frameAt.Format(time.RFC3339), err,
 	)
 }
@@ -288,7 +288,7 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 			theme.Current().AttentionStyle().
 				Render(fmt.Sprintf(
 					"The instance can be checked out at '%s'",
-					instance.Branch,
+					instance.Branch(),
 				)),
 			theme.Current().AttentionStyle().
 				Render(fmt.Sprintf("(press '%s' to copy)", keys.LabelOf(keys.KeyCopyBranch))),

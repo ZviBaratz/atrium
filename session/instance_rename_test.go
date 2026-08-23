@@ -64,25 +64,24 @@ func TestInstanceRename_RenamesBranchWorktreeAndTitle(t *testing.T) {
 	require.NoError(t, wt.Setup())
 
 	inst := &Instance{
-		Title:       "formalize-packaing",
+		ident:       identity{title: "formalize-packaing", branch: wt.GetBranchName()},
 		status:      Running,
 		started:     true,
 		gitWorktree: wt,
 		tmuxSession: liveTmux(t, "formalize-packaing"),
-		Branch:      wt.GetBranchName(),
 	}
 	oldBranch := wt.GetBranchName()
 	oldPath := wt.GetWorktreePath()
 
 	require.NoError(t, renameAndAdopt(inst, "formalize-packaging"))
 
-	require.Equal(t, "formalize-packaging", inst.Title)
-	require.NotEqual(t, oldBranch, inst.Branch)
-	require.Equal(t, wt.GetBranchName(), inst.Branch, "Instance.Branch must track the renamed git branch")
+	require.Equal(t, "formalize-packaging", inst.Title())
+	require.NotEqual(t, oldBranch, inst.Branch())
+	require.Equal(t, wt.GetBranchName(), inst.Branch(), "Instance.Branch must track the renamed git branch")
 
 	// git side: new branch exists, old branch gone, worktree dir moved.
 	require.Empty(t, strings.TrimSpace(mustGit(t, repoPath, "branch", "--list", oldBranch)), "old branch should be gone")
-	require.NotEmpty(t, strings.TrimSpace(mustGit(t, repoPath, "branch", "--list", inst.Branch)), "new branch should exist")
+	require.NotEmpty(t, strings.TrimSpace(mustGit(t, repoPath, "branch", "--list", inst.Branch())), "new branch should exist")
 	require.NotEqual(t, oldPath, wt.GetWorktreePath())
 	_, statErr := os.Stat(oldPath)
 	require.True(t, os.IsNotExist(statErr), "old worktree dir should be gone")
@@ -111,12 +110,11 @@ func TestInstanceRename_RollsBackTmuxOnGitFailure(t *testing.T) {
 	}
 	ts := tmux.NewSessionWithDeps(context.Background(), "alpha", "claude", tmux.MakePtyFactory(), tmuxExec)
 	inst := &Instance{
-		Title:       "alpha",
+		ident:       identity{title: "alpha", branch: wt.GetBranchName()},
 		status:      Running,
 		started:     true,
 		gitWorktree: wt,
 		tmuxSession: ts,
-		Branch:      wt.GetBranchName(),
 	}
 	oldBranch := wt.GetBranchName()
 	oldPath := wt.GetWorktreePath()
@@ -124,8 +122,8 @@ func TestInstanceRename_RollsBackTmuxOnGitFailure(t *testing.T) {
 	require.Error(t, renameAndAdopt(inst, "alpha-fixed"))
 
 	// Identity untouched.
-	require.Equal(t, "alpha", inst.Title)
-	require.Equal(t, oldBranch, inst.Branch)
+	require.Equal(t, "alpha", inst.Title())
+	require.Equal(t, oldBranch, inst.Branch())
 	require.Equal(t, oldBranch, wt.GetBranchName())
 	require.Equal(t, oldPath, wt.GetWorktreePath())
 	_, statErr := os.Stat(oldPath)
@@ -141,12 +139,12 @@ func TestInstanceRename_RollsBackTmuxOnGitFailure(t *testing.T) {
 }
 
 func TestInstanceRename_RejectsUnstarted(t *testing.T) {
-	inst := &Instance{Title: "x"}
+	inst := &Instance{ident: identity{title: "x"}}
 	require.Error(t, renameAndAdopt(inst, "y"))
 }
 
 func TestInstanceRename_RejectsEmpty(t *testing.T) {
-	inst := &Instance{Title: "x", started: true}
+	inst := &Instance{ident: identity{title: "x"}, started: true}
 	require.Error(t, renameAndAdopt(inst, "   "))
 }
 
@@ -178,29 +176,20 @@ func requireSubstr(t *testing.T, ran []string, substrs ...string) {
 }
 
 // TestInstanceRename_IOHalfLeavesTheIdentityAlone pins the split the deep rename
-// depends on. Rename runs on a background goroutine (renameIOCmd), and Title is read
-// unguarded by the renderer on every frame — listRowZoneID keys a row on it — so the
-// I/O half must not write it. It returns the identity instead, and the update thread
-// adopts it.
+// depends on. Rename runs on a background goroutine (renameIOCmd) and must return the
+// new identity rather than adopt it, so the name a row shows changes at one instant on
+// the update thread — after both the tmux session and the git branch have moved, and
+// never for a rename that failed halfway.
 //
-// The failure this prevents is a data race, which no assertion can observe directly:
-// what is observable is that the I/O alone changes nothing the renderer reads, so this
-// goroutine cannot be the WRITER half of one.
+// What is observable is that the I/O alone changes nothing the renderer reads.
 //
-// Only that half. Two earlier drafts of this comment overreached, and both overreached the
-// same way — by promoting one closed window into a claim about all of them:
-//
-//   - "the window in which a torn read could happen does not exist" was false when
-//     written. A second window was already open: TerminalPane.EnsureSession read Title on
-//     the capture goroutine against AdoptRename's write, not against this function's
-//     (#718). Closing this half never closed that one, and the guard that does is ui's
-//     TestEnsureSessionDoesNotReadTitleWhileAdoptRenameWritesIt — which, unlike this test,
-//     fails only under -race.
-//   - "this goroutine cannot be the second party to a torn read" is false too, because
-//     being a reader is also being a party. Rename reads i.Title itself (`oldTitle`), on
-//     this very goroutine. That read is safe, but for its own narrow reason — the only
-//     AdoptRename carrying this instance's title is the one applying this call's result —
-//     not because the goroutine touches nothing.
+// This comment used to argue the split in terms of a data race, and two successive
+// drafts of that argument were wrong in the same way — each promoted one closed window
+// into a claim about all of them, when the fields were plain and every reader needed its
+// own argument. #795 removed the premise: the identity family is unexported and guarded
+// (session/identity.go), so no reader needs an argument and this test is about ordering
+// rather than safety. The race half now has a guard of its own,
+// TestIdentityReadsDoNotRaceItsWrites, which — unlike this test — fails only under -race.
 func TestInstanceRename_IOHalfLeavesTheIdentityAlone(t *testing.T) {
 	repoPath := renameTestRepo(t)
 	wt, _, err := git.NewWorktree(context.Background(), repoPath, "before")
@@ -208,12 +197,11 @@ func TestInstanceRename_IOHalfLeavesTheIdentityAlone(t *testing.T) {
 	require.NoError(t, wt.Setup())
 
 	inst := &Instance{
-		Title:       "before",
+		ident:       identity{title: "before", branch: wt.GetBranchName()},
 		status:      Running,
 		started:     true,
 		gitWorktree: wt,
 		tmuxSession: liveTmux(t, "before"),
-		Branch:      wt.GetBranchName(),
 	}
 	oldBranch := wt.GetBranchName()
 
@@ -226,11 +214,11 @@ func TestInstanceRename_IOHalfLeavesTheIdentityAlone(t *testing.T) {
 	require.NotEmpty(t, renamed.TmuxName)
 
 	// ...but nothing the main thread reads has moved yet.
-	require.Equal(t, "before", inst.Title, "the I/O half must not write Title")
-	require.Equal(t, oldBranch, inst.Branch, "nor Branch")
+	require.Equal(t, "before", inst.Title(), "the I/O half must not write Title")
+	require.Equal(t, oldBranch, inst.Branch(), "nor Branch")
 
 	inst.AdoptRename(renamed)
-	require.Equal(t, "after", inst.Title, "adoption is what the user sees")
-	require.Equal(t, renamed.Branch, inst.Branch)
+	require.Equal(t, "after", inst.Title(), "adoption is what the user sees")
+	require.Equal(t, renamed.Branch, inst.Branch())
 	require.Equal(t, renamed.TmuxName, inst.TmuxSessionName())
 }

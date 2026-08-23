@@ -171,7 +171,7 @@ func RunDaemon(ctx context.Context, cfg *config.Config) error {
 					// state is reflected in the persisted snapshot.
 					if err := instance.UpdateDiffStats(); err != nil {
 						if everyN.ShouldLog() {
-							log.WarningLog.Printf("could not update diff stats for %s: %v", instance.Title, err)
+							log.WarningLog.Printf("could not update diff stats for %s: %v", instance.Title(), err)
 						}
 					}
 				}

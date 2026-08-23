@@ -57,7 +57,7 @@ func resumableClaudeInstance(t *testing.T, fake *fakeTmux, cmdExec cmd_test.Mock
 	writeClaudeTranscript(t, cfgDir, wt.GetWorktreePath())
 	ts := tmux.NewSessionWithDeps(context.Background(), "resumed", "claude", fake, cmdExec)
 	return &Instance{
-		Title: "resumed", status: Paused, started: true, Program: "claude",
+		ident: identity{title: "resumed"}, status: Paused, started: true, Program: "claude",
 		claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts,
 	}
 }
@@ -172,7 +172,7 @@ func TestRepairResumingLaunch_RefusesALaunchThatCarriedNoResumeFlag(t *testing.T
 	// No transcript written, so HasResumable reports (false, true) and startResuming
 	// elects the blank launch.
 	inst := &Instance{
-		Title: "blank", status: Paused, started: true, Program: "claude",
+		ident: identity{title: "blank"}, status: Paused, started: true, Program: "claude",
 		claudeConfigDir: t.TempDir(), gitWorktree: wt, tmuxSession: ts,
 	}
 	require.NoError(t, inst.Resume())
@@ -190,7 +190,7 @@ func TestRepairResumingLaunch_RefusesAnAgentWithNoResumeSupport(t *testing.T) {
 	fake.dieOnAttach()
 	ts := tmux.NewSessionWithDeps(context.Background(), "plain", "aider", fake, fake.exec())
 	inst := &Instance{
-		Title: "plain", status: Paused, started: true, Program: "aider",
+		ident: identity{title: "plain"}, status: Paused, started: true, Program: "aider",
 		gitWorktree: wt, tmuxSession: ts,
 	}
 	require.NoError(t, inst.Resume())

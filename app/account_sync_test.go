@@ -125,7 +125,7 @@ func TestAccountSync_RenamedPoolAbsorbsStaleSessions(t *testing.T) {
 	require.Len(t, got, 4)
 	titles := make([]string, 0, len(got))
 	for _, inst := range got {
-		titles = append(titles, inst.Title)
+		titles = append(titles, inst.Title())
 	}
 	assert.Equal(t, []string{"hub", "platform", "iqa", "atrium"}, titles,
 		"all three quantivly sessions render as one leading cluster")

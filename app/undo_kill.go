@@ -66,9 +66,9 @@ func (m *home) sweepUndoJournal(now time.Time) {
 // the live fleet.
 func (m *home) supersedeUndoFor(inst *session.Instance) {
 	if err := undo.MarkSuperseded(func(e undo.Entry) bool {
-		return e.Title == inst.Title && e.Path == inst.Path
+		return e.Title == inst.Title() && e.Path == inst.Path
 	}); err != nil {
-		log.WarningLog.Printf("undo: cannot retire the record %s reclaimed: %v", inst.Title, err)
+		log.WarningLog.Printf("undo: cannot retire the record %s reclaimed: %v", inst.Title(), err)
 	}
 }
 
@@ -122,13 +122,13 @@ func (m *home) journalKill(inst *session.Instance, batchID string) (undo.Entry, 
 
 	snapshot, err := json.Marshal(inst.ToInstanceData())
 	if err != nil {
-		log.WarningLog.Printf("undo %s: cannot snapshot session, kill will not be undoable: %v", inst.Title, err)
+		log.WarningLog.Printf("undo %s: cannot snapshot session, kill will not be undoable: %v", inst.Title(), err)
 		return undo.Entry{}, false
 	}
 
 	pending := undo.Entry{
 		BatchID:  batchID,
-		Title:    inst.Title,
+		Title:    inst.Title(),
 		Display:  inst.DisplayName(),
 		Path:     inst.Path,
 		Direct:   inst.IsDirect(),
@@ -144,7 +144,7 @@ func (m *home) journalKill(inst *session.Instance, batchID string) (undo.Entry, 
 	if !pending.Direct {
 		wt, err := inst.GetGitWorktree()
 		if err != nil {
-			log.WarningLog.Printf("undo %s: cannot resolve worktree, kill will not be undoable: %v", inst.Title, err)
+			log.WarningLog.Printf("undo %s: cannot resolve worktree, kill will not be undoable: %v", inst.Title(), err)
 			return undo.Entry{}, false
 		}
 		pending.RepoPath = wt.GetRepoPath()
@@ -153,7 +153,7 @@ func (m *home) journalKill(inst *session.Instance, batchID string) (undo.Entry, 
 
 	entry, err := undo.Write(pending)
 	if err != nil {
-		log.WarningLog.Printf("undo %s: cannot write journal entry, kill will not be undoable: %v", inst.Title, err)
+		log.WarningLog.Printf("undo %s: cannot write journal entry, kill will not be undoable: %v", inst.Title(), err)
 		return undo.Entry{}, false
 	}
 
@@ -169,7 +169,7 @@ func (m *home) journalKill(inst *session.Instance, batchID string) (undo.Entry, 
 		// The commits could not be pinned — a repository the user moved or deleted
 		// is the usual cause. Record what we know and rewrite the entry without a
 		// SHA, which is what marks it unrestorable, then let the kill proceed.
-		log.WarningLog.Printf("undo %s: cannot retain branch, kill will not be undoable: %v", inst.Title, err)
+		log.WarningLog.Printf("undo %s: cannot retain branch, kill will not be undoable: %v", inst.Title(), err)
 		if written, werr := undo.Write(entry); werr == nil {
 			entry = written
 		}
@@ -184,7 +184,7 @@ func (m *home) journalKill(inst *session.Instance, batchID string) (undo.Entry, 
 		// The ref exists but the record naming it does not carry the SHA. The
 		// restore refuses rather than guessing, and the sweep still expires the
 		// entry, so the objects are not stranded forever.
-		log.WarningLog.Printf("undo %s: cannot record retained branch: %v", inst.Title, err)
+		log.WarningLog.Printf("undo %s: cannot record retained branch: %v", inst.Title(), err)
 		return entry, false
 	}
 

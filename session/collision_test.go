@@ -62,7 +62,7 @@ func TestOwnedSiblingCollides(t *testing.T) {
 	// A session renamed from "foo" to "bar" that still hosts both siblings under the
 	// names it minted while it was "foo".
 	renamed := &Instance{
-		Title:    "bar",
+		ident:    identity{title: "bar"},
 		tmuxName: "atrium_g_bar",
 		termName: "atrium_g_foo_term",
 		runName:  "atrium_g_foo_run",
@@ -81,7 +81,7 @@ func TestOwnedSiblingCollides(t *testing.T) {
 		{"atrium_g_foo2", renamed, false, "a prefix of the held name is not a collision"},
 		{"", renamed, false, "no candidate, nothing to collide with"},
 		{"atrium_g_foo", nil, false, "no instance, nothing held"},
-		{"atrium_g_foo", &Instance{Title: "foo", tmuxName: "atrium_g_foo"}, false,
+		{"atrium_g_foo", &Instance{ident: identity{title: "foo"}, tmuxName: "atrium_g_foo"}, false,
 			"an instance holding no siblings reserves nothing here"},
 		{"atrium_g_foo", &Instance{termName: "atrium_g_foo_run"}, false,
 			"the shell suffix is not matched against a run-session name"},

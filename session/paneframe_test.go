@@ -41,7 +41,7 @@ func frameInstance(t *testing.T, capture string, captureErr error) (*Instance, *
 		},
 	}
 	ts := tmux.NewSessionWithDeps(context.Background(), "frame", "claude", tmux.MakePtyFactory(), exec)
-	return &Instance{Title: "frame", status: Running, started: true, tmuxSession: ts}, &seen
+	return &Instance{ident: identity{title: "frame"}, status: Running, started: true, tmuxSession: ts}, &seen
 }
 
 // verbOf is the tmux subcommand of an argv, i.e. the first argument that is not
@@ -82,7 +82,7 @@ func TestCapturePaneFrame_SkipsPausedAndAttachedSessions(t *testing.T) {
 	})
 
 	t.Run("no tmux session", func(t *testing.T) {
-		inst := &Instance{Title: "bare", status: Running, started: true}
+		inst := &Instance{ident: identity{title: "bare"}, status: Running, started: true}
 		text, err := inst.CapturePaneFrame()
 		require.NoError(t, err)
 		require.Empty(t, text)

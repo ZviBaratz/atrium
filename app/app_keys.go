@@ -665,12 +665,12 @@ func (m *home) copySelectedBranch() (tea.Model, tea.Cmd) {
 	if selected == nil {
 		return m, nil
 	}
-	if selected.Branch == "" {
+	if selected.Branch() == "" {
 		return m, m.handleInfoNotice("no branch to copy yet")
 	}
 	return m, tea.Batch(
-		m.copyToClipboard(selected.Branch),
-		m.handleInfoNotice(fmt.Sprintf("branch '%s' copied", selected.Branch)))
+		m.copyToClipboard(selected.Branch()),
+		m.handleInfoNotice(fmt.Sprintf("branch '%s' copied", selected.Branch())))
 }
 
 // copyPaneContent copies the active tab's content to the clipboard, unstyled.
@@ -757,7 +757,7 @@ func (m *home) openQueue() (tea.Model, tea.Cmd) {
 func (m *home) openCmdLog() (tea.Model, tea.Cmd) {
 	session := ""
 	if sel := m.list.GetSelectedInstance(); sel != nil {
-		session = sel.Title
+		session = sel.Title()
 	}
 	m.cmdLogOverlay = overlay.NewCmdLogOverlay(session)
 	m.state = stateCmdLog

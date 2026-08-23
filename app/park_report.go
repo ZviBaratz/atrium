@@ -79,7 +79,7 @@ func earlierParkReport(instances []*session.Instance, now time.Time) session.Def
 	var kept []session.ParkedSession
 	for _, spooled := range report.Sessions {
 		for _, inst := range instances {
-			if inst.Title != spooled.Title || inst.Path != spooled.Path {
+			if inst.Title() != spooled.Title || inst.Path != spooled.Path {
 				continue
 			}
 			if inst.Paused() && !changedSince(inst, report.CreatedAt) {
