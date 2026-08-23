@@ -1115,41 +1115,35 @@ func (i *Instance) recoverInPlace() bool {
 	return true
 }
 
-// worktreeCleanup is the seam recreateSession tears the worktree down through on a
-// failed (re)launch. A package-level var — matching the git package's own test-seam
-// idiom (checkGHCLI/runGitPush/runGHBrowse) — so a test can inject a failing teardown
-// and assert the error is wrapped; production always uses (*git.Worktree).Cleanup.
-var worktreeCleanup = (*git.Worktree).Cleanup
-
 // recreateSession starts a fresh tmux session for an already-set-up worktree,
 // resuming the agent's prior conversation when one exists (startResuming; a fresh
 // start otherwise). Callers must ensure no session with the same name still exists —
 // Start guards against duplicates — so a stale session has to be closed first.
 //
-// rollbackWorktree says whether a failed launch should tear the worktree down, and it
-// is emphatically not "clean up after yourself": Worktree.Cleanup is the KILL
-// teardown — `git worktree remove -f` and `git branch -D`. Pass true only when the
-// caller materialized this worktree in the same operation, where the teardown undoes
-// its own Setup and the contents came from the branch, so nothing is lost. Pass false
-// when the worktree pre-existed the call: it may hold uncommitted work this operation
-// did not create, and the branch holds the session's history. A budget-parked session
-// (parkOverBudget) is exactly that case, and reaches here on every Resume because its
-// tmux session is gone by construction — so getting this wrong would make the load
-// shedding introduced for #474 the most destructive path in the program.
-func (i *Instance) recreateSession(rollbackWorktree bool) error {
+// A failed launch tears NOTHING down, and that is the contract rather than an
+// omission. The teardown it used to run was Worktree.Cleanup — `git worktree remove -f`
+// and `git branch -D`, the KILL teardown — and only Kill records a retention ref first
+// (PrepareUndo), so a mistyped program or profile took the session's entire history
+// with it (#741).
+//
+// That rollback justified itself as undoing the Setup the same call had just run, the
+// contents having come from the branch so that nothing was lost. It is false at every
+// caller, and Resume is the only one. The half that holds everywhere is ownership: the
+// branch is always the session's history rather than something this call created, so
+// `branch -D` was never this function's to run.
+//
+// On the park that removed the worktree — the ordinary resume — it is worse than
+// unsound, because unwindAutoPauseCommits has by then soft-reset the parked work OUT of
+// history and into the worktree, so even the gentler pause teardown (Worktree.Remove)
+// would discard it. The other paths here reach no unwind at all: a direct session has
+// no worktree, and a park that left one materialized skips the whole block.
+//
+// What a failed launch leaves behind instead is the worktree still on disk, for the
+// callers that have one, and that is a state Resume already meets and reuses in place.
+func (i *Instance) recreateSession() error {
 	ts := i.tmux()
-	wt := i.worktree()
 	if err := i.startResuming(ts, i.WorkingDir()); err != nil {
 		log.ErrorLog.Print(err)
-		// Undo the worktree this same operation set up, so a failed launch does not
-		// leak one. Skipped when we did not create it (see rollbackWorktree) and when
-		// there is none at all — a direct session runs in the user's real directory.
-		if wt != nil && rollbackWorktree {
-			if cleanupErr := worktreeCleanup(wt); cleanupErr != nil {
-				err = fmt.Errorf("%w (cleanup error: %w)", err, cleanupErr)
-				log.ErrorLog.Print(err)
-			}
-		}
 		return fmt.Errorf("failed to start new session: %w", err)
 	}
 	// Stamp the relaunch so DiedAtLaunch keeps working across Resume: a typo'd
