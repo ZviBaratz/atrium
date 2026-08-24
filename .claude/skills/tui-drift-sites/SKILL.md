@@ -286,16 +286,28 @@ neither. A theme carries both — `Glyphs` exported, the agent table behind
    within the table), not the derivation — a different letter meeting those is a review
    conversation, not a build break.
 
-## Adding a UI state — 5 sites, four of them fixtures
+## Adding a UI state — 5 sites, one of them production code
 
 `app/app.go`'s state enum (which bumps `numStates`), plus a nullable overlay pointer
-field. Then the four fixture sites and ONE code site below. This list was seven long,
-three of them code, until #801: the enum was hand-enumerated again in `viewContent`,
-`handleKeyPress`'s prelude, `menuVisible`, the per-overlay `SetSize` blocks and the
-paste switch. Those five readers now select through `surfaceSpecs`, so the code cost
-of a state is a single table entry — the rest is fixtures.
+field. Then one production-code site, two test-table entries and two fixture steps
+below. The list was longer before #801: the enum was hand-enumerated again in
+`viewContent`, `handleKeyPress`'s prelude, `menuVisible`, the per-overlay `SetSize`
+blocks and the paste switch, and those five readers now select through
+`surfaceSpecs`.
 
-1. **A `surfaceSpec` entry in `app/surfaces.go`** — the one code site. The entry is
+That consolidated the five READERS, not every per-state fact. A state that interacts
+with the mouse or with the bar's own content still has hand-kept sites the registry
+deliberately does not cover: `hintBarClickState` (`app/app_msgs.go` — its test now
+walks the enum, so an unclassified state fails; #852 is what landing in neither of
+its old lists looked like), the `ui.MenuState` writers (a separate enum, set
+imperatively on entry and on every exit path), the help/info mouse arm in
+`handleMouse` (wheel-scroll and click-outside-dismiss name the two `textOverlay`
+states literally), and the per-state resize exits in `Update`'s `WindowSizeMsg` arm
+(hint mode and the screensaver *leave* on resize — state changes, which the `size`
+column cannot express: it resizes overlays). Of those, only the click gate has a
+guard that forces the decision; the rest are still found by reading.
+
+1. **A `surfaceSpec` entry in `app/surfaces.go`** — the production-code site. The entry is
    the state's whole surface as data: `render` (what `viewContent` composites over
    the frame; nil for a state that renders in the frame itself), `keys` (the handler
    `handleKeyPress` routes to — every entry's handler runs before the global esc/quit
@@ -351,11 +363,11 @@ unbounded list, user-authored text with no natural width.
 
 - `SetSize` semantics are the usual defect in a `size` closure — but check which way
   round before "fixing" one. **lipgloss v2 counts the border and padding INSIDE
-  `Width`**, so `Width(w)`
-  renders exactly `w` columns (`style.go`: `width -= horizontalBorderSize`). That
-  inverted the v1 behaviour this line used to describe, and it inverted silently; the
-  in-tree statement of it is `ui/theme/panel.go`'s comment ("Width and Height are the
-  box's TOTAL size, borders included … the upgrade guide does not mention it").
+  `Width`**, so `Width(w)` renders exactly `w` columns (`style.go`:
+  `width -= horizontalBorderSize`). That inverted the v1 behaviour this line used to
+  describe, and it inverted silently; the in-tree statement of it is
+  `ui/theme/panel.go`'s comment ("Width and Height are the box's TOTAL size, borders
+  included … the upgrade guide does not mention it").
   **Copy `commandPalette.go`** — `Width(p.width)` beside `inner := p.width - 6` is the
   self-consistent pair. `cmdLogOverlay.go` carries that same comment over
   `Width(c.width + 2)` *and* the same `inner := c.width - 6`, which cannot both be
@@ -376,18 +388,17 @@ unbounded list, user-authored text with no natural width.
 - `truncate.StringWithTail(s, w, "…")` replaces a character at **exactly** `w`, not only
   above it. Guard it with a `lipgloss.Width(s) <= w` check, or a fixed marker built to
   fit its budget reads back as `(repo…`.
-- Add it to `app/frame_restore_test.go` if its `barVisible` is false,
-  or exempt it there with a reason — the walk over `numStates` fails otherwise.
-  Its `opens` entry is also the **only** place in the tree that presses an opener key
-  and asserts the state changed, which is what the keybinding table's site 4 cannot
-  prove. Hiding the
-  bar hands its row to the panes; closing without recomputing the
-  layout leaves the frame a line taller than the terminal, and the alt-screen
-  renderer never erases it. `view_bounds_test` cannot see this: it only measures
-  a *freshly armed* overlay, never one that has been closed. The recompute itself
-  is guarded once, in `Update` — it compares `menuVisible` before and after every
-  message — so a state left by an async message is covered as well as one closed
-  by a key, and no `dismiss*` helper needs a `recomputeLayout()` of its own.
+- Add it to `app/frame_restore_test.go` if its `barVisible` is false, or exempt it
+  there with a reason — the walk over `numStates` fails otherwise. Its `opens` entry
+  is also the **only** place in the tree that presses an opener key and asserts the
+  state changed, which is what the keybinding table's site 4 cannot prove. Hiding
+  the bar hands its row to the panes; closing without recomputing the layout leaves
+  the frame a line taller than the terminal, and the alt-screen renderer never
+  erases it. `view_bounds_test` cannot see this: it only measures a *freshly armed*
+  overlay, never one that has been closed. The recompute itself is guarded once, in
+  `Update` — it compares `menuVisible` before and after every message — so a state
+  left by an async message is covered as well as one closed by a key, and no
+  `dismiss*` helper needs a `recomputeLayout()` of its own.
 - Overlay states must be handled **before** the global quit/esc keys, or `q` quits
   while the user is typing. That ordering is structural now — `handleKeyPress` runs
   every registered `keys` handler before its globals — so it cannot be got wrong per

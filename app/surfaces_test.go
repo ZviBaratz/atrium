@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -19,15 +20,21 @@ import (
 
 // TestEverySurfaceSpecIsComplete requires every state's slot in surfaceSpecs to
 // be filled and self-identifying: st equals the index (a forgotten slot is
-// zero-valued and fails here before its false bar bit or nil handler can ship,
-// and a misplaced entry fails the same way), and fixture is non-empty, unique,
-// and names an existing golden under testdata/frames — the same name
-// frameStates hands the parity, fingerprint, bounds and hardtab sweeps.
+// zero-valued and fails here before its false bar bit or nil handler can ship;
+// a whole entry moved under another state's key never reaches this guard,
+// because every index is claimed and the keyed literal makes that a
+// duplicate-index compile error — what compiles and lands here is a swapped
+// pair of keys or a mistyped st), and fixture is non-empty, unique, and names
+// an existing golden under testdata/frames — the same name frameStates hands
+// the parity, fingerprint, bounds and hardtab sweeps. The reverse direction
+// closes the walk: every file under testdata/frames is claimed by some state,
+// so a renamed fixture cannot leave its old golden behind reading as current.
 //
 // Mutation-verified: deleting an entry (stateDefault's fails on the empty
 // fixture, since its st is the zero value; any other state's fails on st),
-// changing an entry's st to another state's, duplicating a fixture name, and
-// pointing a fixture at a missing golden each fail here.
+// changing an entry's st to another state's, duplicating a fixture name,
+// pointing a fixture at a missing golden, and dropping a stray file into
+// testdata/frames each fail here.
 func TestEverySurfaceSpecIsComplete(t *testing.T) {
 	seen := make(map[string]state, len(surfaceSpecs))
 	for st := stateDefault; st < numStates; st++ {
@@ -43,6 +50,20 @@ func TestEverySurfaceSpecIsComplete(t *testing.T) {
 		golden := filepath.Join("testdata", "frames", spec.fixture+".txt")
 		if _, err := os.Stat(golden); err != nil {
 			t.Errorf("surfaceSpecs[%d].fixture = %q names no golden: %v — the name must match a file the parity sweep reads", int(st), spec.fixture, err)
+		}
+	}
+
+	// The reverse direction: the frames directory holds nothing the table does
+	// not claim. An unclaimed golden is a renamed fixture's abandoned twin (or
+	// a surface that lost its entry), and it would read as current forever —
+	// CS_UPDATE_GOLDEN only ever regenerates the claimed names. A non-.txt
+	// file fails too, on purpose: the directory holds goldens and nothing else.
+	entries, err := os.ReadDir(filepath.Join("testdata", "frames"))
+	require.NoError(t, err)
+	for _, entry := range entries {
+		name := strings.TrimSuffix(entry.Name(), ".txt")
+		if _, claimed := seen[name]; !claimed {
+			t.Errorf("testdata/frames/%s is claimed by no state — delete the orphan or fix the fixture name that abandoned it", entry.Name())
 		}
 	}
 }

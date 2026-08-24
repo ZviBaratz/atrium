@@ -983,10 +983,11 @@ func (m *home) reconcileInFlightStarts(ctx context.Context) {
 // holding "q" would quit the app with no confirmation, and one holding the word
 // "esc" would cancel the create form and discard the draft.
 //
-// So paste gets its own routing, and the states below are the enumeration of
-// where text can land. Anywhere else — the list, the rail, a confirmation, hint
-// mode — a paste is inert, because there is nothing there for text to mean. That
-// is the property v1's brackets bought, reached without borrowing the mechanism.
+// So paste gets its own routing, and surfaceSpecs' paste entries are the
+// enumeration of where text can land. Anywhere else — the list, the rail, a
+// confirmation, hint mode — a paste is inert, because there is nothing there
+// for text to mean. That is the property v1's brackets bought, reached without
+// borrowing the mechanism.
 func (m *home) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 	if msg.Content == "" {
 		return m, nil

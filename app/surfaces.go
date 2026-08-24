@@ -15,6 +15,7 @@ package app
 
 import (
 	"github.com/ZviBaratz/atrium/log"
+	"github.com/ZviBaratz/atrium/ui/overlay"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -38,10 +39,9 @@ type surfaceSpec struct {
 
 	// render returns the overlay content viewContent places over the composed
 	// frame. nil: the state renders in the frame itself (the list, panes and
-	// bar own every pixel, and viewContent returns the frame unadorned). Each
-	// closure keeps its old ladder arm verbatim: log a nil overlay, then render
-	// it anyway — a state and its overlay are set together, so the log is a
-	// loud breadcrumb for a bug, not a recovery path.
+	// bar own every pixel, and viewContent returns the frame unadorned).
+	// Non-nil entries are built by renderOverlay, which keeps each old ladder
+	// arm's shape: log a nil overlay, then render it anyway.
 	render func(m *home) string
 
 	// keys handles a key press in this state, replacing one handleKeyPress
@@ -80,24 +80,43 @@ type surfaceSpec struct {
 // work (#802) can evolve sizing into data without re-shaping the table.
 type sizeSpec func(m *home, msg tea.WindowSizeMsg)
 
+// renderOverlay builds one overlay field's render closure: log a nil pointer,
+// then render it anyway — a state and its overlay are set together, so the log
+// is a loud breadcrumb for a bug, not a recovery path. The getter returns the
+// field's concrete pointer type on purpose: an interface-typed accessor would
+// box a nil pointer into a non-nil interface value and skip the breadcrumb.
+func renderOverlay[T any, P interface {
+	*T
+	Render() string
+}](name string, field func(m *home) P) func(m *home) string {
+	return func(m *home) string {
+		o := field(m)
+		if o == nil {
+			log.ErrorLog.Printf("%s is nil", name)
+		}
+		return o.Render()
+	}
+}
+
 // renderTextOverlay is the shared render for stateHelp and stateInfo, which
 // display different content through the same textOverlay field — the enum's one
 // many-to-one.
-func renderTextOverlay(m *home) string {
-	if m.textOverlay == nil {
-		log.ErrorLog.Printf("text overlay is nil")
-	}
-	return m.textOverlay.Render()
-}
+var renderTextOverlay = renderOverlay("text overlay",
+	func(m *home) *overlay.TextOverlay { return m.textOverlay })
 
 // surfaceSpecs is the registry, indexed by state. Declared empty and filled in
 // init because a package-level initializer that references the key handlers
 // cannot compile: Go's initialization-dependency analysis is transitive through
 // function bodies, and the handlers reach recomputeLayout, whose
 // updateHandleWindowSizeEvent reads this very table (as does menuVisible) — an
-// initialization cycle. Assigning in init breaks that analysis edge; the keyed
-// literal keeps entry-under-wrong-state a compile error rather than a test
-// failure.
+// initialization cycle. Assigning in init breaks that analysis edge, at a
+// price the compiler no longer polices: an init in a sibling file that sorts
+// before this one would read a zero table — every handler nil, every bar
+// hidden — without a panic to say so, so no other init in the package may
+// reach the readers. The keyed literal makes a whole entry moved under the
+// wrong state a duplicate-index compile error (every index is claimed); what
+// compiles — two entries' keys swapped, an st mistyped — is what
+// TestEverySurfaceSpecIsComplete catches.
 var surfaceSpecs [numStates]surfaceSpec
 
 func init() {
@@ -114,12 +133,8 @@ func init() {
 		},
 		statePrompt: {
 			st: statePrompt, fixture: "prompt",
-			render: func(m *home) string {
-				if m.textInputOverlay == nil {
-					log.ErrorLog.Printf("text input overlay is nil")
-				}
-				return m.textInputOverlay.Render()
-			},
+			render: renderOverlay("text input overlay",
+				func(m *home) *overlay.TextInputOverlay { return m.textInputOverlay }),
 			keys: (*home).handlePromptState,
 			size: func(m *home, msg tea.WindowSizeMsg) {
 				if m.textInputOverlay != nil {
@@ -151,12 +166,8 @@ func init() {
 		},
 		stateConfirm: {
 			st: stateConfirm, fixture: "confirm",
-			render: func(m *home) string {
-				if m.confirmationOverlay == nil {
-					log.ErrorLog.Printf("confirmation overlay is nil")
-				}
-				return m.confirmationOverlay.Render()
-			},
+			render: renderOverlay("confirmation overlay",
+				func(m *home) *overlay.ConfirmationOverlay { return m.confirmationOverlay }),
 			keys: (*home).handleConfirmState,
 			size: func(m *home, msg tea.WindowSizeMsg) {
 				if m.confirmationOverlay != nil {
@@ -169,12 +180,8 @@ func init() {
 		},
 		stateRename: {
 			st: stateRename, fixture: "rename",
-			render: func(m *home) string {
-				if m.renameOverlay == nil {
-					log.ErrorLog.Printf("rename overlay is nil")
-				}
-				return m.renameOverlay.Render()
-			},
+			render: renderOverlay("rename overlay",
+				func(m *home) *overlay.RenameOverlay { return m.renameOverlay }),
 			// Rename runs before the global q/ctrl+c quit handling so those keys
 			// edit (or cancel) the label instead of quitting the app.
 			keys: (*home).handleRenameState,
@@ -189,33 +196,25 @@ func init() {
 		},
 		stateQueue: {
 			st: stateQueue, fixture: "queue",
-			render: func(m *home) string {
-				if m.queueOverlay == nil {
-					log.ErrorLog.Printf("queue overlay is nil")
-				}
-				return m.queueOverlay.Render()
-			},
+			render: renderOverlay("queue overlay",
+				func(m *home) *overlay.QueueOverlay { return m.queueOverlay }),
 			// q is swallowed by the queue overlay rather than quitting; esc is
 			// what closes it.
 			keys: (*home).handleQueueState,
 			size: func(m *home, msg tea.WindowSizeMsg) {
 				if m.queueOverlay != nil {
-					w := int(float32(msg.Width) * 0.6)
-					if w > 80 {
-						w = 80
-					}
-					m.queueOverlay.SetWidth(w)
+					// The queue box shares the history picker's responsive width,
+					// and historyOverlayWidth owns the one expression of it — the
+					// opener sends tea.RequestWindowSize, so this closure is the
+					// queue's only sizing site.
+					m.queueOverlay.SetWidth(historyOverlayWidth(msg.Width))
 				}
 			},
 		},
 		stateCmdLog: {
 			st: stateCmdLog, fixture: "cmdlog",
-			render: func(m *home) string {
-				if m.cmdLogOverlay == nil {
-					log.ErrorLog.Printf("command-log overlay is nil")
-				}
-				return m.cmdLogOverlay.Render()
-			},
+			render: renderOverlay("command-log overlay",
+				func(m *home) *overlay.CmdLogOverlay { return m.cmdLogOverlay }),
 			keys: (*home).handleCmdLogState,
 			size: func(m *home, msg tea.WindowSizeMsg) {
 				if m.cmdLogOverlay != nil {
@@ -258,12 +257,8 @@ func init() {
 		},
 		stateSettings: {
 			st: stateSettings, fixture: "settings",
-			render: func(m *home) string {
-				if m.settingsOverlay == nil {
-					log.ErrorLog.Printf("settings overlay is nil")
-				}
-				return m.settingsOverlay.Render()
-			},
+			render: renderOverlay("settings overlay",
+				func(m *home) *overlay.SettingsOverlay { return m.settingsOverlay }),
 			// Settings, like the other overlay states, runs before the global quit
 			// handling so q/esc and printable keys reach the panel.
 			keys: (*home).handleSettingsState,
@@ -312,12 +307,8 @@ func init() {
 		},
 		stateWelcome: {
 			st: stateWelcome, fixture: "welcome",
-			render: func(m *home) string {
-				if m.welcomeOverlay == nil {
-					log.ErrorLog.Printf("welcome overlay is nil")
-				}
-				return m.welcomeOverlay.Render()
-			},
+			render: renderOverlay("welcome overlay",
+				func(m *home) *overlay.WelcomeOverlay { return m.welcomeOverlay }),
 			keys: (*home).handleWelcomeState,
 			size: func(m *home, msg tea.WindowSizeMsg) {
 				if m.welcomeOverlay != nil {
@@ -330,12 +321,8 @@ func init() {
 		},
 		stateAccounts: {
 			st: stateAccounts, fixture: "accounts",
-			render: func(m *home) string {
-				if m.accountsOverlay == nil {
-					log.ErrorLog.Printf("accounts overlay is nil")
-				}
-				return m.accountsOverlay.Render()
-			},
+			render: renderOverlay("accounts overlay",
+				func(m *home) *overlay.AccountsOverlay { return m.accountsOverlay }),
 			// Accounts, like the other overlay states, runs before the global quit
 			// handling so q/esc and printable keys reach the panel.
 			keys: (*home).handleAccountsState,
@@ -357,8 +344,9 @@ func init() {
 			st: stateScreensaver, fixture: "screensaver",
 			// Bare on purpose, not forgotten: the splash replaces the whole frame
 			// before viewContent consults render, and handleKeyPress consumes
-			// every key (dismissing) before the table lookup — see
-			// dismissScreensaver for the full exit inventory. barVisible is true
+			// every key but ctrl+l (a repaint must not tear the splash down)
+			// before the table lookup, dismissing — see dismissScreensaver for
+			// the full exit inventory. barVisible is true
 			// because the old menuVisible switch let this state fall through to
 			// its default arm; the reserved row is simply never composed while the
 			// splash is up.
@@ -366,31 +354,21 @@ func init() {
 		},
 		stateHistory: {
 			st: stateHistory, fixture: "history",
-			render: func(m *home) string {
-				if m.promptHistoryOverlay == nil {
-					log.ErrorLog.Printf("prompt history overlay is nil")
-				}
-				return m.promptHistoryOverlay.Render()
-			},
+			render: renderOverlay("prompt history overlay",
+				func(m *home) *overlay.PromptHistoryOverlay { return m.promptHistoryOverlay }),
 			keys: (*home).handleHistoryState,
 			size: func(m *home, msg tea.WindowSizeMsg) {
 				if m.promptHistoryOverlay != nil {
-					w := int(float32(msg.Width) * 0.6)
-					if w > 80 {
-						w = 80
-					}
-					m.promptHistoryOverlay.SetWidth(w)
+					// The same width the picker opened with: historyOverlayWidth
+					// owns the expression, so open and resize cannot drift apart.
+					m.promptHistoryOverlay.SetWidth(historyOverlayWidth(msg.Width))
 				}
 			},
 		},
 		stateCommandPalette: {
 			st: stateCommandPalette, fixture: "commandPalette",
-			render: func(m *home) string {
-				if m.commandPaletteOverlay == nil {
-					log.ErrorLog.Printf("command palette overlay is nil")
-				}
-				return m.commandPaletteOverlay.Render()
-			},
+			render: renderOverlay("command palette overlay",
+				func(m *home) *overlay.CommandPaletteOverlay { return m.commandPaletteOverlay }),
 			// The palette runs before the global quit handling so that q and
 			// every other printable key narrows the filter instead of quitting
 			// the app mid-query.
@@ -429,12 +407,8 @@ func init() {
 		},
 		stateCustomCommands: {
 			st: stateCustomCommands, fixture: "customCommands",
-			render: func(m *home) string {
-				if m.customCommandsOverlay == nil {
-					log.ErrorLog.Printf("custom commands overlay is nil")
-				}
-				return m.customCommandsOverlay.Render()
-			},
+			render: renderOverlay("custom commands overlay",
+				func(m *home) *overlay.CustomCommandsOverlay { return m.customCommandsOverlay }),
 			// The custom-commands menu runs before the global quit handling for
 			// the same reason as the palette, and more sharply: its rows are keyed
 			// by whatever the user configured, so q really can be a command key
@@ -466,12 +440,8 @@ func init() {
 		},
 		stateCheckpoints: {
 			st: stateCheckpoints, fixture: "checkpoints",
-			render: func(m *home) string {
-				if m.checkpointOverlay == nil {
-					log.ErrorLog.Printf("checkpoint overlay is nil")
-				}
-				return m.checkpointOverlay.Render()
-			},
+			render: renderOverlay("checkpoint overlay",
+				func(m *home) *overlay.CheckpointOverlay { return m.checkpointOverlay }),
 			// The checkpoint timeline runs before the global quit handling too: r
 			// reloads it here rather than resuming a paused session, and q must be
 			// swallowed rather than quit the app out from under an open box (as in
@@ -498,12 +468,8 @@ func init() {
 		},
 		stateImagePreview: {
 			st: stateImagePreview, fixture: "imagePreview",
-			render: func(m *home) string {
-				if m.imageOverlay == nil {
-					log.ErrorLog.Printf("image overlay is nil")
-				}
-				return m.imageOverlay.Render()
-			},
+			render: renderOverlay("image overlay",
+				func(m *home) *overlay.ImageOverlay { return m.imageOverlay }),
 			// The image preview, like the other overlay states, runs before the
 			// global quit handling: it is a read-only box with one gesture, so
 			// every other key — q included — is swallowed rather than acted on

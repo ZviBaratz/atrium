@@ -1151,8 +1151,10 @@ func promptHistoryTexts(entries []config.PromptHistoryEntry) []string {
 	return texts
 }
 
-// historyOverlayWidth sizes the prompt-history picker to ~60% of the terminal,
-// capped at 80 — the same responsive box the queue overlay uses.
+// historyOverlayWidth sizes the prompt-history picker — and the queue overlay,
+// whose size closure in surfaceSpecs shares the box — to ~60% of the terminal,
+// capped at 80. The picker's opener and both resize closures all call it, so
+// the widths cannot drift apart.
 func historyOverlayWidth(termWidth int) int {
 	w := int(float32(termWidth) * 0.6)
 	if w > 80 {
