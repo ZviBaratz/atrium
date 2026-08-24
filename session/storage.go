@@ -304,7 +304,7 @@ func (s *Storage) SaveInstances(instances []*Instance) error {
 
 // bringInstancesOnline is the seam LoadInstances brings its rehydrated instances
 // online through. A package var — matching the package's own test-seam idiom
-// (worktreeCleanup, repoGroupKey) — so a test can pin what the loader is itself
+// (repoGroupKey, execSetup) — so a test can pin what the loader is itself
 // responsible for: handing over the whole fleet, in stored order, under the cap it
 // resolved from config, and returning the report unchanged. Production always uses
 // bringOnline, whose rationing is tested directly against injected tmux deps.

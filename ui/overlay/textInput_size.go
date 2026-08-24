@@ -55,6 +55,30 @@ const (
 	// TestFitOverlay_DropsTheHeadingBeforeTheCreateButton, which fail if this section
 	// grows a second RENDERED row, and are indifferent to this number.
 	depsSectionLines = 2
+	// collapsedClaudeSectionLines is the height the ONE section a non-claude form
+	// renders (see renderCollapsedClaudeFields) occupies. It is deliberately the sum
+	// of the three it replaces, not the two rows it has anything to say in: the block
+	// pads itself back out to this.
+	//
+	// Padding rather than shrinking, because this section sits ABOVE nothing and
+	// BELOW the variant control that toggles it. The collapse flips under a ↑/↓ on
+	// that control, and the app centres this overlay with PlaceOverlay, which
+	// re-centres on every height change — so a section that shortened here would
+	// move the very row the user is holding a key on, and move it back on the next
+	// press. Handing the freed rows to the pickers and the prompt instead is WORSE,
+	// not better: those render above the variant row, so the row is pushed down by
+	// the reflow at the same time as the re-centre lifts the form, and the two add
+	// (measured: 8 rows against 4 for a plain shrink, 0 for this).
+	//
+	// The rows are not wasted at the size where rows are scarce. fitOverlay drops
+	// blank lines before anything else, so at the 80×24 floor this block's padding is
+	// the first thing shed and the form is exactly what it would have been had the
+	// block never padded — which is where #690 measured the defect and where
+	// TestCreateForm_FloorGoldens renders it.
+	//
+	// Derived, not written down: a hand-written number here could drift from the
+	// three constants it must equal, and the drift would be a silent re-centre.
+	collapsedClaudeSectionLines = modelSectionLines + effortSectionLines + modeSectionLines
 )
 
 // SetSize is given the full terminal dimensions. The create form keeps every section at a
