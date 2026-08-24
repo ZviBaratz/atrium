@@ -397,6 +397,66 @@ func repoScriptProblemsReport(problems []repocfg.Problem) string {
 	return strings.Join(lines, "\n")
 }
 
+// flushThemeProblems opens the startup report for the user theme files the loader
+// refused (#813), once the screen is free. Nil while an overlay owns the screen, and
+// the buffer is cleared as it fires so the preview tick cannot reopen it forever — the
+// shape flushCustomCommandProblems uses.
+//
+// Its own report rather than a section of a shared "your config has problems" modal,
+// for the reason flushRepoScriptProblems is separate: the two fail for unrelated
+// reasons, and showInfo switches to stateInfo as it builds, so a second flush in the
+// same tick defers itself to the next one rather than clobbering the first.
+func (m *home) flushThemeProblems() tea.Cmd {
+	if len(m.pendingThemeProblems) == 0 || m.state != stateDefault {
+		return nil
+	}
+	problems := m.pendingThemeProblems
+	m.pendingThemeProblems = nil
+	return m.showInfo(themeProblemsReport(problems))
+}
+
+// themeProblemsReport is that modal's text, bounded on both axes for the reason
+// customCommandProblemsReport is: a themes directory can hold any number of broken
+// files, and both the filename and the failing value are user-authored.
+func themeProblemsReport(problems []error) string {
+	if len(problems) == 0 {
+		return ""
+	}
+	noun := "files"
+	if len(problems) == 1 {
+		noun = "file"
+	}
+	lines := []string{fmt.Sprintf(
+		"%d theme %s in the themes directory %s ignored:",
+		len(problems), noun, wereOrWas(len(problems)))}
+	shown := problems
+	if len(shown) > customCommandProblemsShown {
+		shown = shown[:customCommandProblemsShown]
+	}
+	for _, p := range shown {
+		lines = append(lines, "  "+clipReportLine(p.Error()))
+	}
+	if len(problems) > len(shown) {
+		lines = append(lines, fmt.Sprintf("  … and %d more", len(problems)-len(shown)))
+	}
+	// Naming the consequence: a refused theme is not in the picker at all, so the
+	// symptom is a palette that is simply missing — and if config.json names it, the
+	// UI falls back to the default without saying why.
+	//
+	// Three short lines rather than two long ones. The overlay hugs its content and caps
+	// at the terminal width less four, and pads two columns each side, so 72 cells is
+	// what survives an 80-column terminal unwrapped — and a wrapped line costs a row the
+	// modal's height budget never counted. The entry lines above can still wrap: they
+	// carry a user-authored filename and are only clipped at reportLineBudget, which is
+	// the trade every one of this modal's siblings makes. These do not have to.
+	// TestThemeProblemsReportFitsANarrowTerminal holds them to it.
+	lines = append(lines, "",
+		"Those palettes are not selectable.",
+		"A `theme` naming one falls back to the default.",
+		"`atrium doctor` reports the same list.")
+	return strings.Join(lines, "\n")
+}
+
 // flushSetupFailures opens the report for a session whose repo environment came up
 // short of what config.json asked for (#389): a setup script that failed, or a
 // port_range with nothing free. Once the screen is free.

@@ -426,6 +426,13 @@ type home struct {
 	// that then died — and appended to when this process writes one itself, so a live TUI
 	// does not make the user wait for a relaunch to hear about an orphan it just made.
 	pendingCreateDisclosures []outbox.DisclosureEntry
+
+	// pendingThemeProblems buffers the user theme files the loader refused (#813), for
+	// the preview tick to toast once there is a frame. Buffered rather than logged
+	// alone for the reason the keybinding and repo_scripts reports are: a refused theme
+	// is invisible in the UI — the palette simply is not in the picker — so the only
+	// symptom is an absence, which is exactly the failure a user cannot diagnose.
+	pendingThemeProblems []error
 	// unrecordedCreates holds the disclosures this process wrote for the OTHER #732 case: a
 	// create whose session is live and whose row is not, because persistInstances failed.
 	// Those are never reported by this process — the session is in the list, so a modal
@@ -892,14 +899,10 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 
 	// Activate the configured UI theme before any component is constructed, so
 	// theme.Current() is correct everywhere it's read (assembleHome's spinner
-	// included). The palette and the glyph set (plain vs Nerd-Font) are
-	// independent axes.
-	theme.Set(appConfig.GetTheme())
-	theme.SetGlyphSet(appConfig.GetGlyphSet())
-	// The detection ladder's lower rung, read once, for terminals that will never
-	// answer the OSC 11 query Init also sends. It sits here so the ladder's order is
-	// visible in one place: Init's query outranks this if an answer arrives.
-	theme.SetScheme(initialScheme())
+	// included). ApplyThemeAtLaunch also runs from main.go, ahead of tmux.Init, so the
+	// managed conf's bar band matches (#574); this second call is what keeps the
+	// refusals, because there is no frame to toast on out there.
+	themeProblems := ApplyThemeAtLaunch(appConfig)
 
 	// Load application state
 	appState := config.LoadState()
@@ -948,6 +951,7 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 	// on its account (#622). pendingParkReports owns which of the two buffers is filled.
 	h.pendingDeferredRecovery, h.pendingEarlierRecovery = pendingParkReports(deferred, instances, time.Now())
 	h.pendingCreateDisclosures = pendingDisclosures
+	h.pendingThemeProblems = themeProblems
 	// Write back any account identities assembleHome healed (#470). Doing it here
 	// keeps that constructor IO-free, and persisting eagerly is what lets `atrium ls`
 	// and the daemon — separate processes that read the stored rows raw — agree with

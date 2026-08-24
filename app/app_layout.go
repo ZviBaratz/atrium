@@ -330,8 +330,14 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 	case "theme", "glyph_set":
 		// Styles read theme.Current() lazily at render time, so swapping the
 		// palette / glyph set plus a forced repaint restyles the whole UI in place.
-		theme.Set(m.appConfig.GetTheme())
-		theme.SetGlyphSet(m.appConfig.GetGlyphSet())
+		//
+		// Through ApplyThemeAtLaunch rather than theme.Set directly, so saving this row
+		// re-reads the themes directory: that is what makes editing a theme file take
+		// effect without a restart, which is the whole of the apply-on-save contract an
+		// fs-watcher was declined in favour of. Refusals are buffered, not toasted here
+		// — the settings overlay owns the screen at this moment, and the preview tick's
+		// flush is what waits for it to close.
+		m.pendingThemeProblems = ApplyThemeAtLaunch(m.appConfig)
 		// The spinner snapshots its frames at construction (assembleHome), so a
 		// rung change that alters them (ascii's |/-\ vs the Braille dots) would not
 		// show until relaunch. The list holds &m.spinner, so re-seeding the frames

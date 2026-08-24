@@ -308,6 +308,37 @@ func TestSettingsOverlay_CycleThemeWraps(t *testing.T) {
 	assert.Equal(t, names[(indexOf(names, start)+len(names)-1)%len(names)], cfg.Theme)
 }
 
+// TestSettingsOverlay_ThemeRowOffersUserThemes is the picker half of #813: a palette
+// loaded from a file is selectable, or the file did nothing.
+//
+// It drives the row's cycle rather than reading options() — the row's own list is what
+// the arrow keys walk, so a list that contained the theme while the cycle skipped it
+// would pass a weaker check. Cycling to it also proves the theme is a legal value for
+// the config field, which is what the settings panel persists.
+func TestSettingsOverlay_ThemeRowOffersUserThemes(t *testing.T) {
+	const name = "fixture-user-theme"
+	fixture := *theme.Get(theme.DefaultThemeName)
+	fixture.Name = name
+	t.Cleanup(theme.SetUserThemes(map[string]*theme.Theme{name: &fixture}))
+
+	cfg := config.DefaultConfig()
+	o := NewSettingsOverlay(cfg)
+	settingsAt(t, o, "theme")
+
+	names := theme.SelectableNames()
+	require.Contains(t, names, name, "precondition: the picker's vocabulary carries it")
+
+	for range names {
+		if cfg.Theme == name {
+			return
+		}
+		_, changed := o.HandleKeyPress(keyMsg("right"))
+		require.Equal(t, "theme", changed)
+	}
+	assert.Failf(t, "the theme row never reached the user theme",
+		"cycled %d options without landing on %q", len(names), name)
+}
+
 // TestSettingsOverlay_CycleModelIndicator pins the model-chip enum: defaults
 // to on, cycles on → off, and wraps back to on.
 func TestSettingsOverlay_CycleModelIndicator(t *testing.T) {

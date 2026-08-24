@@ -1688,7 +1688,7 @@ Advanced — shown in the Category column below. A key with no panel row carries
 | `show_release_notes_after_update` | Updates | bool | `true` | "what's new" overlay once after an update |
 | `double_tap_confirm` | Input | bool | `true` | a second press of the key that opened a confirmation confirms it, so `ctrl-x` `ctrl-x` kills and `P` `P` pushes in one motion. It gates the shortcut, not the dialog: the box and its warning are shown either way, and `y` still confirms. Armed on the kill, push, create-PR, merge, batch-pause, batch-resume and over-capacity-resume dialogs |
 | `kill_double_tap_confirm` | — | bool | `true` | *deprecated* — superseded by `double_tap_confirm`; still read for back-compat (it decides when `double_tap_confirm` is unset, so an explicit `false` is not silently undone) |
-| `theme` | Appearance | string | `"auto"` | color palette + border style. The default, `auto`, follows the terminal's own background (dark → `tokyo-night`, light → `tokyo-night-day`, no answer → `tokyo-night`). Name a palette to pin one: `tokyo-night` / `catppuccin-mocha` for a dark terminal, `tokyo-night-day` / `catppuccin-latte` for a light one, `unicode` (tokyo-night with square borders). A palette named explicitly never auto-switches |
+| `theme` | Appearance | string | `"auto"` | color palette + border style. The default, `auto`, follows the terminal's own background (dark → `tokyo-night`, light → `tokyo-night-day`, no answer → `tokyo-night`). Name a palette to pin one: `tokyo-night` / `catppuccin-mocha` for a dark terminal, `tokyo-night-day` / `catppuccin-latte` for a light one, `unicode` (tokyo-night with square borders), or the name of a [user theme](#user-themes). A palette named explicitly never auto-switches |
 | `splash` | Appearance | string | random | empty-state splash pattern (`""`/`"random"` = fresh each launch; `"off"` = no animation, just the wordmark) |
 | `glyph_set` | Appearance | string | `"plain"` | icon fidelity rung: `nerd` (vendor Nerd-Font icons, needs a patched font), `plain` (Unicode that renders on any font — the default), `ascii` (7-bit floor for terminals where even plain Unicode shows tofu) |
 | `image_preview` | Appearance | string | `"auto"` | how an agent-produced image opens when you uppercase-hint its path: `auto` (real pixels on kitty and Ghostty when Atrium is not inside tmux, block glyphs everywhere else — the default; running kitty *inside* tmux gets glyphs, because tmux does not forward the graphics protocol), `kitty` (attempt pixels even where the terminal isn't recognised — a terminal with the graphics protocol but not Unicode placeholders answers and then draws blanks or boxes, which nothing can detect, so switch to `glyph` if that happens; does **not** yet make tmux work either — the payload is not wrapped in tmux's passthrough envelope), `glyph` (never attempt pixels), `off` (no overlay; hinting an image path just copies it) |
@@ -1729,6 +1729,58 @@ Advanced — shown in the Category column below. A key with no panel row carries
 | `notify_when_focused` | Notifications | bool | `false` | keep notifying while Atrium's terminal is focused; `false` stays silent while you're watching ([Notifications](#notifications)) |
 | `notify_throttle_seconds` | Notifications | int | `3` | minimum gap between two of the same signal for one session; `0` throttles nothing ([Cadence knobs](#cadence-knobs)) |
 | `pending_watchdog_minutes` | Advanced | int | `30` | how long a session may wait on background work before Atrium marks it finished; `1`–`1440` ([Cadence knobs](#cadence-knobs)) |
+
+##### User themes
+
+Drop a JSON file in `~/.atrium/themes/` and its name becomes a value `theme` accepts.
+The filename stem is the theme's name, so `~/.atrium/themes/midnight.json` is
+`"theme": "midnight"`; it must be lowercase letters, digits and dashes.
+
+```json
+{
+  "extends": "tokyo-night",
+  "palette": {
+    "bg":        "#0b0c14",
+    "attention": "#ffb454",
+    "danger":    "#ff5370"
+  }
+}
+```
+
+`extends` names one of the built-in themes — `tokyo-night` (the default if you omit
+it), `catppuccin-mocha`, `tokyo-night-day`, `catppuccin-latte`, `unicode` — and supplies
+every token the file does not, along with the glyph set and the border style. A theme
+file cannot extend another theme file, and cannot change glyphs or borders; the glyph
+set is its own setting (`glyph_set`).
+
+The eighteen semantic tokens, grouped by role:
+
+- **Backgrounds** — `bg` (the colour of the void — Atrium never paints a full-screen
+  fill, so this is what your terminal is showing), `bg_elevated` (selected-row and
+  panel fill), `bar_bg` (the in-session header band).
+- **Text** — `fg` (primary), `fg_dim` (secondary), `fg_faint` (tertiary, and inactive
+  borders and rules).
+- **Accents** — `accent` (active border, selection), `accent_muted`, `purple` (app
+  title and banner).
+- **Status** — `success` (ready, additions), `success_dim` (a Ready session already
+  seen), `working` (the busy tint, which deliberately recedes), `pending` (outstanding
+  background work), `attention` (waiting or behind — nothing else may use it), `danger`
+  (deletions, errors, destructive actions), `cyan` (hunks, info).
+- **Badge** — `badge_bg`, `badge_fg` (the AUTO chip).
+
+Colours are canonical `#rrggbb`; `#fff` and colour names are refused rather than
+guessed at.
+
+**A palette that is not legible is refused, never adjusted.** Every file is checked
+against the same contrast floors the built-in themes are held to, and a file that misses
+one is dropped with the token and its measured ratio named — Atrium will not quietly
+darken a colour you chose. The report appears as a notice at launch and under
+`atrium doctor`, which also lists the themes that loaded (a file in neither list is in
+the wrong directory). A refused theme is not offered in the settings picker, and a
+`theme` naming one falls back to the default.
+
+Changes take effect when you save the theme row in the settings panel (`,`) or on the
+next launch; there is no file watcher.
 
 ##### `NO_COLOR`
 

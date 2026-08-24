@@ -62,3 +62,13 @@ func Hex(c Color) string {
 	// the mask says the range out loud instead of asserting it in a cast.
 	return fmt.Sprintf("#%02x%02x%02x", r>>8&0xff, g>>8&0xff, b>>8&0xff)
 }
+
+// ParseHex is the inverse of Hex: it turns a canonical "#rrggbb" string into a palette
+// colour. It lives beside Hex so both directions of the colour seam are in one file.
+//
+// It does NOT validate. A caller handing it something other than canonical hex — a
+// shorthand, a colour word, empty — gets whatever lipgloss makes of it, which for an
+// unparseable value is black rather than an error. Validation belongs at the boundary
+// that has a filename and a key to name in the message (ui/theme/themefile), and doing
+// it twice would mean two spellings of "what counts as a colour".
+func ParseHex(s string) Color { return lipgloss.Color(s) }

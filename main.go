@@ -109,9 +109,7 @@ var (
 
 			if daemonFlag {
 				cfg := config.LoadConfig()
-				if err := tmux.Init(cfg.TmuxConfigOverride, cfg.GetSessionContextBar()); err != nil {
-					log.WarningLog.Printf("failed to initialize tmux config: %v", err)
-				}
+				initAppearanceAndTmux(cfg)
 				if err := daemon.RunDaemon(ctx, cfg); err != nil {
 					log.ErrorLog.Printf("failed to start daemon: %v", err)
 					return err
@@ -140,9 +138,7 @@ var (
 			}
 			defer releaseTUILock()
 
-			if err := tmux.Init(cfg.TmuxConfigOverride, cfg.GetSessionContextBar()); err != nil {
-				log.WarningLog.Printf("failed to initialize tmux config: %v", err)
-			}
+			initAppearanceAndTmux(cfg)
 
 			// Program flag overrides config
 			program := cfg.GetProgram()
@@ -516,6 +512,16 @@ var (
 				fmt.Print(kb)
 			}
 
+			// User themes: same silence a third time, and the sharpest of the three. A
+			// theme file the loader refuses is simply not in the picker, and a config.json
+			// naming it falls back to the default — so the only symptom is a palette that
+			// never appears. The loaded names are printed too: a file in neither list is in
+			// the wrong directory, which no refusal message can say.
+			if th := doctor.RenderThemes(doctor.CheckThemes()); th != "" {
+				fmt.Println()
+				fmt.Print(th)
+			}
+
 			// Account state keys: state.json indexes the cluster order, the rate-limit
 			// flags and the rotation cursors by account/pool NAME, so a rename can leave
 			// entries naming something config no longer has. Harmless (unknown names are
@@ -546,6 +552,35 @@ var (
 // probe. It runs `gh auth status` under the same short probe budget; any nonzero
 // exit (not logged in, misconfigured) counts as unauthenticated. gh is optional,
 // so this never fails the command — it only downgrades gh's reported state.
+// initAppearanceAndTmux activates the configured theme and THEN materializes the
+// managed tmux config, in that order, for both processes that render one: the
+// interactive TUI and the autoyes daemon.
+//
+// The order is the whole function. tmux renders the in-session status band itself, from
+// the status-style baked into the managed conf, and renderManagedConfig reads
+// theme.Current() to fill it. Before this existed both branches called tmux.Init here
+// while theme.Set ran later, inside app.Run's newHome — so the band was always the
+// DEFAULT palette's, whatever the user had configured, on every session started that
+// run (#574). It self-healed the moment the settings panel's theme row was touched,
+// which is why it survived so long.
+//
+// The daemon needs it as much as the TUI does, and that is not symmetry for its own
+// sake: Init rewrites the managed file wholesale, so a daemon launched at TUI exit
+// would otherwise stamp the default band back over the one the user just chose.
+//
+// Theme-file refusals are logged rather than returned. There is no frame to toast on in
+// either process at this point; the TUI reaches them again through newHome, which
+// buffers them for the preview tick, and `atrium doctor` reports the same list.
+// tmux.Init's error is likewise only logged here, as it was before — app_layout.go is
+// the caller that routes it to a modal, and returning it from startup would refuse to
+// launch over a status bar.
+func initAppearanceAndTmux(cfg *config.Config) {
+	app.ApplyThemeAtLaunch(cfg)
+	if err := tmux.Init(cfg.TmuxConfigOverride, cfg.GetSessionContextBar()); err != nil {
+		log.WarningLog.Printf("failed to initialize tmux config: %v", err)
+	}
+}
+
 func ghAuthChecker(ctx context.Context) error {
 	return exec.CommandContext(ctx, "gh", "auth", "status").Run()
 }

@@ -1,7 +1,6 @@
 package theme
 
 import (
-	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -13,107 +12,25 @@ import (
 // Deliberately moved rather than copied — two implementations of "how bright is
 // this" would let the contrast oracle and the splash's polarity decision disagree
 // about a palette in the middle, silently.
-
-// contrast_test.go is the oracle for the one property a rendering test cannot
-// see: whether the palette is READABLE. Every other theme guard here asks about
-// width, shape or vocabulary; none of them would notice a foreground that
-// disappeared into the background, which is exactly how three dark-tuned themes
-// shipped as the only options (#394).
 //
-// The floors are set from the MINIMUM across the shipped dark themes with margin,
-// so this lands green on what exists today and constrains what is added next. It
-// is not an accessibility certification — the tokens Atrium deliberately renders
-// faint would fail WCAG AA and should — it is a floor under "did someone pick a
-// colour nobody can see".
+// The oracle itself has now made the same journey for the same reason and lives in
+// contrast.go: a user theme file has to be validated at LOAD time, not at review time
+// (#813). The floors, the tiers and the reasoning behind them are all there; this file
+// is one of its two callers, holding the shipped palettes to it. The other is
+// ui/theme/themefile.
 //
-// The per-token checks below use assert, not require, on purpose: a palette that
-// misses is meant to report EVERY token it misses in one run. Tightening these to
-// require would abort at the first one and turn tuning a new palette into one
-// round per token.
+// Validate reports every miss rather than the first, which preserves the property the
+// per-token assert loop here used to provide: a palette that misses is meant to report
+// EVERY token it misses in one run, or tuning a new palette costs one round per token.
+// Where a check below still loops it uses assert, not require, for the same reason.
 
-// contrastRatio is WCAG 2.1's contrast ratio: 1.0 for two identical colours,
-// 21.0 for black on white. Order-independent.
-func contrastRatio(a, b Color) float64 {
-	la, lb := relLuminanceOf(a), relLuminanceOf(b)
-	hi, lo := math.Max(la, lb), math.Min(la, lb)
-	return (hi + 0.05) / (lo + 0.05)
-}
-
-// tokenFloor is the minimum contrast a palette token must hold against its own
-// theme's Bg. Bg is the reference because Atrium never paints a full-screen
-// background — Palette.Bg means "the colour of the void", i.e. what the terminal
-// itself shows — so a token's legibility is its ratio against it.
-//
-// The tiers are roles, not tastes. Status and text tokens carry meaning and get
-// 4.5. SuccessDim gets its own 3.0: it is a status colour, but the dimming that
-// marks a Ready session as already seen costs it the 4.5 tier by a hair — 4.35 on
-// tokyo-night against 4.60 on mocha — so it holds WCAG's large-text/non-text
-// threshold instead of a floor three of the four distinct palettes already miss
-// (4.35 tokyo-night, 4.04 tokyo-night-day, 3.13 catppuccin-latte). The three
-// tokens Atrium deliberately recedes (FgDim, Working, and AccentMuted, whose
-// 2.55-on-tokyo-night-day to 8.69-on-mocha spread is why it cannot share Accent's
-// floor) get 2.4. FgFaint and BarBg are the faint slate — in every shipped palette
-// they are literally the SAME colour, a deliberate choice, not a defect — so they
-// get 1.6. BgElevated is a selection fill that must merely be distinguishable, so
-// 1.1.
-var tokenFloors = map[string]struct {
-	floor float64
-	get   func(Palette) Color
-}{
-	"Fg":          {4.5, func(p Palette) Color { return p.Fg }},
-	"Accent":      {4.5, func(p Palette) Color { return p.Accent }},
-	"Purple":      {4.5, func(p Palette) Color { return p.Purple }},
-	"Success":     {4.5, func(p Palette) Color { return p.Success }},
-	"Pending":     {4.5, func(p Palette) Color { return p.Pending }},
-	"Attention":   {4.5, func(p Palette) Color { return p.Attention }},
-	"Danger":      {4.5, func(p Palette) Color { return p.Danger }},
-	"Cyan":        {4.5, func(p Palette) Color { return p.Cyan }},
-	"SuccessDim":  {3.0, func(p Palette) Color { return p.SuccessDim }},
-	"FgDim":       {2.4, func(p Palette) Color { return p.FgDim }},
-	"Working":     {2.4, func(p Palette) Color { return p.Working }},
-	"AccentMuted": {2.4, func(p Palette) Color { return p.AccentMuted }},
-	"FgFaint":     {1.6, func(p Palette) Color { return p.FgFaint }},
-	"BarBg":       {1.6, func(p Palette) Color { return p.BarBg }},
-	"BgElevated":  {1.1, func(p Palette) Color { return p.BgElevated }},
-}
-
-// pairFloors are the token pairs that meet each other directly rather than over
-// Bg, each at the site that renders them. Every one of these is a real render,
-// named here in the order the table lists them: BadgeFg over BadgeBg is the
-// per-session AUTO chip (ui/list_render.go, and its legend in app/help.go),
-// Foreground(Bg) over Background(Accent) is the picker's selected row
-// (ui/overlay/styles.go), over Background(Attention) is the notice banner
-// (app/banner.go), Fg over BgElevated is the selected list row (ui/row.go), and
-// Fg over BarBg is the diff anchor (ui/diff_anchor.go).
-var pairFloors = []struct {
-	name  string
-	floor float64
-	fg    func(Palette) Color
-	bg    func(Palette) Color
-}{
-	{"BadgeFg on BadgeBg", 4.5, func(p Palette) Color { return p.BadgeFg }, func(p Palette) Color { return p.BadgeBg }},
-	{"Bg on Accent (selected row)", 4.5, func(p Palette) Color { return p.Bg }, func(p Palette) Color { return p.Accent }},
-	{"Bg on Attention (banner)", 4.5, func(p Palette) Color { return p.Bg }, func(p Palette) Color { return p.Attention }},
-	{"Fg on BgElevated (selected list row)", 4.5, func(p Palette) Color { return p.Fg }, func(p Palette) Color { return p.BgElevated }},
-	{"Fg on BarBg (diff anchor)", 4.5, func(p Palette) Color { return p.Fg }, func(p Palette) Color { return p.BarBg }},
-}
-
-// KNOWN, DELIBERATELY UNASSERTED: FgDim on BarBg. ui/contextbar.go's barState renders
-// Paused and the default state in FgDim on the bar's band, which is 1.44:1 on tokyo-night
-// and 1.87:1 on catppuccin-mocha — while ComposeSessionContext's comment, describing the
-// band barState draws onto, says "dim greys wash out" there. It is a real legibility
-// defect on the DARK themes, found by this oracle while it was being written, and it is
-// filed rather than fixed here: fixing it means choosing a new colour for a state, which
-// is a design decision and not #394's subject. Do not add it to pairFloors without fixing
-// barState in the same change.
-
-// TestPaletteContrastFloors holds every registered palette to the floors above.
-// Iterating Names() rather than a hand-listed table is deliberate: a theme
-// registered later is covered without anyone remembering to add it here.
+// TestPaletteContrastFloors holds every registered palette to the oracle. Iterating
+// Names() rather than a hand-listed table is deliberate: a theme registered later is
+// covered without anyone remembering to add it here — which since #813 includes a
+// theme the user wrote, the kind no human reviewed.
 //
 // Five names register today but only four palettes are distinct — unicode reuses
-// tokyo-night's and varies only its borders — which is why the header counts five
-// themes while the tier note counts four palettes, and why breaking a tokyo-night
+// tokyo-night's and varies only its borders — which is why breaking a tokyo-night
 // token reports two failing subtests rather than one.
 func TestPaletteContrastFloors(t *testing.T) {
 	names := Names()
@@ -121,20 +38,95 @@ func TestPaletteContrastFloors(t *testing.T) {
 
 	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
-			p := Get(name).Palette
-			for token, spec := range tokenFloors {
-				got := contrastRatio(spec.get(p), p.Bg)
-				assert.GreaterOrEqualf(t, got, spec.floor,
-					"%s: %s contrast against Bg is %.2f, below the %.2f floor for its role",
-					name, token, got, spec.floor)
-			}
-			for _, pair := range pairFloors {
-				got := contrastRatio(pair.fg(p), pair.bg(p))
-				assert.GreaterOrEqualf(t, got, pair.floor,
-					"%s: %s contrast is %.2f, below the %.2f floor",
-					name, pair.name, got, pair.floor)
+			for _, v := range Validate(Get(name).Palette) {
+				assert.Failf(t, "palette token below its floor", "%s: %s", name, v.Error())
 			}
 		})
+	}
+}
+
+// TestEveryTokenIsFlooredOrExempt is the bidirectional guard over the oracle's own
+// tables: every palette token either carries a floor or is named in the exemption map
+// with a reason, and nothing in either map is a token that does not exist.
+//
+// Without it a nineteenth token would be added to Palette and checked by nothing —
+// the failure mode the settings panel's reflection guard exists to prevent for Config
+// fields, in the one other place a struct is the source of a vocabulary.
+func TestEveryTokenIsFlooredOrExempt(t *testing.T) {
+	known := map[string]bool{}
+	for _, name := range TokenNames() {
+		known[name] = true
+		_, floored := tokenFloors[name]
+		reason, exempt := tokenFloorExempt[name]
+		assert.Truef(t, floored != exempt,
+			"token %q must have exactly one of a floor and an exemption (floored=%v, exempt=%v)",
+			name, floored, exempt)
+		if exempt {
+			assert.NotEmptyf(t, reason, "token %q is exempt with no reason", name)
+		}
+	}
+	for name := range tokenFloors {
+		assert.Truef(t, known[name], "tokenFloors names %q, which is not a palette token", name)
+	}
+	for name := range tokenFloorExempt {
+		assert.Truef(t, known[name], "tokenFloorExempt names %q, which is not a palette token", name)
+	}
+}
+
+// TestValidateReportsEveryMiss holds Validate to the property the refusal message
+// depends on: a palette that misses several floors reports all of them, so a user
+// tuning one does not pay a round trip per token.
+//
+// The fixture drops Fg, Accent and Purple onto the background — three distinct TOKEN
+// floors, so the count cannot be satisfied by pair violations alone.
+func TestValidateReportsEveryMiss(t *testing.T) {
+	p := Get(DefaultThemeName).Palette
+	p.Fg, p.Accent, p.Purple = p.Bg, p.Bg, p.Bg
+
+	names := map[string]bool{}
+	for _, v := range Validate(p) {
+		names[v.Name] = true
+		assert.Lessf(t, v.Got, v.Floor,
+			"%s reported as a violation but measures %.2f against its %.2f floor", v.Name, v.Got, v.Floor)
+	}
+	for _, want := range []string{"fg", "accent", "purple"} {
+		assert.Truef(t, names[want], "a palette with %s == bg must report %s; got %v", want, want, names)
+	}
+}
+
+// TestValidatePassesEveryShippedPalette is the negative control for the test above:
+// the oracle is not simply failing everything handed to it.
+func TestValidatePassesEveryShippedPalette(t *testing.T) {
+	for _, name := range BuiltinNames() {
+		assert.Emptyf(t, Validate(Get(name).Palette), "%s is shipped and must clear its own floors", name)
+	}
+}
+
+// TestBarBandColoursAreFloored pins #555's fix to what it was about: every colour
+// ui/contextbar.go's barState can paint onto the bar's BarBg band has a pair floor.
+//
+// It names the tokens rather than calling barState, which it cannot reach without an
+// import cycle — so this is a claim about another file, and the rule for those applies:
+// when barState changes, open it and check this list. Today it paints fg for the
+// neutral states (running, loading, paused, default), success for ready, attention for
+// needs-input and pending for pending. Before #813 the neutral arms painted fg_dim,
+// which is 1.44:1 on tokyo-night, and no pair floor covered the band at all.
+func TestBarBandColoursAreFloored(t *testing.T) {
+	floored := map[string]bool{}
+	for _, pair := range pairFloors {
+		floored[pair.name] = true
+		// The token that used to be there must not come back: fg_dim's own floor is 2.4
+		// against Bg, which says nothing about the band.
+		assert.NotContainsf(t, pair.name, "fg_dim on bar_bg",
+			"fg_dim is floored against the band, which means barState is painting a receding token there again")
+	}
+	for _, name := range []string{
+		"fg on bar_bg",
+		"success on bar_bg",
+		"attention on bar_bg",
+		"pending on bar_bg",
+	} {
+		assert.Truef(t, floored[name], "barState paints this on the band, unfloored: %s", name)
 	}
 }
 
@@ -149,28 +141,28 @@ func TestPaletteContrastFloors(t *testing.T) {
 // now two — the brand hex and its light-background form — and only AgentGlyph knows
 // which one a given palette gets, so a check that read either map alone would pass
 // while the wrong one shipped. Reading the resolved colour also means the light
-// table is covered here with no second assertion.
+// table is covered here with no second assertion — and, since Names() carries user
+// themes, so is a palette written by someone who never heard of these two colours.
 func TestAgentBrandColoursStayLegible(t *testing.T) {
-	const brandFloor = 3.0 // glyphs, not prose: a single mark at width 1
 	require.NotEmpty(t, agentColors)
 	require.NotEmpty(t, agentColorsLight)
 	for _, name := range Names() {
 		th := Get(name)
 		for key := range agentColors {
 			_, c := th.AgentGlyph(key)
-			got := contrastRatio(c, th.Palette.Bg)
-			assert.GreaterOrEqualf(t, got, brandFloor,
+			got := ContrastRatio(c, th.Palette.Bg)
+			assert.GreaterOrEqualf(t, got, glyphFloor,
 				"%s: the %s brand glyph is %.2f against Bg, below the %.2f floor",
-				name, key, got, brandFloor)
+				name, key, got, glyphFloor)
 		}
 	}
 }
 
 // TestIsLightAgreesWithTheRegistry pins which shipped palettes are light. The
 // predicate exists because three consumers outside this file need the same answer —
-// the agent brand accents, the splash's brightness channel, and the scheme axis to
-// come — and independent luminance thresholds would eventually disagree about a
-// palette in the middle.
+// the agent brand accents, the splash's brightness channel, and the scheme axis —
+// and independent luminance thresholds would eventually disagree about a palette in
+// the middle.
 func TestIsLightAgreesWithTheRegistry(t *testing.T) {
 	for _, name := range []string{"tokyo-night", "catppuccin-mocha", "unicode"} {
 		assert.Falsef(t, IsLight(Get(name).Palette), "%s is a dark palette", name)
@@ -194,6 +186,10 @@ func TestIsLightAgreesWithTheRegistry(t *testing.T) {
 // palettes fail it as published, which is why light.go's values are derived from
 // upstream rather than copied from it.
 //
+// Only floored tokens are compared: an unfloored one (bg itself, the badge pair) has
+// no role tier to be measured against, and bg's ratio to itself is 1.00 in both
+// palettes, which would compare vacuously.
+//
 // assert, not require, inside the loop, matching this file's other per-theme
 // checks: a mis-tuned palette should report every token it misses in one run rather
 // than one round per token.
@@ -211,9 +207,14 @@ func TestLightPaletteMatchesItsDarkTwin(t *testing.T) {
 				"lightTwin is keyed by a theme that is not registered under that name")
 
 			dp, lp := Get(dark).Palette, Get(light).Palette
-			for token, spec := range tokenFloors {
-				dr := contrastRatio(spec.get(dp), dp.Bg)
-				lr := contrastRatio(spec.get(lp), lp.Bg)
+			for _, token := range TokenNames() {
+				if _, floored := tokenFloors[token]; !floored {
+					continue
+				}
+				at := tokenAt(token)
+				require.NotNilf(t, at, "TokenNames returned %q, which tokenAt does not know", token)
+				dr := ContrastRatio(*at(&dp), dp.Bg)
+				lr := ContrastRatio(*at(&lp), lp.Bg)
 				ratio := lr / dr
 				assert.Truef(t, ratio >= lo && ratio <= hi,
 					"%s: %s holds %.2f contrast where %s holds %.2f (%.0f%% of it, outside %.0f-%.0f%%)",

@@ -63,6 +63,21 @@ func WorktreesDir() (string, error) {
 	return filepath.Join(configDir, "worktrees"), nil
 }
 
+// ThemesDir returns the directory that holds user theme files:
+// <config dir>/themes. Like WorktreesDir it must always derive from GetConfigDir,
+// never a hardcoded ~/.atrium or ~/.claude-squad, so a legacy install finds its own.
+//
+// Atrium never creates it. A theme is something the user writes, and an empty
+// directory in everyone's data dir would suggest otherwise; the loader treats a
+// missing one as "no user themes" rather than as a failure.
+func ThemesDir() (string, error) {
+	configDir, err := GetConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(configDir, "themes"), nil
+}
+
 // DefaultDaemonPollIntervalMs is the built-in autoyes daemon poll interval in
 // milliseconds. It is the value DefaultConfig seeds and the floor the daemon
 // falls back to when a loaded config carries a non-positive interval (the field

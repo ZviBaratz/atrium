@@ -3,6 +3,7 @@ package theme
 import (
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"charm.land/lipgloss/v2"
@@ -279,26 +280,117 @@ var registry = map[string]*Theme{
 	"unicode":          unicodeFallback,
 }
 
+// userRegistry holds the palettes loaded from user theme files (#813), swapped whole
+// by SetUserThemes. It is SEPARATE from registry above rather than merged into it for
+// two reasons that both matter:
+//
+//   - registry is a package-level literal that nothing ever writes, and it stays that
+//     way. A user theme is loaded at launch and re-loaded when the settings panel saves
+//     the theme row, so its map is written after init — a different lifetime, and one
+//     that must not be able to REPLACE a built-in. Separate maps make shadowing
+//     structurally impossible; the loader refuses a colliding name by name instead, so
+//     the user is told rather than silently overriding tokyo-night.
+//   - An atomic pointer, not a mutex. Nothing here is on the render hot path, but
+//     Names() feeds SelectableNames(), which is one hop from a tea.Cmd, and the rest of
+//     this package's mutable state (current, curScheme, mono) is already lock-free for
+//     the same "the getter promises any goroutine" reason. One swap of an
+//     already-built map cannot be observed half-applied.
+//
+// The zero value is a nil pointer, which reads as "no user themes" — the state every
+// install is in until a file is loaded.
+var userRegistry atomic.Pointer[map[string]*Theme]
+
+// userThemes returns the loaded user palettes, never nil.
+func userThemes() map[string]*Theme {
+	if m := userRegistry.Load(); m != nil {
+		return *m
+	}
+	return nil
+}
+
+// SetUserThemes replaces the whole set of user themes and returns a function that
+// restores the previous set — the Set/SetGlyphSet idiom, so a test cannot leave a
+// fixture palette registered for the rest of the suite.
+//
+// It does NOT recompose the active theme. A caller that has just changed which
+// palettes exist calls Set afterwards, which is what every production caller does
+// anyway (the selection may itself be one of the themes being replaced), and what
+// keeps this function's job to one thing.
+//
+// The map is copied on the way in so a caller that keeps and mutates its own copy
+// cannot reach the registered one — the same reason Theme.agentGlyphs is unexported.
+func SetUserThemes(m map[string]*Theme) (restore func()) {
+	prev := userRegistry.Load()
+	next := make(map[string]*Theme, len(m))
+	for k, v := range m {
+		next[k] = v
+	}
+	userRegistry.Store(&next)
+	return func() { userRegistry.Store(prev) }
+}
+
 // Get resolves a theme name (case/space-insensitive), falling back to the
 // default for empty or unknown names. It never returns nil.
+//
+// Built-ins are consulted first. A user theme can therefore never shadow one, which is
+// the invariant that lets the loader treat a colliding filename as an error the author
+// can see rather than as a silent, load-order-dependent override.
 func Get(name string) *Theme {
-	if t, ok := registry[strings.ToLower(strings.TrimSpace(name))]; ok {
+	key := strings.ToLower(strings.TrimSpace(name))
+	if t, ok := registry[key]; ok {
+		return t
+	}
+	if t, ok := userThemes()[key]; ok {
 		return t
 	}
 	return registry[DefaultThemeName]
 }
 
-// Names returns the registered theme names (unordered); useful for docs/help.
-func Names() []string {
+// BuiltinNames returns the names of the themes compiled into the binary, sorted.
+//
+// Separate from Names() because two callers need "the five", not "everything
+// registered": the user-theme loader, which refuses a filename that would shadow a
+// built-in and lists the legal `extends` values, and any report that distinguishes what
+// Atrium ships from what the user wrote. Deriving it from the same map Get() indexes is
+// what keeps that list from becoming a hand-maintained second copy of the registry.
+func BuiltinNames() []string {
 	names := make([]string, 0, len(registry))
 	for n := range registry {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// IsBuiltin reports whether a name is one of the themes compiled into the binary.
+func IsBuiltin(name string) bool {
+	_, ok := registry[strings.ToLower(strings.TrimSpace(name))]
+	return ok
+}
+
+// Names returns the registered theme names — built-in and user — unordered; useful for
+// docs/help.
+//
+// User themes are included so every sweep that iterates this list covers them too: the
+// splash's canonical-hex check, the glyph width sweep, the contrast oracle and the
+// settings picker were all written against "every registered theme", and a user palette
+// is exactly the kind that has not been reviewed by a human.
+func Names() []string {
+	user := userThemes()
+	names := make([]string, 0, len(registry)+len(user))
+	for n := range registry {
+		names = append(names, n)
+	}
+	for n := range user {
 		names = append(names, n)
 	}
 	return names
 }
 
 // SelectableNames returns what a user may set `theme` to: AutoThemeName first (it
-// is the recommended value), then every registered theme, sorted.
+// is the recommended value), then every registered theme, sorted — user themes
+// included, since Names() carries them and a loaded palette a user cannot select is a
+// file that did nothing.
 //
 // It lives here rather than in the settings overlay so theme vocabulary has one
 // home. Names() deliberately still returns only the registry, because every
