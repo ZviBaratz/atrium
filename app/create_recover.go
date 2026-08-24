@@ -729,14 +729,14 @@ func branchOwner(instances []*session.Instance, repo, branch string) (title stri
 	want := filepath.Clean(repo)
 	var elsewhere string
 	for _, inst := range instances {
-		if inst.Branch != branch {
+		if inst.Branch() != branch {
 			continue
 		}
 		if filepath.Clean(inst.Path) == want {
-			return inst.Title, true
+			return inst.Title(), true
 		}
 		if elsewhere == "" {
-			elsewhere = inst.Title
+			elsewhere = inst.Title()
 		}
 	}
 	return elsewhere, false

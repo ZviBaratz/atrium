@@ -24,7 +24,7 @@ import (
 // from removed sessions are never queried (InstanceAtZone only checks rows
 // currently in the list).
 func listRowZoneID(i *session.Instance) string {
-	return "list-row-" + i.GroupKey() + "\x00" + i.Title
+	return "list-row-" + i.GroupKey() + "\x00" + i.Title()
 }
 
 // listHeaderZoneID is the bubblezone marker id for a repo-group header row,

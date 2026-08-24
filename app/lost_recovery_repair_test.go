@@ -230,7 +230,7 @@ func TestFinishBlankRelaunches_SizesTheRelaunchedPane(t *testing.T) {
 		return nil
 	}
 
-	h.finishBlankRelaunches([]lostRecovery{{instance: inst, title: inst.Title, relaunchedBlank: true}})
+	h.finishBlankRelaunches([]lostRecovery{{instance: inst, title: inst.Title(), relaunchedBlank: true}})
 
 	require.Same(t, inst, gotInst, "the pane sized is the one that was just relaunched")
 	require.Equal(t, wantW, gotW, "sized to the preview's width")
@@ -239,7 +239,7 @@ func TestFinishBlankRelaunches_SizesTheRelaunchedPane(t *testing.T) {
 	// The control: a park has no new pane to size, and its instance is on its way to
 	// Paused, where SetPreviewSize refuses anyway.
 	gotInst = nil
-	h.finishBlankRelaunches([]lostRecovery{{instance: inst, title: inst.Title}})
+	h.finishBlankRelaunches([]lostRecovery{{instance: inst, title: inst.Title()}})
 	require.Nil(t, gotInst, "only a relaunch produces a pane that needs sizing")
 }
 

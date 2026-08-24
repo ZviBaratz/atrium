@@ -36,7 +36,7 @@ func reattachableInstance(t *testing.T, saved Status) *Instance {
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
 	}
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, aliveExec)
-	return &Instance{Title: "sess", status: saved, Program: "claude", tmuxSession: ts}
+	return &Instance{ident: identity{title: "sess"}, status: saved, Program: "claude", tmuxSession: ts}
 }
 
 // TestReattach_ArmsSuppressionOnlyWhenSavedReady pins the reattach path that had
@@ -100,7 +100,7 @@ func TestReattach_PausedDoesNoIO(t *testing.T) {
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { execCalls++; return nil, fmt.Errorf("dead") },
 	}
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, countingExec)
-	inst := &Instance{Title: "sess", status: Paused, Program: "claude", tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "sess"}, status: Paused, Program: "claude", tmuxSession: ts}
 
 	require.False(t, inst.paneSurvived(), "a paused instance has no live pane to reserve a slot for")
 	require.Zero(t, execCalls, "and answering that must not cost a tmux call")

@@ -101,7 +101,7 @@ func TestWorkingDirGone_OrphanedWorktreeIsStillFreed(t *testing.T) {
 // shell in a directory that is very much there.
 func TestWorkingDirGone_DirectSessionRecoveryTouchesNothing(t *testing.T) {
 	dir := t.TempDir()
-	inst := &Instance{Title: "d", status: Running, started: true, direct: true, Path: dir, tmuxSession: directTmux("d")}
+	inst := &Instance{ident: identity{title: "d"}, status: Running, started: true, direct: true, Path: dir, tmuxSession: directTmux("d")}
 
 	require.NoError(t, inst.RecoverLostSession())
 
@@ -127,7 +127,7 @@ func TestWorkingDirGone_UnstattableDirectoryIsNotReportedGone(t *testing.T) {
 	require.NoError(t, os.Chmod(parent, 0o000))
 	t.Cleanup(func() { _ = os.Chmod(parent, 0o755) })
 
-	inst := &Instance{Title: "d", status: Running, started: true, direct: true, Path: dir}
+	inst := &Instance{ident: identity{title: "d"}, status: Running, started: true, direct: true, Path: dir}
 
 	_, err := os.Stat(dir)
 	require.Error(t, err, "precondition: the directory is unstattable")
@@ -141,7 +141,7 @@ func TestWorkingDirGone_UnstattableDirectoryIsNotReportedGone(t *testing.T) {
 // an uncached key — but it would make the predicate say "this session's directory
 // was removed" about a session that never had one.
 func TestWorkingDirGone_EmptyWorkingDirIsNotGone(t *testing.T) {
-	inst := &Instance{Title: "d", status: Running, direct: true}
+	inst := &Instance{ident: identity{title: "d"}, status: Running, direct: true}
 
 	require.Empty(t, inst.WorkingDir(), "precondition: the fixture has no working directory")
 	require.False(t, inst.WorkingDirGone(), "no working directory is not a removed working directory")

@@ -88,7 +88,7 @@ func startedFixture(t *testing.T, specs ...fixtureSpec) []*session.Instance {
 	require.NoError(t, err)
 	require.Len(t, loaded, len(specs))
 	for _, inst := range loaded {
-		require.Truef(t, inst.Started(), "fixture %q must be started for the policy to see it", inst.Title)
+		require.Truef(t, inst.Started(), "fixture %q must be started for the policy to see it", inst.Title())
 	}
 	return loaded
 }

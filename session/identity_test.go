@@ -196,7 +196,7 @@ func TestGroupKeyDedupsColdComputation(t *testing.T) {
 
 	// A non-direct, not-yet-started instance: no worktree, not direct, so
 	// GroupKey takes the cold (subprocess) branch.
-	inst := &Instance{Title: "x", Path: t.TempDir()}
+	inst := &Instance{ident: identity{title: "x"}, Path: t.TempDir()}
 
 	const n = 32
 	var wg sync.WaitGroup
@@ -225,13 +225,12 @@ func TestInstanceRenameMintsQualifiedTmuxName(t *testing.T) {
 	require.NoError(t, wt.Setup())
 
 	inst := &Instance{
-		Title:       "old-name",
+		ident:       identity{title: "old-name", branch: wt.GetBranchName()},
 		Path:        repoPath,
 		status:      Running,
 		started:     true,
 		gitWorktree: wt,
 		tmuxSession: liveTmux(t, "old-name"),
-		Branch:      wt.GetBranchName(),
 	}
 
 	require.NoError(t, renameAndAdopt(inst, "new-name"))

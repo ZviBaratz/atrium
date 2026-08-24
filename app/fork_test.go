@@ -87,7 +87,7 @@ func TestSelectedCheckpoint_RefusesWhenThereIsNothingSelected(t *testing.T) {
 // intent flag. A key can be handled, documented in the footer, and dead.
 func TestForkKeyOpensTheSeededForm(t *testing.T) {
 	h := openForkTimeline(t)
-	source := h.checkpointTarget.Title
+	source := h.checkpointTarget.Title()
 
 	h.handleCheckpointsState(runeKey("f"))
 
@@ -209,7 +209,7 @@ func TestFirstFreeTitle(t *testing.T) {
 	// which is the whole point of the scoping.
 	inst := h.list.GetSelectedInstance()
 	require.NotNil(t, inst)
-	inst.Title = "alpha-fork"
+	require.NoError(t, inst.SetTitle("alpha-fork"))
 	h.newSessionGroup = inst.GroupKey()
 	require.NotEmpty(t, h.variantTitleConflict("alpha-fork", path, true),
 		"the fixture must actually collide, or the suffix step proves nothing")
@@ -577,7 +577,7 @@ func openForkTimelineIn(t *testing.T, repo, branch string) *home {
 	t.Helper()
 	h, inst := checkpointHome(t)
 	inst.Path = repo
-	inst.Branch = branch
+	inst.SetBranch(branch)
 	h.newSessionPath = repo
 	_, _ = h.openCheckpoints()
 	require.NotNil(t, h.checkpointOverlay)

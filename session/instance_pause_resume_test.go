@@ -171,7 +171,7 @@ func pausableInstance(t *testing.T, wt *git.Worktree) *Instance {
 	t.Helper()
 	srv := newFakeTmuxServer(t)
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", srv, srv.exec())
-	return &Instance{Title: "sess", status: Running, started: true, gitWorktree: wt, tmuxSession: ts}
+	return &Instance{ident: identity{title: "sess"}, status: Running, started: true, gitWorktree: wt, tmuxSession: ts}
 }
 
 // TestPauseResume_RoundTripsWithoutHistoryArtifact is the core acceptance test
@@ -282,7 +282,7 @@ func TestUnwindAutoPauseCommits_CollapsesStackedAutoCommits(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(wtPath, "b.txt"), []byte("b\n"), 0644))
 	require.NoError(t, wt.CommitChanges(autoMsg("Tue")))
 
-	inst := &Instance{Title: "sess", gitWorktree: wt}
+	inst := &Instance{ident: identity{title: "sess"}, gitWorktree: wt}
 	n, err := inst.unwindAutoPauseCommits(wt)
 	require.NoError(t, err)
 	require.Equal(t, 2, n, "both stacked auto-commits are reported as unwound")
@@ -305,7 +305,7 @@ func TestUnwindAutoPauseCommits_PreservesRealCommit(t *testing.T) {
 	require.NoError(t, wt.CommitChanges("feat: a real change"))
 	headBefore := gitOutput(t, wtPath, "rev-parse", "HEAD")
 
-	inst := &Instance{Title: "sess", gitWorktree: wt}
+	inst := &Instance{ident: identity{title: "sess"}, gitWorktree: wt}
 	n, err := inst.unwindAutoPauseCommits(wt)
 	require.NoError(t, err)
 	require.Equal(t, 0, n, "a real HEAD is never unwound, so nothing is reported")
@@ -369,7 +369,7 @@ func TestResumeKeepsTheBranchWhenTheParkedSessionWillNotClose(t *testing.T) {
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
 	}
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", newRecordingPtyFactory(t, nil), stuck)
-	inst := &Instance{Title: "sess", status: Paused, started: true, gitWorktree: wt, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "sess"}, status: Paused, started: true, gitWorktree: wt, tmuxSession: ts}
 
 	err := inst.Resume()
 
@@ -432,7 +432,7 @@ func TestResumeKeepsTheBranchWhenTheRelaunchFails(t *testing.T) {
 
 	srv := newParkedTmuxServerFailingLaunch(t, errors.New("pty boom"))
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", srv, srv.exec())
-	inst := &Instance{Title: "sess", status: Paused, started: true, gitWorktree: wt, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "sess"}, status: Paused, started: true, gitWorktree: wt, tmuxSession: ts}
 
 	err := inst.Resume()
 
@@ -504,7 +504,7 @@ func TestASecondResumeRecoversTheSessionAFailedOneLeft(t *testing.T) {
 
 	srv := newParkedTmuxServerFailingLaunch(t, errors.New("pty boom"))
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", srv, srv.exec())
-	inst := &Instance{Title: "sess", status: Paused, started: true, gitWorktree: wt, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "sess"}, status: Paused, started: true, gitWorktree: wt, tmuxSession: ts}
 
 	require.Error(t, inst.Resume(), "the first attempt must fail, or there is no retry to test")
 	require.True(t, inst.Paused(), "and must leave the session parked, which is what makes a retry possible")
@@ -567,7 +567,7 @@ func TestResumeClosesTheParkedSessionEvenWhenLivenessCannotAnswer(t *testing.T) 
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
 	}
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, sealed)
-	inst := &Instance{Title: "sess", status: Paused, started: true, gitWorktree: wt, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "sess"}, status: Paused, started: true, gitWorktree: wt, tmuxSession: ts}
 
 	err := inst.Resume()
 

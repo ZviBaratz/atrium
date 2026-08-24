@@ -668,14 +668,16 @@ func TestCaptureTerminalFrame_JustCreatedShellKeepsItsFallback(t *testing.T) {
 
 // TestFrameTargetSnapshotsTheTitleForTheCaptureGoroutine is the delivery half of #718.
 //
-// ui's TestCaptureGoroutineReadsNoUnguardedInstanceField proves the shell creator does not read
-// Instance.Title; nothing there proves the title it needs actually ARRIVES. Both halves
-// are needed: pass an empty string through and the AST guard still passes while every
+// ui's TestCaptureGoroutineTakesItsIdentityByParameter proves the shell creator does not read
+// Instance.Title itself; nothing there proves the title it needs actually ARRIVES. Both
+// halves are needed: pass an empty string through and the AST guard still passes while every
 // shell is created with the window name "term: " and the legacy reap probes "term_".
 //
 // The snapshot has to be taken HERE, in resolveFrameTarget, because this is the update
-// thread — the same thread AdoptRename writes Title on. Deriving it inside the ensurer is
-// the race; deriving it in captureTerminalFrame would be the same race one hop earlier.
+// thread — the thread AdoptRename runs on, so this is the one place the title is the
+// frame's. Since #795 reading it inside the ensurer would be safe rather than a race, and
+// still wrong: it would be whichever title a concurrent rename left, one hop or two away
+// from the frame being captured.
 func TestFrameTargetSnapshotsTheTitleForTheCaptureGoroutine(t *testing.T) {
 	spy := newFrameSpy("shell prompt $")
 	h, inst := newCaptureHome(t, spy)
@@ -683,7 +685,7 @@ func TestFrameTargetSnapshotsTheTitleForTheCaptureGoroutine(t *testing.T) {
 
 	target := h.resolveFrameTarget()
 	require.False(t, target.empty(), "control: an idle terminal tab must resolve a target")
-	require.Equal(t, inst.Title, target.termTitle,
+	require.Equal(t, inst.Title(), target.termTitle,
 		"resolveFrameTarget must snapshot the title on the update thread")
 
 	// Rename AFTER the target is resolved, and then run the capture. The order is what
@@ -695,9 +697,9 @@ func TestFrameTargetSnapshotsTheTitleForTheCaptureGoroutine(t *testing.T) {
 	// `ensure(target.termInstance, target.termInstance.Title)` — the #718 defect, moved
 	// one hop — and this goes red.
 	before := target.termTitle
-	renamedTo := inst.Title + "-renamed"
+	renamedTo := inst.Title() + "-renamed"
 	inst.AdoptRename(session.RenamedIdentity{
-		Title: renamedTo, Branch: inst.Branch, TmuxName: inst.TmuxSessionName(),
+		Title: renamedTo, Branch: inst.Branch(), TmuxName: inst.TmuxSessionName(),
 	})
 
 	var got string

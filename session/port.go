@@ -65,7 +65,7 @@ var livePorts = newPortRegistry()
 // owner as success (the restore path re-running), so one key for two sessions would
 // hand them both the same port and call it idempotent. Not the tmux name either, which
 // is empty until the session's first Start and the port is allocated before that.
-func (i *Instance) portOwner() string { return i.Title + "\x00" + i.Path }
+func (i *Instance) portOwner() string { return i.Title() + "\x00" + i.Path }
 
 // reserve claims a specific port for owner, reporting false when someone else holds it.
 // Reserving a port the same owner already holds succeeds — it is the restore path
@@ -202,8 +202,8 @@ func (i *Instance) reservePort(s repocfg.Script) {
 		i.setPortProblem(fmt.Sprintf(
 			"No port was free in %s for %q.\n\nThe session is running without $ATRIUM_PORT. "+
 				"Free one by killing another session in this repo, or widen port_range in config.json.",
-			rng, i.Title))
-		log.WarningLog.Printf("port_range %s is exhausted; %q starts without a port", rng, i.Title)
+			rng, i.Title()))
+		log.WarningLog.Printf("port_range %s is exhausted; %q starts without a port", rng, i.Title())
 		return
 	}
 	i.setPort(port)
@@ -239,7 +239,7 @@ func (i *Instance) claimPersistedPort() {
 		return
 	}
 	if !livePorts.reserve(port, i.portOwner()) {
-		log.WarningLog.Printf("session %q claimed port %d, which is already held; dropping it", i.Title, port)
+		log.WarningLog.Printf("session %q claimed port %d, which is already held; dropping it", i.Title(), port)
 		i.setPort(0)
 	}
 }

@@ -27,7 +27,7 @@ func claudePendingInstance(t *testing.T, content *string) *Instance {
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return []byte(*content), nil },
 	}
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", tmux.MakePtyFactory(), aliveExec)
-	return &Instance{Title: "sess", status: Running, started: true, tmuxSession: ts}
+	return &Instance{ident: identity{title: "sess"}, status: Running, started: true, tmuxSession: ts}
 }
 
 // seedInflight writes a hook record for inst's session: the working/ready latch (stateEvent
@@ -99,7 +99,7 @@ func TestPendingWatchdogCap(t *testing.T) {
 // while still working" notification — does NOT fire on entry to Pending, only on the real
 // Pending→Ready once the sub-agent completes.
 func TestPending_UnreadSemantics(t *testing.T) {
-	inst := &Instance{Title: "s", status: Running}
+	inst := &Instance{ident: identity{title: "s"}, status: Running}
 
 	inst.SetStatus(Pending) // Running → Pending: the false end-of-turn
 	require.False(t, inst.Unread(), "entering Pending must not flag unread (no false 'finished')")

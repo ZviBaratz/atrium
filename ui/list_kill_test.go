@@ -14,7 +14,7 @@ func TestKillInstanceRemovesTargetBeforeSelection(t *testing.T) {
 	if got := l.NumInstances(); got != 2 {
 		t.Fatalf("expected 2 instances after kill, got %d", got)
 	}
-	if got := l.GetSelectedInstance().Title; got != "c" {
+	if got := l.GetSelectedInstance().Title(); got != "c" {
 		t.Fatalf("expected selection to remain on 'c', got %q", got)
 	}
 }
@@ -29,7 +29,7 @@ func TestKillInstanceRemovesTargetAfterSelection(t *testing.T) {
 	if got := l.NumInstances(); got != 2 {
 		t.Fatalf("expected 2 instances after kill, got %d", got)
 	}
-	if got := l.GetSelectedInstance().Title; got != "b" {
+	if got := l.GetSelectedInstance().Title(); got != "b" {
 		t.Fatalf("expected selection to remain on 'b', got %q", got)
 	}
 }

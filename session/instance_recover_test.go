@@ -178,7 +178,7 @@ func orphanedWorktreeInstance(t *testing.T) (*Instance, *recordingPtyFactory) {
 		"sess", "session/sess", "", "main", false, "session/")
 	pty := newRecordingPtyFactory(t, nil)
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, deadExec())
-	inst := &Instance{Title: "sess", status: Running, Program: "claude", gitWorktree: wt, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "sess"}, status: Running, Program: "claude", gitWorktree: wt, tmuxSession: ts}
 	return inst, pty
 }
 
@@ -217,7 +217,7 @@ func TestRecoverInPlace_ResumesConversationWhenWorktreeValid(t *testing.T) {
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
 	}
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, liveExec)
-	inst := &Instance{Title: "sess", status: Running, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "sess"}, status: Running, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
 
 	inst.recoverInPlace()
 
@@ -248,7 +248,7 @@ func TestRecoverInPlace_StartsBlankWhenNoConversation(t *testing.T) {
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
 	}
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, liveExec)
-	inst := &Instance{Title: "sess", status: Running, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "sess"}, status: Running, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
 
 	inst.recoverInPlace()
 
@@ -268,7 +268,7 @@ func TestRecoverInPlace_FailedRestartDegradesToPaused(t *testing.T) {
 	writeClaudeTranscript(t, cfgDir, wt.GetWorktreePath())
 	pty := newRecordingPtyFactory(t, fmt.Errorf("pty boom"))
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, deadExec())
-	inst := &Instance{Title: "sess", status: Running, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "sess"}, status: Running, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
 
 	inst.recoverInPlace()
 
@@ -286,7 +286,7 @@ func TestRecreateSession_StartsBlankWhenNoConversation(t *testing.T) {
 	cfgDir := t.TempDir() // deliberately no transcript written
 	pty := newRecordingPtyFactory(t, fmt.Errorf("pty boom"))
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, deadExec())
-	inst := &Instance{Title: "sess", started: true, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "sess"}, started: true, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
 
 	err := inst.recreateSession()
 
@@ -306,7 +306,7 @@ func TestKill_CleansUpWorktreeWhenNotStarted(t *testing.T) {
 	wt := newTestWorktree(t)
 	// started is left false and no tmux session is set — exactly the state Start()'s
 	// deferred Kill() runs in when worktree setup has succeeded but a later step fails.
-	inst := &Instance{Title: "sess", gitWorktree: wt}
+	inst := &Instance{ident: identity{title: "sess"}, gitWorktree: wt}
 
 	require.NoError(t, inst.Kill())
 
@@ -338,7 +338,7 @@ func TestResume_BranchCheckedOutReturnsTypedError(t *testing.T) {
 	// A parked session, not a nil one: Resume closes what the park left behind before it
 	// checks the branch, so this refusal is now reached with the close already done.
 	ts, _ := parkedTmux(t)
-	inst := &Instance{Title: "sess", status: Paused, started: true, gitWorktree: wt, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "sess"}, status: Paused, started: true, gitWorktree: wt, tmuxSession: ts}
 
 	err := inst.Resume()
 	require.Error(t, err)
@@ -371,7 +371,7 @@ func TestRecreateSession_KeepsTheWorktreeWhenTheLaunchFails(t *testing.T) {
 
 	pty := newRecordingPtyFactory(t, fmt.Errorf("pty boom"))
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, deadExec())
-	inst := &Instance{Title: "sess", started: true, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "sess"}, started: true, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
 
 	require.Error(t, inst.recreateSession(), "the failed launch must still surface")
 

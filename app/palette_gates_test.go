@@ -204,7 +204,7 @@ func instanceFingerprint(inst *session.Instance) string {
 		return ""
 	}
 	return fmt.Sprintf("status=%v muted=%v name=%q branch=%q queued=%v",
-		inst.GetStatus(), inst.Muted(), inst.DisplayName(), inst.Branch, inst.HasQueuedPrompt())
+		inst.GetStatus(), inst.Muted(), inst.DisplayName(), inst.Branch(), inst.HasQueuedPrompt())
 }
 
 // Enter on a dimmed row must answer. It is selectable on purpose (dimmed, not

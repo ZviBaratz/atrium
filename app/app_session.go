@@ -84,7 +84,7 @@ func (m *home) pushSessionContexts() tea.Cmd {
 		var failed []*session.Instance
 		for _, p := range pending {
 			if err := p.inst.PushContext(p.name, p.left); err != nil {
-				log.WarningLog.Printf("failed to push session context for %q: %v", p.inst.Title, err)
+				log.WarningLog.Printf("failed to push session context for %q: %v", p.inst.Title(), err)
 				failed = append(failed, p.inst)
 			}
 		}
@@ -101,7 +101,7 @@ func (m *home) pushOneContext(inst *session.Instance) {
 	}
 	name, left := ui.ComposeSessionContext(inst, ui.RepoKey(inst))
 	if err := inst.SetContext(name, left); err != nil {
-		log.WarningLog.Printf("failed to push session context for %q: %v", inst.Title, err)
+		log.WarningLog.Printf("failed to push session context for %q: %v", inst.Title(), err)
 	}
 }
 
@@ -150,12 +150,12 @@ func (m *home) validateDeepRename(selected *session.Instance, value string) erro
 			}
 			continue
 		}
-		if inst.GroupKey() == group && session.DerivedNamesCollide(m.appConfig.BranchPrefix, inst.Title, value) {
+		if inst.GroupKey() == group && session.DerivedNamesCollide(m.appConfig.BranchPrefix, inst.Title(), value) {
 			return fmt.Errorf("a session named %q already exists in %s", value, group)
 		}
 		if session.DerivedTmuxNameCollides(cand, inst.TmuxSessionName()) ||
 			session.OwnedSiblingCollides(cand, inst) {
-			return fmt.Errorf("renaming to %q collides with session %q", value, inst.Title)
+			return fmt.Errorf("renaming to %q collides with session %q", value, inst.Title())
 		}
 	}
 	return nil
@@ -180,11 +180,12 @@ type renameDoneMsg struct {
 // Validation stays on the main thread (it reads m.list); only the I/O moves.
 //
 // The I/O half writes no model state at all: Instance.Rename returns the new
-// identity rather than assigning Title/Branch, because those are plain fields with no
-// mutex, read unguarded by the renderer on every frame. The handler adopts it. Keeping the
-// write off this goroutine is necessary but not by itself sufficient — what the readers on
-// OTHER goroutines are owed is a value snapshotted on the update thread; see AdoptRename
-// for the per-reader argument (#718).
+// identity rather than adopting it, and the handler applies it. The fields are guarded
+// now (#795), so this is no longer about avoiding a data race — it is about WHEN the new
+// name becomes visible. Adopting mid-I/O would let a row claim a name whose tmux session
+// or git branch had not moved yet, and would strand a failed rename halfway. What a
+// reader on another goroutine still wants is a value snapshotted on the update thread,
+// which is freshness rather than safety; see AdoptRename.
 func renameIOCmd(inst *session.Instance, value, note string) tea.Cmd {
 	return func() tea.Msg {
 		renamed, err := inst.Rename(value)
@@ -611,7 +612,7 @@ func (m *home) handlePauseDone(msg pauseDoneMsg) tea.Cmd {
 	selected := msg.instance
 	cleanupTerminalForInstance(m.tabbedWindow, selected)
 	if serr := m.persistInstances(); serr != nil {
-		log.WarningLog.Printf("failed to persist paused instance %s: %v", selected.Title, serr)
+		log.WarningLog.Printf("failed to persist paused instance %s: %v", selected.Title(), serr)
 	}
 	m.renameTarget = selected
 	m.renameOverlay = overlay.NewRenameOverlay(selected.DisplayName(), selected.Note(), true)
@@ -627,7 +628,7 @@ func (m *home) handlePauseDone(msg pauseDoneMsg) tea.Cmd {
 func (m *home) handleResumeDone(msg resumeDoneMsg) tea.Cmd {
 	if msg.err == nil {
 		if serr := m.persistInstances(); serr != nil {
-			log.WarningLog.Printf("failed to persist resumed instance %s: %v", msg.instance.Title, serr)
+			log.WarningLog.Printf("failed to persist resumed instance %s: %v", msg.instance.Title(), serr)
 		}
 		// A resume re-points the preview at a brand-new pane behind the same
 		// *Instance, so instanceChanged cannot see it — the pointer did not move. Say
@@ -779,11 +780,11 @@ func (m *home) resumeInstances(insts []*session.Instance, message, altConfirmKey
 			// every session beside it. A refusal reports like any other resume
 			// failure, so the batch summary names it.
 			if err := m.verifyResumeIdentity(inst); err != nil {
-				res.failures = append(res.failures, resumeFailure{inst.Title, err})
+				res.failures = append(res.failures, resumeFailure{inst.Title(), err})
 				continue
 			}
 			if err := inst.Resume(); err != nil {
-				res.failures = append(res.failures, resumeFailure{inst.Title, err})
+				res.failures = append(res.failures, resumeFailure{inst.Title(), err})
 				continue
 			}
 			res.resumed++
@@ -938,7 +939,7 @@ func (m *home) pauseInstances(insts []*session.Instance, message, altConfirmKey 
 				// reapStrandedShell gives. A failure here is still a teardown: most
 				// of pause()'s failing branches removed the worktree first.
 				res.failures = append(res.failures, pauseFailure{
-					inst: inst, title: inst.Title, err: err, worktreeGone: inst.WorkingDirGone(),
+					inst: inst, title: inst.Title(), err: err, worktreeGone: inst.WorkingDirGone(),
 				})
 				continue
 			}
@@ -1031,16 +1032,16 @@ func (m *home) applyBatchKill(msg batchKillDoneMsg) batchKillDoneMsg {
 	for _, out := range msg.torndown {
 		inst := out.inst
 		m.tabbedWindow.CleanupTerminalForInstance(inst)
-		storeErr := m.storage.DeleteInstance(inst.Title, inst.Path)
+		storeErr := m.storage.DeleteInstance(inst.Title(), inst.Path)
 		m.list.RemoveInstance(inst)
 		m.forgetInstance(inst)
 
 		switch {
 		case out.err != nil:
-			msg.failures = append(msg.failures, killFailure{inst.Title,
+			msg.failures = append(msg.failures, killFailure{inst.Title(),
 				fmt.Errorf("removed, but teardown was incomplete: %w", out.err)})
 		case storeErr != nil:
-			msg.failures = append(msg.failures, killFailure{inst.Title,
+			msg.failures = append(msg.failures, killFailure{inst.Title(),
 				fmt.Errorf("removed, but its saved state could not be cleared: %w", storeErr)})
 		default:
 			msg.killed++
@@ -1144,11 +1145,11 @@ func (m *home) killInstances(insts []*session.Instance, message string, altConfi
 			// deleted. Direct sessions have no branch/worktree, so skip the check.
 			if !inst.IsDirect() {
 				if worktree, err := inst.GetGitWorktree(); err != nil {
-					log.WarningLog.Printf("kill %s: cannot resolve worktree, proceeding: %v", inst.Title, err)
+					log.WarningLog.Printf("kill %s: cannot resolve worktree, proceeding: %v", inst.Title(), err)
 				} else if heldByBase, cerr := worktree.IsBranchHeldByBaseRepo(); cerr != nil {
-					log.WarningLog.Printf("kill %s: cannot verify branch checkout, proceeding: %v", inst.Title, cerr)
+					log.WarningLog.Printf("kill %s: cannot verify branch checkout, proceeding: %v", inst.Title(), cerr)
 				} else if heldByBase {
-					res.failures = append(res.failures, killFailure{inst.Title,
+					res.failures = append(res.failures, killFailure{inst.Title(),
 						fmt.Errorf("branch checked out in the main repo")})
 					continue
 				}
@@ -1501,7 +1502,7 @@ func (m *home) titleConflictIn(group, title string) string {
 	prefix := m.appConfig.BranchPrefix
 	cand := tmux.QualifiedSessionName(group, title)
 	for _, inst := range m.list.GetInstances() {
-		if inst.GroupKey() == group && session.DerivedNamesCollide(prefix, inst.Title, title) {
+		if inst.GroupKey() == group && session.DerivedNamesCollide(prefix, inst.Title(), title) {
 			return titleErrAlreadyUsed
 		}
 		if session.DerivedTmuxNameCollides(cand, inst.TmuxSessionName()) {
@@ -2319,9 +2320,9 @@ func killIOCmd(m *home, inst *session.Instance) tea.Cmd {
 		// "cannot resolve worktree" warning for a session that never had one.
 		if !inst.IsDirect() {
 			if worktree, err := inst.GetGitWorktree(); err != nil {
-				log.WarningLog.Printf("kill %s: cannot resolve worktree, proceeding: %v", inst.Title, err)
+				log.WarningLog.Printf("kill %s: cannot resolve worktree, proceeding: %v", inst.Title(), err)
 			} else if heldByBase, cerr := worktree.IsBranchHeldByBaseRepo(); cerr != nil {
-				log.WarningLog.Printf("kill %s: cannot verify branch checkout, proceeding: %v", inst.Title, cerr)
+				log.WarningLog.Printf("kill %s: cannot verify branch checkout, proceeding: %v", inst.Title(), cerr)
 			} else if heldByBase {
 				return killDoneMsg{outcome: killOutcome{inst: inst}, refused: fmt.Errorf(
 					"branch for %s is checked out in the main repo; switch it away before deleting",
@@ -2422,7 +2423,7 @@ func (m *home) applyKillDone(msg killDoneMsg) tea.Cmd {
 		return nil
 	}
 	m.tabbedWindow.CleanupTerminalForInstance(inst)
-	storeErr := m.storage.DeleteInstance(inst.Title, inst.Path)
+	storeErr := m.storage.DeleteInstance(inst.Title(), inst.Path)
 	m.list.RemoveInstance(inst)
 	m.forgetInstance(inst)
 

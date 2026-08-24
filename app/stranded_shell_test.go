@@ -58,7 +58,7 @@ func TestPauseDone_FailedPausePersistsAfterReapingTheStrandedShell(t *testing.T)
 	orig := cleanupTerminalForInstance
 	t.Cleanup(func() { cleanupTerminalForInstance = orig })
 	cleanupTerminalForInstance = func(_ *ui.TabbedWindow, reaped *session.Instance) {
-		order = append(order, "reap "+reaped.Title)
+		order = append(order, "reap "+reaped.Title())
 	}
 
 	_, _ = h.Update(pauseDoneMsg{instance: inst, err: os.ErrClosed, worktreeGone: true})

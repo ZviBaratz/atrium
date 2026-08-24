@@ -471,7 +471,7 @@ func TestNoteFrameTargetChange_ResetsTheQuietRun(t *testing.T) {
 				restore := sizeStartedPane
 				t.Cleanup(func() { sizeStartedPane = restore })
 				sizeStartedPane = func(*session.Instance, int, int) error { return nil }
-				h.finishBlankRelaunches([]lostRecovery{{instance: inst, title: inst.Title, relaunchedBlank: true}})
+				h.finishBlankRelaunches([]lostRecovery{{instance: inst, title: inst.Title(), relaunchedBlank: true}})
 			}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

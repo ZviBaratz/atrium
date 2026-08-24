@@ -924,7 +924,7 @@ func pausedInstance(t *testing.T, branch string) *session.Instance {
 	})
 	require.NoError(t, err)
 	inst.SetStatus(session.Paused)
-	inst.Branch = branch
+	inst.SetBranch(branch)
 	return inst
 }
 

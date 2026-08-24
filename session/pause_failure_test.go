@@ -19,7 +19,7 @@ import (
 func resumableInstance(t *testing.T, wt *git.Worktree) (*Instance, *fakeTmuxServer) {
 	t.Helper()
 	ts, srv := parkedTmux(t)
-	return &Instance{Title: "sess", status: Paused, started: true, Program: "claude",
+	return &Instance{ident: identity{title: "sess"}, status: Paused, started: true, Program: "claude",
 		gitWorktree: wt, tmuxSession: ts}, srv
 }
 
@@ -46,7 +46,7 @@ func TestResume_StampsStartedAtForLaunchCrashDetection(t *testing.T) {
 func startedInstance(t *testing.T, wt *git.Worktree) *Instance {
 	t.Helper()
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", newRecordingPtyFactory(t, nil), deadExec())
-	inst := &Instance{Title: "sess", status: Running, Program: "claude", gitWorktree: wt, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "sess"}, status: Running, Program: "claude", gitWorktree: wt, tmuxSession: ts}
 	inst.started = true
 	return inst
 }

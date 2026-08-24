@@ -98,6 +98,6 @@ func TestRenameSubmit_DeepCollisionReopensOverlayWithNote(t *testing.T) {
 	require.NotNil(t, h.renameOverlay)
 	require.Equal(t, "beta", h.renameOverlay.Value(), "the attempted name is preserved")
 	require.Equal(t, "park me", h.renameOverlay.NoteValue(), "the note is preserved")
-	require.Equal(t, "alpha", alpha.Title, "the collision left the instance untouched")
+	require.Equal(t, "alpha", alpha.Title(), "the collision left the instance untouched")
 	require.Empty(t, alpha.Note(), "nothing is persisted on a failed rename")
 }

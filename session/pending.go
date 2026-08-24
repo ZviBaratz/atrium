@@ -135,11 +135,11 @@ func (i *Instance) applyPending() {
 			// degrades to a bounded re-reconcile — the row flips back to Pending next poll and
 			// the watchdog retries a cap later — never a permanently-stuck row.
 			if err := ts.ClearInflight(); err != nil {
-				log.WarningLog.Printf("pending watchdog: failed to clear in-flight set for %q: %v", i.Title, err)
+				log.WarningLog.Printf("pending watchdog: failed to clear in-flight set for %q: %v", i.Title(), err)
 			}
 		}
 		i.SetStatus(Ready) // a non-Pending write releases the producer and its clock
-		log.InfoLog.Printf("pending watchdog: %q held pending past %s, reconciled to ready", i.Title, i.pendingWatchdogCap())
+		log.InfoLog.Printf("pending watchdog: %q held pending past %s, reconciled to ready", i.Title(), i.pendingWatchdogCap())
 		return
 	}
 	i.SetStatus(Pending)

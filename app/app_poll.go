@@ -290,13 +290,13 @@ func sendPromptCmd(instance *session.Instance, prompt string) tea.Cmd {
 		err := sendWithRetry(func() error { return instance.SendPrompt(prompt) })
 		switch {
 		case err == nil:
-			log.InfoLog.Printf("delivered queued prompt to %q", instance.Title)
+			log.InfoLog.Printf("delivered queued prompt to %q", instance.Title())
 			return promptDeliveredMsg{instance: instance, prompt: prompt}
 		case session.IsSoftPromptError(err):
 			return promptDeferredMsg{instance: instance}
 		default:
 			log.ErrorLog.Printf("failed to send queued prompt to %q after %d attempts: %v",
-				instance.Title, promptSendAttempts, err)
+				instance.Title(), promptSendAttempts, err)
 			return promptSendErrorMsg{instance: instance, prompt: prompt, err: err}
 		}
 	}
@@ -581,14 +581,14 @@ func recoverLostInstances(results []instanceMetaResult, strikes map[*session.Ins
 			delete(strikes, r.instance)
 			recovered = append(recovered, lostRecovery{
 				instance:        r.instance,
-				title:           r.instance.Title,
+				title:           r.instance.Title(),
 				relaunchedBlank: true,
 			})
 			continue
 		}
 		err := r.instance.RecoverLostSession()
 		if err != nil {
-			log.ErrorLog.Printf("failed to recover lost session %q: %v", r.instance.Title, err)
+			log.ErrorLog.Printf("failed to recover lost session %q: %v", r.instance.Title(), err)
 		} else {
 			delete(strikes, r.instance) // clean success; drop the strike
 		}
@@ -598,7 +598,7 @@ func recoverLostInstances(results []instanceMetaResult, strikes map[*session.Ins
 		}
 		recovered = append(recovered, lostRecovery{
 			instance: r.instance,
-			title:    r.instance.Title,
+			title:    r.instance.Title(),
 			err:      err,
 			// Sampled right after the recovery, before anything else can run: this
 			// loop and the caller's reap are the same synchronous update turn.

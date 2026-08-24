@@ -8,7 +8,7 @@ import (
 )
 
 func TestInstance_SetNoteTrims(t *testing.T) {
-	i := &Instance{Title: "t"}
+	i := &Instance{ident: identity{title: "t"}}
 	i.SetNote("  blocked on review  ")
 	require.Equal(t, "blocked on review", i.Note())
 	i.SetNote("   ")
@@ -16,7 +16,7 @@ func TestInstance_SetNoteTrims(t *testing.T) {
 }
 
 func TestToInstanceData_CarriesNote(t *testing.T) {
-	i := &Instance{Title: "t"}
+	i := &Instance{ident: identity{title: "t"}}
 	i.SetNote("park me")
 	require.Equal(t, "park me", i.ToInstanceData().Note)
 }

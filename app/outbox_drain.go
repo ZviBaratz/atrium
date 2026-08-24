@@ -184,7 +184,7 @@ func queuedPromptsNotice(n int) string {
 // reason: a title alone is ambiguous across repo groups.
 func (m *home) findInstanceByIdentity(title, path string) *session.Instance {
 	for _, inst := range m.list.GetInstances() {
-		if inst.Title == title && inst.Path == path {
+		if inst.Title() == title && inst.Path == path {
 			return inst
 		}
 	}

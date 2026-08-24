@@ -57,7 +57,7 @@ func addPersistedInstanceOnBranch(t *testing.T, h *home, title, path, branch str
 	loaded, _, err := st.LoadInstances(context.Background())
 	require.NoError(t, err)
 	require.Len(t, loaded, 1)
-	require.Equal(t, branch, loaded[0].Branch, "precondition: the branch round-tripped")
+	require.Equal(t, branch, loaded[0].Branch(), "precondition: the branch round-tripped")
 	h.list.AddInstance(loaded[0])
 	return loaded[0]
 }

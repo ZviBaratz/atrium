@@ -85,7 +85,7 @@ func rowFrom(t *testing.T, title, path, branch, record string) *session.Instance
 	t.Helper()
 	inst, err := session.NewInstance(session.InstanceOptions{Title: title, Path: path, Program: "echo"})
 	require.NoError(t, err)
-	inst.Branch = branch
+	inst.SetBranch(branch)
 	inst.CreateRequest = record
 	return inst
 }
@@ -649,9 +649,9 @@ func TestReconcileRefusesWhileTheAgentIsStillRunning(t *testing.T) {
 	// fixture using both describes two different branches, and the only assertion that
 	// noticed is the one below: the receipt check above it names a tmux session, which
 	// comes from (repo group, title) and carries no prefix at all.
-	require.NotEmpty(t, inst.Branch, "precondition: the interrupted build minted a branch")
+	require.NotEmpty(t, inst.Branch(), "precondition: the interrupted build minted a branch")
 	record := strand(t, outbox.Request{Title: "fix-auth", Path: repo},
-		outbox.ClaimMeta{At: time.Now(), SessionBranch: inst.Branch})
+		outbox.ClaimMeta{At: time.Now(), SessionBranch: inst.Branch()})
 
 	// No instances: the row is what the crash lost.
 	require.Equal(t, 1, reconcile(t))
@@ -665,7 +665,7 @@ func TestReconcileRefusesWhileTheAgentIsStillRunning(t *testing.T) {
 	// running with nothing in atrium's records pointing at it.
 	d := disclosed(t, record)
 	assert.Equal(t, inst.TmuxSessionName(), d.TmuxName)
-	assert.Equal(t, inst.Branch, d.Branch)
+	assert.Equal(t, inst.Branch(), d.Branch)
 	// The worktree too, and this is the one arm where omitting it was a real hole. It is
 	// the arm where the interrupted build got FURTHEST — branch, worktree and a running
 	// agent — and the one arm that deliberately frees none of them, so the user kills the
