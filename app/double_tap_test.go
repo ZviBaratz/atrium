@@ -367,3 +367,45 @@ func pressableKey(k string) tea.KeyPressMsg {
 	}
 	return keyMsg(k)
 }
+
+// A binding of SEVERAL keys must echo the one that was pressed, not the first one
+// declared.
+//
+// keys.PrimaryKey answers "which key is this action's" with Keys()[0], which is the
+// pressed key for every binding this repo ships and for none of the interesting ones a
+// user can write. Bind pause to both p and P, press P in visual mode, and a call site
+// that resolved the key from the KeyName instead of forwarding msg.String() arms p:
+// the dialog then teaches a key the user did not press and ignores the one they did.
+//
+// Visual mode is where this is fixable and therefore where it is asserted.
+// handleMultiSelectState still holds the keystroke; dispatchAction has already turned
+// it into a KeyName and thrown it away, which armDoubleTap's comment discloses rather
+// than papering over.
+func TestDoubleTapEchoesTheSecondKeyOfAMultiKeyBinding(t *testing.T) {
+	// push_branch must move off P first: keys.Apply refuses an override onto a key
+	// another action still holds, and an ignored override would leave pause on its
+	// shipped single key, where the defect under test cannot occur.
+	problems, restore := keys.Apply(map[string]keys.Spec{
+		"push_branch": {Keys: []string{"ctrl+u"}},
+		"pause":       {Keys: []string{"p", "P"}},
+	})
+	defer restore()
+	require.Empty(t, problems, "the rebind must be applied, not refused")
+	require.Equal(t, "p", keys.PrimaryKey(keys.KeyPause),
+		"p must stay first, or this asserts nothing about which key was pressed")
+
+	h := newCreateFormHome(t)
+	a := addActive(t, h, "alpha")
+	pressRune(h, 'v')
+	h.list.ToggleMark(a)
+	pressRune(h, 'P')
+
+	require.Equal(t, stateConfirm, h.state, "the second key of the binding must open the dialog")
+	require.NotNil(t, h.confirmationOverlay)
+	assert.Equal(t, "P", h.confirmationOverlay.ConfirmAltKey)
+	assert.Contains(t, flattenOverlay(h.confirmationOverlay.Render()), "(or P)")
+
+	_, _ = h.handleKeyPress(textMsg("P"))
+	assert.Equal(t, stateDefault, h.state)
+	assert.True(t, h.actionInFlight)
+}

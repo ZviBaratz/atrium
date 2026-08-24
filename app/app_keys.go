@@ -541,9 +541,9 @@ func (m *home) handleMultiSelectState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 		m.list.Down()
 		return m, m.instanceChanged()
 	case keys.KeyPause:
-		return m, m.pauseMarked()
+		return m, m.pauseMarked(msg.String())
 	case keys.KeyResume:
-		return m, m.resumeMarked()
+		return m, m.resumeMarked(msg.String())
 	case keys.KeyKill:
 		return m, m.killMarked(keys.KillKey())
 	default:

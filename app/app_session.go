@@ -1184,8 +1184,9 @@ func (m *home) killInstances(insts []*session.Instance, message string, altConfi
 // (mirroring ActiveInstancesInView's predicate: not paused/loading/direct). With
 // nothing eligible it explains itself and stays in the mode; otherwise it leaves
 // visual mode (capturing the slice first) so a cancelled confirmation leaves no
-// stale marks behind.
-func (m *home) pauseMarked() tea.Cmd {
+// stale marks behind. openedBy is the key that got here, forwarded so the
+// confirmation double-taps on that same key (see armDoubleTap).
+func (m *home) pauseMarked(openedBy string) tea.Cmd {
 	var insts []*session.Instance
 	for _, inst := range m.list.MarkedInstancesInView() {
 		status := inst.GetStatus()
@@ -1197,12 +1198,12 @@ func (m *home) pauseMarked() tea.Cmd {
 		return m.handleInfoNotice("no marked sessions to pause")
 	}
 	m.exitVisualMode()
-	return m.pauseInstances(insts, pauseConfirmMessage("marked", len(insts)), keys.PrimaryKey(keys.KeyPause))
+	return m.pauseInstances(insts, pauseConfirmMessage("marked", len(insts)), openedBy)
 }
 
 // resumeMarked resumes the paused subset of the multi-select-marked sessions.
-// Same eligibility/exit semantics as pauseMarked.
-func (m *home) resumeMarked() tea.Cmd {
+// Same eligibility/exit/openedBy semantics as pauseMarked.
+func (m *home) resumeMarked(openedBy string) tea.Cmd {
 	var insts []*session.Instance
 	for _, inst := range m.list.MarkedInstancesInView() {
 		if inst.GetStatus() == session.Paused {
@@ -1213,7 +1214,7 @@ func (m *home) resumeMarked() tea.Cmd {
 		return m.handleInfoNotice("no marked sessions to resume")
 	}
 	m.exitVisualMode()
-	return m.resumeInstances(insts, resumeConfirmMessage("marked", len(insts)), keys.PrimaryKey(keys.KeyResume))
+	return m.resumeInstances(insts, resumeConfirmMessage("marked", len(insts)), openedBy)
 }
 
 // killMarked tears down the killable subset of the multi-select-marked sessions
@@ -2562,9 +2563,15 @@ func (m *home) armOnConfirm(arm func()) {
 // key is passed in rather than derived, because the key the dialog must echo is the
 // one the user pressed and several verbs have two entry points: visual mode kills on
 // plain "x" as well as the chord, and the batch pause/resume dialogs open from either
-// the all-sessions chord or the marked-set key. Every caller reads it from the
-// registry (keys.PrimaryKey / keys.KillKey), never as a literal, so the shortcut
-// follows a rebind instead of listening for a key nobody presses.
+// the all-sessions chord or the marked-set key. Where the pressed key is in hand it is
+// forwarded verbatim — handleMultiSelectState passes msg.String(), including the bare
+// "x" that no registry Entry owns and no override can move. Where it is not, the
+// caller reached armDoubleTap through dispatchAction, which resolves a KeyName and
+// discards the keystroke (the command palette has no keystroke at all), so the key is
+// read back from the registry with keys.PrimaryKey / keys.KillKey. That is the
+// pressed key for every binding of one key, which is every binding this repo ships;
+// it under-serves only a user-supplied override of several keys pressed on one of the
+// others, who gets the dialog and y, just not the shortcut.
 //
 // Three refusals, all silent — an un-armed double-tap costs a shortcut, never an
 // answer, because y is always there:

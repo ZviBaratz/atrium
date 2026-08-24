@@ -1642,7 +1642,7 @@ added without a row here.
 
 The panel groups these keys into ten categories — Sessions, Worktrees & git,
 Appearance, Session list, Notifications, Automation, Input, Projects, Updates, and
-Advanced — shown in the Category column below. The seven keys with no panel row carry
+Advanced — shown in the Category column below. A key with no panel row carries
 `—` instead; `profiles` names its editor.
 
 | Key | Category | Type | Default | Notes |
