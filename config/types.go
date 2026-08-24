@@ -378,9 +378,26 @@ type Config struct {
 	// overlay once after the app updates to a newer version. nil means use the
 	// default (on), so configs written before it existed keep it.
 	ShowReleaseNotesAfterUpdate *bool `json:"show_release_notes_after_update,omitempty"`
-	// KillDoubleTapConfirm, when true, lets a second press of the kill key (Ctrl+X)
-	// confirm the kill dialog, so Ctrl+X Ctrl+X tears a session down in one motion.
-	// nil means use the default (on), so configs written before it existed keep it.
+	// DoubleTapConfirm, when true, lets a second press of the key that OPENED a
+	// confirmation confirm it, so the destructive verbs are one motion: kill twice,
+	// push twice, merge twice. It gates the shortcut, never the dialog — the box and
+	// its copy stay on screen either way, which is the whole reason this is one
+	// switch rather than a per-dialog opt-out (#520): a user who silenced the kill
+	// confirmation to stop enter-smashing would also silence the unpushed-commit
+	// count that is the only warning of what the kill costs.
+	//
+	// nil means use the default (on), so configs written before it existed keep it —
+	// except that the deprecated KillDoubleTapConfirm below is consulted first, so an
+	// explicit opt-out survives the rename. See GetDoubleTapConfirm.
+	DoubleTapConfirm *bool `json:"double_tap_confirm,omitempty"`
+	// KillDoubleTapConfirm was the kill-only spelling of DoubleTapConfirm, back when
+	// the kill dialog was the only one with a double-tap.
+	//
+	// Superseded by DoubleTapConfirm, and kept for back-compat: when that field is
+	// nil this bool still decides (see GetDoubleTapConfirm), so a config that turned
+	// the shortcut OFF keeps it off rather than silently regaining it on every keyed
+	// confirmation.
+	// It has no settings row — the panel edits its successor.
 	KillDoubleTapConfirm *bool `json:"kill_double_tap_confirm,omitempty"`
 	// Theme selects the UI color palette and border style by name (see ui/theme
 	// registry: "tokyo-night", "catppuccin-mocha", "tokyo-night-day",
@@ -664,4 +681,36 @@ type Config struct {
 	// without focus-events on) always notify — an unknown focus is never treated as
 	// focused, so this can never cause permanent silence.
 	NotifyWhenFocused bool `json:"notify_when_focused,omitempty"`
+	// NotifyThrottleSeconds is the minimum spacing between two notifications of the
+	// same edge for the same session. Edges already fire only on status transitions,
+	// so this guards a markerless agent's classifier flapping (prompt detection
+	// flipping NeedsInput↔Running) rather than a chatty agent. nil defaults to 3;
+	// 0 disables the throttle so every edge signals; larger values clamp
+	// (GetNotifyThrottleSeconds).
+	NotifyThrottleSeconds *int `json:"notify_throttle_seconds,omitempty"`
+	// ContextWarnPercent is how full a session's context window must be before the
+	// list's context chip turns Attention-coloured. nil defaults to 75; values
+	// outside [1,100] clamp; a value above ContextDangerPercent collapses to it, so
+	// the warn band narrows to nothing rather than inverting the ladder
+	// (GetContextWarnPercent). Only reachable where the model's window is known —
+	// a count from an unknown model has no ceiling to be near.
+	ContextWarnPercent *int `json:"context_warn_percent,omitempty"`
+	// ContextDangerPercent is how full a session's context window must be before the
+	// list's context chip turns Danger-coloured. nil defaults to 90; values outside
+	// [1,100] clamp (GetContextDangerPercent). It outranks ContextWarnPercent: the
+	// two are one ladder, and the top rung is the one a user must not lose.
+	ContextDangerPercent *int `json:"context_danger_percent,omitempty"`
+	// PendingWatchdogMinutes is the wall-clock cap a session may sit Pending —
+	// waiting on background sub-agent work — before the watchdog force-reconciles it
+	// to done. nil defaults to 30; values outside [1,1440] clamp. There is no "off"
+	// rung: the watchdog is what keeps an alive-but-stuck row from reading "busy"
+	// forever (GetPendingWatchdogMinutes). A value set here outranks an agent
+	// adapter's own cap, so a knob the user set is never silently inert.
+	PendingWatchdogMinutes *int `json:"pending_watchdog_minutes,omitempty"`
+	// DiffRefreshSeconds bounds how stale a background session's +/- chip may get.
+	// It backstops every writer the agent's own status cannot see — the terminal
+	// tab's shell, a `git commit` in the agent's pane, an editor, a sibling session
+	// sharing a link_path. nil defaults to 15; values outside [1,3600] clamp
+	// (GetDiffRefreshSeconds). Lower costs a diff walk per session per sweep.
+	DiffRefreshSeconds *int `json:"diff_refresh_seconds,omitempty"`
 }

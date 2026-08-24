@@ -10,7 +10,7 @@ import (
 )
 
 func TestInstance_SetMuted(t *testing.T) {
-	i := &Instance{Title: "t"}
+	i := &Instance{ident: identity{title: "t"}}
 	require.False(t, i.Muted(), "a fresh session is not muted")
 	i.SetMuted(true)
 	require.True(t, i.Muted())
@@ -19,7 +19,7 @@ func TestInstance_SetMuted(t *testing.T) {
 }
 
 func TestToInstanceData_CarriesMuted(t *testing.T) {
-	i := &Instance{Title: "t"}
+	i := &Instance{ident: identity{title: "t"}}
 	i.SetMuted(true)
 	require.True(t, i.ToInstanceData().Muted)
 }
@@ -27,7 +27,7 @@ func TestToInstanceData_CarriesMuted(t *testing.T) {
 // TestMuted_RoundTrip covers AC #5: a muted session's mute survives a restart —
 // through ToInstanceData → JSON → FromInstanceData.
 func TestMuted_RoundTrip(t *testing.T) {
-	inst := &Instance{Title: "m", status: Paused, started: true, direct: true, Path: t.TempDir(), Program: "claude"}
+	inst := &Instance{ident: identity{title: "m"}, status: Paused, started: true, direct: true, Path: t.TempDir(), Program: "claude"}
 	inst.SetMuted(true)
 
 	data := inst.ToInstanceData()

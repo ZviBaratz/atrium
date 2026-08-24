@@ -768,7 +768,7 @@ func TestConfirmationFlowSimulation(t *testing.T) {
 	require.NotNil(t, selected)
 
 	// This is what the KeyKill handler does
-	message := fmt.Sprintf("[!] Kill session '%s'?", selected.Title)
+	message := fmt.Sprintf("[!] Kill session '%s'?", selected.Title())
 	h.confirmationOverlay = overlay.NewConfirmationOverlay(message)
 	h.state = stateConfirm
 
@@ -816,7 +816,7 @@ func TestConfirmKillDoubleTapAltKey(t *testing.T) {
 	t.Run("toggle off leaves the alt key unset", func(t *testing.T) {
 		off := false
 		cfg := config.DefaultConfig()
-		cfg.KillDoubleTapConfirm = &off
+		cfg.DoubleTapConfirm = &off
 		h, inst := newHomeWithInstance(t, cfg)
 		h.confirmKill(inst)
 		require.NotNil(t, h.confirmationOverlay)

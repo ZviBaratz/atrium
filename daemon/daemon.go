@@ -153,6 +153,17 @@ func RunDaemon(ctx context.Context, cfg *config.Config) error {
 
 	pollInterval := effectivePollInterval(cfg.DaemonPollInterval)
 
+	// The daemon runs Instance.ApplyPaneState, so it runs the Pending watchdog too —
+	// and it is a separate process with its own config load, so the TUI's install of
+	// this cap does not reach it. Without this a headless stretch would reconcile
+	// stuck Pending rows on the built-in cap while the TUI used the user's value,
+	// which is one behaviour under two clocks (#799).
+	//
+	// Nothing drives RunDaemon in the suite, so this line's presence is unguarded —
+	// the same disclosed gap the effectivePollInterval call above sits in. What a
+	// test can reach is PendingWatchdogOverride itself, in config.
+	session.SetPendingWatchdog(cfg.PendingWatchdogOverride())
+
 	// If we get an error for a session, it's likely that we'll keep getting the error. Log every 30 seconds.
 	everyN := log.NewEvery(60 * time.Second)
 
@@ -171,7 +182,7 @@ func RunDaemon(ctx context.Context, cfg *config.Config) error {
 					// state is reflected in the persisted snapshot.
 					if err := instance.UpdateDiffStats(); err != nil {
 						if everyN.ShouldLog() {
-							log.WarningLog.Printf("could not update diff stats for %s: %v", instance.Title, err)
+							log.WarningLog.Printf("could not update diff stats for %s: %v", instance.Title(), err)
 						}
 					}
 				}

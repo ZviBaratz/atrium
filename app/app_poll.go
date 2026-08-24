@@ -290,13 +290,13 @@ func sendPromptCmd(instance *session.Instance, prompt string) tea.Cmd {
 		err := sendWithRetry(func() error { return instance.SendPrompt(prompt) })
 		switch {
 		case err == nil:
-			log.InfoLog.Printf("delivered queued prompt to %q", instance.Title)
+			log.InfoLog.Printf("delivered queued prompt to %q", instance.Title())
 			return promptDeliveredMsg{instance: instance, prompt: prompt}
 		case session.IsSoftPromptError(err):
 			return promptDeferredMsg{instance: instance}
 		default:
 			log.ErrorLog.Printf("failed to send queued prompt to %q after %d attempts: %v",
-				instance.Title, promptSendAttempts, err)
+				instance.Title(), promptSendAttempts, err)
 			return promptSendErrorMsg{instance: instance, prompt: prompt, err: err}
 		}
 	}
@@ -581,14 +581,14 @@ func recoverLostInstances(results []instanceMetaResult, strikes map[*session.Ins
 			delete(strikes, r.instance)
 			recovered = append(recovered, lostRecovery{
 				instance:        r.instance,
-				title:           r.instance.Title,
+				title:           r.instance.Title(),
 				relaunchedBlank: true,
 			})
 			continue
 		}
 		err := r.instance.RecoverLostSession()
 		if err != nil {
-			log.ErrorLog.Printf("failed to recover lost session %q: %v", r.instance.Title, err)
+			log.ErrorLog.Printf("failed to recover lost session %q: %v", r.instance.Title(), err)
 		} else {
 			delete(strikes, r.instance) // clean success; drop the strike
 		}
@@ -598,7 +598,7 @@ func recoverLostInstances(results []instanceMetaResult, strikes map[*session.Ins
 		}
 		recovered = append(recovered, lostRecovery{
 			instance: r.instance,
-			title:    r.instance.Title,
+			title:    r.instance.Title(),
 			err:      err,
 			// Sampled right after the recovery, before anything else can run: this
 			// loop and the caller's reap are the same synchronous update turn.
@@ -683,12 +683,12 @@ type metadataSweepDoneMsg struct {
 // so a stale "running" on a now-idle agent doesn't linger; background rows keep the
 // hysteresis Poll so a mid-turn agent isn't falsely flagged done (see collectMetadata's
 // fresh argument). Returns nil when there are no active sessions to refresh.
-func sweepMetadataNowCmd(ctx context.Context, active []*session.Instance, selected *session.Instance, attachGen uint64, usage usagePolicy) tea.Cmd {
+func sweepMetadataNowCmd(ctx context.Context, active []*session.Instance, selected *session.Instance, attachGen uint64, usage usagePolicy, diffFloor time.Duration) tea.Cmd {
 	if len(active) == 0 {
 		return nil
 	}
 	return func() tea.Msg {
-		return metadataSweepDoneMsg{results: collectMetadata(ctx, active, selected, true, usage), attachGen: attachGen}
+		return metadataSweepDoneMsg{results: collectMetadata(ctx, active, selected, true, usage, diffFloor), attachGen: attachGen}
 	}
 }
 
@@ -714,13 +714,13 @@ func (m *home) snapshotActiveInstances() []*session.Instance {
 // which is imperceptible for a background session.
 const metadataFullSweepEvery = 4
 
-// diffContentFloor bounds how stale a background row's +/- chip may get. It is the
-// backstop for every writer the agent's own status cannot see: the terminal tab
-// runs a shell inside the worktree, the agent may run `git commit` in its own pane,
-// the user may edit the worktree from an editor, and a sibling session sharing a
-// link_path mutates the same tree — none of which moves a status. A var so tests
-// can shrink it.
-var diffContentFloor = 15 * time.Second
+// diffContentFloor resolves the configured diff staleness bound for this tick. It is a
+// home method for the same reason usagePolicy() is: the value is read on the main thread
+// and handed to the poll goroutines as a plain duration, so the config is never touched
+// from a goroutine.
+func (m *home) diffContentFloor() time.Duration {
+	return time.Duration(m.appConfig.GetDiffRefreshSeconds()) * time.Second
+}
 
 // diffContentDue reports whether a non-selected session needs its diff CONTENT —
 // the line counts and patch text — recomputed this sweep.
@@ -741,11 +741,19 @@ var diffContentFloor = 15 * time.Second
 //     edge, the moment the agent's final write lands and the chip matters most;
 //   - the floor has lapsed, covering the writers no status can see.
 //
+// floor is the caller's configured staleness bound (config.GetDiffRefreshSeconds,
+// #799): the backstop for every writer the agent's own status cannot see — the terminal
+// tab runs a shell inside the worktree, the agent may run `git commit` in its own pane,
+// the user may edit the worktree from an editor, and a sibling session sharing a
+// link_path mutates the same tree, none of which moves a status. It is a parameter
+// rather than a package var so the value is resolved once per tick on the main thread
+// and cannot race the poll goroutines that read it.
+//
 // The zero StatusChangedAt is treated as "changed just now", not as 2000 years
 // ago: a restored instance assigns its status directly rather than through
 // SetStatus, so the stamp stays zero until the first poll, and a naive comparison
 // would read every freshly launched session as indefinitely idle.
-func diffContentDue(status session.Status, statusChangedAt, contentAt, now time.Time) bool {
+func diffContentDue(status session.Status, statusChangedAt, contentAt, now time.Time, floor time.Duration) bool {
 	if contentAt.IsZero() {
 		return true
 	}
@@ -756,7 +764,7 @@ func diffContentDue(status session.Status, statusChangedAt, contentAt, now time.
 	if statusChangedAt.IsZero() || statusChangedAt.After(contentAt) {
 		return true
 	}
-	return now.Sub(contentAt) >= diffContentFloor
+	return now.Sub(contentAt) >= floor
 }
 
 // pollTargets selects which active sessions to poll this tick. A full sweep polls all of
@@ -791,7 +799,7 @@ func pollTargets(active []*session.Instance, selected *session.Instance, fullSwe
 // use the hysteresis Poll — they carry no ready-suppression, so a single marker-absent
 // sample of a mid-turn agent must not be allowed to flag a false completion. The periodic
 // tick passes fresh=false, so every row uses the hysteresis Poll there.
-func collectMetadata(ctx context.Context, poll []*session.Instance, selected *session.Instance, fresh bool, usage usagePolicy) []instanceMetaResult {
+func collectMetadata(ctx context.Context, poll []*session.Instance, selected *session.Instance, fresh bool, usage usagePolicy, diffFloor time.Duration) []instanceMetaResult {
 	results := make([]instanceMetaResult, len(poll))
 	var wg sync.WaitGroup
 	for idx, inst := range poll {
@@ -850,7 +858,7 @@ func collectMetadata(ctx context.Context, poll []*session.Instance, selected *se
 			case instance == selected:
 				r.diffStats = instance.ComputeDiff()
 			case diffContentDue(instance.GetStatus(), instance.StatusChangedAt(),
-				instance.DiffContentAt(), time.Now()):
+				instance.DiffContentAt(), time.Now(), diffFloor):
 				r.diffStats = instance.ComputeDiffNumstat()
 			default:
 				// The tree cannot have changed: skip the untracked-file walk and the
@@ -1182,7 +1190,7 @@ func applyDiffStats(inst *session.Instance, stats *git.DiffStats, contentSkipped
 // memory bounded since the diff pane only ever renders the selected one. A background
 // instance gets a lightweight numstat-only summary, or — once diffContentDue rules out
 // that its tree moved — the branch-level counters alone. See collectMetadata.
-func tickUpdateMetadataCmd(ctx context.Context, active []*session.Instance, selected *session.Instance, fullSweep bool, attachGen uint64, usage usagePolicy) tea.Cmd {
+func tickUpdateMetadataCmd(ctx context.Context, active []*session.Instance, selected *session.Instance, fullSweep bool, attachGen uint64, usage usagePolicy, diffFloor time.Duration) tea.Cmd {
 	return func() tea.Msg {
 		// Honor ctx during the inter-tick wait so a shutdown mid-sleep doesn't leave
 		// this goroutine parked for up to 500ms.
@@ -1201,6 +1209,6 @@ func tickUpdateMetadataCmd(ctx context.Context, active []*session.Instance, sele
 			return metadataUpdateDoneMsg{attachGen: attachGen}
 		}
 
-		return metadataUpdateDoneMsg{results: collectMetadata(ctx, poll, selected, false, usage), attachGen: attachGen}
+		return metadataUpdateDoneMsg{results: collectMetadata(ctx, poll, selected, false, usage, diffFloor), attachGen: attachGen}
 	}
 }

@@ -412,7 +412,7 @@ in-app keymap and this section ever drift apart, so it stays complete.
 |-----|--------|
 | `↵/o` | attach to the selected session |
 | `ctrl-q` | toggle attach/detach (detach when in, attach from the list) |
-| `ctrl-x` | kill the selected/attached session (twice to confirm) |
+| `ctrl-x` | kill the selected/attached session (press it twice to confirm — every keyed confirmation takes its own key twice) |
 | `U` | undo the last kill: rebuild its branch, worktree and agent (see [Undoing a kill](#undoing-a-kill)) |
 | `ctrl-pgup/pgdn` | in a session: cycle to prev / next session in the repo group |
 | `shift-pgup/pgdn` | in a session: scroll the agent's scrollback (see [Scrolling an attached session](#scrolling-an-attached-session)) |
@@ -1623,13 +1623,44 @@ ones it refused in a modal at startup, and `atrium doctor` prints the same list,
 placeholder typo or two entries claiming the same key is a message rather than a
 command silently missing from the menu.
 
+#### Cadence knobs
+
+Around thirty of Atrium's constants are displayed but hardcoded. **Four** of them
+are yours:
+
+| Setting | Default | What it decides |
+|---|---|---|
+| `context_warn_percent` / `context_danger_percent` | 75 / 90 | how full a session's context window has to be before its chip goes amber, then red |
+| `notify_throttle_seconds` | 3 | the minimum gap between two of the same signal for one session |
+| `pending_watchdog_minutes` | 30 | how long a session may wait on background work before Atrium stops believing it and marks the turn finished |
+| `diff_refresh_seconds` | 15 | how stale a background session's `+/-` chip may get before Atrium re-walks its worktree |
+
+All four apply live — change one in the Settings panel (`,`) and it takes effect
+without a restart. Values outside each key's range are clamped rather than
+refused when they come from a hand-edited `config.json`; the panel refuses them
+up front, where there is someone to tell.
+
+The rest stay fixed on purpose. The 500ms metadata poll and its four-tick full
+sweep, the 100ms frame tick, the pull-request status TTLs, the idle hysteresis,
+the hook heartbeat — those are tuned against a single shared tmux server, a
+network round trip, or a classifier's failure modes. A different value there
+does not give you a differently-shaped Atrium, it gives you a wrong one, and
+offering the dial would sell a correctness constraint as a preference.
+
+The four above are the opposite case: each encodes a working style — how close
+to full is worth a glance, how often you consent to be interrupted, how long
+your background work legitimately runs, how much staleness you will trade for
+fewer git walks. Atrium has no way to know your answer.
+
 #### Configuration reference
 
 Every `config.json` key, its default, and where it is documented above. Nearly all
 are also editable live from the Settings panel (`,`). The exceptions are the three
 account lists — `claude_accounts`, `gh_accounts`, `agy_accounts` — which the
 one-value-per-row panel cannot express and which are managed from the Accounts
-overlay instead, and the deprecated `nerd_font`, which `glyph_set` supersedes.
+overlay instead, and the two deprecated keys whose successors own the row instead:
+`nerd_font` (superseded by `glyph_set`) and `kill_double_tap_confirm` (superseded by
+`double_tap_confirm`).
 `profiles`, `custom_commands` and `repo_scripts` are lists of records too: the panel
 gives `profiles` a record editor of its own under Profiles rather than a row, and the
 other two are edited in `config.json` directly. `keybindings` is the same case one
@@ -1640,7 +1671,7 @@ added without a row here.
 
 The panel groups these keys into ten categories — Sessions, Worktrees & git,
 Appearance, Session list, Notifications, Automation, Input, Projects, Updates, and
-Advanced — shown in the Category column below. The seven keys with no panel row carry
+Advanced — shown in the Category column below. A key with no panel row carries
 `—` instead; `profiles` names its editor.
 
 | Key | Category | Type | Default | Notes |
@@ -1655,7 +1686,8 @@ Advanced — shown in the Category column below. The seven keys with no panel ro
 | `tmux_config_override` | Advanced | string | `""` | path to a custom tmux config for sessions |
 | `auto_attach` | Sessions | bool | `true` | attach to a new session as soon as it starts ([Auto-attach](#auto-attach)) |
 | `show_release_notes_after_update` | Updates | bool | `true` | "what's new" overlay once after an update |
-| `kill_double_tap_confirm` | Input | bool | `true` | a second `ctrl-x` confirms the kill dialog |
+| `double_tap_confirm` | Input | bool | `true` | a second press of the key that opened a confirmation confirms it, so `ctrl-x` `ctrl-x` kills and `P` `P` pushes in one motion. It gates the shortcut, not the dialog: the box and its warning are shown either way, and `y` still confirms. Armed on the kill, push, create-PR, merge, batch-pause, batch-resume and over-capacity-resume dialogs |
+| `kill_double_tap_confirm` | — | bool | `true` | *deprecated* — superseded by `double_tap_confirm`; still read for back-compat (it decides when `double_tap_confirm` is unset, so an explicit `false` is not silently undone) |
 | `theme` | Appearance | string | `"auto"` | color palette + border style. The default, `auto`, follows the terminal's own background (dark → `tokyo-night`, light → `tokyo-night-day`, no answer → `tokyo-night`). Name a palette to pin one: `tokyo-night` / `catppuccin-mocha` for a dark terminal, `tokyo-night-day` / `catppuccin-latte` for a light one, `unicode` (tokyo-night with square borders). A palette named explicitly never auto-switches |
 | `splash` | Appearance | string | random | empty-state splash pattern (`""`/`"random"` = fresh each launch; `"off"` = no animation, just the wordmark) |
 | `glyph_set` | Appearance | string | `"plain"` | icon fidelity rung: `nerd` (vendor Nerd-Font icons, needs a patched font), `plain` (Unicode that renders on any font — the default), `ascii` (7-bit floor for terminals where even plain Unicode shows tofu) |
@@ -1685,6 +1717,9 @@ Advanced — shown in the Category column below. The seven keys with no panel ro
 | `permission_indicator` | Session list | string | `"on"` | per-session permission-mode chip: `on` / `off` |
 | `effort_indicator` | Session list | string | `"on"` | per-session reasoning-effort chip: `on` / `off` |
 | `context_indicator` | Session list | string | `"percent"` | per-session transcript chip: `percent` / `count` / `bar` / `cost` / `off` (the occupancy modes fall back to a count when the model's window is unknown; `cost` is a list-rate estimate, not a bill) |
+| `context_warn_percent` | Session list | int | `75` | occupancy at which the context chip turns amber; `1`–`100`, held at or below `context_danger_percent` ([Cadence knobs](#cadence-knobs)) |
+| `context_danger_percent` | Session list | int | `90` | occupancy at which the context chip turns red; `1`–`100`, held at or above `context_warn_percent` ([Cadence knobs](#cadence-knobs)) |
+| `diff_refresh_seconds` | Session list | int | `15` | how stale a background session's +/- chip may get; `1`–`3600` ([Cadence knobs](#cadence-knobs)) |
 | `session_sort` | Session list | string | `"creation"` | within-group order: `creation` / `status` |
 | `group_mode` | Session list | string | `"repo"` | list grouping: `repo` / `account` |
 | `smart_dispatch_auto` | Automation | bool | `false` | let a confident `i` match create the session without the form |
@@ -1692,6 +1727,8 @@ Advanced — shown in the Category column below. The seven keys with no panel ro
 | `notifications_finished` | Notifications | string | `"same"` | quieter rung for a *plain finished turn* only, so a blocked session — or one that stopped to ask — is never out-shouted: `same` / `off` / `bell` ([Notifications](#notifications)) |
 | `notify_command` | Notifications | string | built-in | shell command for `desktop` notifications ([Notifications](#notifications)) |
 | `notify_when_focused` | Notifications | bool | `false` | keep notifying while Atrium's terminal is focused; `false` stays silent while you're watching ([Notifications](#notifications)) |
+| `notify_throttle_seconds` | Notifications | int | `3` | minimum gap between two of the same signal for one session; `0` throttles nothing ([Cadence knobs](#cadence-knobs)) |
+| `pending_watchdog_minutes` | Advanced | int | `30` | how long a session may wait on background work before Atrium marks it finished; `1`–`1440` ([Cadence knobs](#cadence-knobs)) |
 
 ##### `NO_COLOR`
 

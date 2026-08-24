@@ -62,8 +62,10 @@ func TestApplyTimingProjections(t *testing.T) {
 //
 // Exempt are the list-of-record keys, which a one-value-per-row panel cannot
 // express (accounts are managed from the Accounts overlay; profiles get their own
-// editor in PR D, which is not a settingRow either), and the deprecated nerd_font,
-// superseded by glyph_set.
+// editor in PR D, which is not a settingRow either), and the two deprecated keys
+// whose successors own the row instead — nerd_font (→ glyph_set) and
+// kill_double_tap_confirm (→ double_tap_confirm). Read the map for the current set;
+// this sentence is a summary of it, not a second copy.
 func TestEveryScalarConfigFieldHasARow(t *testing.T) {
 	exempt := map[string]string{
 		"profiles":        "list of records — Profiles editor (PR D), not a settingRow",
@@ -74,6 +76,9 @@ func TestEveryScalarConfigFieldHasARow(t *testing.T) {
 		"repo_scripts":    "list of records — edited in config.json; the one-value-per-row panel cannot express route rules + a script + an env map (#389)",
 		"keybindings":     "map of action → key(s) — edited in config.json; a one-value-per-row panel cannot express a keymap, and a bad row here would cost the user the key they were editing with (#376)",
 		"nerd_font":       "deprecated, superseded by glyph_set",
+		// The panel edits the successor; a row here would offer two switches for one
+		// behaviour, and setting the losing one would appear to do nothing.
+		"kill_double_tap_confirm": "deprecated, superseded by double_tap_confirm (#798)",
 	}
 
 	count := map[string]int{}
@@ -247,13 +252,13 @@ func TestCategoryRowCounts(t *testing.T) {
 		catSessions:      4,
 		catWorktrees:     6,
 		catAppearance:    6,
-		catSessionList:   6,
-		catNotifications: 4,
+		catSessionList:   9,
+		catNotifications: 5,
 		catAutomation:    4,
 		catInput:         3,
 		catProjects:      2,
 		catUpdates:       2,
-		catAdvanced:      3, // 2 settings + the read-only config-file row
+		catAdvanced:      4, // 3 settings + the read-only config-file row
 	}
 	got := map[settingCategory]int{}
 	total := 0
@@ -261,7 +266,7 @@ func TestCategoryRowCounts(t *testing.T) {
 		got[r.category]++
 		total++
 	}
-	assert.Equal(t, 40, total, "39 config rows plus the read-only config-file row")
+	assert.Equal(t, 45, total, "44 config rows plus the read-only config-file row")
 	for _, c := range allCategories() {
 		assert.Equalf(t, want[c], got[c], "category %q row count", c.label())
 	}

@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/git"
 
@@ -17,9 +18,14 @@ import (
 //
 // Every row here is a claim about when a tree can have changed. The "false" rows
 // are the whole point of the change; the "true" rows are what keeps it honest.
+//
+// The floor is a parameter since #799 (config.GetDiffRefreshSeconds). This table drives
+// the built-in default so its rows keep saying what they said; that the parameter is
+// honoured at all is TestDiffContentDueHonoursTheConfiguredFloor's claim.
 func TestDiffContentDue(t *testing.T) {
 	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	ago := func(d time.Duration) time.Time { return now.Add(-d) }
+	floor := time.Duration(config.DefaultDiffRefreshSeconds()) * time.Second
 
 	for _, tc := range []struct {
 		name            string
@@ -58,7 +64,7 @@ func TestDiffContentDue(t *testing.T) {
 		},
 		{
 			name: "idle beyond the floor", status: session.Ready,
-			statusChangedAt: ago(time.Hour), contentAt: ago(diffContentFloor + time.Second), want: true,
+			statusChangedAt: ago(time.Hour), contentAt: ago(floor + time.Second), want: true,
 		},
 		{
 			// The win: a settled session polled again a moment later.
@@ -71,7 +77,7 @@ func TestDiffContentDue(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := diffContentDue(tc.status, tc.statusChangedAt, tc.contentAt, now)
+			got := diffContentDue(tc.status, tc.statusChangedAt, tc.contentAt, now, floor)
 			require.Equal(t, tc.want, got)
 		})
 	}

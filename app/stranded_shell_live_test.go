@@ -197,7 +197,7 @@ func TestRenameThenPause_ReapsTheShellUnderItsPreRenameName(t *testing.T) {
 
 	// The production rename: the same Cmd the R key builds, then the handler that adopts
 	// the identity it earned. Nothing here touches the terminal pane, which is the point.
-	msg, ok := renameIOCmd(inst, inst.Title+"-renamed", "")().(renameDoneMsg)
+	msg, ok := renameIOCmd(inst, inst.Title()+"-renamed", "")().(renameDoneMsg)
 	require.True(t, ok, "precondition: renameIOCmd must report a rename outcome")
 	require.NoError(t, msg.err, "precondition: this rename must succeed")
 	h.Update(msg)

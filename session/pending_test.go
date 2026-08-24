@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ZviBaratz/atrium/cmd/cmd_test"
+	"github.com/ZviBaratz/atrium/session/agent"
 	"github.com/ZviBaratz/atrium/session/tmux"
 
 	"github.com/stretchr/testify/require"
@@ -26,7 +27,7 @@ func claudePendingInstance(t *testing.T, content *string) *Instance {
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return []byte(*content), nil },
 	}
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", tmux.MakePtyFactory(), aliveExec)
-	return &Instance{Title: "sess", status: Running, started: true, tmuxSession: ts}
+	return &Instance{ident: identity{title: "sess"}, status: Running, started: true, tmuxSession: ts}
 }
 
 // seedInflight writes a hook record for inst's session: the working/ready latch (stateEvent
@@ -43,17 +44,54 @@ func seedInflight(t *testing.T, inst *Instance, stateEvent string, ids ...string
 	}
 }
 
-// TestPendingWatchdogCap: claude has no adapter override, so it uses the package default;
-// the default is a tunable var.
+// TestPendingWatchdogCap walks the whole three-rung ladder pendingWatchdogCap resolves
+// (#799): the user's configured cap outranks an agent adapter's override, which outranks
+// DefaultPendingWatchdog. All three rungs are exercised against the SAME instance, so what
+// the assertions distinguish is precedence and not two unrelated defaults.
+//
+// The adapter rung has to be installed by the test: the Adapter field exists but no entry
+// in the registry declares one today, so a fixture that waited for a real override would
+// assert nothing at all. Resolve returns the shared adapter, so the write is undone in a
+// cleanup.
 func TestPendingWatchdogCap(t *testing.T) {
+	t.Cleanup(func() { SetPendingWatchdog(0) })
 	inst := &Instance{Program: "claude"}
-	require.Equal(t, defaultPendingWatchdog, inst.pendingWatchdogCap(),
-		"claude resolves the package default (no adapter override)")
 
-	prev := defaultPendingWatchdog
-	defaultPendingWatchdog = 1234 * time.Millisecond
-	t.Cleanup(func() { defaultPendingWatchdog = prev })
-	require.Equal(t, 1234*time.Millisecond, inst.pendingWatchdogCap())
+	const configured = 1234 * time.Millisecond
+	const adapterCap = 7 * time.Minute
+	require.NotEqual(t, configured, adapterCap, "the two overrides must be distinguishable")
+	require.NotEqual(t, DefaultPendingWatchdog, adapterCap, "as must the adapter's and the default")
+
+	t.Run("default", func(t *testing.T) {
+		require.Zero(t, agent.Resolve(inst.Program).PendingWatchdog,
+			"the default rung needs an agent carrying no override")
+		require.Equal(t, DefaultPendingWatchdog, inst.pendingWatchdogCap())
+	})
+
+	t.Run("configured beats the default", func(t *testing.T) {
+		SetPendingWatchdog(configured)
+		require.Equal(t, configured, inst.pendingWatchdogCap())
+
+		SetPendingWatchdog(0)
+		require.Equal(t, DefaultPendingWatchdog, inst.pendingWatchdogCap(),
+			"clearing falls back, so the setter is not one-way")
+	})
+
+	t.Run("adapter beats the default", func(t *testing.T) {
+		a := agent.Resolve(inst.Program)
+		t.Cleanup(func() { a.PendingWatchdog = 0 })
+		a.PendingWatchdog = adapterCap
+		require.Equal(t, adapterCap, inst.pendingWatchdogCap())
+	})
+
+	t.Run("configured beats the adapter", func(t *testing.T) {
+		a := agent.Resolve(inst.Program)
+		t.Cleanup(func() { a.PendingWatchdog = 0 })
+		a.PendingWatchdog = adapterCap
+		SetPendingWatchdog(configured)
+		require.Equal(t, configured, inst.pendingWatchdogCap(),
+			"the user's cap is the top rung, so a per-agent default can never make it inert")
+	})
 }
 
 // TestPending_UnreadSemantics is the #289 freebie: routing a Stop-with-sub-agent to
@@ -61,7 +99,7 @@ func TestPendingWatchdogCap(t *testing.T) {
 // while still working" notification — does NOT fire on entry to Pending, only on the real
 // Pending→Ready once the sub-agent completes.
 func TestPending_UnreadSemantics(t *testing.T) {
-	inst := &Instance{Title: "s", status: Running}
+	inst := &Instance{ident: identity{title: "s"}, status: Running}
 
 	inst.SetStatus(Pending) // Running → Pending: the false end-of-turn
 	require.False(t, inst.Unread(), "entering Pending must not flag unread (no false 'finished')")
@@ -108,7 +146,7 @@ func TestApplyPending_WatchdogReconciles(t *testing.T) {
 	// field's doc).
 	inst.mu.Lock()
 	require.Equal(t, pendingInflight, inst.pendingSource, "the set is what is holding this row")
-	inst.pendingSince = time.Now().Add(-2 * defaultPendingWatchdog)
+	inst.pendingSince = time.Now().Add(-2 * DefaultPendingWatchdog)
 	inst.mu.Unlock()
 
 	st := inst.Poll()
@@ -130,7 +168,7 @@ const backgroundFooter = "───────────────\n❯ \n�
 // A pane held Pending by the FOOTER CHIP is exempt from the watchdog. The cap backstops a
 // SubagentStop that never fired — a latch that can leak — and a chip cannot leak: it is
 // re-scraped every poll and gone when the work exits. Expiring it would re-commit the exact
-// "done while still working" bug at the 30-minute mark, and a persistent Monitor legitimately
+// "done while still working" bug once the cap elapsed, and a persistent Monitor legitimately
 // outlives any cap.
 func TestApplyBackground_IsNeverReconciledByTheWatchdog(t *testing.T) {
 	c := backgroundFooter
@@ -144,7 +182,7 @@ func TestApplyBackground_IsNeverReconciledByTheWatchdog(t *testing.T) {
 
 	// Age it far past the cap. A set-driven Pending would reconcile here; this must not.
 	inst.mu.Lock()
-	inst.statusChangedAt = time.Now().Add(-4 * defaultPendingWatchdog)
+	inst.statusChangedAt = time.Now().Add(-4 * DefaultPendingWatchdog)
 	inst.mu.Unlock()
 
 	inst.ApplyPaneState(inst.Poll())
@@ -173,7 +211,7 @@ func TestApplyPending_LongBackgroundHoldDoesNotExpireTheNextSubagentRun(t *testi
 	// the handover below has to reset, and leaving pendingSince fresh here would let the
 	// test pass on a shared clock too.
 	inst.mu.Lock()
-	aged := time.Now().Add(-4 * defaultPendingWatchdog)
+	aged := time.Now().Add(-4 * DefaultPendingWatchdog)
 	inst.statusChangedAt, inst.pendingSince = aged, aged
 	inst.mu.Unlock()
 	inst.ApplyPaneState(inst.Poll())
@@ -192,7 +230,7 @@ func TestApplyPending_LongBackgroundHoldDoesNotExpireTheNextSubagentRun(t *testi
 	// this sub-agent had been running for four watchdog caps.
 	require.WithinDuration(t, time.Now(), inst.PendingSince(), time.Minute,
 		"the cue dates the sub-agent run, not the chip hold it replaced")
-	require.True(t, inst.StatusChangedAt().Before(time.Now().Add(-defaultPendingWatchdog)),
+	require.True(t, inst.StatusChangedAt().Before(time.Now().Add(-DefaultPendingWatchdog)),
 		"while the shared stamp still carries the background hold's age")
 }
 

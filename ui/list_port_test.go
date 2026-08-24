@@ -168,7 +168,7 @@ func TestRender_DevChipWithoutAManagedPort(t *testing.T) {
 func TestRender_RunningChipIsDroppedWhenTheRowCannotHoldIt(t *testing.T) {
 	t.Cleanup(theme.Set("unicode"))
 	inst, port := portedInstance(t)
-	require.Equal(t, inst.DisplayName(), inst.Title, "an un-renamed session: line 2 has no flex segment")
+	require.Equal(t, inst.DisplayName(), inst.Title(), "an un-renamed session: line 2 has no flex segment")
 	inst.SetDiffStats(&git.DiffStats{Added: 12, Removed: 3, Commits: 2, Behind: 1})
 
 	s := spinner.New()
@@ -223,7 +223,7 @@ func TestRender_PortChipWidthBudget(t *testing.T) {
 	t.Cleanup(theme.Set("unicode"))
 	inst, port := portedInstance(t)
 	inst.SetDisplayName("web ui")
-	inst.Branch = "zvi/a-rather-long-branch-name-that-overflows"
+	inst.SetBranch("zvi/a-rather-long-branch-name-that-overflows")
 	inst.SetDiffStats(&git.DiffStats{Added: 12, Removed: 3, Commits: 2})
 	inst.SetPRStatus(&git.PRStatus{HasPR: true, Number: 1234, CI: git.CIFailing})
 
@@ -250,7 +250,7 @@ func TestRender_PortChipWidthBudget(t *testing.T) {
 func TestRender_PortChipIsDroppedWhenTheRowCannotHoldIt(t *testing.T) {
 	t.Cleanup(theme.Set("unicode"))
 	inst, port := portedInstance(t)
-	require.Equal(t, inst.DisplayName(), inst.Title, "an un-renamed session: line 2 has no flex segment")
+	require.Equal(t, inst.DisplayName(), inst.Title(), "an un-renamed session: line 2 has no flex segment")
 	inst.SetDiffStats(&git.DiffStats{Added: 12, Removed: 3, Commits: 2, Behind: 1})
 	inst.SetPRStatus(&git.PRStatus{HasPR: true, Number: 1234, CI: git.CIFailing})
 

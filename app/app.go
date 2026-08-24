@@ -8,6 +8,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -160,6 +161,13 @@ func Run(ctx context.Context, program string, autoYes bool, version, binName str
 	// SS3 Home/End input shim is gone too — v2's decoder reads ESC O H/F natively,
 	// which is the whole of what that wrapper existed to work around.
 	//
+	// Before the program, not inside it: suppressHardTabs edits the tty flag
+	// Bubble Tea reads once, in checkOptimizedMovements, while setting up input —
+	// so it has to be set by the time p.Run() gets there. The restore is
+	// deferred rather than run after p.Run() because Bubble Tea puts back the tty
+	// state it snapshotted, which by then is the suppressed one; ours has to land
+	// after that, and last is what a defer here guarantees, panics included (#796).
+	defer suppressHardTabs(os.Stdin)()
 	p := tea.NewProgram(h, programOptions(ctx)...)
 	_, err = p.Run()
 	// The event loop has exited. On signal shutdown it returned on ctx.Done()
@@ -960,7 +968,7 @@ func (m *home) Init() tea.Cmd {
 		},
 		m.armFrameCapture(0), // pane-capture chain: the only place tmux content is read
 		m.armSplashTick(),    // idle splash animation, live from the first frame
-		tickUpdateMetadataCmd(m.ctx, m.snapshotActiveInstances(), m.list.GetSelectedInstance(), true, m.attachGen, m.usagePolicy()), // first tick: full sweep
+		tickUpdateMetadataCmd(m.ctx, m.snapshotActiveInstances(), m.list.GetSelectedInstance(), true, m.attachGen, m.usagePolicy(), m.diffContentFloor()), // first tick: full sweep
 		m.updateCheckCmd(),   // nil (inert) is fine: tea.Batch skips nil cmds
 		m.driftCheckCmd(),    // agent-heuristic drift hint
 		m.agentCheckCmd(),    // background agent CLI detection

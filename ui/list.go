@@ -24,7 +24,7 @@ import (
 // from removed sessions are never queried (InstanceAtZone only checks rows
 // currently in the list).
 func listRowZoneID(i *session.Instance) string {
-	return "list-row-" + i.GroupKey() + "\x00" + i.Title
+	return "list-row-" + i.GroupKey() + "\x00" + i.Title()
 }
 
 // listHeaderZoneID is the bubblezone marker id for a repo-group header row,
@@ -403,6 +403,15 @@ func (l *List) SetEffortIndicator(mode string) {
 // config.GetContextIndicator value at startup and on settings changes.
 func (l *List) SetContextIndicator(mode string) {
 	l.renderer.contextIndicator = mode
+}
+
+// SetContextThresholds sets the context chip's colour bands (see
+// InstanceRenderer.contextWarnPct). The app passes the clamped
+// config.GetContextWarnPercent / GetContextDangerPercent values at startup and on
+// settings changes. A zero for either restores that band's package default.
+func (l *List) SetContextThresholds(warn, danger int) {
+	l.renderer.contextWarnPct = warn
+	l.renderer.contextDangerPct = danger
 }
 
 // SetFilter updates the incremental filter query and clamps the selection to the

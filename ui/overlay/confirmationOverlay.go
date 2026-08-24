@@ -145,19 +145,18 @@ func (c *ConfirmationOverlay) BorderColor() theme.Color {
 	return theme.Current().Palette.Accent
 }
 
-// SetConfirmKey sets the key used to confirm the action
-func (c *ConfirmationOverlay) SetConfirmKey(key string) {
-	c.ConfirmKey = key
-}
-
-// SetConfirmAltKey sets an optional second key that also confirms the action.
+// SetConfirmAltKey sets an optional second key that also confirms the action: the
+// key that opened the dialog, so pressing it again is the double-tap. Callers go
+// through app's armDoubleTap rather than here, which is what applies the config gate
+// and refuses a key the dialog already answers.
+//
+// It is the only key setter. SetConfirmKey and SetCancelKey were deleted with #798
+// (#465): they had never had a caller, and `unused` does not flag an exported
+// method, so nothing in CI would ever have said so. They also implied a
+// configurability this overlay does not have — y / n / esc are the answer keys, and
+// this slot is how a dialog gains a second one.
 func (c *ConfirmationOverlay) SetConfirmAltKey(key string) {
 	c.ConfirmAltKey = key
-}
-
-// SetCancelKey sets the key used to cancel the action
-func (c *ConfirmationOverlay) SetCancelKey(key string) {
-	c.CancelKey = key
 }
 
 // SetConfirmLabel names what confirming does, as a verb phrase in the caller's own
@@ -166,8 +165,9 @@ func (c *ConfirmationOverlay) SetCancelKey(key string) {
 // keeps "confirm", so adoption is opt-in per dialog.
 //
 // This is hint text only: the keys stay y / n / esc, deliberately — a verb-labeled
-// confirmation is a copy change, not a muscle-memory one, and the single alternate
-// confirm slot is already spoken for by the kill chord (see SetConfirmAltKey, #448).
+// confirmation is a copy change, not a muscle-memory one. The alternate confirm slot
+// is a separate axis, and since #798 it is the opening key of whichever dialog this
+// is rather than the kill chord alone (see SetConfirmAltKey).
 func (c *ConfirmationOverlay) SetConfirmLabel(label string) {
 	c.confirmLabel = label
 }

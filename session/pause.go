@@ -173,7 +173,7 @@ func (i *Instance) RepairResumingLaunch(within time.Duration) bool {
 	if wt := i.worktree(); wt != nil {
 		valid, err := wt.IsValidWorktree()
 		if err != nil {
-			log.ErrorLog.Printf("cannot validate the worktree for %s, leaving it to be parked: %v", i.Title, err)
+			log.ErrorLog.Printf("cannot validate the worktree for %s, leaving it to be parked: %v", i.Title(), err)
 		}
 		if err != nil || !valid {
 			return false
@@ -190,10 +190,10 @@ func (i *Instance) RepairResumingLaunch(within time.Duration) bool {
 	// relaunching over a session that would not die is how you get two agents or a
 	// launch refused by name.
 	if err := ts.DetachSafely(); err != nil {
-		log.ErrorLog.Printf("failed to detach the dead session for %s: %v", i.Title, err)
+		log.ErrorLog.Printf("failed to detach the dead session for %s: %v", i.Title(), err)
 	}
 	if err := ts.Close(); err != nil {
-		log.ErrorLog.Printf("cannot repair the resuming launch for %s: %v", i.Title, err)
+		log.ErrorLog.Printf("cannot repair the resuming launch for %s: %v", i.Title(), err)
 		return false
 	}
 
@@ -201,10 +201,10 @@ func (i *Instance) RepairResumingLaunch(within time.Duration) bool {
 	// tmux session's environment can only be set as it is born.
 	i.applySessionEnv(workDir)
 	if err := ts.Start(workDir); err != nil {
-		log.ErrorLog.Printf("blank relaunch failed for %s, leaving it to be parked: %v", i.Title, err)
+		log.ErrorLog.Printf("blank relaunch failed for %s, leaving it to be parked: %v", i.Title(), err)
 		return false
 	}
-	log.InfoLog.Printf("%q exited at launch while resuming its conversation; relaunched without resuming", i.Title)
+	log.InfoLog.Printf("%q exited at launch while resuming its conversation; relaunched without resuming", i.Title())
 
 	i.mu.Lock()
 	// Stamped so DiedAtLaunch keeps describing THIS launch: a blank agent that also dies
@@ -380,7 +380,7 @@ func (i *Instance) pause() error {
 		tc.Record("check if worktree is dirty", err)
 	} else if dirty {
 		// Commit changes locally (without pushing to GitHub)
-		commitMsg := fmt.Sprintf("%s'%s' on %s %s", autoPauseCommitPrefix, i.Title, time.Now().Format(time.RFC822), autoPauseCommitSuffix)
+		commitMsg := fmt.Sprintf("%s'%s' on %s %s", autoPauseCommitPrefix, i.Title(), time.Now().Format(time.RFC822), autoPauseCommitSuffix)
 		if tc.Record("commit changes", wt.CommitChanges(commitMsg)) {
 			removeWorktree = false
 		} else {
@@ -460,13 +460,13 @@ func (i *Instance) Resume() error {
 			if err := ts.Restore(); err != nil {
 				log.ErrorLog.Print(err)
 				if closeErr := ts.Close(); closeErr != nil {
-					log.ErrorLog.Printf("failed to close stale session %s: %v", i.Title, closeErr)
+					log.ErrorLog.Printf("failed to close stale session %s: %v", i.Title(), closeErr)
 				}
-				if err := i.recreateSession(false); err != nil {
+				if err := i.recreateSession(); err != nil {
 					return err
 				}
 			}
-		} else if err := i.recreateSession(false); err != nil {
+		} else if err := i.recreateSession(); err != nil {
 			return err
 		}
 		i.SetStatus(Running)
@@ -516,18 +516,20 @@ func (i *Instance) Resume() error {
 	// never abort, and this must.
 	//
 	// A failure ABORTS the resume rather than being logged and walked past, and it runs
-	// here so the abort has nothing to undo. Walking past it reaches recreateSession,
-	// which answers a failed launch — Start's duplicate-name guard would be the one to
-	// refuse — by tearing the worktree down through Worktree.Cleanup: `git worktree
-	// remove -f` and `git branch -D`, the KILL teardown, with no retention ref, because
-	// only Kill records one. Ordered above the block below, a park is still a park when
+	// here so the abort has nothing to undo. Walking past it reaches a relaunch that
+	// Start's duplicate-name guard is bound to refuse, by which point this call would
+	// have re-added the worktree and unwound the pause auto-commit for a launch that
+	// never had a chance — leaving a park that is no longer a park. Until #741 it was
+	// worse than that: the failed launch answered by tearing the worktree down through
+	// Worktree.Cleanup — `git worktree remove -f` and `git branch -D`, the KILL
+	// teardown, with no retention ref, because only Kill records one. It no longer tears
+	// anything down, which is why the cost of walking past is now the state above rather
+	// than the loss. Ordered above the block below, a park is still a park when
 	// this returns — the worktree is wherever the pause left it, the branch holds every
 	// commit, and no auto-commit has been unwound — so retrying costs nothing and is
 	// simply a second Resume. That is a statement about the state left behind, not a
 	// promise the retry will fare better: a socket that is unreachable rather than empty
 	// fails the same way every time, which is why the error names where the work is.
-	// (An ordinary launch failure still reaches that rollback. That route pre-dates this
-	// and is filed as #741.)
 	//
 	// What returning does not undo is Close's own first half: cleanupHookSession and
 	// resetPaneID run before the kill that failed, so a session still alive here has lost
@@ -540,7 +542,7 @@ func (i *Instance) Resume() error {
 	// what refuses a resume. That is the same Record/Wrap split closeParkedSession makes,
 	// spelled out here because this site cannot use teardown.Errors to make it.
 	if err := ts.DetachSafely(); err != nil {
-		log.ErrorLog.Printf("failed to detach the session %s was parked with: %v", i.Title, err)
+		log.ErrorLog.Printf("failed to detach the session %s was parked with: %v", i.Title(), err)
 	}
 	if err := ts.Close(); err != nil {
 		// One line, no newlines: a batch resume renders each failure as a bullet in a
@@ -551,30 +553,40 @@ func (i *Instance) Resume() error {
 		// (doctor.CheckOrphans).
 		return fmt.Errorf("failed to close the session %s was parked with: %w "+
 			"(it stays paused, with its work on branch %s; run `atrium doctor` to check the "+
-			"tmux server, then resume again)", i.Title, err, wt.GetBranchName())
+			"tmux server, then resume again)", i.Title(), err, wt.GetBranchName())
 	}
 
-	// If our own worktree is still materialized on disk, something parked this session
-	// without removing it. Reuse it as-is: running Setup would clearStaleWorktree and
-	// re-add from the branch, discarding any uncommitted work — and BranchCheckoutPath
-	// would see our own worktree as a foreign checkout and refuse the resume outright.
-	// A normal pause removes the worktree, so a valid one here means a park that left it
-	// on disk. Several do — a pause whose WIP commit failed (see pause), a startup
-	// recovery whose relaunch failed after the worktree validated (recoverInPlace), one
-	// the host session budget deferred (parkOverBudget) — so the test is the property,
-	// not a list: none of them ran pause's auto-commit, so a materialized worktree here
-	// never has one to unwind. Otherwise materialize it fresh, first guarding against
-	// the branch being checked out elsewhere (base repo or a sibling worktree).
+	// If our own worktree is still materialized on disk, reuse it as-is: running Setup
+	// would clearStaleWorktree and re-add from the branch, discarding any uncommitted
+	// work — and BranchCheckoutPath would see our own worktree as a foreign checkout and
+	// refuse the resume outright.
+	//
+	// A normal pause removes the worktree, so two populations arrive here with one, and
+	// the skipped unwind below is right for both:
+	//
+	//   - a park that left it on disk: a pause whose WIP commit failed (see pause), a
+	//     startup recovery whose relaunch failed after the worktree validated
+	//     (recoverInPlace), one the host session budget deferred (parkOverBudget). None
+	//     of them ran pause's auto-commit, so there is none to unwind.
+	//   - an earlier Resume of this same session that materialized the worktree and then
+	//     failed to launch the agent. Since #741 that failure tears nothing down, so the
+	//     directory stays for the retry — and that attempt already ran the unwind below.
+	//
+	// The test is therefore the property rather than the list. What the second population
+	// costs is disclosed rather than handled, and it is one shape rather than two items:
+	// the retry skips this entire block, so ANYTHING in it that failed on the attempt
+	// before is not attempted again (#791). Both halves are best-effort by design — an
+	// unwind that errored leaves its auto-commit in history, and a setup script that
+	// failed or was aborted leaves the worktree half-provisioned — and neither aborts a
+	// resume, which is exactly why neither gets a second chance here.
+	//
+	// Otherwise materialize it fresh, first guarding against the branch being checked
+	// out elsewhere (base repo or a sibling worktree).
 	valid, err := wt.IsValidWorktree()
 	if err != nil {
 		log.ErrorLog.Print(err)
 		return fmt.Errorf("failed to validate worktree: %w", err)
 	}
-	// Whether this call is the one that put the worktree on disk. It decides whether a
-	// failed launch below may tear it down: rolling back our own Setup is safe, while
-	// tearing down a worktree we merely found would destroy work we did not create and
-	// delete the branch holding it (see recreateSession).
-	materializedHere := !valid
 	if !valid {
 		// Naming the holding path makes the error actionable and lets the app layer
 		// offer to detach the base repo automatically.
@@ -609,13 +621,19 @@ func (i *Instance) Resume() error {
 		// installed — node_modules, a built binary, a generated .env — so "once per new
 		// worktree" is the rule, and this IS a new worktree. Deliberately inside the
 		// !valid branch: a park that left its worktree materialized skips Setup, and
-		// re-running `npm ci` for it would be a cost with nothing to buy.
+		// re-running `npm ci` for it would be a cost with nothing to buy. That is sound
+		// for a park, which never ran this; it is the weaker half for a resume retrying
+		// after a failed launch, which did — and possibly failed at it (#791).
 		i.RunSetupScript(wt.GetWorktreePath())
 	}
 
 	// Relaunch the agent, resuming its prior conversation rather than starting blank —
-	// never reattaching, for the reason the close above carries.
-	if err := i.recreateSession(materializedHere); err != nil {
+	// never reattaching, for the reason the close above carries. A failure TEARS NOTHING
+	// DOWN (see recreateSession) — which is not the same as leaving the session as it was
+	// found: the block above has already re-added the worktree and moved the branch tip
+	// back off pause's auto-commit. What survives is every commit and the restored work,
+	// so the retry is a second Resume rather than a rescue.
+	if err := i.recreateSession(); err != nil {
 		return err
 	}
 

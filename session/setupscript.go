@@ -188,7 +188,7 @@ func (i *Instance) runResolvedSetupScript(run setupRun) {
 	output, err := execSetup(ctx, run)
 	i.setSetupResult(output, err)
 	if err != nil {
-		log.ErrorLog.Printf("setup script for %q failed: %v", i.Title, err)
+		log.ErrorLog.Printf("setup script for %q failed: %v", i.Title(), err)
 	}
 }
 
@@ -242,7 +242,7 @@ func (i *Instance) renderSetupRun(compiled repocfg.Script, repoPath, dir string)
 	if err != nil {
 		// Validation rendered this template against a fully-populated probe, so an
 		// error here is about this session, not the template.
-		log.ErrorLog.Printf("setup script for %q (repo_scripts entry %q) failed to render: %v", i.Title, compiled.Name, err)
+		log.ErrorLog.Printf("setup script for %q (repo_scripts entry %q) failed to render: %v", i.Title(), compiled.Name, err)
 		return setupRun{}, false
 	}
 	// A run_command that will not render is reported, and then STEPPED OVER rather than
@@ -255,12 +255,12 @@ func (i *Instance) renderSetupRun(compiled repocfg.Script, repoPath, dir string)
 	// $ATRIUM_PORT, for a feature the user may never press.
 	runCmd, err := compiled.RenderRun(ctx)
 	if err != nil {
-		log.ErrorLog.Printf("run_command for %q (repo_scripts entry %q) failed to render: %v", i.Title, compiled.Name, err)
+		log.ErrorLog.Printf("run_command for %q (repo_scripts entry %q) failed to render: %v", i.Title(), compiled.Name, err)
 		runCmd = ""
 	}
 	env, err := compiled.RenderEnv(ctx)
 	if err != nil {
-		log.ErrorLog.Printf("session_env for %q (repo_scripts entry %q) failed to render: %v", i.Title, compiled.Name, err)
+		log.ErrorLog.Printf("session_env for %q (repo_scripts entry %q) failed to render: %v", i.Title(), compiled.Name, err)
 		return setupRun{}, false
 	}
 
@@ -283,7 +283,7 @@ func (i *Instance) renderSetupRun(compiled repocfg.Script, repoPath, dir string)
 		// `${ATRIUM_PORT+x}` is set-and-empty in the script and absent in the pane. Test
 		// the value, not its existence.
 		sessionEnv: withPortEnv(i.PortText(), env),
-		session:    i.Title,
+		session:    i.Title(),
 	}, true
 }
 
@@ -329,7 +329,7 @@ func (i *Instance) routeRepoScript(dir string) (repocfg.Script, string, bool) {
 	// logging is enough at this point: by now the user has already been told.
 	compiled, problem := repocfg.ValidateOne(index, entry)
 	if problem != nil {
-		log.WarningLog.Printf("setup script for %q not run: %s", i.Title, problem.Error())
+		log.WarningLog.Printf("setup script for %q not run: %s", i.Title(), problem.Error())
 		return repocfg.Script{}, "", false
 	}
 	return compiled, repoPath, true
@@ -373,12 +373,16 @@ func (i *Instance) originRemote(repoPath string) string {
 // a script (see Instance.Start). If a leaf that can be absent is ever added, the
 // `rm -rf {{.Session.X}}/build` case comes back and that guard has to come with it.
 func (i *Instance) repoScriptCtx(dir, repoPath string) repocfg.Ctx {
+	// One snapshot, for the same reason as sessionBrief: this context is built on the
+	// Start goroutine, and a script that is told one title and a branch from the other
+	// side of a rename is worse than one told a stale pair.
+	id := i.Identity()
 	return repocfg.Ctx{
 		Session: repocfg.SessionCtx{
 			Port:     i.PortText(),
-			Title:    i.Title,
-			Name:     i.DisplayName(),
-			Branch:   i.Branch,
+			Title:    id.Title,
+			Name:     id.Name,
+			Branch:   id.Branch,
 			Worktree: dir,
 		},
 		Repo: repocfg.RepoCtx{Path: repoPath, Name: i.GroupKey()},
@@ -527,7 +531,7 @@ func (i *Instance) SetupFailureReport() string {
 	if i.setupErr == nil {
 		return ""
 	}
-	report := fmt.Sprintf("The setup script for %q failed: %v\n\nThe session is running — its worktree and branch are intact, but whatever the script installs is not there.", i.Title, i.setupErr)
+	report := fmt.Sprintf("The setup script for %q failed: %v\n\nThe session is running — its worktree and branch are intact, but whatever the script installs is not there.", i.Title(), i.setupErr)
 	if i.setupOutput != "" {
 		report += "\n\n" + i.setupOutput
 	}

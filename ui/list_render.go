@@ -51,6 +51,14 @@ type InstanceRenderer struct {
 	// the occupancy modes, Instance.CostInfo in "cost" — and is absent whenever
 	// there is none.
 	contextIndicator string
+	// contextWarnPct and contextDangerPct are the occupancy bands at which the
+	// context chip turns Attention- and Danger-coloured (config.GetContextWarnPercent
+	// / GetContextDangerPercent, #799). Zero means "unset", which falls back to the
+	// package defaults — so a renderer built by hand, in a test or by a caller that
+	// predates SetContextThresholds, keeps the 75/90 the constants document rather
+	// than colouring every row Danger from 0%.
+	contextWarnPct   int
+	contextDangerPct int
 	// hideClaudeAccountBadge suppresses the per-row Claude-account badge. Set by
 	// List.String when account grouping is visually active (mode == account and >1
 	// account), so the cluster divider + tinted header carry the identity instead of
@@ -78,7 +86,7 @@ func (r *InstanceRenderer) setWidth(width int) {
 // under a different namespace keeps its meaningful prefix; if stripping would
 // empty the label, the full branch is kept.
 func (r *InstanceRenderer) displayBranch(i *session.Instance) string {
-	branch := i.Branch
+	branch := i.Branch()
 	if r.branchPrefix != "" {
 		if trimmed := strings.TrimPrefix(branch, r.branchPrefix); trimmed != "" {
 			branch = trimmed
@@ -359,7 +367,7 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 	// level instead would leave the poisoned value in the instance, to reappear
 	// the moment the neighbour that poisoned it went away.
 	if chip, ok := contextChip(i.UsageInfo(), i.CostInfo(), r.contextIndicator, th.Glyphs.ContextRamp); ok {
-		right1 = append(right1, p.seg(" "+chip, contextColor(th, i.UsageInfo(), r.contextIndicator)))
+		right1 = append(right1, p.seg(" "+chip, contextColor(th, i.UsageInfo(), r.contextIndicator, r.contextWarnPct, r.contextDangerPct)))
 	}
 	// Agent-identity icon (which CLI the session runs), pinned to the far right so
 	// it sits in a fixed column — a right-edge counterpart to the left status
@@ -496,7 +504,7 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 		// carries no information and is dropped to let the git state lead. The full
 		// branch is still reachable in the preview/diff panes.
 		var groups [][]rowSeg
-		if i.DisplayName() != i.Title {
+		if i.DisplayName() != i.Title() {
 			groups = append(groups, []rowSeg{p.flexSeg(r.displayBranch(i), th.Palette.FgDim, false)})
 		}
 		if chips := gitChips(p, stat); len(chips) > 0 {

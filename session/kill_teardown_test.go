@@ -61,7 +61,7 @@ func TestKillPropagatesTeardownFailure(t *testing.T) {
 		}
 		return nil
 	})
-	inst := &Instance{Title: "boom", tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "boom"}, tmuxSession: ts}
 
 	err := inst.Kill()
 	require.Error(t, err, "a failed tmux teardown must surface from Kill")
@@ -83,7 +83,7 @@ func TestKillTreatsDeadSessionAsClean(t *testing.T) {
 		}
 		return nil
 	})
-	inst := &Instance{Title: "gone", tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "gone"}, tmuxSession: ts}
 
 	require.NoError(t, inst.Kill(), "an already-dead session must not surface a spurious error")
 }

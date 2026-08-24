@@ -90,7 +90,7 @@ func recoverableInstanceLaunching(t *testing.T, title string, startErr error) (*
 	}
 	ts := tmux.NewSessionWithDeps(context.Background(), title, "claude", pty, relaunchExec)
 	inst := &Instance{
-		Title: title, status: Running, Program: "claude",
+		ident: identity{title: title}, status: Running, Program: "claude",
 		claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts,
 	}
 	return inst, pty
@@ -106,7 +106,7 @@ func survivingInstance(t *testing.T, title string) (*Instance, *recordingPtyFact
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
 	}
 	ts := tmux.NewSessionWithDeps(context.Background(), title, "claude", pty, aliveExec)
-	return &Instance{Title: title, status: Running, Program: "claude", tmuxSession: ts}, pty
+	return &Instance{ident: identity{title: title}, status: Running, Program: "claude", tmuxSession: ts}, pty
 }
 
 // TestBringOnline_ParksRecoveryPastTheHostBudget is #474 itself: a reboot with more
@@ -201,7 +201,7 @@ func TestBringOnline_SurvivingFleetIsNeverParked(t *testing.T) {
 // something it found already parked.
 func TestBringOnline_PausedSessionsCostNothing(t *testing.T) {
 	parked := &Instance{
-		Title: "already-paused", status: Paused, Program: "claude",
+		ident: identity{title: "already-paused"}, status: Paused, Program: "claude",
 		tmuxSession: tmux.NewSessionWithDeps(context.Background(), "already-paused", "claude",
 			newRecordingPtyFactory(t, nil), deadExec()),
 	}
@@ -323,7 +323,7 @@ func TestNewRecoveryBudget_OnlyTheSoftCapRations(t *testing.T) {
 // the first session it meets.
 func TestNilRecoveryBudgetGrantsEverything(t *testing.T) {
 	var b *recoveryBudget
-	require.True(t, b.spend(&Instance{Title: "anything"}))
+	require.True(t, b.spend(&Instance{ident: identity{title: "anything"}}))
 	b.reserve()
 	b.refund()
 	require.Equal(t, DeferredRecovery{}, b.result())
@@ -335,13 +335,16 @@ func TestNilRecoveryBudgetGrantsEverything(t *testing.T) {
 // Leaving the worktree materialized is what makes the park safe, so nothing downstream
 // may treat it as scratch. Resume reaches recreateSession for a budget-parked session
 // every time — its tmux session is gone by construction, which is why it was being
-// recovered at all — and recreateSession's failure path tears the worktree down through
-// Worktree.Cleanup: `git worktree remove -f` AND `git branch -D`. That teardown is a
-// rollback of the Setup a normal resume just ran, where the worktree came from the
-// branch and nothing is lost. Here Resume materialized nothing, so the same teardown
-// would destroy uncommitted work it did not create, and delete the branch holding the
-// session's history — turning a load-shedding measure into the most destructive path in
-// the program.
+// recovered at all — and recreateSession's failure path used to tear the worktree down
+// through Worktree.Cleanup: `git worktree remove -f` AND `git branch -D`. It was gated
+// on whether that call had materialized the worktree, which spared this park and nothing
+// else. #741 removed the teardown outright: the gate asked about the directory, while
+// the destructive half is the branch, and no caller of that function ever created one.
+//
+// So this now guards a promise made to every resume rather than an exemption made to
+// this park — and it is still the sharpest fixture for it, because here the uncommitted
+// work was never committed anywhere, so destroying it would turn a load-shedding measure
+// into the most destructive path in the program.
 func TestParkedOverflowSurvivesAFailedResume(t *testing.T) {
 	// A survivor reserves the only slot without launching anything, so the second
 	// session is parked for want of budget.

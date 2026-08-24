@@ -367,9 +367,10 @@ func (t *TerminalPane) ApplyFrame(key, content string, err error, at time.Time) 
 //
 // title is the instance's Title, SNAPSHOTTED on the update thread when the frame target
 // was resolved (frameTarget.termTitle, app/app_frames.go) — not read off the instance
-// here, which would be a data race: Title is a plain exported field with no mutex, and
-// AdoptRename writes it on the update thread while this runs on the capture goroutine
-// (#718). Same reason frameTarget.termKey is computed there rather than derived here.
+// here. Since #795 that read would be safe rather than a data race, but it would be a
+// read from a DIFFERENT instant than the rest of the frame: AdoptRename writes on the
+// update thread while this runs on the capture goroutine (#718). Same reason
+// frameTarget.termKey is computed there rather than derived here.
 //
 // The snapshot is up to one paneFrameInterval plus a capture round trip STALER than the
 // racy read it replaces, so each use had to be worth that:
@@ -678,7 +679,7 @@ func (t *TerminalPane) CloseForInstance(inst *session.Instance) {
 		}
 		delete(t.sessions, key)
 	} else if owned != "" {
-		uncached := tmux.NewSessionWithName(t.baseContext(), owned, termWindowName(inst.Title), terminalReapProgram)
+		uncached := tmux.NewSessionWithName(t.baseContext(), owned, termWindowName(inst.Title()), terminalReapProgram)
 		if err := uncached.Close(); err != nil {
 			log.InfoLog.Printf("terminal pane: failed to close uncached session %s: %v", owned, err)
 			reaped = false

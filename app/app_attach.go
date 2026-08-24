@@ -23,9 +23,10 @@ import (
 // restoreTerm is seamed because #375 stage C added the first test to drive the raw-mode
 // SUCCESS path (asserting a raw takeover does NOT borrow SIGINT), and a fake makeRaw has
 // no real *term.State to hand back. Unseamed, that test either nil-derefs inside
-// term.Restore or fabricates a zeroed State — and `go test` run from a terminal has that
-// terminal on stdin, so the fabricated one applies a zeroed termios to the developer's
-// own tty. The seam is the only spelling that is safe wherever the suite runs.
+// term.Restore or fabricates a zeroed State, which would apply a zeroed termios to
+// whatever stdin is. `go test` itself is safe from that — it hands the test binary
+// /dev/null — but a directly-run test binary or a debugger inherits the developer's own
+// tty. The seam is the only spelling that is safe wherever the suite runs.
 //
 // suspendInterrupt is seamed for the same reason one rung up: the alternative is a test
 // that raises a process-global SIGINT at the test binary.
@@ -34,6 +35,7 @@ var (
 	makeRaw          = term.MakeRaw
 	restoreTerm      = term.Restore
 	suspendInterrupt = lifecycle.SuspendTerminalSignals
+	yieldTabs        = yieldHardTabs
 )
 
 // handoverHold is seamed for the reason the term calls above are: the tests that drive
@@ -147,6 +149,21 @@ func (a *attachCommand) Run() error {
 	if cooked := !a.raw; cooked {
 		defer suspendInterrupt()()
 	}
+	// OPOST is what makes the tab-delay field app.Run set apply to the CHILD: with it on,
+	// the driver expands the child's tabs itself and counts the bytes of its ANSI escapes
+	// as printable columns. Hand the field back for the child's span and take it again on
+	// the way out, before bubbletea's RestoreTerminal re-reads it (yieldHardTabs, #796).
+	//
+	// Keyed on the OUTCOME, unlike the SIGINT borrow above, and that difference is the
+	// whole point of the two conditions sitting apart. What decides here is whether OPOST
+	// survived, and makeRaw clears it — so a raw takeover that GOT raw mode has nothing to
+	// yield, while one that asked and failed is running cooked with OPOST on and needs the
+	// yield exactly as much as a request for cooked mode did. The borrow's exclusion of
+	// rawModeFailed is a deliberate judgement about who should receive a Ctrl+C; this is
+	// not a judgement at all, just what the tty is doing.
+	if opost := !a.raw || a.rawModeFailed; opost {
+		defer yieldTabs(os.Stdin)()
+	}
 	ch, err := a.attach()
 	if err != nil {
 		return err
@@ -250,10 +267,10 @@ func (m *home) attachExecCommand(attach func() (chan struct{}, error), killTarge
 // rather than as a guess.
 func attachLabel(killTarget, selected *session.Instance) string {
 	if killTarget != nil {
-		return killTarget.Title
+		return killTarget.Title()
 	}
 	if selected != nil {
-		return selected.Title
+		return selected.Title()
 	}
 	return ""
 }

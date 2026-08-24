@@ -1,6 +1,7 @@
 package session
 
 import (
+	"sync/atomic"
 	"time"
 
 	"github.com/ZviBaratz/atrium/log"
@@ -54,22 +55,66 @@ import (
 // DETERMINISTICALLY clears the stuck set (ClearInflight) so the next poll sees ready+empty
 // → idle and stays there, instead of re-classifying ready+non-empty → Pending and flapping.
 
-// defaultPendingWatchdog is the wall-clock cap a session may sit Pending before the
-// watchdog force-reconciles it to done. Deliberately generous: this backstops only the
-// rare alive-but-stuck case (a SubagentStop that never fired on a still-live pane) — tmux
-// liveness already catches the common dead-pane failure within a couple of ticks — so the
-// cap is tuned so a legitimately long-running background sub-agent never trips it (a false
-// "done" is worse than a row that reads "busy" a while longer). A var, not a const, so
-// tests can shrink it. Agents may override via agent.Adapter.PendingWatchdog.
-var defaultPendingWatchdog = 30 * time.Minute
+// DefaultPendingWatchdog is the wall-clock cap a session may sit Pending before the
+// watchdog force-reconciles it to done, absent any override. Deliberately generous: this
+// backstops only the rare alive-but-stuck case (a SubagentStop that never fired on a
+// still-live pane) — tmux liveness already catches the common dead-pane failure within a
+// couple of ticks — so the cap is tuned so a legitimately long-running background
+// sub-agent never trips it (a false "done" is worse than a row that reads "busy" a while
+// longer).
+const DefaultPendingWatchdog = 30 * time.Minute
 
-// pendingWatchdogCap is this instance's Pending cap: the agent's override when set,
-// otherwise the package default. Mirrors idleConfirmCap's adapter-override pattern.
+// configuredPendingWatchdog holds the user's pending_watchdog_minutes as nanoseconds, or
+// 0 for "not configured". Atomic rather than a plain var because the write and one of the
+// reads are on different goroutines: SetPendingWatchdog runs on the TUI's Update thread
+// (assembleHome, then every settings change), while applyPending — and through it
+// pendingWatchdogCap — is reached from app's attachKeeper, which services instances from a
+// goroutine of its own. The TUI's own metadata path is main-thread (applyMetadataResults
+// applies what the poll goroutines collected), so the keeper is the whole reason this is
+// not a plain var.
+var configuredPendingWatchdog atomic.Int64
+
+// SetPendingWatchdog installs the user-configured Pending cap, which outranks both an
+// agent adapter's override and the package default. A non-positive duration clears it, so
+// the ladder falls back to adapter → DefaultPendingWatchdog.
+//
+// Callers pass an already-clamped value, and specifically config.PendingWatchdogOverride —
+// NOT GetPendingWatchdogMinutes, which resolves an unset field to the built-in 30 and would
+// therefore install a cap on every launch, leaving the adapter rung of the ladder below
+// permanently inert. This refuses only the non-positive case, which would make every Pending
+// row expire on its first poll.
+func SetPendingWatchdog(d time.Duration) {
+	if d <= 0 {
+		configuredPendingWatchdog.Store(0)
+		return
+	}
+	configuredPendingWatchdog.Store(int64(d))
+}
+
+// PendingWatchdog reports the cap SetPendingWatchdog installed, or 0 when none is. It is
+// the setter's counterpart: package-level mutable state that nothing can read back is
+// state nothing can assert about, and the cap's whole contract is which of three values is
+// currently in force.
+func PendingWatchdog() time.Duration {
+	return time.Duration(configuredPendingWatchdog.Load())
+}
+
+// pendingWatchdogCap is this instance's Pending cap, resolved down a three-rung ladder:
+// the user's configured value, then the agent's override, then the package default.
+//
+// The user outranks the adapter deliberately (#799). The reverse order preserves
+// per-agent tuning, but it also means a user who raises the cap because THEIR agent runs
+// long sub-agents gets no effect and no explanation — a knob that is silently inert for
+// the agent that motivated it. An adapter override still carries every session whose user
+// has not expressed an opinion, which is the case it was written for.
 func (i *Instance) pendingWatchdogCap() time.Duration {
+	if d := configuredPendingWatchdog.Load(); d > 0 {
+		return time.Duration(d)
+	}
 	if d := agent.Resolve(i.Program).PendingWatchdog; d > 0 {
 		return d
 	}
-	return defaultPendingWatchdog
+	return DefaultPendingWatchdog
 }
 
 // applyPending maps a PanePending poll onto the instance's status, running the wall-clock
@@ -90,11 +135,11 @@ func (i *Instance) applyPending() {
 			// degrades to a bounded re-reconcile — the row flips back to Pending next poll and
 			// the watchdog retries a cap later — never a permanently-stuck row.
 			if err := ts.ClearInflight(); err != nil {
-				log.WarningLog.Printf("pending watchdog: failed to clear in-flight set for %q: %v", i.Title, err)
+				log.WarningLog.Printf("pending watchdog: failed to clear in-flight set for %q: %v", i.Title(), err)
 			}
 		}
 		i.SetStatus(Ready) // a non-Pending write releases the producer and its clock
-		log.InfoLog.Printf("pending watchdog: %q held pending past %s, reconciled to ready", i.Title, i.pendingWatchdogCap())
+		log.InfoLog.Printf("pending watchdog: %q held pending past %s, reconciled to ready", i.Title(), i.pendingWatchdogCap())
 		return
 	}
 	i.SetStatus(Pending)

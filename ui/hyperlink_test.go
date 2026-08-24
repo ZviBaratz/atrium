@@ -71,7 +71,7 @@ func TestGitContextHeader_PRSegmentHyperlinkNoWidthDrift(t *testing.T) {
 
 	inst, err := session.NewInstance(session.InstanceOptions{Title: "t", Path: t.TempDir(), Program: "echo"})
 	require.NoError(t, err)
-	inst.Branch = "feat"
+	inst.SetBranch("feat")
 	stats := &git.DiffStats{Added: 3, Removed: 1, FilesChanged: 1}
 
 	inst.SetPRStatus(&git.PRStatus{HasPR: true, Number: 5, State: "OPEN", URL: "https://github.com/x/y/pull/5"})

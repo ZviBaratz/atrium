@@ -17,7 +17,7 @@ import (
 // rendering and the copy live in session/tmux, this is where the four values come from.
 func TestSessionBriefFacts(t *testing.T) {
 	wt := newTestWorktree(t) // real repo + real worktree under a temp HOME
-	inst := &Instance{Title: "issue-485", Path: wt.GetRepoPath(), Branch: wt.GetBranchName(), gitWorktree: wt}
+	inst := &Instance{ident: identity{title: "issue-485", branch: wt.GetBranchName()}, Path: wt.GetRepoPath(), gitWorktree: wt}
 
 	root, err := config.WorktreesDir()
 	require.NoError(t, err)
@@ -32,8 +32,7 @@ func TestSessionBriefFacts(t *testing.T) {
 	// The origin must be the worktree's RESOLVED repo root, not i.Path — a user can create a
 	// session from a subdirectory of the repo, and telling the agent the origin is
 	// <repo>/some/subdir would be a confidently wrong statement about where its work came from.
-	sub := &Instance{Title: "issue-485", Path: filepath.Join(wt.GetRepoPath(), "docs"),
-		Branch: wt.GetBranchName(), gitWorktree: wt}
+	sub := &Instance{ident: identity{title: "issue-485", branch: wt.GetBranchName()}, Path: filepath.Join(wt.GetRepoPath(), "docs"), gitWorktree: wt}
 	require.Equal(t, wt.GetRepoPath(), sub.sessionBrief().Origin)
 
 	// The worktrees root has to be the tree git actually materializes into — never a hardcoded
@@ -63,12 +62,11 @@ func TestSessionBriefFollowsRename(t *testing.T) {
 	require.NoError(t, wt.Setup())
 
 	inst := &Instance{
-		Title:       "formalize-packaing",
+		ident:       identity{title: "formalize-packaing", branch: wt.GetBranchName()},
 		status:      Running,
 		started:     true,
 		gitWorktree: wt,
 		tmuxSession: liveTmux(t, "formalize-packaing"),
-		Branch:      wt.GetBranchName(),
 	}
 	before := inst.sessionBrief()
 	require.Equal(t, "formalize-packaing", before.Name)
@@ -91,11 +89,11 @@ func TestSessionBriefFollowsRename(t *testing.T) {
 // session, whose cwd is the user's own checkout. A brief there would be confidently wrong, and
 // wrong is worse than silent.
 func TestSessionBriefEmptyWithoutWorktree(t *testing.T) {
-	direct := &Instance{Title: "d", Path: t.TempDir(), direct: true}
+	direct := &Instance{ident: identity{title: "d"}, Path: t.TempDir(), direct: true}
 	require.Equal(t, tmux.SessionBrief{}, direct.sessionBrief())
 	require.Empty(t, tmux.RenderSessionBrief(direct.sessionBrief()))
 
 	// An unstarted git session has no worktree either, and no branch to name yet.
-	unstarted := &Instance{Title: "u", Path: t.TempDir()}
+	unstarted := &Instance{ident: identity{title: "u"}, Path: t.TempDir()}
 	require.Equal(t, tmux.SessionBrief{}, unstarted.sessionBrief())
 }

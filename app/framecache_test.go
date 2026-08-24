@@ -102,5 +102,5 @@ func TestFrameCached_ClickStillRoutesToTheRightRowAfterAMemoizedRender(t *testin
 // only use so the duplication is visible: if the id scheme changes, this test stops
 // finding a zone and fails loudly rather than silently asserting nothing.
 func listRowZoneIDFor(i *session.Instance) string {
-	return "list-row-" + i.GroupKey() + "\x00" + i.Title
+	return "list-row-" + i.GroupKey() + "\x00" + i.Title()
 }

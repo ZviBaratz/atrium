@@ -88,7 +88,7 @@ func startedFixture(t *testing.T, specs ...fixtureSpec) []*session.Instance {
 	require.NoError(t, err)
 	require.Len(t, loaded, len(specs))
 	for _, inst := range loaded {
-		require.Truef(t, inst.Started(), "fixture %q must be started for the policy to see it", inst.Title)
+		require.Truef(t, inst.Started(), "fixture %q must be started for the policy to see it", inst.Title())
 	}
 	return loaded
 }
@@ -325,7 +325,7 @@ func TestMetadataTick_ReadsThenSuppressesTheContextChip(t *testing.T) {
 	h.list.AddInstance(solo)()
 
 	// Alone on the directory: the tick reads, and the instance ends up holding it.
-	results := collectMetadata(h.ctx, []*session.Instance{solo}, nil, false, h.usagePolicy())
+	results := collectMetadata(h.ctx, []*session.Instance{solo}, nil, false, h.usagePolicy(), h.diffContentFloor())
 	require.Len(t, results, 1)
 	require.NotEqual(t, tmux.PaneDead, results[0].state, "precondition: the fake pane must be alive")
 	require.True(t, results[0].usageOK, "a readable transcript must yield a result to apply")
@@ -341,7 +341,7 @@ func TestMetadataTick_ReadsThenSuppressesTheContextChip(t *testing.T) {
 	require.Equal(t, solo.ContextSourceKey(), neighbour.ContextSourceKey(),
 		"the fixtures must actually collide for this test to mean anything")
 
-	results = collectMetadata(h.ctx, []*session.Instance{solo, neighbour}, nil, false, h.usagePolicy())
+	results = collectMetadata(h.ctx, []*session.Instance{solo, neighbour}, nil, false, h.usagePolicy(), h.diffContentFloor())
 	require.Len(t, results, 2)
 	for i, r := range results {
 		require.Truef(t, r.usageClear, "result %d must carry the clear verdict, not just a skipped read", i)
@@ -369,7 +369,7 @@ func TestMetadataTick_ChipOffReadsNothing(t *testing.T) {
 	inst := usageFleetInstance(t, "quiet", dir, root)
 	h.list.AddInstance(inst)()
 
-	results := collectMetadata(h.ctx, []*session.Instance{inst}, nil, false, h.usagePolicy())
+	results := collectMetadata(h.ctx, []*session.Instance{inst}, nil, false, h.usagePolicy(), h.diffContentFloor())
 	require.Len(t, results, 1)
 	require.True(t, results[0].usageClear)
 	require.False(t, results[0].usageOK, "a transcript that is readable must still go unread")
@@ -423,7 +423,7 @@ func TestMetadataTick_ReadsThenSuppressesTheCostChip(t *testing.T) {
 	solo := usageFleetInstance(t, "solo", dir, root)
 	h.list.AddInstance(solo)()
 
-	results := collectMetadata(h.ctx, []*session.Instance{solo}, nil, false, h.usagePolicy())
+	results := collectMetadata(h.ctx, []*session.Instance{solo}, nil, false, h.usagePolicy(), h.diffContentFloor())
 	require.Len(t, results, 1)
 	require.NotEqual(t, tmux.PaneDead, results[0].state, "precondition: the fake pane must be alive")
 	require.True(t, results[0].costOK, "a readable transcript must yield a result to apply")
@@ -437,7 +437,7 @@ func TestMetadataTick_ReadsThenSuppressesTheCostChip(t *testing.T) {
 	require.Equal(t, solo.ContextSourceKey(), neighbour.ContextSourceKey(),
 		"the fixtures must actually collide for this test to mean anything")
 
-	results = collectMetadata(h.ctx, []*session.Instance{solo, neighbour}, nil, false, h.usagePolicy())
+	results = collectMetadata(h.ctx, []*session.Instance{solo, neighbour}, nil, false, h.usagePolicy(), h.diffContentFloor())
 	require.Len(t, results, 2)
 	for i, r := range results {
 		require.Truef(t, r.costClear, "result %d must carry the clear verdict, not just a skipped read", i)
@@ -483,7 +483,7 @@ func TestMetadataTick_ChipModeReadsOneThingNotBoth(t *testing.T) {
 			inst := usageFleetInstance(t, "one", dir, root)
 			h.list.AddInstance(inst)()
 
-			results := collectMetadata(h.ctx, []*session.Instance{inst}, nil, false, h.usagePolicy())
+			results := collectMetadata(h.ctx, []*session.Instance{inst}, nil, false, h.usagePolicy(), h.diffContentFloor())
 			require.Len(t, results, 1)
 			assert.Equal(t, tc.wantContext, !results[0].usageClear, "context read taken")
 			assert.Equal(t, tc.wantCost, !results[0].costClear, "cost read taken")

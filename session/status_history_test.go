@@ -24,7 +24,7 @@ func TestStatus_String(t *testing.T) {
 // TestStatusHistory_RecordsRealTransitions asserts every From≠To change lands in the
 // ring buffer in order, and a repeated same-status write (the idle poll tick) does not.
 func TestStatusHistory_RecordsRealTransitions(t *testing.T) {
-	inst := &Instance{Title: "s", status: Running}
+	inst := &Instance{ident: identity{title: "s"}, status: Running}
 
 	inst.SetStatus(Ready)      // Running → Ready
 	inst.SetStatus(NeedsInput) // Ready → NeedsInput
@@ -48,7 +48,7 @@ func TestStatusHistory_RecordsRealTransitions(t *testing.T) {
 // transition and is left untouched by a repeated same-status write, so a session that
 // stays idle across many poll ticks keeps a stable "held since" time.
 func TestStatusChangedAt_StampsOnChangeNotOnNoOp(t *testing.T) {
-	inst := &Instance{Title: "s", status: Running}
+	inst := &Instance{ident: identity{title: "s"}, status: Running}
 	require.True(t, inst.StatusChangedAt().IsZero(), "unset before the first SetStatus")
 
 	inst.SetStatus(Ready)
@@ -66,7 +66,7 @@ func TestStatusChangedAt_StampsOnChangeNotOnNoOp(t *testing.T) {
 // matches the zero-value status (Running) stamps the clock, so StatusChangedAt is
 // meaningful from launch rather than reading as the zero time.
 func TestStatusChangedAt_FirstObservationStampsClock(t *testing.T) {
-	inst := &Instance{Title: "s"} // zero-value status == Running
+	inst := &Instance{ident: identity{title: "s"}} // zero-value status == Running
 	inst.SetStatus(Running)
 	require.False(t, inst.StatusChangedAt().IsZero(), "first observation stamps the clock")
 	require.Empty(t, inst.StatusHistory(), "a Running→Running first write records no transition")
@@ -75,7 +75,7 @@ func TestStatusChangedAt_FirstObservationStampsClock(t *testing.T) {
 // TestStatusHistory_RingBufferBounded asserts the buffer is capped at statusHistoryMax,
 // dropping the oldest entries and keeping the newest transition.
 func TestStatusHistory_RingBufferBounded(t *testing.T) {
-	inst := &Instance{Title: "s", status: Running}
+	inst := &Instance{ident: identity{title: "s"}, status: Running}
 	// Alternate Ready/Running well past the cap; each write is a real transition.
 	toggles := statusHistoryMax*2 + 5
 	for n := 0; n < toggles; n++ {
@@ -97,7 +97,7 @@ func TestStatusHistory_RingBufferBounded(t *testing.T) {
 // TestStatusHistory_ReturnsCopy asserts callers cannot mutate the instance's internal
 // history through the returned slice.
 func TestStatusHistory_ReturnsCopy(t *testing.T) {
-	inst := &Instance{Title: "s", status: Running}
+	inst := &Instance{ident: identity{title: "s"}, status: Running}
 	inst.SetStatus(Ready)
 	got := inst.StatusHistory()
 	require.Len(t, got, 1)

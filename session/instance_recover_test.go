@@ -37,6 +37,15 @@ func newRecordingPtyFactory(t *testing.T, startErr error) *recordingPtyFactory {
 	return f
 }
 
+// setStartErr changes what Start returns from here on, so one fixture can fail a launch
+// and then let the retry through. Taken under the same mutex Start reads the field
+// through: a launch still in flight on another goroutine would otherwise race it.
+func (f *recordingPtyFactory) setStartErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.startErr = err
+}
+
 func (f *recordingPtyFactory) Start(cmd *exec.Cmd) (*os.File, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -169,7 +178,7 @@ func orphanedWorktreeInstance(t *testing.T) (*Instance, *recordingPtyFactory) {
 		"sess", "session/sess", "", "main", false, "session/")
 	pty := newRecordingPtyFactory(t, nil)
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, deadExec())
-	inst := &Instance{Title: "sess", status: Running, Program: "claude", gitWorktree: wt, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "sess"}, status: Running, Program: "claude", gitWorktree: wt, tmuxSession: ts}
 	return inst, pty
 }
 
@@ -208,7 +217,7 @@ func TestRecoverInPlace_ResumesConversationWhenWorktreeValid(t *testing.T) {
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
 	}
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, liveExec)
-	inst := &Instance{Title: "sess", status: Running, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "sess"}, status: Running, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
 
 	inst.recoverInPlace()
 
@@ -239,7 +248,7 @@ func TestRecoverInPlace_StartsBlankWhenNoConversation(t *testing.T) {
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
 	}
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, liveExec)
-	inst := &Instance{Title: "sess", status: Running, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "sess"}, status: Running, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
 
 	inst.recoverInPlace()
 
@@ -259,7 +268,7 @@ func TestRecoverInPlace_FailedRestartDegradesToPaused(t *testing.T) {
 	writeClaudeTranscript(t, cfgDir, wt.GetWorktreePath())
 	pty := newRecordingPtyFactory(t, fmt.Errorf("pty boom"))
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, deadExec())
-	inst := &Instance{Title: "sess", status: Running, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "sess"}, status: Running, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
 
 	inst.recoverInPlace()
 
@@ -267,30 +276,6 @@ func TestRecoverInPlace_FailedRestartDegradesToPaused(t *testing.T) {
 	require.True(t, inst.Paused(), "a failed restart must degrade to Paused, not abort")
 	require.Contains(t, pty.commands()[0], "--continue",
 		"recovery must attempt to resume the prior conversation")
-}
-
-// TestRecreateSession_ResumesConversationAndCleansUpOnFailure asserts the Resume
-// fallback helper resumes the conversation (StartContinue) and, when the launch fails
-// on a worktree this same operation materialized, tears it down and returns an error
-// rather than leaking it. The teardown is a rollback of that Setup, which is why it is
-// safe here and refused when the worktree pre-existed the call (see
-// TestRecreateSession_KeepsAWorktreeItDidNotMaterialize).
-func TestRecreateSession_ResumesConversationAndCleansUpOnFailure(t *testing.T) {
-	wt := newTestWorktree(t)
-	cfgDir := t.TempDir()
-	writeClaudeTranscript(t, cfgDir, wt.GetWorktreePath())
-	pty := newRecordingPtyFactory(t, fmt.Errorf("pty boom"))
-	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, deadExec())
-	inst := &Instance{Title: "sess", started: true, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
-
-	err := inst.recreateSession(true)
-
-	require.Error(t, err, "a failed launch must surface an error to Resume's caller")
-	require.Contains(t, pty.commands()[0], "--continue",
-		"the fallback must resume the prior conversation, not start blank")
-	valid, vErr := wt.IsValidWorktree()
-	require.NoError(t, vErr)
-	require.False(t, valid, "the worktree must be cleaned up after a failed launch")
 }
 
 // TestRecreateSession_StartsBlankWhenNoConversation asserts the Resume fallback
@@ -301,37 +286,13 @@ func TestRecreateSession_StartsBlankWhenNoConversation(t *testing.T) {
 	cfgDir := t.TempDir() // deliberately no transcript written
 	pty := newRecordingPtyFactory(t, fmt.Errorf("pty boom"))
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, deadExec())
-	inst := &Instance{Title: "sess", started: true, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "sess"}, started: true, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
 
-	err := inst.recreateSession(true)
+	err := inst.recreateSession()
 
 	require.Error(t, err, "a failed launch must still surface an error")
 	require.NotContains(t, pty.commands()[0], "--continue",
 		"with no conversation, the fallback must start the agent blank")
-}
-
-// TestRecreateSession_PropagatesCleanupFailure asserts that when the launch fails AND
-// the worktree teardown also fails, recreateSession wraps the cleanup error into the
-// returned error rather than dropping it — so a doubly-failed Resume surfaces both
-// causes. The worktreeCleanup seam is overridden to fail deterministically, since git
-// teardown does not route through the injectable cmd.Executor that fails the launch.
-func TestRecreateSession_PropagatesCleanupFailure(t *testing.T) {
-	wt := newTestWorktree(t)
-	cfgDir := t.TempDir()
-	pty := newRecordingPtyFactory(t, fmt.Errorf("pty boom"))
-	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, deadExec())
-	inst := &Instance{Title: "sess", started: true, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
-
-	boom := fmt.Errorf("cleanup boom")
-	defer func(orig func(*git.Worktree) error) { worktreeCleanup = orig }(worktreeCleanup)
-	worktreeCleanup = func(*git.Worktree) error { return boom }
-
-	err := inst.recreateSession(true)
-
-	require.Error(t, err, "a failed launch must surface an error")
-	require.ErrorIs(t, err, boom, "the cleanup failure must be wrapped into the returned error")
-	require.Contains(t, err.Error(), "cleanup error", "the wrap must label the cleanup cause")
-	require.Contains(t, err.Error(), "failed to start new session", "the launch failure must remain the outer cause")
 }
 
 // TestKill_CleansUpWorktreeWhenNotStarted is the regression guard for the resource
@@ -345,7 +306,7 @@ func TestKill_CleansUpWorktreeWhenNotStarted(t *testing.T) {
 	wt := newTestWorktree(t)
 	// started is left false and no tmux session is set — exactly the state Start()'s
 	// deferred Kill() runs in when worktree setup has succeeded but a later step fails.
-	inst := &Instance{Title: "sess", gitWorktree: wt}
+	inst := &Instance{ident: identity{title: "sess"}, gitWorktree: wt}
 
 	require.NoError(t, inst.Kill())
 
@@ -377,7 +338,7 @@ func TestResume_BranchCheckedOutReturnsTypedError(t *testing.T) {
 	// A parked session, not a nil one: Resume closes what the park left behind before it
 	// checks the branch, so this refusal is now reached with the close already done.
 	ts, _ := parkedTmux(t)
-	inst := &Instance{Title: "sess", status: Paused, started: true, gitWorktree: wt, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "sess"}, status: Paused, started: true, gitWorktree: wt, tmuxSession: ts}
 
 	err := inst.Resume()
 	require.Error(t, err)
@@ -386,17 +347,22 @@ func TestResume_BranchCheckedOutReturnsTypedError(t *testing.T) {
 	require.NotEmpty(t, busy.Path, "the error should name the holding worktree")
 }
 
-// TestRecreateSession_KeepsAWorktreeItDidNotMaterialize is the guard on the other side
-// of that flag, and the reason it exists at all.
+// TestRecreateSession_KeepsTheWorktreeWhenTheLaunchFails is the unit-level guard that a
+// failed launch tears nothing down, and it is unconditional — there is no longer a flag
+// with a destructive side.
 //
 // Worktree.Cleanup is the KILL teardown — `git worktree remove -f` plus `git branch
-// -D`. Running it as a launch-failure rollback is only sound when this call put the
-// worktree there; when it merely found one, the same teardown destroys uncommitted work
-// it did not create and deletes the branch holding the session's history. Resume reaches
-// here with a pre-existing worktree for every park that leaves one materialized, and a
-// budget-parked session takes that path on every single resume, its tmux session having
-// died with the server.
-func TestRecreateSession_KeepsAWorktreeItDidNotMaterialize(t *testing.T) {
+// -D`. It ran here as a launch-failure rollback, gated on whether this same call had
+// materialized the worktree. That gate was the wrong question: it asks about the
+// directory, while the destructive half is the branch, and no caller of this function
+// ever created the branch (#741). Whichever park Resume met, the same teardown destroyed
+// uncommitted work and deleted the branch holding the session's history.
+//
+// The end-to-end guards are TestResumeKeepsTheBranchWhenTheRelaunchFails, for the park
+// that removed the worktree, and TestParkedOverflowSurvivesAFailedResume for the park
+// that left one — a budget-parked session takes that path on every single resume, its
+// tmux session having died with the server.
+func TestRecreateSession_KeepsTheWorktreeWhenTheLaunchFails(t *testing.T) {
 	wt := newTestWorktree(t)
 	cfgDir := t.TempDir()
 	writeClaudeTranscript(t, cfgDir, wt.GetWorktreePath())
@@ -405,13 +371,19 @@ func TestRecreateSession_KeepsAWorktreeItDidNotMaterialize(t *testing.T) {
 
 	pty := newRecordingPtyFactory(t, fmt.Errorf("pty boom"))
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, deadExec())
-	inst := &Instance{Title: "sess", started: true, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "sess"}, started: true, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
 
-	require.Error(t, inst.recreateSession(false), "the failed launch must still surface")
+	require.Error(t, inst.recreateSession(), "the failed launch must still surface")
+
+	// Rides along on the one act rather than in a fixture of its own: the argv is elected
+	// before the launch is attempted, so a failure must not change which command it
+	// carried. TestRecreateSession_StartsBlankWhenNoConversation is the negative.
+	require.Contains(t, pty.commands()[0], "--continue",
+		"the fallback must resume the prior conversation, not start blank")
 
 	valid, vErr := wt.IsValidWorktree()
 	require.NoError(t, vErr)
-	require.True(t, valid, "a worktree this call did not materialize must survive the failure")
+	require.True(t, valid, "a failed launch must not tear the worktree down")
 	onDisk, rErr := os.ReadFile(wip)
 	require.NoError(t, rErr)
 	require.Equal(t, "half-finished\n", string(onDisk), "and so must the work it holds")

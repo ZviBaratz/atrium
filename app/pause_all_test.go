@@ -34,7 +34,7 @@ func TestPauseAll_OpensCountConfirmation(t *testing.T) {
 	// The literal itself is pinned once, in dialog_voice_test.go; what this test is
 	// about is that ctrl+p opened the pause dialog over the right kind and count.
 	assert.Contains(t, rendered, pauseConfirmMessage("active", 2))
-	assert.Contains(t, rendered, "Press y to pause 2 sessions, n or esc to cancel")
+	assert.Contains(t, rendered, "Press y (or ctrl+p) to pause 2 sessions, n or esc to cancel")
 }
 
 // The count is grammatical for a single session.

@@ -25,13 +25,12 @@ func startedForTermName(t *testing.T, title string) *Instance {
 	require.NoError(t, err)
 	require.NoError(t, wt.Setup())
 	return &Instance{
-		Title:       title,
+		ident:       identity{title: title, branch: wt.GetBranchName()},
 		status:      Running,
 		started:     true,
 		gitWorktree: wt,
 		tmuxSession: liveTmux(t, title),
 		tmuxName:    tmux.Prefix() + title,
-		Branch:      wt.GetBranchName(),
 	}
 }
 
@@ -114,7 +113,7 @@ func TestReleaseTerminalSessionNameRemintsFromTheCurrentName(t *testing.T) {
 // An instance with no tmux name has nothing to mint from, and a claim must not invent one:
 // the pane reads "" as "no shell can be cached for this" and returns before any tmux call.
 func TestTerminalSessionNameIsEmptyWithoutATmuxName(t *testing.T) {
-	inst := &Instance{Title: "never-started"}
+	inst := &Instance{ident: identity{title: "never-started"}}
 
 	assert.Empty(t, inst.MintTerminalSessionName())
 	name, minted := inst.ClaimTerminalSessionName()

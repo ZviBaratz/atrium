@@ -1525,7 +1525,7 @@ func (m *home) holdCreateRequest(path string, r outbox.Request, inst *session.In
 		// config value: one edited between a crash and the next launch would have the
 		// reconcile probe for a branch nobody made, read the orphan as "nothing was
 		// built", and create a second session beside it.
-		meta.SessionBranch = git.BranchNameForSession(m.appConfig.BranchPrefix, inst.Title)
+		meta.SessionBranch = git.BranchNameForSession(m.appConfig.BranchPrefix, inst.Title())
 		// Measured here rather than inferred from the gate that ran a moment ago. For
 		// an ordinary request the gate has just proved this false and the probe agrees;
 		// for a re-queued Adopt it is true by design, and the difference between "true
@@ -1645,7 +1645,7 @@ func (m *home) failCreateRequest(inst *session.Instance, reason string) {
 		return
 	}
 	m.discloseCreateLeftovers(path, outbox.Disclosure{
-		Title:  inst.Title,
+		Title:  inst.Title(),
 		Repo:   inst.Path,
 		Reason: reason,
 	})
@@ -1703,9 +1703,9 @@ func (m *home) discloseUnrecordedSession(inst *session.Instance, reason string) 
 	// unlinks the record, so a crash in between would leave the orphan with nothing that
 	// mentions it.
 	m.discloseLiveButUnrecorded(inst, path, outbox.Disclosure{
-		Title:    inst.Title,
+		Title:    inst.Title(),
 		Repo:     inst.Path,
-		Branch:   inst.Branch,
+		Branch:   inst.Branch(),
 		Worktree: inst.GetWorktreePath(),
 		TmuxName: inst.TmuxSessionName(),
 		Reason:   reason,

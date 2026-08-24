@@ -241,8 +241,9 @@ type Adapter struct {
 	// turn ended, but sub-agents still recorded in flight) before the poller
 	// force-reconciles it to done even though the pane is alive — the alive-but-stuck
 	// backstop for a SubagentStop that never fired (#290). 0 means "use the package
-	// default" (session.defaultPendingWatchdog). Generous by design: a background
+	// default" (session.DefaultPendingWatchdog). Generous by design: a background
 	// sub-agent legitimately runs long, and tmux liveness carries the common failure.
+	// Outranked by the user's own pending_watchdog_minutes when they set one (#799).
 	PendingWatchdog time.Duration
 
 	// Prompts are tried in order; the first match classifies the pane as a

@@ -239,7 +239,7 @@ func (k *attachKeeper) service(inst *session.Instance) {
 		delete(k.hardFails, inst)
 		inst.ClearPrompt(prompt)
 		k.delivered = true
-		log.InfoLog.Printf("delivered queued prompt to %q while attached", inst.Title)
+		log.InfoLog.Printf("delivered queued prompt to %q while attached", inst.Title())
 	case session.IsSoftPromptError(err):
 		// Pane not ready / unconfirmed: retry next cycle with the prompt queued. A
 		// soft outcome also resets the hard budget so it matches the tick path,
@@ -270,7 +270,7 @@ func (k *attachKeeper) service(inst *session.Instance) {
 		// Budget exhausted: retire the prompt so the keeper doesn't spin on a dead
 		// pane, and surface the loss post-detach — mirroring promptSendErrorMsg.
 		inst.ClearPrompt(prompt)
-		msg := fmt.Sprintf("failed to deliver prompt to %q: %v", inst.Title, err)
+		msg := fmt.Sprintf("failed to deliver prompt to %q: %v", inst.Title(), err)
 		k.errs = append(k.errs, msg)
 		log.ErrorLog.Printf("%s (after %d attempts while attached)", msg, promptSendAttempts)
 	}

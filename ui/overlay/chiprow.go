@@ -16,6 +16,22 @@ import (
 // 80-col terminal, in all three fields at once; 38 fits the 42 available.
 const claudeFieldNA = "  n/a — the program is not Claude Code"
 
+// collapsedClaudeLabel is the label row of the collapsed n/a block — the one
+// section a non-Claude create form renders in place of Model, Effort and
+// Permissions (see TextInputOverlay.renderCollapsedClaudeFields).
+//
+// Composed from the three fields' own label consts rather than written out, so
+// renaming a field renames it here too. The separator is the middle dot the chip
+// rows already use.
+//
+// #690 asked for one line, `Model · Effort · Permissions   n/a — …`. That is 67
+// cells against the 42 an 80-col terminal yields — the width the whole issue is
+// about — so it is wrapped onto the two rows #690's own acceptance bar allows
+// ("at most two rows saying what it cannot configure"), with both halves
+// transcribed rather than paraphrased. TestCollapsedClaudeFields_TwoRowsAtTheFloor
+// pins the count.
+var collapsedClaudeLabel = strings.Join([]string{modelLabel, effortLabel, modeLabel}, " · ")
+
 // noOverrideChip is the label of the first chip in every claude override field
 // (model, effort, permission mode) — the no-op choice that composes no flag. It
 // reads "inherit", not "default", and the distinction is load-bearing: "default"

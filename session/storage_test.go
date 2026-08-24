@@ -153,8 +153,8 @@ func TestStorageRoundTrip(t *testing.T) {
 	got, _, err := store.LoadInstances(context.Background())
 	require.NoError(t, err)
 	require.Len(t, got, 2)
-	assert.Equal(t, "alpha", got[0].Title)
-	assert.Equal(t, "beta", got[1].Title)
+	assert.Equal(t, "alpha", got[0].Title())
+	assert.Equal(t, "beta", got[1].Title())
 	assert.Equal(t, Paused, got[0].status)
 }
 
@@ -192,16 +192,16 @@ func TestUpdateInstance_UpdatesField(t *testing.T) {
 
 	var updatedAlpha, unchangedBeta *Instance
 	for _, inst := range got {
-		if inst.Title == "alpha" {
+		if inst.Title() == "alpha" {
 			updatedAlpha = inst
-		} else if inst.Title == "beta" {
+		} else if inst.Title() == "beta" {
 			unchangedBeta = inst
 		}
 	}
 	require.NotNil(t, updatedAlpha)
 	require.NotNil(t, unchangedBeta)
 	assert.Equal(t, "Alpha New Label", updatedAlpha.DisplayName())
-	assert.Equal(t, "beta", unchangedBeta.Title)
+	assert.Equal(t, "beta", unchangedBeta.Title())
 }
 
 // TestUpdateInstance_NotFoundReturnsError asserts that updating a non-existent
@@ -464,7 +464,7 @@ func TestLoadInstances_RationsRecoveryByTheConfiguredCap(t *testing.T) {
 			calls++
 			gotCap = sc
 			for _, inst := range insts {
-				gotTitles = append(gotTitles, inst.Title)
+				gotTitles = append(gotTitles, inst.Title())
 			}
 			return DeferredRecovery{Sessions: []ParkedSession{{Title: "gamma", Path: "/repo/web"}}, Limit: sc.Limit}
 		})

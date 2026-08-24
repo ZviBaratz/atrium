@@ -43,9 +43,9 @@ func TestResumeAll_OverSoftCapNamesHostBudget(t *testing.T) {
 	assert.Contains(t, rendered, resumeConfirmMessage("paused", 3))
 	assert.Contains(t, rendered,
 		"Host capacity is 4, with 2 already running — 3 more will queue rather than parallelize.")
-	assert.Contains(t, rendered, "Press y to resume 3 sessions, n or esc to cancel")
+	assert.Contains(t, rendered, "Press y (or ctrl+r) to resume 3 sessions, n or esc to cancel")
 	for _, inst := range h.list.GetInstances() {
-		if inst.Title == "live-1" || inst.Title == "live-2" {
+		if inst.Title() == "live-1" || inst.Title() == "live-2" {
 			continue
 		}
 		assert.True(t, inst.Paused(), "nothing resumes until the user confirms")
@@ -156,7 +156,7 @@ func TestResumeSelected_OverSoftCapConfirmsFirst(t *testing.T) {
 	assert.Contains(t, rendered, "Resume session 'alpha'?")
 	assert.Contains(t, rendered,
 		"Host capacity is 2, with 2 already running — another will queue rather than parallelize.")
-	assert.Contains(t, rendered, "Press y to resume, n or esc to cancel")
+	assert.Contains(t, rendered, "Press y (or r) to resume, n or esc to cancel")
 	assert.NotContains(t, rendered, "rebuilds",
 		"the capacity dialog stays on capacity")
 	assert.Equal(t, "resuming…", h.pendingConfirmBusyLabel,

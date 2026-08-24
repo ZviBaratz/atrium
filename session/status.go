@@ -163,7 +163,7 @@ func (i *Instance) recordStatusChange(to Status) {
 		// array avoids pinning the trimmed-off headroom of the old one.
 		i.statusHistory = append([]StatusTransition(nil), i.statusHistory[len(i.statusHistory)-statusHistoryMax:]...)
 	}
-	log.InfoLog.Printf("status-change %q %s→%s (held %s)", i.Title, from, to, held.Round(time.Millisecond))
+	log.InfoLog.Printf("status-change %q %s→%s (held %s)", i.Title(), from, to, held.Round(time.Millisecond))
 }
 
 // StatusDirty reports whether this instance's status or its stamp has changed since

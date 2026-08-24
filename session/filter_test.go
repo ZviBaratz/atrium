@@ -13,7 +13,7 @@ func newFilterInstance(t *testing.T, title, branch string) *Instance {
 	t.Helper()
 	inst, err := NewInstance(InstanceOptions{Title: title, Path: "/tmp/repoA", Program: "echo"})
 	require.NoError(t, err)
-	inst.Branch = branch
+	inst.SetBranch(branch)
 	return inst
 }
 

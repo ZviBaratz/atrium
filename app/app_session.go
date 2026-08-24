@@ -84,7 +84,7 @@ func (m *home) pushSessionContexts() tea.Cmd {
 		var failed []*session.Instance
 		for _, p := range pending {
 			if err := p.inst.PushContext(p.name, p.left); err != nil {
-				log.WarningLog.Printf("failed to push session context for %q: %v", p.inst.Title, err)
+				log.WarningLog.Printf("failed to push session context for %q: %v", p.inst.Title(), err)
 				failed = append(failed, p.inst)
 			}
 		}
@@ -101,7 +101,7 @@ func (m *home) pushOneContext(inst *session.Instance) {
 	}
 	name, left := ui.ComposeSessionContext(inst, ui.RepoKey(inst))
 	if err := inst.SetContext(name, left); err != nil {
-		log.WarningLog.Printf("failed to push session context for %q: %v", inst.Title, err)
+		log.WarningLog.Printf("failed to push session context for %q: %v", inst.Title(), err)
 	}
 }
 
@@ -150,12 +150,12 @@ func (m *home) validateDeepRename(selected *session.Instance, value string) erro
 			}
 			continue
 		}
-		if inst.GroupKey() == group && session.DerivedNamesCollide(m.appConfig.BranchPrefix, inst.Title, value) {
+		if inst.GroupKey() == group && session.DerivedNamesCollide(m.appConfig.BranchPrefix, inst.Title(), value) {
 			return fmt.Errorf("a session named %q already exists in %s", value, group)
 		}
 		if session.DerivedTmuxNameCollides(cand, inst.TmuxSessionName()) ||
 			session.OwnedSiblingCollides(cand, inst) {
-			return fmt.Errorf("renaming to %q collides with session %q", value, inst.Title)
+			return fmt.Errorf("renaming to %q collides with session %q", value, inst.Title())
 		}
 	}
 	return nil
@@ -180,11 +180,12 @@ type renameDoneMsg struct {
 // Validation stays on the main thread (it reads m.list); only the I/O moves.
 //
 // The I/O half writes no model state at all: Instance.Rename returns the new
-// identity rather than assigning Title/Branch, because those are plain fields with no
-// mutex, read unguarded by the renderer on every frame. The handler adopts it. Keeping the
-// write off this goroutine is necessary but not by itself sufficient — what the readers on
-// OTHER goroutines are owed is a value snapshotted on the update thread; see AdoptRename
-// for the per-reader argument (#718).
+// identity rather than adopting it, and the handler applies it. The fields are guarded
+// now (#795), so this is no longer about avoiding a data race — it is about WHEN the new
+// name becomes visible. Adopting mid-I/O would let a row claim a name whose tmux session
+// or git branch had not moved yet, and would strand a failed rename halfway. What a
+// reader on another goroutine still wants is a value snapshotted on the update thread,
+// which is freshness rather than safety; see AdoptRename.
 func renameIOCmd(inst *session.Instance, value, note string) tea.Cmd {
 	return func() tea.Msg {
 		renamed, err := inst.Rename(value)
@@ -573,6 +574,11 @@ func (m *home) resumeSelected(selected *session.Instance) tea.Cmd {
 			fmt.Sprintf("Resume session '%s'?\n%s", selected.DisplayName(), clause),
 			resumeLabel, action)
 		m.confirmationOverlay.SetConfirmLabel("resume")
+		// The single-resume double-tap exists only on this branch, because this is the
+		// only branch with a dialog: every resume that fits the host budget runs on the
+		// first press and has nothing to confirm. So r r is not a second gesture to
+		// learn — it is the same r, pressed again, when the first one asked a question.
+		m.armDoubleTap(keys.PrimaryKey(keys.KeyResume))
 		return cmd
 	}
 	return m.beginAsyncAction(string(resumeLabel), action)
@@ -606,7 +612,7 @@ func (m *home) handlePauseDone(msg pauseDoneMsg) tea.Cmd {
 	selected := msg.instance
 	cleanupTerminalForInstance(m.tabbedWindow, selected)
 	if serr := m.persistInstances(); serr != nil {
-		log.WarningLog.Printf("failed to persist paused instance %s: %v", selected.Title, serr)
+		log.WarningLog.Printf("failed to persist paused instance %s: %v", selected.Title(), serr)
 	}
 	m.renameTarget = selected
 	m.renameOverlay = overlay.NewRenameOverlay(selected.DisplayName(), selected.Note(), true)
@@ -622,7 +628,7 @@ func (m *home) handlePauseDone(msg pauseDoneMsg) tea.Cmd {
 func (m *home) handleResumeDone(msg resumeDoneMsg) tea.Cmd {
 	if msg.err == nil {
 		if serr := m.persistInstances(); serr != nil {
-			log.WarningLog.Printf("failed to persist resumed instance %s: %v", msg.instance.Title, serr)
+			log.WarningLog.Printf("failed to persist resumed instance %s: %v", msg.instance.Title(), serr)
 		}
 		// A resume re-points the preview at a brand-new pane behind the same
 		// *Instance, so instanceChanged cannot see it — the pointer did not move. Say
@@ -702,7 +708,7 @@ func (m *home) resumeAll() tea.Cmd {
 	if len(paused) == 0 {
 		return m.handleInfoNotice("no paused sessions to resume")
 	}
-	return m.resumeInstances(paused, resumeConfirmMessage("paused", len(paused)))
+	return m.resumeInstances(paused, resumeConfirmMessage("paused", len(paused)), keys.PrimaryKey(keys.KeyResumeAll))
 }
 
 // resumeConfirmMessage is the batch-resume question for n sessions described by kind
@@ -757,7 +763,12 @@ func resumeConfirmMessage(kind string, n int) string {
 // grows that population without creating a session, and the confirmation the user
 // already has to answer is where the cost belongs. Computed here, in the shared core,
 // so resumeAll and resumeMarked cannot drift — the reason SetConfirmLabel is here too.
-func (m *home) resumeInstances(insts []*session.Instance, message string) tea.Cmd {
+//
+// altConfirmKey is the key that opened the dialog, for the double-tap, and it is a
+// parameter for the same reason killInstances' is: the two entry points are different
+// keys (the resume-all chord from the list, the plain resume key from visual mode),
+// and the dialog must echo the one the user actually pressed.
+func (m *home) resumeInstances(insts []*session.Instance, message, altConfirmKey string) tea.Cmd {
 	if clause := m.resumeCapNotice(len(insts)); clause != "" {
 		message += "\n" + clause
 	}
@@ -769,11 +780,11 @@ func (m *home) resumeInstances(insts []*session.Instance, message string) tea.Cm
 			// every session beside it. A refusal reports like any other resume
 			// failure, so the batch summary names it.
 			if err := m.verifyResumeIdentity(inst); err != nil {
-				res.failures = append(res.failures, resumeFailure{inst.Title, err})
+				res.failures = append(res.failures, resumeFailure{inst.Title(), err})
 				continue
 			}
 			if err := inst.Resume(); err != nil {
-				res.failures = append(res.failures, resumeFailure{inst.Title, err})
+				res.failures = append(res.failures, resumeFailure{inst.Title(), err})
 				continue
 			}
 			res.resumed++
@@ -788,6 +799,7 @@ func (m *home) resumeInstances(insts []*session.Instance, message string) tea.Cm
 	// shared core, so both entry points get the same label from the same count
 	// (confirmAction created m.confirmationOverlay synchronously above).
 	m.confirmationOverlay.SetConfirmLabel(fmt.Sprintf("resume %d session%s", len(insts), plural(len(insts))))
+	m.armDoubleTap(altConfirmKey)
 	return cmd
 }
 
@@ -857,7 +869,7 @@ func (m *home) pauseAll() tea.Cmd {
 	if len(active) == 0 {
 		return m.handleInfoNotice("no active sessions to pause")
 	}
-	return m.pauseInstances(active, pauseConfirmMessage("active", len(active)))
+	return m.pauseInstances(active, pauseConfirmMessage("active", len(active)), keys.PrimaryKey(keys.KeyPauseAll))
 }
 
 // pauseConfirmMessage is the batch-pause question for n sessions described by kind
@@ -914,7 +926,11 @@ func pauseConfirmMessage(kind string, n int) string {
 // branch is kept, the WIP is committed onto it, and the resume relaunches the agent
 // back into its conversation. The danger border is for losing work, not for stopping
 // a process.
-func (m *home) pauseInstances(insts []*session.Instance, message string) tea.Cmd {
+//
+// altConfirmKey is the key that opened the dialog, for the double-tap — a parameter
+// for the reason killInstances' and resumeInstances' are: pauseAll and pauseMarked
+// are reached by different keys.
+func (m *home) pauseInstances(insts []*session.Instance, message, altConfirmKey string) tea.Cmd {
 	action := func() tea.Msg {
 		var res batchPauseDoneMsg
 		for _, inst := range insts {
@@ -923,7 +939,7 @@ func (m *home) pauseInstances(insts []*session.Instance, message string) tea.Cmd
 				// reapStrandedShell gives. A failure here is still a teardown: most
 				// of pause()'s failing branches removed the worktree first.
 				res.failures = append(res.failures, pauseFailure{
-					inst: inst, title: inst.Title, err: err, worktreeGone: inst.WorkingDirGone(),
+					inst: inst, title: inst.Title(), err: err, worktreeGone: inst.WorkingDirGone(),
 				})
 				continue
 			}
@@ -940,6 +956,7 @@ func (m *home) pauseInstances(insts []*session.Instance, message string) tea.Cmd
 	// shared core, so both entry points get the same label from the same count
 	// (confirmAction created m.confirmationOverlay synchronously above).
 	m.confirmationOverlay.SetConfirmLabel(fmt.Sprintf("pause %d session%s", len(insts), plural(len(insts))))
+	m.armDoubleTap(altConfirmKey)
 	return cmd
 }
 
@@ -1015,16 +1032,16 @@ func (m *home) applyBatchKill(msg batchKillDoneMsg) batchKillDoneMsg {
 	for _, out := range msg.torndown {
 		inst := out.inst
 		m.tabbedWindow.CleanupTerminalForInstance(inst)
-		storeErr := m.storage.DeleteInstance(inst.Title, inst.Path)
+		storeErr := m.storage.DeleteInstance(inst.Title(), inst.Path)
 		m.list.RemoveInstance(inst)
 		m.forgetInstance(inst)
 
 		switch {
 		case out.err != nil:
-			msg.failures = append(msg.failures, killFailure{inst.Title,
+			msg.failures = append(msg.failures, killFailure{inst.Title(),
 				fmt.Errorf("removed, but teardown was incomplete: %w", out.err)})
 		case storeErr != nil:
-			msg.failures = append(msg.failures, killFailure{inst.Title,
+			msg.failures = append(msg.failures, killFailure{inst.Title(),
 				fmt.Errorf("removed, but its saved state could not be cleared: %w", storeErr)})
 		default:
 			msg.killed++
@@ -1098,7 +1115,7 @@ func (m *home) reapStrandedShell(inst *session.Instance, worktreeGone bool) {
 // land mid-flight and the costliest to leave un-joined at quit.
 //
 // altConfirmKey is the key that opened the dialog, which double-taps to confirm when
-// kill_double_tap_confirm is on. It is a parameter rather than keys.KillKey() because
+// double_tap_confirm is on. It is a parameter rather than keys.KillKey() because
 // visual mode advertises plain "x" and accepts ctrl+x too, so the key the dialog must
 // echo is the one the user pressed — hard-coding the chord would print "(or ctrl+x)"
 // at someone who never pressed it.
@@ -1128,11 +1145,11 @@ func (m *home) killInstances(insts []*session.Instance, message string, altConfi
 			// deleted. Direct sessions have no branch/worktree, so skip the check.
 			if !inst.IsDirect() {
 				if worktree, err := inst.GetGitWorktree(); err != nil {
-					log.WarningLog.Printf("kill %s: cannot resolve worktree, proceeding: %v", inst.Title, err)
+					log.WarningLog.Printf("kill %s: cannot resolve worktree, proceeding: %v", inst.Title(), err)
 				} else if heldByBase, cerr := worktree.IsBranchHeldByBaseRepo(); cerr != nil {
-					log.WarningLog.Printf("kill %s: cannot verify branch checkout, proceeding: %v", inst.Title, cerr)
+					log.WarningLog.Printf("kill %s: cannot verify branch checkout, proceeding: %v", inst.Title(), cerr)
 				} else if heldByBase {
-					res.failures = append(res.failures, killFailure{inst.Title,
+					res.failures = append(res.failures, killFailure{inst.Title(),
 						fmt.Errorf("branch checked out in the main repo")})
 					continue
 				}
@@ -1158,12 +1175,9 @@ func (m *home) killInstances(insts []*session.Instance, message string, altConfi
 	// Kill is destructive, so it wears the danger border (confirmAction created
 	// m.confirmationOverlay synchronously above).
 	m.confirmationOverlay.SetDestructive()
-	// Mirror confirmKill's double-tap shortcut: with kill_double_tap_confirm on,
-	// pressing the opening key again confirms the batch dialog, matching single-kill
-	// muscle memory (x x, or Ctrl+X Ctrl+X).
-	if altConfirmKey != "" && m.appConfig.GetKillDoubleTapConfirm() {
-		m.confirmationOverlay.SetConfirmAltKey(altConfirmKey)
-	}
+	// Mirror confirmKill's double-tap shortcut: pressing the opening key again confirms
+	// the batch dialog, matching single-kill muscle memory (x x, or Ctrl+X Ctrl+X).
+	m.armDoubleTap(altConfirmKey)
 	return cmd
 }
 
@@ -1171,8 +1185,9 @@ func (m *home) killInstances(insts []*session.Instance, message string, altConfi
 // (mirroring ActiveInstancesInView's predicate: not paused/loading/direct). With
 // nothing eligible it explains itself and stays in the mode; otherwise it leaves
 // visual mode (capturing the slice first) so a cancelled confirmation leaves no
-// stale marks behind.
-func (m *home) pauseMarked() tea.Cmd {
+// stale marks behind. openedBy is the key that got here, forwarded so the
+// confirmation double-taps on that same key (see armDoubleTap).
+func (m *home) pauseMarked(openedBy string) tea.Cmd {
 	var insts []*session.Instance
 	for _, inst := range m.list.MarkedInstancesInView() {
 		status := inst.GetStatus()
@@ -1184,12 +1199,12 @@ func (m *home) pauseMarked() tea.Cmd {
 		return m.handleInfoNotice("no marked sessions to pause")
 	}
 	m.exitVisualMode()
-	return m.pauseInstances(insts, pauseConfirmMessage("marked", len(insts)))
+	return m.pauseInstances(insts, pauseConfirmMessage("marked", len(insts)), openedBy)
 }
 
 // resumeMarked resumes the paused subset of the multi-select-marked sessions.
-// Same eligibility/exit semantics as pauseMarked.
-func (m *home) resumeMarked() tea.Cmd {
+// Same eligibility/exit/openedBy semantics as pauseMarked.
+func (m *home) resumeMarked(openedBy string) tea.Cmd {
 	var insts []*session.Instance
 	for _, inst := range m.list.MarkedInstancesInView() {
 		if inst.GetStatus() == session.Paused {
@@ -1200,7 +1215,7 @@ func (m *home) resumeMarked() tea.Cmd {
 		return m.handleInfoNotice("no marked sessions to resume")
 	}
 	m.exitVisualMode()
-	return m.resumeInstances(insts, resumeConfirmMessage("marked", len(insts)))
+	return m.resumeInstances(insts, resumeConfirmMessage("marked", len(insts)), openedBy)
 }
 
 // killMarked tears down the killable subset of the multi-select-marked sessions
@@ -1487,7 +1502,7 @@ func (m *home) titleConflictIn(group, title string) string {
 	prefix := m.appConfig.BranchPrefix
 	cand := tmux.QualifiedSessionName(group, title)
 	for _, inst := range m.list.GetInstances() {
-		if inst.GroupKey() == group && session.DerivedNamesCollide(prefix, inst.Title, title) {
+		if inst.GroupKey() == group && session.DerivedNamesCollide(prefix, inst.Title(), title) {
 			return titleErrAlreadyUsed
 		}
 		if session.DerivedTmuxNameCollides(cand, inst.TmuxSessionName()) {
@@ -2204,18 +2219,27 @@ func (m *home) stashDirtyCreateForm() {
 }
 
 // cancelPromptOverlay cancels the prompt overlay.
+//
+// Every mutation here runs on the update loop, the menu reset included. It used
+// to ride a tea.Sequence element instead, which put it on a Cmd goroutine racing
+// the loop's own reads of the same menu (#527, absorbed by #794) — the standing
+// rule being that a tea.Cmd is a goroutine, so a Cmd computes and returns a
+// message and the handler applies it. There is nothing left to hand back here:
+// every caller is already on the loop, so the write belongs beside the state and
+// overlay resets above rather than behind a message that would only travel back
+// to this same goroutine.
+//
+// Ordering the reset before the resize rather than after it is not load-bearing.
+// The resize handler's only reach into the menu is SetSize, and the height it
+// passes comes from menuVisible, which switches on home.state — reset
+// synchronously above — not on the menu's own state.
 func (m *home) cancelPromptOverlay() tea.Cmd {
 	m.stashDirtyCreateForm()
 	m.textInputOverlay = nil
 	m.state = stateDefault
+	m.menu.SetState(ui.StateDefault)
 	m.resetTitleCheck()
-	return tea.Sequence(
-		tea.RequestWindowSize,
-		func() tea.Msg {
-			m.menu.SetState(ui.StateDefault)
-			return nil
-		},
-	)
+	return tea.RequestWindowSize
 }
 
 // killDataWarning returns a parenthetical suffix for the kill confirmation that
@@ -2296,9 +2320,9 @@ func killIOCmd(m *home, inst *session.Instance) tea.Cmd {
 		// "cannot resolve worktree" warning for a session that never had one.
 		if !inst.IsDirect() {
 			if worktree, err := inst.GetGitWorktree(); err != nil {
-				log.WarningLog.Printf("kill %s: cannot resolve worktree, proceeding: %v", inst.Title, err)
+				log.WarningLog.Printf("kill %s: cannot resolve worktree, proceeding: %v", inst.Title(), err)
 			} else if heldByBase, cerr := worktree.IsBranchHeldByBaseRepo(); cerr != nil {
-				log.WarningLog.Printf("kill %s: cannot verify branch checkout, proceeding: %v", inst.Title, cerr)
+				log.WarningLog.Printf("kill %s: cannot verify branch checkout, proceeding: %v", inst.Title(), cerr)
 			} else if heldByBase {
 				return killDoneMsg{outcome: killOutcome{inst: inst}, refused: fmt.Errorf(
 					"branch for %s is checked out in the main repo; switch it away before deleting",
@@ -2399,7 +2423,7 @@ func (m *home) applyKillDone(msg killDoneMsg) tea.Cmd {
 		return nil
 	}
 	m.tabbedWindow.CleanupTerminalForInstance(inst)
-	storeErr := m.storage.DeleteInstance(inst.Title, inst.Path)
+	storeErr := m.storage.DeleteInstance(inst.Title(), inst.Path)
 	m.list.RemoveInstance(inst)
 	m.forgetInstance(inst)
 
@@ -2418,9 +2442,10 @@ func (m *home) applyKillDone(msg killDoneMsg) tea.Cmd {
 
 // confirmKill shows the kill-confirmation overlay for inst and stashes the
 // teardown action. inst need not be the selected instance: the in-session kill
-// key (Ctrl+X) and the auto-open path target a specific session regardless of
-// the current list selection, so the action keys on inst (and KillInstance)
-// rather than on whatever happens to be selected when the user confirms.
+// key (Ctrl+X) arrives here through attachFinishedMsg carrying the instance that
+// was ATTACHED, and the selection can have moved by the time the user detaches, so
+// the action keys on inst (and KillInstance) rather than on whatever happens to be
+// selected when the user confirms.
 func (m *home) confirmKill(inst *session.Instance) tea.Cmd {
 	if inst == nil || inst.GetStatus() == session.Loading {
 		return nil
@@ -2431,8 +2456,8 @@ func (m *home) confirmKill(inst *session.Instance) tea.Cmd {
 		message += killDataWarning(stats.Dirty, stats.Unpushed)
 	}
 	// The label names its object because this dialog need not target the SELECTED
-	// session: the in-session chord and the auto-open path both kill a specific one
-	// (see the doc above). pausing…/resuming… stay object-less for the opposite
+	// session: the in-session chord kills the session it was attached to, whatever
+	// the list highlights now (see the doc above). pausing…/resuming… stay object-less for the opposite
 	// reason — they always act on the highlighted row. Don't "fix" that asymmetry.
 	arm, action := m.armTeardown([]*session.Instance{inst}, killIOCmd(m, inst))
 	cmd := m.confirmAction(message, busyLabel(fmt.Sprintf("killing '%s'…", inst.DisplayName())), action)
@@ -2441,12 +2466,10 @@ func (m *home) confirmKill(inst *session.Instance) tea.Cmd {
 	// border (the default is accent); confirmAction created m.confirmationOverlay
 	// synchronously above.
 	m.confirmationOverlay.SetDestructive()
-	// Opt-in: a second press of the kill key confirms the dialog, so Ctrl+X Ctrl+X
-	// kills in one motion. Scoped to the kill dialog (other confirmations still
-	// require 'y').
-	if m.appConfig.GetKillDoubleTapConfirm() {
-		m.confirmationOverlay.SetConfirmAltKey(keys.KillKey())
-	}
+	// A second press of the kill key confirms, so Ctrl+X Ctrl+X kills in one motion.
+	// The chord rather than a threaded key: this dialog also opens from the in-session
+	// Ctrl+X, by way of attachFinishedMsg, which is not a list keypress at all.
+	m.armDoubleTap(keys.KillKey())
 	return cmd
 }
 
@@ -2536,6 +2559,51 @@ func (m *home) confirmAction(message string, label busyLabel, action tea.Cmd) te
 // beside the dispatch, rather than where the dialog is built.
 func (m *home) armOnConfirm(arm func()) {
 	m.pendingConfirmArm = arm
+}
+
+// armDoubleTap lets a second press of key — the key that OPENED the confirmation —
+// confirm it, when double_tap_confirm is on. Call it after confirmAction, which
+// creates the overlay.
+//
+// It is the whole of #520's counter-proposal to #391's per-dialog opt-outs: the
+// friction those were meant to relieve is repetition, and a double-tap makes the
+// repeated action one motion while leaving the box — and the consequence copy on it —
+// exactly where it was. An opt-out would have deleted the dialog and, with it, the
+// unpushed-commit count that is the only warning of what a kill costs.
+//
+// key is passed in rather than derived, because the key the dialog must echo is the
+// one the user pressed and several verbs have two entry points: visual mode kills on
+// plain "x" as well as the chord, and the batch pause/resume dialogs open from either
+// the all-sessions chord or the marked-set key. Where the pressed key is in hand it is
+// forwarded verbatim — handleMultiSelectState passes msg.String(), including the bare
+// "x" that no registry Entry owns and no override can move. Where it is not, the
+// caller reached armDoubleTap through dispatchAction, which resolves a KeyName and
+// discards the keystroke (the command palette has no keystroke at all), so the key is
+// read back from the registry with keys.PrimaryKey / keys.KillKey. That is the
+// pressed key for every binding of one key, which is every binding this repo ships;
+// it under-serves only a user-supplied override of several keys pressed on one of the
+// others, who gets the dialog and y, just not the shortcut.
+//
+// Three refusals, all silent — an un-armed double-tap costs a shortcut, never an
+// answer, because y is always there:
+//
+//   - An empty key. The action is unbound, so there is no second press to make.
+//   - A nil overlay. confirmAction always leaves one, so this is a caller bug, not a
+//     state; it is guarded rather than dereferenced because the panic would land in
+//     the frame after the mistake.
+//   - A key the dialog already ANSWERS. HandleKeyPress tests the alt key before the
+//     cancel key, so an override that put pause on n would make the n this dialog
+//     advertises confirm the pause instead of cancelling it. Answers is the same
+//     predicate handleConfirmState defers its settings deep link to, for the same
+//     reason: the dialog answers for the keys it prints.
+func (m *home) armDoubleTap(key string) {
+	if key == "" || m.confirmationOverlay == nil || !m.appConfig.GetDoubleTapConfirm() {
+		return
+	}
+	if m.confirmationOverlay.Answers(key) {
+		return
+	}
+	m.confirmationOverlay.SetConfirmAltKey(key)
 }
 
 // resolveSpawnPool returns the pool a plan rotates within: the picker's chosen

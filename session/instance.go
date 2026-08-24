@@ -134,22 +134,30 @@ func StatusUrgency(s Status, unread bool) int {
 
 // Instance is a running instance of claude code.
 type Instance struct {
-	// Title is the title of the instance. It is the stable identifier used as the storage
-	// key and to seed the git branch and tmux session names at creation, so it never changes
-	// once the instance has started.
-	Title string
-	// displayName is an optional, purely cosmetic label shown in the list in place of Title.
-	// Unlike Title it can be changed at any time because it is decoupled from the git branch,
-	// worktree, and tmux session. Empty means "show Title".
-	displayName string
-	// note is an optional freeform annotation surfaced on the session's row
-	// (e.g. "blocked on review"). Like displayName it is cosmetic, mutable at
-	// any time, and decoupled from the git branch / tmux session.
-	note string
+	// identityMu guards ident, the name-shaped fields (title, branch, displayName, note).
+	//
+	// It is deliberately NOT i.mu: that lock's charter is live state (status, started,
+	// tmuxSession, gitWorktree) with a "never hold it across tmux/git I/O" rule, while the
+	// identity accessors are called from nearly every path in the tree, so one lock serving
+	// both would spread that rule everywhere.
+	//
+	// identityMu is a LEAF: nothing is called while it is held, so it can never be the
+	// outer half of a cycle. That, not an ordering convention, is what makes a second lock
+	// in this struct free of the deadlock it would otherwise invite — and it is the only
+	// form of the rule that survives contact with this package, where i.mu spans routinely
+	// reach an identity accessor two or three calls deep (recordStatusChange, portOwner,
+	// probeRunTmux, reservePort, …). Holding i.mu and then taking identityMu is fine and
+	// happens constantly; the reverse never happens. AdoptRename is the one place that
+	// touches both, and it writes ident and tmuxName under separate, sequential
+	// acquisitions rather than nesting them. TestIdentityMuIsALeafLock holds it.
+	//
+	// Always go through the accessors in identity.go; nothing outside that file touches ident.
+	identityMu sync.RWMutex
+	// ident is the identity field family. See identity.go for what is in it and why the
+	// four are one struct.
+	ident identity
 	// Path is the path to the workspace.
 	Path string
-	// Branch is the branch of the instance.
-	Branch string
 	// Program is the program to run in the instance.
 	Program string
 	// CreateRequest is the `atrium new` spool record this session was built for, ""
@@ -632,12 +640,16 @@ var repoGroupKey = git.RepoGroupKey
 
 // ToInstanceData converts an Instance to its serializable form
 func (i *Instance) ToInstanceData() InstanceData {
+	// One snapshot rather than four locked reads: the four fields are serialized into
+	// the same record, so a rename landing between them would persist a title from after
+	// it beside a branch from before.
+	id := i.Identity()
 	data := InstanceData{
-		Title:       i.Title,
-		DisplayName: i.displayName,
-		Note:        i.note,
+		Title:       id.Title,
+		DisplayName: id.DisplayName,
+		Note:        id.Note,
 		Path:        i.Path,
-		Branch:      i.Branch,
+		Branch:      id.Branch,
 		Status:      i.GetStatus(),
 		Height:      i.Height,
 		Width:       i.Width,
@@ -684,7 +696,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		data.Worktree = GitWorktreeData{
 			RepoPath:         wt.GetRepoPath(),
 			WorktreePath:     wt.GetWorktreePath(),
-			SessionName:      i.Title,
+			SessionName:      id.Title,
 			BranchName:       wt.GetBranchName(),
 			BaseCommitSHA:    wt.GetBaseCommitSHA(),
 			BaseRef:          wt.GetBaseRef(),
@@ -722,13 +734,15 @@ func (i *Instance) ToInstanceData() InstanceData {
 // tmux/git subprocesses (spawned later, by reattach) derive from.
 func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix string) (*Instance, error) {
 	instance := &Instance{
-		baseCtx:     ctx,
-		Title:       data.Title,
-		displayName: data.DisplayName,
-		note:        data.Note,
-		Path:        data.Path,
-		Branch:      data.Branch,
-		status:      data.Status,
+		baseCtx: ctx,
+		ident: identity{
+			title:       data.Title,
+			displayName: data.DisplayName,
+			note:        data.Note,
+			branch:      data.Branch,
+		},
+		Path:   data.Path,
+		status: data.Status,
 		// Restored, not re-derived: a session that has been waiting on the user
 		// for six hours must still say so after a restart. A zero value (a state
 		// file predating the field) is exactly the case recordStatusChange
@@ -845,7 +859,7 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 	if data.TmuxName != "" {
 		sess = tmux.NewSessionWithName(ctx, data.TmuxName, data.Title, instance.Program)
 	} else {
-		sess = tmux.NewSession(ctx, instance.Title, instance.Program)
+		sess = tmux.NewSession(ctx, instance.Title(), instance.Program)
 	}
 	sess.SetClaudeConfigDir(instance.claudeConfigDir)
 	sess.SetGHConfigDir(instance.ghConfigDir)
@@ -924,9 +938,9 @@ func (i *Instance) reattach(paneAlive bool, budget *recoveryBudget) {
 		// successfully-reattached session Running here; recoverInPlace sets its own
 		// status otherwise.
 		if err := i.Start(false); err != nil {
-			log.ErrorLog.Printf("failed to restore session %s, recovering: %v", i.Title, err)
+			log.ErrorLog.Printf("failed to restore session %s, recovering: %v", i.Title(), err)
 			if closeErr := sess.Close(); closeErr != nil {
-				log.ErrorLog.Printf("failed to close stale session %s: %v", i.Title, closeErr)
+				log.ErrorLog.Printf("failed to close stale session %s: %v", i.Title(), closeErr)
 			}
 			if !i.recoverInPlace() {
 				budget.refund()
@@ -977,7 +991,7 @@ func (i *Instance) reattach(paneAlive bool, budget *recoveryBudget) {
 // zero startedAt is the value that predicate is written for.
 func (i *Instance) parkOverBudget() {
 	i.started = true
-	log.InfoLog.Printf("recovery deferred for %q: host session budget reached; parked as paused", i.Title)
+	log.InfoLog.Printf("recovery deferred for %q: host session budget reached; parked as paused", i.Title())
 	i.SetStatus(Paused)
 }
 
@@ -1084,7 +1098,7 @@ func (i *Instance) recoverInPlace() bool {
 		// Direct session: no worktree to validate. Restart the agent in the real
 		// directory; on failure leave it Paused so the user can Resume later.
 		if err := i.startResuming(i.tmuxSession, i.Path); err != nil {
-			log.ErrorLog.Printf("failed to restart direct session %s in place, leaving paused: %v", i.Title, err)
+			log.ErrorLog.Printf("failed to restart direct session %s in place, leaving paused: %v", i.Title(), err)
 			i.SetStatus(Paused)
 			return false
 		}
@@ -1097,7 +1111,7 @@ func (i *Instance) recoverInPlace() bool {
 
 	valid, err := wt.IsValidWorktree()
 	if err != nil {
-		log.ErrorLog.Printf("failed to validate worktree for %s, leaving paused: %v", i.Title, err)
+		log.ErrorLog.Printf("failed to validate worktree for %s, leaving paused: %v", i.Title(), err)
 	}
 	if err != nil || !valid {
 		i.SetStatus(Paused)
@@ -1105,7 +1119,7 @@ func (i *Instance) recoverInPlace() bool {
 	}
 
 	if err := i.startResuming(i.tmuxSession, wt.GetWorktreePath()); err != nil {
-		log.ErrorLog.Printf("failed to restart session %s in place, leaving paused: %v", i.Title, err)
+		log.ErrorLog.Printf("failed to restart session %s in place, leaving paused: %v", i.Title(), err)
 		i.SetStatus(Paused)
 		return false
 	}
@@ -1115,41 +1129,35 @@ func (i *Instance) recoverInPlace() bool {
 	return true
 }
 
-// worktreeCleanup is the seam recreateSession tears the worktree down through on a
-// failed (re)launch. A package-level var — matching the git package's own test-seam
-// idiom (checkGHCLI/runGitPush/runGHBrowse) — so a test can inject a failing teardown
-// and assert the error is wrapped; production always uses (*git.Worktree).Cleanup.
-var worktreeCleanup = (*git.Worktree).Cleanup
-
 // recreateSession starts a fresh tmux session for an already-set-up worktree,
 // resuming the agent's prior conversation when one exists (startResuming; a fresh
 // start otherwise). Callers must ensure no session with the same name still exists —
 // Start guards against duplicates — so a stale session has to be closed first.
 //
-// rollbackWorktree says whether a failed launch should tear the worktree down, and it
-// is emphatically not "clean up after yourself": Worktree.Cleanup is the KILL
-// teardown — `git worktree remove -f` and `git branch -D`. Pass true only when the
-// caller materialized this worktree in the same operation, where the teardown undoes
-// its own Setup and the contents came from the branch, so nothing is lost. Pass false
-// when the worktree pre-existed the call: it may hold uncommitted work this operation
-// did not create, and the branch holds the session's history. A budget-parked session
-// (parkOverBudget) is exactly that case, and reaches here on every Resume because its
-// tmux session is gone by construction — so getting this wrong would make the load
-// shedding introduced for #474 the most destructive path in the program.
-func (i *Instance) recreateSession(rollbackWorktree bool) error {
+// A failed launch tears NOTHING down, and that is the contract rather than an
+// omission. The teardown it used to run was Worktree.Cleanup — `git worktree remove -f`
+// and `git branch -D`, the KILL teardown — and only Kill records a retention ref first
+// (PrepareUndo), so a mistyped program or profile took the session's entire history
+// with it (#741).
+//
+// That rollback justified itself as undoing the Setup the same call had just run, the
+// contents having come from the branch so that nothing was lost. It is false at every
+// caller, and Resume is the only one. The half that holds everywhere is ownership: the
+// branch is always the session's history rather than something this call created, so
+// `branch -D` was never this function's to run.
+//
+// On the park that removed the worktree — the ordinary resume — it is worse than
+// unsound, because unwindAutoPauseCommits has by then soft-reset the parked work OUT of
+// history and into the worktree, so even the gentler pause teardown (Worktree.Remove)
+// would discard it. The other paths here reach no unwind at all: a direct session has
+// no worktree, and a park that left one materialized skips the whole block.
+//
+// What a failed launch leaves behind instead is the worktree still on disk, for the
+// callers that have one, and that is a state Resume already meets and reuses in place.
+func (i *Instance) recreateSession() error {
 	ts := i.tmux()
-	wt := i.worktree()
 	if err := i.startResuming(ts, i.WorkingDir()); err != nil {
 		log.ErrorLog.Print(err)
-		// Undo the worktree this same operation set up, so a failed launch does not
-		// leak one. Skipped when we did not create it (see rollbackWorktree) and when
-		// there is none at all — a direct session runs in the user's real directory.
-		if wt != nil && rollbackWorktree {
-			if cleanupErr := worktreeCleanup(wt); cleanupErr != nil {
-				err = fmt.Errorf("%w (cleanup error: %w)", err, cleanupErr)
-				log.ErrorLog.Print(err)
-			}
-		}
 		return fmt.Errorf("failed to start new session: %w", err)
 	}
 	// Stamp the relaunch so DiedAtLaunch keeps working across Resume: a typo'd
@@ -1193,7 +1201,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 	}
 
 	return &Instance{
-		Title:       opts.Title,
+		ident:       identity{title: opts.Title},
 		status:      Ready,
 		Path:        absPath,
 		Program:     opts.Program,
@@ -1409,13 +1417,16 @@ func (i *Instance) sessionBrief() tmux.SessionBrief {
 	if err != nil {
 		// Without the root there is no sibling-worktree warning to give, and ok() rejects a
 		// partial brief anyway. Degrade to no brief rather than to a brief with a hole.
-		log.ErrorLog.Printf("session brief disabled for %s: cannot resolve worktrees dir: %v", i.Title, err)
+		log.ErrorLog.Printf("session brief disabled for %s: cannot resolve worktrees dir: %v", i.Title(), err)
 		return tmux.SessionBrief{}
 	}
+	// One snapshot: the brief is rendered from a tea.Cmd goroutine at every launch, so
+	// separate reads could name the session after a rename and its branch from before it.
+	id := i.Identity()
 	return tmux.SessionBrief{
-		Name:          i.Title,
+		Name:          id.Title,
 		Origin:        wt.GetRepoPath(),
-		Branch:        i.Branch,
+		Branch:        id.Branch,
 		WorktreesRoot: root,
 	}
 }
@@ -1469,7 +1480,7 @@ func (i *Instance) RebindBaseContext(ctx context.Context) {
 // and, for non-direct sessions, the git worktree and branch. firstTimeSetup is
 // true if this is a new instance; otherwise, it's one loaded from storage.
 func (i *Instance) Start(firstTimeSetup bool) error {
-	if i.Title == "" {
+	if i.Title() == "" {
 		return fmt.Errorf("instance title cannot be empty")
 	}
 
@@ -1478,14 +1489,14 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 	// repo root.
 	if firstTimeSetup && !i.direct {
 		// The session always gets its own branch. baseBranch (if set) only chooses the start
-		// point it branches off, so i.Branch is the session branch in both cases.
+		// point it branches off, so the session branch is what SetBranch publishes in both cases.
 		var gitWorktree *git.Worktree
 		var branchName string
 		var err error
 		if i.baseBranch != "" {
-			gitWorktree, branchName, err = git.NewWorktreeFromBase(i.baseContext(), i.Path, i.Title, i.baseBranch)
+			gitWorktree, branchName, err = git.NewWorktreeFromBase(i.baseContext(), i.Path, i.Title(), i.baseBranch)
 		} else {
-			gitWorktree, branchName, err = git.NewWorktree(i.baseContext(), i.Path, i.Title)
+			gitWorktree, branchName, err = git.NewWorktree(i.baseContext(), i.Path, i.Title())
 		}
 		if err != nil {
 			return fmt.Errorf("failed to create git worktree: %w", err)
@@ -1497,7 +1508,7 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		i.mu.Lock()
 		i.gitWorktree = gitWorktree
 		i.mu.Unlock()
-		i.Branch = branchName
+		i.SetBranch(branchName)
 	}
 
 	// Pin the forked conversation into the launch command before the tmux session is
@@ -1519,9 +1530,9 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		// FromInstanceData, so they never reach this branch.)
 		name := i.TmuxSessionName()
 		if name == "" {
-			name = tmux.QualifiedSessionName(i.GroupKey(), i.Title)
+			name = tmux.QualifiedSessionName(i.GroupKey(), i.Title())
 		}
-		tmuxSession = tmux.NewSessionWithName(i.baseContext(), name, i.Title, i.Program)
+		tmuxSession = tmux.NewSessionWithName(i.baseContext(), name, i.Title(), i.Program)
 		tmuxSession.SetClaudeConfigDir(i.claudeConfigDir)
 		tmuxSession.SetGHConfigDir(i.ghConfigDir)
 		tmuxSession.SetGitHubTokenEnv(i.githubTokenEnv)
@@ -1766,7 +1777,7 @@ func (i *Instance) ApplyPaneState(state tmux.PaneState) (tapped bool) {
 		// backstops one failure — a SubagentStop that never fired, leaving a latched id stuck
 		// forever — and a footer chip cannot fail that way: it is re-scraped every poll and
 		// gone the moment the work exits. Expiring it would re-commit the exact "done while
-		// still working" bug this state exists to fix, at the 30-minute mark, and a persistent
+		// still working" bug this state exists to fix once the cap elapsed, and a persistent
 		// Monitor legitimately runs for the whole session. A dead pane is still caught by
 		// tmux liveness (PaneDead) before the pane is ever classified.
 		//
@@ -1965,7 +1976,7 @@ func (i *Instance) ClearPrompt(deliveredText string) {
 	}
 	if i.promptQueue[0].text != deliveredText {
 		log.WarningLog.Printf("ClearPrompt ignored for %q: head %q != settled %q",
-			i.Title, i.promptQueue[0].text, deliveredText)
+			i.Title(), i.promptQueue[0].text, deliveredText)
 		return
 	}
 	i.promptQueue = i.promptQueue[1:]
@@ -2191,26 +2202,6 @@ func (i *Instance) Started() bool {
 	return i.isStarted()
 }
 
-// SetTitle sets the title of the instance. Returns an error if the instance has started.
-// We cant change the title once it's been used for a tmux session etc.
-func (i *Instance) SetTitle(title string) error {
-	if i.isStarted() {
-		return fmt.Errorf("cannot change title of a started instance")
-	}
-	i.Title = title
-	return nil
-}
-
-// RenamedIdentity is the identity a completed deep rename has earned but not yet
-// adopted: the I/O is done, and these are the fields the main loop must write.
-// It exists so Rename can run off the update thread without touching Title or
-// Branch — see AdoptRename.
-type RenamedIdentity struct {
-	Title    string
-	Branch   string
-	TmuxName string
-}
-
 // Rename performs an in-place "deep" rename of a started instance to newTitle: it renames
 // the tmux session, then the git branch and worktree directory. Unlike SetDisplayName
 // (which only changes the cosmetic label) this fixes the identity everywhere it surfaces —
@@ -2219,22 +2210,18 @@ type RenamedIdentity struct {
 // (reversible by name), never a worktree move that already minted a fresh path.
 //
 // This is the I/O half only: it runs on a background goroutine (renameIOCmd) and
-// deliberately writes NEITHER Title NOR Branch. Those are unguarded fields read by the
-// main thread on every render (listRowZoneID keys a row on Title), so writing them here
-// would be a data race — the reason the returned identity is applied by AdoptRename on the
-// update thread instead. Everything this function does touch (the git/tmux structs) guards
-// its own fields.
+// deliberately adopts nothing. It returns the new identity for the update thread to write
+// through AdoptRename, so the rename is visible to the renderer at one instant rather than
+// mid-I/O — the tmux session and the git branch must both have moved before a row claims
+// the new name. The identity fields themselves are guarded (identity.go, #795), so the
+// snapshot below is a safe read wherever it runs; what it is not is atomic with the adopt,
+// which is why the ordering argument still matters.
 //
-// The renderer is not the only reader, and moving the write to the update thread is not on
-// its own enough to make either field safe — the readers on other goroutines have to be
-// accounted for one at a time, and are (see AdoptRename). One of them is this function:
-// `oldTitle := i.Title` below is an off-thread read of the field AdoptRename writes. It is
-// safe for a reason particular to it and not general — the only AdoptRename that can carry
-// this instance's title is the one applying THIS call's own result, which by construction
-// cannot run until this returns, and the rename dialog's in-flight gate stops a second
-// rename overlapping. The reader that had no such reason was TerminalPane.EnsureSession on
-// the capture goroutine, which now takes the title as a parameter (frameTarget.termTitle,
-// #718).
+// `oldTitle` is the rollback name, and it must be the one this call started from: the only
+// AdoptRename that can carry this instance's title is the one applying THIS call's own
+// result, which by construction cannot run until this returns, and the rename dialog's
+// in-flight gate stops a second rename overlapping. Everything else this function touches
+// (the git/tmux structs) guards its own fields.
 func (i *Instance) Rename(newTitle string) (RenamedIdentity, error) {
 	newTitle = strings.TrimSpace(newTitle)
 	if newTitle == "" {
@@ -2244,7 +2231,7 @@ func (i *Instance) Rename(newTitle string) (RenamedIdentity, error) {
 		return RenamedIdentity{}, fmt.Errorf("cannot deep-rename an instance that has not been started")
 	}
 
-	oldTitle := i.Title
+	oldTitle := i.Title()
 	ts := i.tmux()
 	wt := i.worktree()
 
@@ -2276,82 +2263,6 @@ func (i *Instance) Rename(newTitle string) (RenamedIdentity, error) {
 	}
 	return renamed, nil
 }
-
-// AdoptRename writes the identity a successful Rename earned. Main-loop only, for the
-// same single-writer reason as SetDiffStats: Title and Branch are plain fields with no
-// mutex, so a second writer would be a data race with no lock to serialise it.
-// A zero Branch is left alone — a direct session has no worktree to derive one from, so
-// overwriting would blank a field the rename never owned.
-//
-// This comment used to justify "main-loop only" with "Title is read unguarded by the
-// renderer", which is true of the renderer and was never the whole reader set — the
-// renderer runs on this same loop, so it is the one reader that cannot race. What makes
-// main-loop-only sufficient is that the readers on OTHER goroutines are handed values
-// snapshotted here rather than reading the fields: TerminalPane.EnsureSession, on the
-// capture goroutine, took the title off the instance until #718 and now receives
-// frameTarget.termTitle; app's customCommandSpec carries strings for the same reason.
-//
-// Not every reader is inside that rule yet, and #718 named the rest rather than converting
-// them — the census lives in #719, not here, because it is long, it spans packages, and an
-// enumeration in a comment is a claim nothing can hold to the tree. Take it fresh instead:
-//
-//	grep -rn '\.Title\b\|\.Branch\b\|\.DisplayName()' session/ app/ ui/ --include='*.go' | grep -v _test
-//
-// Both breadths in that line were bought by getting it wrong. Receiver-agnostic, because
-// `i\.Title` finds nothing in app/ or ui/, which spell it `inst.Title` and
-// `msg.instance.Title`. And ui/ in the path list, because the reader this whole issue is
-// about LIVED there — a recipe scoped to session/ and app/ would have the next maintainer
-// audit everything except the package that produced the bug.
-//
-// It is deliberately noisy, and most of what it returns is on the update thread and fine.
-// Ask of each hit which goroutine it is on: the answer is a per-reader argument, never a
-// general one —
-// a teardown and a run-command sit behind beginAsyncAction's actionInFlight gate, which a
-// rename's own I/O sits behind too; a Start goroutine cannot overlap a rename of the same
-// instance because Rename refuses one that has not finished starting; Rename's own
-// `oldTitle := i.Title` is safe only because the AdoptRename that could race it is the one
-// applying that very call's result. Some have no such argument and are merely improbable.
-// None of it is a rule a NEW off-thread reader may lean on: snapshot on this thread instead.
-//
-// It deliberately leaves both sibling names alone: termName and runName are owned rather
-// than derived, so the shell and the dev server keep the names they were created under and
-// stay reachable by the teardowns that must kill them (#389, #708). Their tmux sessions are
-// not renamed on the socket either — the same call hooks make for a stronger reason
-// (tmux_rename.go). Nothing here may start chasing them without also moving the sessions.
-func (i *Instance) AdoptRename(renamed RenamedIdentity) {
-	i.Title = renamed.Title
-	if renamed.Branch != "" {
-		i.Branch = renamed.Branch
-	}
-	i.mu.Lock()
-	i.tmuxName = renamed.TmuxName
-	i.mu.Unlock()
-}
-
-// DisplayName returns the cosmetic label shown for the instance, falling back to Title when
-// no custom label has been set.
-func (i *Instance) DisplayName() string {
-	if i.displayName != "" {
-		return i.displayName
-	}
-	return i.Title
-}
-
-// SetDisplayName sets the cosmetic display label. Unlike SetTitle it works at any time
-// (even after the instance has started) because the label is decoupled from the git branch
-// and tmux session. Whitespace is trimmed; an empty value clears the label so the name
-// reverts to Title.
-func (i *Instance) SetDisplayName(name string) {
-	i.displayName = strings.TrimSpace(name)
-}
-
-// Note returns the freeform annotation shown on the session's row, or "" when unset.
-func (i *Instance) Note() string { return i.note }
-
-// SetNote sets the freeform annotation. Whitespace is trimmed; an empty value clears it.
-// Like SetDisplayName it works at any time and is independent of the git branch and tmux
-// session.
-func (i *Instance) SetNote(note string) { i.note = strings.TrimSpace(note) }
 
 // PreviewFullHistory captures the entire tmux pane output including full scrollback history
 func (i *Instance) PreviewFullHistory() (string, error) {
@@ -2389,7 +2300,7 @@ func (i *Instance) ScrollbackContent(width int) (string, ScrollbackSource, error
 	if !errors.Is(err, transcript.ErrUnsupported) {
 		// A supported program whose transcript is unavailable (not written yet,
 		// unreadable, …): degrade silently to the tmux capture.
-		log.InfoLog.Printf("transcript fallback to tmux capture for %q: %v", i.Title, err)
+		log.InfoLog.Printf("transcript fallback to tmux capture for %q: %v", i.Title(), err)
 	}
 	content, terr := i.PreviewFullHistory()
 	return content, ScrollbackTmux, terr

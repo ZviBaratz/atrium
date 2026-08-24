@@ -49,7 +49,7 @@ func killableInstance(t *testing.T, wt *git.Worktree) *Instance {
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
 	}
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", newRecordingPtyFactory(t, nil), aliveExec)
-	return &Instance{Title: "sess", status: Running, started: true, gitWorktree: wt, tmuxSession: ts}
+	return &Instance{ident: identity{title: "sess"}, status: Running, started: true, gitWorktree: wt, tmuxSession: ts}
 }
 
 // TestPrepareUndoCommitsDirtyWorkBeforeRetaining. The order is the whole point: a
@@ -163,7 +163,7 @@ func TestPrepareUndoStillRecordsDirtItRefusedToCommit(t *testing.T) {
 // directory with no worktree and no branch. There is nothing to commit and nothing
 // to retain, and reaching for git would only log a misleading failure.
 func TestPrepareUndoOnADirectSessionIsANoOp(t *testing.T) {
-	inst := &Instance{Title: "sess", status: Running, started: true, direct: true}
+	inst := &Instance{ident: identity{title: "sess"}, status: Running, started: true, direct: true}
 
 	captured, err := inst.PrepareUndo(undoRef)
 	require.NoError(t, err)
