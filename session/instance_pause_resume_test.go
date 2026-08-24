@@ -432,7 +432,7 @@ func TestResumeKeepsTheBranchWhenTheRelaunchFails(t *testing.T) {
 
 	srv := newParkedTmuxServerFailingLaunch(t, errors.New("pty boom"))
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", srv, srv.exec())
-	inst := &Instance{Title: "sess", status: Paused, started: true, gitWorktree: wt, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "sess"}, status: Paused, started: true, gitWorktree: wt, tmuxSession: ts}
 
 	err := inst.Resume()
 
@@ -504,7 +504,7 @@ func TestASecondResumeRecoversTheSessionAFailedOneLeft(t *testing.T) {
 
 	srv := newParkedTmuxServerFailingLaunch(t, errors.New("pty boom"))
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", srv, srv.exec())
-	inst := &Instance{Title: "sess", status: Paused, started: true, gitWorktree: wt, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "sess"}, status: Paused, started: true, gitWorktree: wt, tmuxSession: ts}
 
 	require.Error(t, inst.Resume(), "the first attempt must fail, or there is no retry to test")
 	require.True(t, inst.Paused(), "and must leave the session parked, which is what makes a retry possible")
