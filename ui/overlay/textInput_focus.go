@@ -133,6 +133,30 @@ func (t *TextInputOverlay) stopEnabled(kind focusStop) bool {
 	return true
 }
 
+// claudeFieldsCollapsed reports whether the create form should render the three
+// claude-only fields as one collapsed n/a line instead of three inert sections.
+// It is true only when all three are present AND all three are inert — i.e. the
+// effective program is not claude.
+//
+// Present-and-inert is the contract this preserves, not one it breaks: a claude
+// profile still gets three live sections, and a form with no claude candidate at
+// all has no fields to collapse (NewSessionCreateOverlay leaves them nil). What
+// collapses is the *refusal*, which said the same sentence three times and cost
+// nine of the twenty content rows an 80×24 terminal has (#690).
+//
+// All three are driven together by syncClaudeFieldsEnabled, so in practice they
+// agree; the conjunction is written out anyway because a partial state must
+// render the three sections rather than a line claiming more than it knows.
+//
+// #816 (adapter-declared session config schemas) deletes this special case: once
+// an adapter declares which knobs it has, a non-claude form simply has no such
+// section to render and there is nothing to collapse.
+func (t *TextInputOverlay) claudeFieldsCollapsed() bool {
+	return t.modelField != nil && t.modelField.Disabled() &&
+		t.effortField != nil && t.effortField.Disabled() &&
+		t.modeField != nil && t.modeField.Disabled()
+}
+
 // nextEnabledIndex returns the first enabled stop index reached from the current cursor by
 // stepping `delta` (+1 forward, -1 backward), wrapping around the stop list.
 func (t *TextInputOverlay) nextEnabledIndex(delta int) int {
