@@ -63,134 +63,16 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 	m.tabbedWindow.SetSize(tabsWidth, contentHeight)
 	m.list.SetSize(listWidth, contentHeight)
 
-	if m.textInputOverlay != nil {
-		// Pass the full terminal height: the create form sizes its own sections to fit (and the
-		// plain prompt overlay applies its own fraction), so it needs to know the real height
-		// rather than a pre-scaled slice of it.
-		m.textInputOverlay.SetSize(int(float32(msg.Width)*0.6), msg.Height)
-	}
-	if m.textOverlay != nil {
-		// Pass the full terminal size: the overlay hugs its content width and
-		// windows its lines to fit short terminals.
-		m.textOverlay.SetSize(msg.Width, msg.Height)
-	}
-	if m.settingsOverlay != nil {
-		// Pass the full terminal size: the panel caps its own width and windows
-		// its rows to fit short terminals.
-		m.settingsOverlay.SetSize(msg.Width, msg.Height)
-	}
-	if m.accountsOverlay != nil {
-		// Pass the full terminal size: the panel caps its own width and windows
-		// its rows to fit short terminals.
-		m.accountsOverlay.SetSize(msg.Width, msg.Height)
-	}
-	if m.confirmationOverlay != nil {
-		// The dialog keeps its classic width on normal terminals and shrinks with
-		// narrow ones; it was the one overlay excluded from resize handling.
-		m.confirmationOverlay.SetWidth(confirmWidth(msg.Width))
-	}
-	if m.welcomeOverlay != nil {
-		// Same idiom as the confirmation dialog: keep the authored width on normal
-		// terminals, shrink so the box never spills off a narrow one.
-		m.welcomeOverlay.SetWidth(welcomeWidth(msg.Width))
-	}
-	if m.queueOverlay != nil {
-		w := int(float32(msg.Width) * 0.6)
-		if w > 80 {
-			w = 80
+	// Each overlay's resize policy is its surfaceSpecs entry's size closure. The
+	// walk runs every entry, not just the current state's: the closures nil-check
+	// their own overlay pointer, so a still-armed overlay from another state is
+	// resized exactly as the old per-pointer blocks resized it — sizing follows
+	// the FIELD, not the state (which is also why one closure covers the shared
+	// textOverlay).
+	for st := stateDefault; st < numStates; st++ {
+		if size := surfaceSpecs[st].size; size != nil {
+			size(m, msg)
 		}
-		m.queueOverlay.SetWidth(w)
-	}
-	if m.promptHistoryOverlay != nil {
-		w := int(float32(msg.Width) * 0.6)
-		if w > 80 {
-			w = 80
-		}
-		m.promptHistoryOverlay.SetWidth(w)
-	}
-	if m.cmdLogOverlay != nil {
-		// The command log benefits from width (argv) and height (many rows), so it
-		// takes a larger share than the queue overlay, capped for very wide terminals.
-		w := int(float32(msg.Width) * 0.85)
-		if w > 120 {
-			w = 120
-		}
-		h := int(float32(msg.Height) * 0.85)
-		if h > 44 {
-			h = 44
-		}
-		m.cmdLogOverlay.SetSize(w, h)
-	}
-	if m.checkpointOverlay != nil {
-		// One row per checkpoint: a time column, the prompt line, and what the
-		// checkpoint covers. Wants height more than width — a long session has
-		// dozens of checkpoints — so it takes the command log's height share and a
-		// narrower width, capped so the prompt column stays readable.
-		w := int(float32(msg.Width) * 0.7)
-		if w > 96 {
-			w = 96
-		}
-		h := int(float32(msg.Height) * 0.85)
-		if h > 40 {
-			h = 40
-		}
-		m.checkpointOverlay.SetSize(w, h)
-	}
-	if m.commandPaletteOverlay != nil {
-		// Three columns wide (key, verb, prose) and as many rows as it can get:
-		// the palette's whole value is seeing a lot of the keymap at once. Capped
-		// like the command log so a very wide terminal doesn't stretch the prose
-		// column past comfortable reading.
-		w := int(float32(msg.Width) * 0.85)
-		if w > 100 {
-			w = 100
-		}
-		// The share is of the *box*, border and padding included, so it is the room
-		// the palette may occupy rather than the room it fills and then overruns.
-		// The +3 keeps the rendered size where it was before that was true.
-		h := int(float32(msg.Height)*0.85) + 3
-		if h > 43 {
-			h = 43
-		}
-		if h > msg.Height {
-			h = msg.Height
-		}
-		m.commandPaletteOverlay.SetSize(w, h)
-	}
-	if m.customCommandsOverlay != nil {
-		// Narrower than the palette: two columns (key, description) of user-authored
-		// prose, where the palette has three of generated text. Capped for the same
-		// reason — a very wide terminal should not stretch a one-line description
-		// across the screen. The share is of the box, border and padding included.
-		w := int(float32(msg.Width) * 0.7)
-		if w > 80 {
-			w = 80
-		}
-		// No `h > msg.Height` clamp, unlike the palette above: a 0.7 share capped at 30
-		// cannot exceed the height it was taken from. That guard is necessary there
-		// because of the palette's `+3`, and copying it here would read as load-bearing
-		// while doing nothing.
-		h := int(float32(msg.Height) * 0.7)
-		if h > 30 {
-			h = 30
-		}
-		m.customCommandsOverlay.SetSize(w, h)
-	}
-	if m.imageOverlay != nil {
-		// The most generous share here, because resolution is the whole point:
-		// every cell the box gives up is two pixels of the picture. The caps are
-		// the same ones ImageOverlay enforces on the picture itself, plus its
-		// chrome — asking for more would only pad the box around a picture that
-		// cannot grow. The share is of the box, border and padding included.
-		w := int(float32(msg.Width) * 0.85)
-		if w > imagePreviewMaxWidth {
-			w = imagePreviewMaxWidth
-		}
-		h := int(float32(msg.Height) * 0.85)
-		if h > imagePreviewMaxHeight {
-			h = imagePreviewMaxHeight
-		}
-		m.imageOverlay.SetSize(w, h)
 	}
 
 	previewWidth, previewHeight := m.tabbedWindow.GetPreviewSize()
@@ -207,23 +89,10 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 // behind them would be a redundant strip. Plain navigation shows the always-on
 // hint line; with it turned off (hint_bar in config.json) the row stays reserved
 // but renders blank (Menu.quiet) instead of disappearing, so a transient notice
-// can ride it without shifting the layout (#438).
+// can ride it without shifting the layout (#438). Which state keeps the row is
+// each surfaceSpecs entry's barVisible bit, with its reason beside it.
 func (m *home) menuVisible() bool {
-	switch m.state {
-	case stateFilter, stateVisual, stateDiffComment:
-		// These inline interactions teach their gestures on the bar, so it stays
-		// even when the always-on hint bar is turned off.
-		return true
-	case statePrompt, stateRename, stateQueue, stateCmdLog, stateCommandPalette, stateCustomCommands, stateCheckpoints, stateConfirm, stateHelp, stateInfo, stateSettings, stateWelcome, stateAccounts, stateHistory, stateImagePreview:
-		return false
-	default: // stateDefault (and the empty list)
-		// The bottom row is always reserved during plain navigation, so a transient
-		// notice never resizes the frame (#438). generatingName / actionInFlight are
-		// subsumed here — they still drive the menu's StateGeneratingName / StateBusy
-		// content. With hint_bar off the row renders blank (Menu.quiet, seeded from the
-		// setting), giving a still chrome-free frame a notice can ride without a shift.
-		return true
-	}
+	return surfaceSpecs[m.state].barVisible
 }
 
 // welcomeWidth clamps the first-run welcome modal's box width so it never spills

@@ -187,6 +187,35 @@ func TestHandleCheckpointsState_RReloads(t *testing.T) {
 		"and put the box back into its loading state")
 }
 
+// TestCheckpointsKeyRoutesThroughUpdate presses r through home.Update where the
+// sibling tests above call handleCheckpointsState directly. The direct calls
+// cannot see the routing: stateCheckpoints' keys entry in surfaceSpecs is the
+// only thing sending a keypress to this surface, and it is the one entry a
+// re-route survives silently — the other overlay handlers dereference their own
+// overlay on entry, so a cross-wire panics in the frame-restore walk, while
+// this surface's esc-shaped neighbours close nil-tolerantly and keep that walk
+// green with the timeline's keys dead.
+//
+// Mutation-verified: with stateCheckpoints' keys pointed at
+// handleImagePreviewState, r is swallowed without a reload and this fails on
+// the cmd and render assertions; with it nil, r resolves through the global
+// dispatch instead and the frame-restore walk fails on esc no longer closing
+// the timeline.
+func TestCheckpointsKeyRoutesThroughUpdate(t *testing.T) {
+	h, inst := checkpointHome(t)
+	h.openCheckpoints()
+	h.handleCheckpointsLoaded(checkpointsLoadedMsg{target: inst, result: transcript.Checkpoints{
+		Blobs: true, List: []transcript.Checkpoint{{MessageID: "a", Label: "a prompt"}},
+	}})
+
+	_, cmd := h.Update(keyMsg("r"))
+
+	assert.Equal(t, stateCheckpoints, h.state, "r must reach the timeline's own handler")
+	require.NotNil(t, cmd, "r must start another read")
+	assert.Contains(t, xansi.Strip(h.checkpointOverlay.Render()), "reading transcript",
+		"and put the box back into its loading state")
+}
+
 // startedClaudeSession adds a session to the list that Started() reports true for,
 // which needs a real tmux session: NewInstance alone cannot reach it, and
 // ContextSourceKey — the whole basis of the ambiguity check — returns "" until it

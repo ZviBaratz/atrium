@@ -286,17 +286,41 @@ neither. A theme carries both — `Glyphs` exported, the agent table behind
    within the table), not the derivation — a different letter meeting those is a review
    conversation, not a build break.
 
-## Adding a UI state — 7 sites, three of them fixture files
+## Adding a UI state — 5 sites, four of them fixtures
 
 `app/app.go`'s state enum (which bumps `numStates`), plus a nullable overlay pointer
-field. Then six more, and the count is the thing to get right: adding the enum and
-stopping at `statemachine_test.go` is a hard CI fail, not an omission you find later.
+field. Then the four fixture sites and ONE code site below. This list was seven long,
+three of them code, until #801: the enum was hand-enumerated again in `viewContent`,
+`handleKeyPress`'s prelude, `menuVisible`, the per-overlay `SetSize` blocks and the
+paste switch. Those five readers now select through `surfaceSpecs`, so the code cost
+of a state is a single table entry — the rest is fixtures.
 
-1. **`frameStates()`, in `app/frameparity_test.go`** — *not* `app/statemachine_test.go`,
-   which only *consumes* it. `TestFrameStatesCoverEveryState` requires
-   `len(frameStates()) == numStates`, so bumping the enum fails there immediately.
-   Seven tests fan out from that one entry (frame parity, both colour fingerprints,
-   the bounds sweep, the background-message state machine, both no-colour checks).
+1. **A `surfaceSpec` entry in `app/surfaces.go`** — the one code site. The entry is
+   the state's whole surface as data: `render` (what `viewContent` composites over
+   the frame; nil for a state that renders in the frame itself), `keys` (the handler
+   `handleKeyPress` routes to — every entry's handler runs before the global esc/quit
+   handling, so the ordering that used to be a per-guard comment is structural now),
+   `barVisible` (`menuVisible`'s bit), `size` (the overlay's resize policy; the walk
+   runs every entry's closure, which nil-checks its own overlay field — one closure
+   per FIELD, so a state sharing another's overlay leaves size nil and says so),
+   `paste` (nil means a paste is inert there), and `fixture` (the golden's name).
+   `TestEverySurfaceSpecIsComplete` fails a forgotten or misplaced slot, a duplicate
+   fixture name, and a fixture with no golden; `TestSurfaceSpecHasNotGrownAField`
+   beside it makes a new column a decision for every state rather than a silent zero.
+
+   **The guard proves the entry exists, not that it is right.** A `keys` func aimed at
+   the wrong handler passes it, and a per-surface suite that only calls its handler
+   directly cannot notice — the checkpoints timeline is the state that could have
+   shipped that way, which is why `TestCheckpointsKeyRoutesThroughUpdate` presses its
+   key through `home.Update` instead; copy that shape for the new state. And still
+   **press the keys yourself** in the running TUI.
+2. **A `{state, wire}` entry in `frameStates()`, `app/frameparity_test.go`** — *not*
+   `app/statemachine_test.go`, which only *consumes* it. The name column is derived
+   from `surfaceSpecs`' fixture, so the entry is just the state and its wiring.
+   `TestFrameStatesCoverEveryState` requires one entry per state, so bumping the enum
+   fails there immediately. Seven tests fan out from that one entry (frame parity,
+   both colour fingerprints, the bounds sweep, the background-message state machine,
+   both no-colour checks).
 
    Give it a **`wire` func** that arms the overlay production would keep, or the state
    is swept half-constructed and the interesting dereference never happens. Prefer the
@@ -305,10 +329,10 @@ stopping at `statemachine_test.go` is a hard CI fail, not an omission you find l
    half-armed otherwise, which is the dereference the sweep exists to find. And seed it
    with **real content** — an overlay wired empty renders its one-line empty state, so
    every width and height guard downstream holds nothing.
-2. **A new golden under `app/testdata/frames/<name>.txt`.** `compareGolden` hard-fails
-   on a missing file, and creates it for you: `CS_UPDATE_GOLDEN=1` is an env var, not a
-   flag.
-3. + 4. **Re-baseline `app/testdata/colours.txt` and `colours-light.txt`**, each under
+3. **A new golden under `app/testdata/frames/<fixture>.txt`.** `compareGolden`
+   hard-fails on a missing file, and creates it for you: `CS_UPDATE_GOLDEN=1` is an
+   env var, not a flag.
+4. **Re-baseline `app/testdata/colours.txt` and `colours-light.txt`**, each under
    its own `-run` target. They iterate `frameStates()` in *slice* order and write one
    block per state, so **append your entry last**: inserted mid-slice it rewrites every
    block after it and the diff becomes unreadable.
@@ -317,11 +341,7 @@ stopping at `statemachine_test.go` is a hard CI fail, not an omission you find l
    CS_UPDATE_GOLDEN=1 go test ./app/ -run TestFrameColourFingerprint
    CS_UPDATE_GOLDEN=1 go test ./app/ -run TestLightFrameColourFingerprint
    ```
-5. `app/app_layout.go` — `menuVisible()`'s case list if the state hides the hint bar,
-   and a `SetSize` block so the overlay is sized responsively.
-6. `app/frame_restore_test.go` — see below.
-7. The `View()` arm in `app/app.go`, and a router in `app/app_update.go`'s
-   `handleKeyPress` prelude.
+5. `app/frame_restore_test.go` — see below.
 
 Situational, and worth knowing which: **`app/view_bounds_test.go`'s overlay map has no
 tripwire** and is deliberately fixture-specific — `TestViewFitsTerminalBoundsEveryState`
@@ -329,8 +349,9 @@ tripwire** and is deliberately fixture-specific — `TestViewFitsTerminalBoundsE
 when your state needs a pathological fixture the generic sweep cannot produce — an
 unbounded list, user-authored text with no natural width.
 
-- `SetSize` semantics are the usual defect — but check which way round before "fixing"
-  one. **lipgloss v2 counts the border and padding INSIDE `Width`**, so `Width(w)`
+- `SetSize` semantics are the usual defect in a `size` closure — but check which way
+  round before "fixing" one. **lipgloss v2 counts the border and padding INSIDE
+  `Width`**, so `Width(w)`
   renders exactly `w` columns (`style.go`: `width -= horizontalBorderSize`). That
   inverted the v1 behaviour this line used to describe, and it inverted silently; the
   in-tree statement of it is `ui/theme/panel.go`'s comment ("Width and Height are the
@@ -355,10 +376,11 @@ unbounded list, user-authored text with no natural width.
 - `truncate.StringWithTail(s, w, "…")` replaces a character at **exactly** `w`, not only
   above it. Guard it with a `lipgloss.Width(s) <= w` check, or a fixed marker built to
   fit its budget reads back as `(repo…`.
-- Add it to `app/frame_restore_test.go` if it hides the hint bar (`menuVisible`),
+- Add it to `app/frame_restore_test.go` if its `barVisible` is false,
   or exempt it there with a reason — the walk over `numStates` fails otherwise.
   Its `opens` entry is also the **only** place in the tree that presses an opener key
-  and asserts the state changed, which is what site 4 above cannot prove. Hiding the
+  and asserts the state changed, which is what the keybinding table's site 4 cannot
+  prove. Hiding the
   bar hands its row to the panes; closing without recomputing the
   layout leaves the frame a line taller than the terminal, and the alt-screen
   renderer never erases it. `view_bounds_test` cannot see this: it only measures
@@ -366,9 +388,11 @@ unbounded list, user-authored text with no natural width.
   is guarded once, in `Update` — it compares `menuVisible` before and after every
   message — so a state left by an async message is covered as well as one closed
   by a key, and no `dismiss*` helper needs a `recomputeLayout()` of its own.
-- Overlay states must be handled **before** the global quit/esc keys in
-  `app/app_update.go`'s prelude, or `q` quits while the user is typing. Each
-  branch there carries its ordering constraint as a comment; keep that up.
+- Overlay states must be handled **before** the global quit/esc keys, or `q` quits
+  while the user is typing. That ordering is structural now — `handleKeyPress` runs
+  every registered `keys` handler before its globals — so it cannot be got wrong per
+  state; what `q` or esc *means inside* the surface is the entry's own comment in
+  `surfaceSpecs`, and keeping that rationale beside the entry is still on you.
 - `ui/menu_scan_test.go`'s enum-count tripwire (`require.Equal(t, 5, int(StateVisual))`)
   pins **`ui.MenuState`**, not `app.state` — so an app state does *not* trip it, whatever
   the neighbouring prose implies. It fires only if the new surface also needs its own

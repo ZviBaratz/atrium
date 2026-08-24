@@ -992,40 +992,13 @@ func (m *home) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// The nil checks are the belt to the state's braces: a state and its overlay are
-	// set together, so each is unreachable — but paste is the one input that can
-	// arrive without a keystroke to precede it, and a dropped paste beats a crash.
-	switch m.state {
-	case statePrompt:
-		if m.textInputOverlay == nil {
-			return m, nil
-		}
-		return m.handlePromptPaste(msg)
-
-	case stateFilter:
-		// The list owns the query; a paste extends it exactly as typing does.
-		m.list.SetFilter(m.list.FilterQuery() + msg.Content)
-		return m, m.instanceChanged()
-
-	case stateRename:
-		if m.renameOverlay != nil {
-			m.renameOverlay.HandlePaste(msg)
-		}
-
-	case stateCommandPalette:
-		if m.commandPaletteOverlay != nil {
-			m.commandPaletteOverlay.HandlePaste(msg.Content)
-		}
-
-	case stateSettings:
-		if m.settingsOverlay != nil {
-			m.settingsOverlay.HandlePaste(msg)
-		}
-
-	case stateAccounts:
-		if m.accountsOverlay != nil {
-			m.accountsOverlay.HandlePaste(msg)
-		}
+	// The nil checks inside each paste closure are the belt to the state's
+	// braces: a state and its overlay are set together, so each is unreachable —
+	// but paste is the one input that can arrive without a keystroke to precede
+	// it, and a dropped paste beats a crash. A state with no paste entry in
+	// surfaceSpecs is one where a paste is inert.
+	if paste := surfaceSpecs[m.state].paste; paste != nil {
+		return paste(m, msg)
 	}
 	return m, nil
 }
@@ -1064,110 +1037,15 @@ func (m *home) handleKeyPress(msg tea.KeyPressMsg) (mod tea.Model, cmd tea.Cmd) 
 		return m, nil
 	}
 
-	if m.state == stateHelp {
-		return m.handleHelpState(msg)
-	}
-
-	if m.state == stateWelcome {
-		return m.handleWelcomeState(msg)
-	}
-
-	if m.state == stateInfo {
-		return m.handleInfoState(msg)
-	}
-
-	if m.state == statePrompt {
-		return m.handlePromptState(msg)
-	}
-
-	if m.state == stateHistory {
-		return m.handleHistoryState(msg)
-	}
-
-	if m.state == stateConfirm {
-		return m.handleConfirmState(msg)
-	}
-
-	// Rename must run before the global q/ctrl+c quit handling below so those keys
-	// edit (or cancel) the label instead of quitting the app.
-	if m.state == stateRename {
-		return m.handleRenameState(msg)
-	}
-
-	if m.state == stateQueue {
-		return m.handleQueueState(msg)
-	}
-
-	if m.state == stateCmdLog {
-		return m.handleCmdLogState(msg)
-	}
-
-	// The checkpoint timeline must run before the global quit handling too: r
-	// reloads it here rather than resuming a paused session, and q must be swallowed
-	// rather than quit the app out from under an open box (as in the queue overlay,
-	// esc is what closes).
-	if m.state == stateCheckpoints {
-		return m.handleCheckpointsState(msg)
-	}
-
-	// The image preview, like the other overlay states, must run before the global
-	// quit handling: it is a read-only box with one gesture, so every other key —
-	// q included — is swallowed rather than acted on behind it.
-	if m.state == stateImagePreview {
-		return m.handleImagePreviewState(msg)
-	}
-
-	// The palette, like the other overlay states, must run before the global quit
-	// handling so that q and every other printable key narrows the filter instead
-	// of quitting the app mid-query.
-	if m.state == stateCommandPalette {
-		return m.handleCommandPaletteState(msg)
-	}
-
-	// The custom-commands menu must run before the global quit handling for the same
-	// reason, and more sharply: its rows are keyed by whatever the user configured,
-	// so q really can be a command key here.
-	if m.state == stateCustomCommands {
-		return m.handleCustomCommandsState(msg)
-	}
-
-	// Settings, like the other overlay states, must run before the global quit
-	// handling so q/esc and printable keys reach the panel.
-	if m.state == stateSettings {
-		return m.handleSettingsState(msg)
-	}
-
-	// Accounts, like the other overlay states, must run before the global quit
-	// handling so q/esc and printable keys reach the panel.
-	if m.state == stateAccounts {
-		return m.handleAccountsState(msg)
-	}
-
-	// Filter must run before the global quit handling so that printable keys and Esc
-	// update the filter instead of quitting.
-	if m.state == stateFilter {
-		return m.handleFilterState(msg)
-	}
-
-	// Hint (fingers) mode: every key is either a hint character or an exit.
-	// Must run before the global esc/quit handling below so hint letters like
-	// q never quit the app.
-	if m.state == stateHints {
-		return m.handleHintsState(msg)
-	}
-
-	// Multi-select (visual) mode: space marks, lifecycle keys act on the marked
-	// set, esc exits. Must run before the global esc/quit handling below so esc
-	// clears the marks (not the filter) and q never quits.
-	if m.state == stateVisual {
-		return m.handleMultiSelectState(msg)
-	}
-
-	// Diff-comment mode: the line cursor moves with j/k, enter opens the composer,
-	// esc exits. Must run before the global esc/quit handling below so esc leaves
-	// comment mode (not the app) and q never quits.
-	if m.state == stateDiffComment {
-		return m.handleDiffCommentState(msg)
+	// Every state with its own key handler routes there before the globals
+	// below, so q, esc and printable keys reach the surface instead of quitting,
+	// unwinding, or falling into dispatch — the ordering each of the old
+	// per-state guards demanded in its own comment, now structural. What a key
+	// means inside each surface is that entry's rationale in surfaceSpecs; a
+	// state with no handler (only stateDefault, and the screensaver consumed
+	// above) falls through to the globals.
+	if handle := surfaceSpecs[m.state].keys; handle != nil {
+		return handle(m, msg)
 	}
 
 	// Exit scrolling mode when ESC is pressed and preview pane is in scrolling mode
