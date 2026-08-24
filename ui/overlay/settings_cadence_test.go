@@ -165,3 +165,65 @@ func rowIndex(t *testing.T, o *SettingsOverlay, key string) int {
 	t.Fatalf("no row keyed %q", key)
 	return -1
 }
+
+// TestResetOnTheDangerRowCannotInvertThePair covers the mutation path the validator cannot
+// see. resetRow calls row.reset directly and never settingRow.set, so a cross-field rule
+// enforced only by a validator is unenforced here — and r on the danger row would drop it to
+// the built-in default under a legally-stored higher warn, re-creating the invisible stored
+// value the validator was added to prevent.
+func TestResetOnTheDangerRowCannotInvertThePair(t *testing.T) {
+	cfg := config.DefaultConfig()
+	o := NewSettingsOverlay(cfg)
+	warn := rowByKey(t, cfg, "context_warn_percent")
+	danger := rowByKey(t, cfg, "context_danger_percent")
+
+	require.NoError(t, danger.set(cfg, "95"))
+	require.NoError(t, warn.set(cfg, "95"), "fixture check: legal while danger is 95")
+
+	key := o.resetRow(&o.rows[rowIndex(t, o, "context_danger_percent")])
+	assert.Equal(t, "context_danger_percent", key, "the reset changed state, so it must persist")
+
+	require.NotNil(t, cfg.ContextWarnPercent, "the sibling is clamped, not cleared")
+	assert.Equal(t, 90, *cfg.ContextWarnPercent,
+		"and clamped to the danger band the reset installed, so it stays visible on its own row")
+	assert.Equal(t, 90, cfg.GetContextWarnPercent(), "no stored value is left above the effective danger")
+	assert.Equal(t, *cfg.ContextWarnPercent, cfg.GetContextWarnPercent(),
+		"stored and effective agree, so the warn row shows the number that is actually stored")
+}
+
+// TestResetPersistsWhenTheStoredValueEqualsTheDefault covers the other half of reset: a
+// cadence row's get reports the EFFECTIVE value, so clearing a field that stores exactly the
+// default changes nothing on screen. resetRow's before/after comparison would read that as
+// "no change", report no key, and leave home's SaveConfig unrun — the marker clears while
+// config.json keeps the value, and the next launch brings both back.
+func TestResetPersistsWhenTheStoredValueEqualsTheDefault(t *testing.T) {
+	cfg := config.DefaultConfig()
+	o := NewSettingsOverlay(cfg)
+	row := rowIndex(t, o, "notify_throttle_seconds")
+
+	def := config.DefaultNotifyThrottleSeconds()
+	require.NoError(t, o.rows[row].set(cfg, strconv.Itoa(def)))
+	require.NotNil(t, cfg.NotifyThrottleSeconds, "fixture check: the field must be stored")
+	require.Equal(t, strconv.Itoa(def), o.rows[row].get(cfg),
+		"fixture check: and indistinguishable from the default on screen, or this proves nothing")
+
+	assert.Equal(t, "notify_throttle_seconds", o.resetRow(&o.rows[row]),
+		"the key is reported so the change reaches config.json")
+	assert.Nil(t, cfg.NotifyThrottleSeconds, "and the field is actually cleared")
+
+	// A second press has nothing left to do, so it reports nothing and no save runs.
+	assert.Empty(t, o.resetRow(&o.rows[row]), "an already-clear field is not a change")
+}
+
+// TestCadenceRowsClearOnAnEmptyEdit pins the empty-string arm, matching max_sessions and
+// project_search_depth. Without it an emptied edit box errors as "not a whole number".
+func TestCadenceRowsClearOnAnEmptyEdit(t *testing.T) {
+	cfg := config.DefaultConfig()
+	row := rowByKey(t, cfg, "diff_refresh_seconds")
+
+	require.NoError(t, row.set(cfg, "42"))
+	require.NotNil(t, cfg.DiffRefreshSeconds)
+	require.NoError(t, row.set(cfg, "  "), "whitespace is empty too")
+	assert.Nil(t, cfg.DiffRefreshSeconds, "an emptied box restores the default")
+	assert.Equal(t, strconv.Itoa(config.DefaultDiffRefreshSeconds()), row.get(cfg))
+}

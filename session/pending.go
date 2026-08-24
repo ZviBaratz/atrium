@@ -78,8 +78,11 @@ var configuredPendingWatchdog atomic.Int64
 // agent adapter's override and the package default. A non-positive duration clears it, so
 // the ladder falls back to adapter → DefaultPendingWatchdog.
 //
-// Callers pass an already-clamped value (config.GetPendingWatchdogMinutes); this refuses
-// only the non-positive case, which would make every Pending row expire on its first poll.
+// Callers pass an already-clamped value, and specifically config.PendingWatchdogOverride —
+// NOT GetPendingWatchdogMinutes, which resolves an unset field to the built-in 30 and would
+// therefore install a cap on every launch, leaving the adapter rung of the ladder below
+// permanently inert. This refuses only the non-positive case, which would make every Pending
+// row expire on its first poll.
 func SetPendingWatchdog(d time.Duration) {
 	if d <= 0 {
 		configuredPendingWatchdog.Store(0)

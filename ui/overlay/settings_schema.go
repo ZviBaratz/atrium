@@ -200,12 +200,34 @@ type settingRow struct {
 	// warn row would show the marker and then not clear it, because its reset — which
 	// clears a field that is already clear — genuinely has nothing to do.
 	modifiedWhen func(c *config.Config) bool
+	// resetChanges reports whether pressing r would actually change stored state. nil
+	// means resetRow's own before/after comparison of get decides.
+	//
+	// It exists because that comparison reads the EFFECTIVE value, which for a cadence
+	// row is the default whenever the stored value equals it — so clearing a field
+	// storing exactly the default looked like a no-op, resetRow reported "" and the
+	// save never ran. The marker cleared on screen while config.json kept the value,
+	// and the next launch brought both back.
+	resetChanges func(c *config.Config) bool
 }
 
 // withModifiedWhen gates a row's "changed from default" marker on the user having set the
 // field, for a row whose value a sibling can move. See settingRow.modifiedWhen.
 func withModifiedWhen(r settingRow, modifiedWhen func(c *config.Config) bool) settingRow {
 	r.modifiedWhen = modifiedWhen
+	return r
+}
+
+// withResetHook runs after a row's own reset, for a row whose default can invalidate a
+// SIBLING field's stored value. Reset is the one mutation path that does not go through
+// settingRow.set, so a cross-field rule enforced only by a validator is not enforced here
+// — which is exactly how a reset can re-create the state its validator refuses.
+func withResetHook(r settingRow, after func(c *config.Config)) settingRow {
+	inner := r.reset
+	r.reset = func(c *config.Config) {
+		inner(c)
+		after(c)
+	}
 	return r
 }
 
@@ -259,14 +281,21 @@ const cadenceNote = "One of four exposed cadences; the rest are tuned for correc
 // EFFECTIVE value (so the panel shows what is in force, never a stored value the
 // accessor would rewrite), set stores a pointer, and reset clears it back to nil.
 //
+// field is one closure rather than a set/isSet pair because reading and writing the
+// pointer must never disagree about which field the row owns: resetChanges asks whether
+// anything is stored, and answering that from a different closure than the one reset
+// clears is a bug nothing here would catch.
+//
 // lo/hi are the accessor's own bounds, and the row REFUSES a value outside them rather
 // than echoing back a number the accessor would silently clamp — the same contract
 // MaxProjectSearchDepth exists for. validate is an optional extra predicate for a row
-// whose bound depends on another field; nil where the range is the whole rule.
+// whose bound depends on another field; nil where the range is the whole rule. Note that
+// validate guards set alone: a cross-field rule that reset can also break needs a
+// withResetHook as well.
 func cadenceRow(key string, category settingCategory, label, summary, detail string,
 	def, lo, hi int,
 	get func(c *config.Config) int,
-	set func(c *config.Config, v *int),
+	field func(c *config.Config) **int,
 	validate func(c *config.Config, n int) error,
 ) settingRow {
 	value := func(c *config.Config) string { return strconv.Itoa(get(c)) }
@@ -276,11 +305,22 @@ func cadenceRow(key string, category settingCategory, label, summary, detail str
 		summary: summary, detail: detail,
 		get:            value,
 		defaultDisplay: func() string { return strconv.Itoa(def) },
-		reset:          func(c *config.Config) { set(c, nil) },
+		reset:          func(c *config.Config) { *field(c) = nil },
+		resetChanges:   func(c *config.Config) bool { return *field(c) != nil },
 		set: func(c *config.Config, v string) error {
-			n, err := strconv.Atoi(strings.TrimSpace(v))
+			v = strings.TrimSpace(v)
+			if v == "" {
+				// Emptying the box clears the field, matching max_sessions and
+				// project_search_depth. Unlike those two there is no editGet: they render
+				// unset as "" and so must edit as "", while a cadence row shows the number
+				// in force, and prefilling the editor with it is worth more than making
+				// blank the round trip.
+				*field(c) = nil
+				return nil
+			}
+			n, err := strconv.Atoi(v)
 			if err != nil {
-				return fmt.Errorf("%s must be a whole number", label)
+				return fmt.Errorf("%s must be a whole number (empty restores the default)", label)
 			}
 			if n < lo || n > hi {
 				return fmt.Errorf("%s must be between %d and %d", label, lo, hi)
@@ -290,7 +330,7 @@ func cadenceRow(key string, category settingCategory, label, summary, detail str
 					return err
 				}
 			}
-			set(c, &n)
+			*field(c) = &n
 			return nil
 		},
 	}
@@ -856,7 +896,7 @@ func newSettingRows(cfg *config.Config) []settingRow {
 				"known. Held at or below Context danger at, which outranks it. "+cadenceNote,
 			config.DefaultContextWarnPercent(), 1, 100,
 			(*config.Config).GetContextWarnPercent,
-			func(c *config.Config, v *int) { c.ContextWarnPercent = v },
+			func(c *config.Config) **int { return &c.ContextWarnPercent },
 			func(c *config.Config, n int) error {
 				if n > c.GetContextDangerPercent() {
 					return fmt.Errorf("warn must not exceed the danger threshold (%d)", c.GetContextDangerPercent())
@@ -864,14 +904,14 @@ func newSettingRows(cfg *config.Config) []settingRow {
 				return nil
 			}),
 			func(c *config.Config) bool { return c.ContextWarnPercent != nil }),
-		cadenceRow("context_danger_percent", catSessionList, "Context danger at",
+		withResetHook(cadenceRow("context_danger_percent", catSessionList, "Context danger at",
 			"How full the context window must be before the chip turns red.",
 			"A percentage of the model's window, so it only applies where the window is "+
 				"known. Refused below a set Context warn at; while that row is unset, its "+
 				"default band follows this one down. "+cadenceNote,
 			config.DefaultContextDangerPercent(), 1, 100,
 			(*config.Config).GetContextDangerPercent,
-			func(c *config.Config, v *int) { c.ContextDangerPercent = v },
+			func(c *config.Config) **int { return &c.ContextDangerPercent },
 			func(c *config.Config, n int) error {
 				// The mirror of the warn row's refusal, and it reads the STORED warn, not
 				// GetContextWarnPercent: the accessor already collapses an inverted pair onto
@@ -887,6 +927,19 @@ func newSettingRows(cfg *config.Config) []settingRow {
 				}
 				return nil
 			}),
+			func(c *config.Config) {
+				// Reset does not go through set, so the validator above cannot see it: r on
+				// this row drops danger to the built-in 90, and a warn stored at 95 — which
+				// was legal while danger was 95 — is then inverted and invisible, the exact
+				// state the validator refuses. Clamp the sibling down instead of clearing it,
+				// so the value stays visible on its own row and reachable by its own reset.
+				if c == nil || c.ContextWarnPercent == nil {
+					return
+				}
+				if capped := c.GetContextDangerPercent(); *c.ContextWarnPercent > capped {
+					c.ContextWarnPercent = &capped
+				}
+			}),
 		cadenceRow("diff_refresh_seconds", catSessionList, "Diff chip refresh",
 			"How stale a background session's +/- chip may get, in seconds.",
 			"Backstops the writers no agent status can see: the terminal tab's shell, a "+
@@ -894,7 +947,7 @@ func newSettingRows(cfg *config.Config) []settingRow {
 				"Lower costs a git walk per background session per sweep. "+cadenceNote,
 			config.DefaultDiffRefreshSeconds(), 1, config.MaxDiffRefreshSeconds(),
 			(*config.Config).GetDiffRefreshSeconds,
-			func(c *config.Config, v *int) { c.DiffRefreshSeconds = v }, nil),
+			func(c *config.Config) **int { return &c.DiffRefreshSeconds }, nil),
 
 		// ── Notifications ─────────────────────────────────────────────────────
 		{
@@ -991,7 +1044,7 @@ func newSettingRows(cfg *config.Config) []settingRow {
 				"agent whose state Atrium has to guess at. "+cadenceNote,
 			config.DefaultNotifyThrottleSeconds(), 0, config.MaxNotifyThrottleSeconds(),
 			(*config.Config).GetNotifyThrottleSeconds,
-			func(c *config.Config, v *int) { c.NotifyThrottleSeconds = v }, nil),
+			func(c *config.Config) **int { return &c.NotifyThrottleSeconds }, nil),
 			func(c *config.Config) bool {
 				return c.GetNotifications() != config.NotificationsOff
 			}),
@@ -1262,7 +1315,7 @@ func newSettingRows(cfg *config.Config) []settingRow {
 				"default. "+cadenceNote,
 			config.DefaultPendingWatchdogMinutes(), 1, config.MaxPendingWatchdogMinutes(),
 			(*config.Config).GetPendingWatchdogMinutes,
-			func(c *config.Config, v *int) { c.PendingWatchdogMinutes = v }, nil),
+			func(c *config.Config) **int { return &c.PendingWatchdogMinutes }, nil),
 		// The resolved config.json path, so the file the panel writes is discoverable
 		// from inside the panel. Memoized rather than re-resolved per render, since
 		// GetConfigDir stats the filesystem; see configFilePath for why the memo has to
