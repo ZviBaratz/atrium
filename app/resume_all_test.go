@@ -35,7 +35,7 @@ func TestResumeAll_OpensCountConfirmation(t *testing.T) {
 	// The literal itself is pinned once, in dialog_voice_test.go; what this test is
 	// about is that ctrl+r opened the resume dialog over the right kind and count.
 	assert.Contains(t, rendered, resumeConfirmMessage("paused", 2))
-	assert.Contains(t, rendered, "Press y to resume 2 sessions, n or esc to cancel")
+	assert.Contains(t, rendered, "Press y (or ctrl+r) to resume 2 sessions, n or esc to cancel")
 }
 
 // The count is grammatical for a single session.
