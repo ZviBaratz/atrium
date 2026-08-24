@@ -292,7 +292,7 @@ func applySplashConfig(cfg *config.Config) {
 // given row — or, for "profiles", after its record editor changed the profile
 // list — then live-applies whatever that field controls. Fields without a case
 // here are read live at their point of use (auto_attach, max_sessions,
-// kill_double_tap_confirm, image_preview) or only consumed by later operations
+// double_tap_confirm, image_preview) or only consumed by later operations
 // (branch_prefix; daemon_poll_interval on the next daemon run), so persisting is
 // all they need.
 //

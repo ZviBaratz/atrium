@@ -71,7 +71,7 @@ func HelpGroups() []HelpGroup {
 		{Title: "Handoff", Rows: []HelpRow{
 			{Keys: []KeyName{KeyEnter}, Desc: "attach to the selected session"},
 			{Keys: []KeyName{KeyAttachToggle}, Desc: "toggle attach/detach (detach when in, attach from the list)"},
-			{Keys: []KeyName{KeyKill}, Desc: "kill the selected/attached session (twice to confirm)"},
+			{Keys: []KeyName{KeyKill}, Desc: "kill the selected/attached session (press it twice to confirm — every keyed confirmation takes its own key twice)"},
 			{Keys: []KeyName{KeyUndoKill}, Desc: "undo the last kill: rebuild its branch, worktree and agent"},
 			{Keys: []KeyName{KeySessionCycle}, Desc: "cycle to prev / next session in the repo group"},
 			{Keys: []KeyName{KeyQuickSend}, Desc: "send a message (without attaching)"},

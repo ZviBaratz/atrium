@@ -931,16 +931,22 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			timingLive, true,
 			(*config.Config).GetMouse,
 			func(c *config.Config, v bool) { c.Mouse = &v }),
-		boolRow("kill_double_tap_confirm", catInput, "Kill double-tap",
-			// The key is read, not spelled: this PR made the double-tap follow a rebind
-			// (SetConfirmAltKey takes keys.KillKey()), so a literal "Ctrl+X" would teach the
-			// one key the dialog stops answering to — in front of the user who rebound kill
-			// precisely because ctrl+x is their shell's editing key.
-			"Let a second "+keys.LabelOf(keys.KeyKill)+" confirm the kill dialog in one motion.",
-			"",
+		boolRow("double_tap_confirm", catInput, "Double-tap to confirm",
+			// The description names the pattern rather than any one key, because the row
+			// gates every keyed confirmation: spelling one of them would teach a rule
+			// narrower than the switch. Where a key IS named — the examples below — it is
+			// read from the registry, not spelled: the double-tap follows a rebind
+			// (armDoubleTap is handed a registry-read key), so a literal "Ctrl+X" would
+			// teach the one key the dialog
+			// stops answering to, in front of the user who rebound kill precisely because
+			// ctrl+x is their shell's editing key.
+			"Let a second press of the key that opened a confirmation confirm it.",
+			"So "+keys.LabelOf(keys.KeyKill)+" twice kills and "+keys.LabelOf(keys.KeySubmit)+
+				" twice pushes, in one motion. Off still confirms with y — the dialog and "+
+				"its warning are on screen either way.",
 			timingLive, true,
-			(*config.Config).GetKillDoubleTapConfirm,
-			func(c *config.Config, v bool) { c.KillDoubleTapConfirm = &v }),
+			(*config.Config).GetDoubleTapConfirm,
+			func(c *config.Config, v bool) { c.DoubleTapConfirm = &v }),
 		boolRow("record_prompt_history", catInput, "Record prompt history",
 			"Remember submitted prompts so ↑ in an empty prompt can reuse them.",
 			"",

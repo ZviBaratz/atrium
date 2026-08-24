@@ -77,7 +77,7 @@ const DefaultDaemonPollIntervalMs = 1000
 // gets detection.
 func DefaultConfig() *Config {
 	autoAttach := true
-	killDoubleTap := true
+	doubleTap := true
 	sessionContextBar := true
 	hintBar := true
 	mouse := true
@@ -103,8 +103,11 @@ func DefaultConfig() *Config {
 			}
 			return fmt.Sprintf("%s/", strings.ToLower(user.Username))
 		}(),
-		AutoAttach:                  &autoAttach,
-		KillDoubleTapConfirm:        &killDoubleTap,
+		AutoAttach: &autoAttach,
+		// The successor only: a config written from these defaults must not carry the
+		// deprecated kill_double_tap_confirm key, or every fresh install would ship
+		// the legacy spelling of a setting it has never used.
+		DoubleTapConfirm:            &doubleTap,
 		ShowReleaseNotesAfterUpdate: &showReleaseNotes,
 		UpdateBaseOnCreate:          &updateBaseOnCreate,
 		CarryFiles:                  append([]string(nil), defaultCarryFiles...),

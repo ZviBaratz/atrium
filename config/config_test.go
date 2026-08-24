@@ -496,21 +496,50 @@ func TestWorktreesDir(t *testing.T) {
 	})
 }
 
-func TestGetKillDoubleTapConfirm(t *testing.T) {
+// The double-tap gate is one field with a deprecated predecessor, so the ladder has
+// four rungs rather than the usual three: the successor when it is set, the legacy
+// key when it is not, and on when neither is.
+//
+// The load-bearing rung is the LEGACY FALSE one. The predecessor gated the kill dialog
+// alone and the successor gates every keyed confirmation, so a rename that merely
+// dropped the old key would hand the shortcut back to the one user who had
+// deliberately refused it — and on more dialogs than they ever refused it for. That is
+// the case a nil-defaults-on accessor gets wrong silently, which is why it is asserted
+// separately from the nil case.
+func TestGetDoubleTapConfirm(t *testing.T) {
+	on, off := true, false
 	t.Run("default config is on", func(t *testing.T) {
-		assert.True(t, DefaultConfig().GetKillDoubleTapConfirm())
+		assert.True(t, DefaultConfig().GetDoubleTapConfirm())
 	})
-	t.Run("nil field (older config) defaults on", func(t *testing.T) {
-		assert.True(t, (&Config{}).GetKillDoubleTapConfirm())
+	t.Run("neither field (older config) defaults on", func(t *testing.T) {
+		assert.True(t, (&Config{}).GetDoubleTapConfirm())
 	})
 	t.Run("explicit true", func(t *testing.T) {
-		v := true
-		assert.True(t, (&Config{KillDoubleTapConfirm: &v}).GetKillDoubleTapConfirm())
+		assert.True(t, (&Config{DoubleTapConfirm: &on}).GetDoubleTapConfirm())
 	})
 	t.Run("explicit false", func(t *testing.T) {
-		v := false
-		assert.False(t, (&Config{KillDoubleTapConfirm: &v}).GetKillDoubleTapConfirm())
+		assert.False(t, (&Config{DoubleTapConfirm: &off}).GetDoubleTapConfirm())
 	})
+	t.Run("legacy false is honored", func(t *testing.T) {
+		assert.False(t, (&Config{KillDoubleTapConfirm: &off}).GetDoubleTapConfirm())
+	})
+	t.Run("legacy true is honored", func(t *testing.T) {
+		assert.True(t, (&Config{KillDoubleTapConfirm: &on}).GetDoubleTapConfirm())
+	})
+	t.Run("the successor outranks the legacy key in both directions", func(t *testing.T) {
+		assert.True(t, (&Config{DoubleTapConfirm: &on, KillDoubleTapConfirm: &off}).GetDoubleTapConfirm())
+		assert.False(t, (&Config{DoubleTapConfirm: &off, KillDoubleTapConfirm: &on}).GetDoubleTapConfirm())
+	})
+}
+
+// DefaultConfig must write the successor and NOT the predecessor: the legacy key is
+// omitempty, so a nil there is the difference between a fresh config.json that names
+// only the current spelling and one that ships a deprecated key nobody set.
+func TestDefaultConfigWritesOnlyTheCurrentDoubleTapKey(t *testing.T) {
+	c := DefaultConfig()
+	require.NotNil(t, c.DoubleTapConfirm)
+	assert.True(t, *c.DoubleTapConfirm)
+	assert.Nil(t, c.KillDoubleTapConfirm, "DefaultConfig must not seed the deprecated key")
 }
 
 func TestGetSmartDispatchAuto(t *testing.T) {
@@ -596,7 +625,7 @@ func TestBoolOr(t *testing.T) {
 // TestBoolAccessorsNilReceiver locks the contract that every optional-bool
 // accessor resolves to its documented default on a nil *Config instead of
 // panicking. Several accessors previously omitted the nil-receiver guard
-// (GetSessionContextBar, GetAutoAttach, GetKillDoubleTapConfirm,
+// (GetSessionContextBar, GetAutoAttach, GetDoubleTapConfirm,
 // GetSmartDispatchAuto, GetTrustWorktreesRoot); routing them through boolOr
 // standardized the guard.
 func TestBoolAccessorsNilReceiver(t *testing.T) {
@@ -608,7 +637,7 @@ func TestBoolAccessorsNilReceiver(t *testing.T) {
 	assert.True(t, c.GetShowReleaseNotesAfterUpdate())
 	assert.True(t, c.GetPRCreateDraft())
 	assert.True(t, c.GetUpdateBaseOnCreate())
-	assert.True(t, c.GetKillDoubleTapConfirm())
+	assert.True(t, c.GetDoubleTapConfirm())
 	// Default-off accessors.
 	assert.False(t, c.GetNerdFont())
 	assert.False(t, c.GetFastForwardLocalBase())
