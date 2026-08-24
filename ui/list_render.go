@@ -78,7 +78,7 @@ func (r *InstanceRenderer) setWidth(width int) {
 // under a different namespace keeps its meaningful prefix; if stripping would
 // empty the label, the full branch is kept.
 func (r *InstanceRenderer) displayBranch(i *session.Instance) string {
-	branch := i.Branch
+	branch := i.Branch()
 	if r.branchPrefix != "" {
 		if trimmed := strings.TrimPrefix(branch, r.branchPrefix); trimmed != "" {
 			branch = trimmed
@@ -496,7 +496,7 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 		// carries no information and is dropped to let the git state lead. The full
 		// branch is still reachable in the preview/diff panes.
 		var groups [][]rowSeg
-		if i.DisplayName() != i.Title {
+		if i.DisplayName() != i.Title() {
 			groups = append(groups, []rowSeg{p.flexSeg(r.displayBranch(i), th.Palette.FgDim, false)})
 		}
 		if chips := gitChips(p, stat); len(chips) > 0 {

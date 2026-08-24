@@ -103,7 +103,7 @@ func TestListGolden(t *testing.T) {
 	readyInst := instWithStatus(t, "overhaul", session.Running)
 	readyInst.SetStatus(session.Ready)
 	readyInst.SetDisplayName("Visual overhaul")
-	readyInst.Branch = "zvi/visual-overhaul"
+	readyInst.SetBranch("zvi/visual-overhaul")
 	readyInst.Program = "claude" // exercises the agent identity glyph (✻) in the row
 	readyInst.SetDiffStats(&git.DiffStats{Added: 142, Removed: 31, Commits: 3, Dirty: true})
 	l.AddInstance(readyInst)()
@@ -112,14 +112,14 @@ func TestListGolden(t *testing.T) {
 	// (a slug echo of the name) and line 2 has nothing else, so it falls back to
 	// the age.
 	bounds := instWithStatus(t, "bounds", session.NeedsInput)
-	bounds.Branch = "fix-bounds"
+	bounds.SetBranch("fix-bounds")
 	bounds.CreatedAt = time.Now().Add(-2 * time.Hour)
 	l.AddInstance(bounds)()
 
 	// A non-renamed session with changes: branch still suppressed, so line 2 leads
 	// with the git state instead.
 	markers := instWithStatus(t, "markers", session.Paused)
-	markers.Branch = "pane-markers"
+	markers.SetBranch("pane-markers")
 	markers.SetDiffStats(&git.DiffStats{Added: 8, Removed: 3, Commits: 1})
 	l.AddInstance(markers)()
 	l.SetSize(40, 14)

@@ -140,7 +140,7 @@ func (b *recoveryBudget) spend(inst *Instance) bool {
 		return true
 	}
 	if b.live >= b.limit {
-		b.deferred = append(b.deferred, ParkedSession{Title: inst.Title, Path: inst.Path})
+		b.deferred = append(b.deferred, ParkedSession{Title: inst.Title(), Path: inst.Path})
 		return false
 	}
 	b.live++

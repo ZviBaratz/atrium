@@ -43,7 +43,7 @@ func ctrlS(h *home)    { h.handleKeyPress(keyMsg("ctrl+s")) }
 
 func instanceByTitle(h *home, title string) *session.Instance {
 	for _, inst := range h.list.GetInstances() {
-		if inst.Title == title {
+		if inst.Title() == title {
 			return inst
 		}
 	}

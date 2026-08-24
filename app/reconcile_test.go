@@ -187,7 +187,7 @@ func TestReconcileInFlightStarts_ForceQuitTearsDownRealSession(t *testing.T) {
 	require.True(t, inst.Started())
 	t.Cleanup(func() { inst.RebindBaseContext(context.Background()); _ = inst.Kill() })
 
-	branch, wtPath := inst.Branch, inst.WorkingDir()
+	branch, wtPath := inst.Branch(), inst.WorkingDir()
 	require.True(t, git.LocalBranchExists(context.Background(), repo, branch), "branch exists after Start")
 
 	h.list.AddInstance(inst)

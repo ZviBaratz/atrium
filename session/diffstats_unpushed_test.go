@@ -99,7 +99,7 @@ func TestInstanceData_UnpushedRoundTrips(t *testing.T) {
 // read it back as legacy-unknown and re-warn.
 func TestToInstanceData_UnpushedZeroIsWritten(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	inst := &Instance{Title: "t", status: Paused, started: true, Path: t.TempDir(), Program: "claude"}
+	inst := &Instance{ident: identity{title: "t"}, status: Paused, started: true, Path: t.TempDir(), Program: "claude"}
 	inst.SetDiffStats(&git.DiffStats{Commits: 2, Unpushed: 0})
 
 	blob, err := json.Marshal(inst.ToInstanceData())

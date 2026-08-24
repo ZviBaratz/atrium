@@ -90,7 +90,7 @@ func TestBatchOutcome_PausePersistsAfterTearingDownTerminals(t *testing.T) {
 	orig := cleanupTerminalForInstance
 	t.Cleanup(func() { cleanupTerminalForInstance = orig })
 	cleanupTerminalForInstance = func(_ *ui.TabbedWindow, inst *session.Instance) {
-		order = append(order, "reap "+inst.Title)
+		order = append(order, "reap "+inst.Title())
 	}
 
 	_, _ = h.Update(batchPauseDoneMsg{

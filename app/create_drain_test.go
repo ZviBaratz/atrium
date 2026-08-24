@@ -127,7 +127,7 @@ func assertCreateQueued(t *testing.T, record string) {
 // titled returns the instance with this title, or nil.
 func titled(h *home, title string) *session.Instance {
 	for _, inst := range h.list.GetInstances() {
-		if inst.Title == title {
+		if inst.Title() == title {
 			return inst
 		}
 	}
@@ -2087,7 +2087,7 @@ func startedCreate(t *testing.T, h *home) (*session.Instance, string) {
 		inst.RebindBaseContext(context.Background())
 		_ = inst.Kill()
 	})
-	require.NotEmpty(t, inst.Branch)
+	require.NotEmpty(t, inst.Branch())
 	require.NotEmpty(t, inst.GetWorktreePath())
 	require.NotEmpty(t, inst.TmuxSessionName())
 
@@ -2123,7 +2123,7 @@ func TestCreateDrainDisclosesAPersistFailure(t *testing.T) {
 	d, state := outbox.DisclosureFor(path)
 	require.Equal(t, outbox.HasDisclosure, state, "and what the create left behind must survive the answer")
 	assert.Equal(t, "fix-auth", d.Title)
-	assert.Equal(t, inst.Branch, d.Branch)
+	assert.Equal(t, inst.Branch(), d.Branch)
 	assert.Equal(t, inst.GetWorktreePath(), d.Worktree)
 	assert.Equal(t, inst.TmuxSessionName(), d.TmuxName)
 	assert.Contains(t, d.Reason, "disk full")

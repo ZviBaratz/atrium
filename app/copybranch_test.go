@@ -64,7 +64,7 @@ func newBranchInstance(t *testing.T, title, branch string) *session.Instance {
 	t.Helper()
 	inst, err := session.NewInstance(session.InstanceOptions{Title: title, Path: t.TempDir(), Program: "echo"})
 	require.NoError(t, err)
-	inst.Branch = branch
+	inst.SetBranch(branch)
 	return inst
 }
 

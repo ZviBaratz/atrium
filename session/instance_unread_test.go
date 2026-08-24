@@ -14,7 +14,7 @@ import (
 // TestUnread_FlagsOnTransitionIntoReady asserts the unread bit is edge-triggered:
 // a Running→Ready transition flags it (and stamps unreadAt for the dwell floor).
 func TestUnread_FlagsOnTransitionIntoReady(t *testing.T) {
-	inst := &Instance{Title: "u", status: Running}
+	inst := &Instance{ident: identity{title: "u"}, status: Running}
 
 	inst.SetStatus(Ready)
 
@@ -26,7 +26,7 @@ func TestUnread_FlagsOnTransitionIntoReady(t *testing.T) {
 // SetStatus(Ready) on an idle session is a no-op for the unread bit: only an
 // edge (non-Ready → Ready) flags, so MarkSeen sticks while the session stays idle.
 func TestUnread_ReadyToReadyDoesNotReflag(t *testing.T) {
-	inst := &Instance{Title: "u", status: Running}
+	inst := &Instance{ident: identity{title: "u"}, status: Running}
 	inst.SetStatus(Ready)
 	inst.MarkSeen()
 
@@ -38,7 +38,7 @@ func TestUnread_ReadyToReadyDoesNotReflag(t *testing.T) {
 // TestUnread_ReflagsAfterWorkingPhase asserts a seen session that does another
 // turn of work (Ready→Running→Ready) becomes unread again.
 func TestUnread_ReflagsAfterWorkingPhase(t *testing.T) {
-	inst := &Instance{Title: "u", status: Running}
+	inst := &Instance{ident: identity{title: "u"}, status: Running}
 	inst.SetStatus(Ready)
 	inst.MarkSeen()
 
@@ -52,7 +52,7 @@ func TestUnread_ReflagsAfterWorkingPhase(t *testing.T) {
 // the next into-Ready transition is swallowed (synthetic lifecycle transition),
 // and the cycle after it flags normally again.
 func TestUnread_SuppressionConsumedWithoutFlagging(t *testing.T) {
-	inst := &Instance{Title: "u", status: Running}
+	inst := &Instance{ident: identity{title: "u"}, status: Running}
 	inst.ArmReadySuppression()
 
 	inst.SetStatus(Ready)
@@ -67,7 +67,7 @@ func TestUnread_SuppressionConsumedWithoutFlagging(t *testing.T) {
 // working phase (PaneWorking → SetStatus(Running)) cancels a pending
 // suppression: the agent demonstrably did new work, so its completion must flag.
 func TestUnread_SuppressionClearedByObservedWorking(t *testing.T) {
-	inst := &Instance{Title: "u", status: Ready}
+	inst := &Instance{ident: identity{title: "u"}, status: Ready}
 	inst.ArmReadySuppression()
 
 	inst.SetStatus(Running) // observed working phase clears the pending suppression
@@ -94,7 +94,7 @@ func TestRecoverInPlace_ArmsReadySuppression(t *testing.T) {
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
 	}
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, liveExec)
-	inst := &Instance{Title: "sess", status: Running, gitWorktree: wt, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "sess"}, status: Running, gitWorktree: wt, tmuxSession: ts}
 
 	inst.recoverInPlace()
 	require.Equal(t, Running, inst.GetStatus())
@@ -118,7 +118,7 @@ func TestResume_ArmsReadySuppression(t *testing.T) {
 	// wrong command, silently.
 	srv := newParkedTmuxServer(t)
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", srv, srv.exec())
-	inst := &Instance{Title: "sess", status: Paused, started: true, direct: true, Path: t.TempDir(), tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "sess"}, status: Paused, started: true, direct: true, Path: t.TempDir(), tmuxSession: ts}
 
 	require.NoError(t, inst.Resume())
 	require.Equal(t, Running, inst.GetStatus())

@@ -272,7 +272,7 @@ func TestGroupMode_SessionMoveWorksWhileAccountGrouped(t *testing.T) {
 	pressKey(h, 'K') // KeyMoveUp — within the api repo
 
 	assert.False(t, h.menu.HasNotice(), "J/K is available under account grouping")
-	assert.Equal(t, "api2", h.list.GetSelectedInstance().Title, "the second api session moved up")
+	assert.Equal(t, "api2", h.list.GetSelectedInstance().Title(), "the second api session moved up")
 	assert.Equal(t, 0, indexOfTitle(h.list, "api2"), "and now leads its repo")
 }
 
@@ -280,7 +280,7 @@ func TestGroupMode_SessionMoveWorksWhileAccountGrouped(t *testing.T) {
 // displayed order, or -1.
 func indexOfTitle(l *ui.List, title string) int {
 	for i, it := range l.GetInstances() {
-		if it.Title == title {
+		if it.Title() == title {
 			return i
 		}
 	}

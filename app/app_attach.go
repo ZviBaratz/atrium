@@ -267,10 +267,10 @@ func (m *home) attachExecCommand(attach func() (chan struct{}, error), killTarge
 // rather than as a guess.
 func attachLabel(killTarget, selected *session.Instance) string {
 	if killTarget != nil {
-		return killTarget.Title
+		return killTarget.Title()
 	}
 	if selected != nil {
-		return selected.Title
+		return selected.Title()
 	}
 	return ""
 }

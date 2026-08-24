@@ -34,7 +34,7 @@ func TestStatusAccessorsAreRaceFree(t *testing.T) {
 	newSession := func() *tmux.Session {
 		return tmux.NewSessionWithDeps(context.Background(), "race", "claude", tmux.MakePtyFactory(), mockExec)
 	}
-	inst := &Instance{Title: "race", status: Loading, started: true, tmuxSession: newSession()}
+	inst := &Instance{ident: identity{title: "race"}, status: Loading, started: true, tmuxSession: newSession()}
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -72,7 +72,7 @@ func TestPreviewSkipsCaptureWhenSessionDead(t *testing.T) {
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { captured = true; return nil, fmt.Errorf("capture fail") },
 	}
 	ts := tmux.NewSessionWithDeps(context.Background(), "dead", "claude", tmux.MakePtyFactory(), mockExec)
-	inst := &Instance{Title: "dead", status: Running, started: true, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "dead"}, status: Running, started: true, tmuxSession: ts}
 
 	content, err := inst.Preview()
 	require.NoError(t, err)
@@ -107,7 +107,7 @@ func TestRecoverLostSessionTransitionsToPaused(t *testing.T) {
 	require.NoError(t, wt.Setup())
 
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", tmux.MakePtyFactory(), deadExec())
-	inst := &Instance{Title: "sess", status: Running, started: true, gitWorktree: wt, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "sess"}, status: Running, started: true, gitWorktree: wt, tmuxSession: ts}
 
 	require.False(t, inst.TmuxAlive())
 	require.NoError(t, inst.RecoverLostSession())
@@ -146,7 +146,7 @@ func TestPause_ClearsCachedDirtyDiffStat(t *testing.T) {
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return []byte(""), nil },
 	}
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", tmux.MakePtyFactory(), liveExec)
-	inst := &Instance{Title: "sess", status: Running, started: true, gitWorktree: wt, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "sess"}, status: Running, started: true, gitWorktree: wt, tmuxSession: ts}
 	inst.diffStats = &git.DiffStats{Added: 1, FilesChanged: 1, Dirty: true}
 
 	require.NoError(t, inst.pause())
@@ -261,7 +261,7 @@ func TestDisplayName_FallsBackToTitle(t *testing.T) {
 	inst.SetDisplayName("Nicer Label")
 	assert.Equal(t, "Nicer Label", inst.DisplayName())
 	// Title (the stable identifier) is untouched by the label.
-	assert.Equal(t, "my-task", inst.Title)
+	assert.Equal(t, "my-task", inst.Title())
 }
 
 func TestSetDisplayName_WorksAfterStart(t *testing.T) {
@@ -425,7 +425,7 @@ func TestApplyPaneState(t *testing.T) {
 func TestApprovePrompt_TapsEnterWithoutAutoYes(t *testing.T) {
 	var sent [][]string
 	inst := &Instance{
-		Title:       "approve",
+		ident:       identity{title: "approve"},
 		status:      NeedsInput,
 		started:     true,
 		tmuxSession: tmux.NewSessionWithDeps(context.Background(), "approve", "claude", tmux.MakePtyFactory(), approveRecorder(&sent)),
@@ -441,7 +441,7 @@ func TestApprovePrompt_TapsEnterWithoutAutoYes(t *testing.T) {
 func TestApprovePrompt_NotStartedErrors(t *testing.T) {
 	var sent [][]string
 	inst := &Instance{
-		Title:       "approve-unstarted",
+		ident:       identity{title: "approve-unstarted"},
 		status:      Ready,
 		tmuxSession: tmux.NewSessionWithDeps(context.Background(), "approve-unstarted", "claude", tmux.MakePtyFactory(), approveRecorder(&sent)),
 	}
@@ -455,7 +455,7 @@ func TestApprovePrompt_NotStartedErrors(t *testing.T) {
 // IsReadyForPrompt, AwaitingInput).
 func TestApprovePrompt_NilTmuxSessionErrors(t *testing.T) {
 	inst := &Instance{
-		Title:   "approve-no-pane",
+		ident:   identity{title: "approve-no-pane"},
 		status:  NeedsInput,
 		started: true,
 	}
@@ -466,7 +466,7 @@ func TestApprovePrompt_NilTmuxSessionErrors(t *testing.T) {
 func TestApprovePrompt_PausedErrors(t *testing.T) {
 	var sent [][]string
 	inst := &Instance{
-		Title:       "approve-paused",
+		ident:       identity{title: "approve-paused"},
 		status:      Paused,
 		started:     true,
 		tmuxSession: tmux.NewSessionWithDeps(context.Background(), "approve-paused", "claude", tmux.MakePtyFactory(), approveRecorder(&sent)),
@@ -534,7 +534,7 @@ func suggestionRecorder(sendKeysArgs *[][]string, captureErr error, captures ...
 func suggestionInstance(t *testing.T, program string, captureErr error, sent *[][]string, captures ...string) *Instance {
 	t.Helper()
 	return &Instance{
-		Title:       "suggest",
+		ident:       identity{title: "suggest"},
 		status:      Ready,
 		started:     true,
 		tmuxSession: tmux.NewSessionWithDeps(context.Background(), "suggest", program, tmux.MakePtyFactory(), suggestionRecorder(sent, captureErr, captures...)),
@@ -601,7 +601,7 @@ func TestAcceptSuggestion_NonClaudeAdapterNoCaptureNoKeys(t *testing.T) {
 		return inner(cmd)
 	}
 	inst := &Instance{
-		Title:       "suggest-codex",
+		ident:       identity{title: "suggest-codex"},
 		status:      Ready,
 		started:     true,
 		tmuxSession: tmux.NewSessionWithDeps(context.Background(), "suggest-codex", "codex", tmux.MakePtyFactory(), rec),
@@ -638,7 +638,7 @@ func TestAcceptSuggestion_PausedErrors(t *testing.T) {
 // must error, not panic.
 func TestAcceptSuggestion_NilTmuxSessionErrors(t *testing.T) {
 	inst := &Instance{
-		Title:   "suggest-no-pane",
+		ident:   identity{title: "suggest-no-pane"},
 		status:  Ready,
 		started: true,
 	}

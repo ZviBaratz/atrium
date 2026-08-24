@@ -201,7 +201,7 @@ func TestGroupMode_SortAndAccountCombineRegardlessOfToggleOrder(t *testing.T) {
 		l = acctList(t, "api|work", "sideproj|personal", "infra|work", "api|work", "sideproj|personal")
 		byTitle := func(title string) *session.Instance {
 			for _, it := range l.items {
-				if it.Title == title {
+				if it.Title() == title {
 					return it
 				}
 			}

@@ -241,7 +241,7 @@ func (m *home) forkFromCheckpoint() (tea.Model, tea.Cmd) {
 		path = target.Path
 	}
 	pf := &pendingFork{
-		sourceTitle:      target.Title,
+		sourceTitle:      target.Title(),
 		sourceTranscript: m.checkpointSource.Path,
 		cutEntryID:       cp.ForkAtID,
 		droppedMessageID: cp.MessageID,
@@ -264,15 +264,15 @@ func (m *home) forkFromCheckpoint() (tea.Model, tea.Cmd) {
 //
 // "" means "use the form's ordinary default", which is what the picker already shows.
 func (m *home) forkBaseBranch(target *session.Instance, path string) string {
-	if target == nil || target.IsDirect() || target.Branch == "" || path == "" {
+	if target == nil || target.IsDirect() || target.Branch() == "" || path == "" {
 		return ""
 	}
-	if !git.LocalBranchExists(m.ctx, path, target.Branch) {
+	if !git.LocalBranchExists(m.ctx, path, target.Branch()) {
 		log.InfoLog.Printf("fork: %q's branch %q is gone; basing the fork on the repo default",
-			target.Title, target.Branch)
+			target.Title(), target.Branch())
 		return ""
 	}
-	return target.Branch
+	return target.Branch()
 }
 
 // handleCheckpointsState routes a key to the timeline and acts on what it armed.

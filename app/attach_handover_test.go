@@ -124,7 +124,7 @@ func TestBothBuildersWireTheHandover(t *testing.T) {
 	h, inst := newCustomCommandHome(t, nil)
 
 	cmd, _ := h.attachExecCommand(func() (chan struct{}, error) { return nil, nil }, inst, nil)
-	assert.Equal(t, handover.Payload{Kind: handover.KindAttach, Label: inst.Title}, cmd.handover,
+	assert.Equal(t, handover.Payload{Kind: handover.KindAttach, Label: inst.Title()}, cmd.handover,
 		"a session attach must publish the session it handed the terminal to")
 
 	termCmd, _ := h.terminalCustomCommandExec(customCommandSpec{key: "g", desc: "lazygit"})
@@ -132,12 +132,22 @@ func TestBothBuildersWireTheHandover(t *testing.T) {
 		"a terminal command must publish its own name and kind, since Resumes phrases the two differently")
 }
 
+// titledInstance builds an unstarted session with nothing but a title, which is all
+// the label and notice helpers below read. It goes through the real constructor rather
+// than a struct literal because the identity fields are unexported and guarded (#795).
+func titledInstance(t *testing.T, title string) *session.Instance {
+	t.Helper()
+	inst, err := session.NewInstance(session.InstanceOptions{Title: title, Path: t.TempDir(), Program: "echo"})
+	require.NoError(t, err)
+	return inst
+}
+
 // TestAttachExecLabelsTheSession pins where the label comes from for each attach shape.
 // killTarget is nil only for the terminal tab, and that tab shows the selected row —
 // every terminal-tab site selects before attaching — so the selection answers for it.
 func TestAttachExecLabelsTheSession(t *testing.T) {
-	killTarget := &session.Instance{Title: "kill-target"}
-	selected := &session.Instance{Title: "selected"}
+	killTarget := titledInstance(t, "kill-target")
+	selected := titledInstance(t, "selected")
 
 	assert.Equal(t, "kill-target", attachLabel(killTarget, selected),
 		"a session attach names the instance it bound up front")

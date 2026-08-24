@@ -498,7 +498,7 @@ func TestFlushDropsAMarkALiveSessionOwns(t *testing.T) {
 	require.True(t, inst.Started(), "precondition: an unstarted row owns nothing yet")
 
 	record := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: repo})
-	live := outbox.Disclosure{Title: "fix-auth", Repo: repo, Branch: inst.Branch,
+	live := outbox.Disclosure{Title: "fix-auth", Repo: repo, Branch: inst.Branch(),
 		Reason: "the row could not be written"}
 	require.NoError(t, outbox.Disclose(record, &live))
 	stranded := orphanDisclosure("long-gone")
@@ -511,7 +511,7 @@ func TestFlushDropsAMarkALiveSessionOwns(t *testing.T) {
 
 	require.Equal(t, stateInfo, h.state, "the genuine orphan is still reported")
 	report := h.textOverlay.Render()
-	assert.NotContains(t, report, inst.Branch,
+	assert.NotContains(t, report, inst.Branch(),
 		"a branch a live row holds is that row's, whatever a file written before it says")
 	assert.Contains(t, report, stranded.Branch, "and the real orphan is not screened away with it")
 }

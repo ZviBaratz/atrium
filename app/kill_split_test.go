@@ -267,7 +267,7 @@ func TestBatchKill_ClearsEveryMarkItArmed(t *testing.T) {
 	// A refusal: recorded as a failure, never torn down, row intact.
 	h.applyBatchKill(batchKillDoneMsg{
 		armed:    []*session.Instance{inst},
-		failures: []killFailure{{inst.Title, errors.New("branch checked out in the main repo")}},
+		failures: []killFailure{{inst.Title(), errors.New("branch checked out in the main repo")}},
 	})
 
 	require.Empty(t, h.retiring, "a refused session must not keep the mark its batch armed")

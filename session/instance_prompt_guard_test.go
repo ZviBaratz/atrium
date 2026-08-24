@@ -8,7 +8,7 @@ import (
 )
 
 func TestQueuePrompt(t *testing.T) {
-	i := &Instance{Title: "queue"}
+	i := &Instance{ident: identity{title: "queue"}}
 
 	i.QueuePrompt("do the thing")
 	require.Equal(t, "do the thing", i.Prompt())
@@ -23,7 +23,7 @@ func TestQueuePrompt(t *testing.T) {
 // TestQueuePromptAppendsFIFO pins the FIFO contract: appends go to the tail, the head
 // is the next to deliver, and ClearPrompt pops the head to promote the successor.
 func TestQueuePromptAppendsFIFO(t *testing.T) {
-	i := &Instance{Title: "fifo"}
+	i := &Instance{ident: identity{title: "fifo"}}
 	i.QueuePrompt("first")
 	i.QueueFollowupPrompt("second")
 
@@ -44,11 +44,11 @@ func TestQueuePromptAppendsFIFO(t *testing.T) {
 // carries a zero clock (strict idle-only, so promptDeliveryReady never force-injects it
 // mid-turn), while a boot prompt carries a live clock (the 60s valve).
 func TestQueueFollowupHasZeroClock(t *testing.T) {
-	boot := &Instance{Title: "boot"}
+	boot := &Instance{ident: identity{title: "boot"}}
 	boot.QueuePrompt("boot prompt")
 	require.False(t, boot.PromptQueuedAt().IsZero(), "a boot prompt keeps a live delivery clock")
 
-	followup := &Instance{Title: "followup"}
+	followup := &Instance{ident: identity{title: "followup"}}
 	followup.QueueFollowupPrompt("quick send")
 	require.True(t, followup.PromptQueuedAt().IsZero(), "a follow-up must have a zero clock (strict idle-only)")
 }
@@ -57,7 +57,7 @@ func TestQueueFollowupHasZeroClock(t *testing.T) {
 // longer heads the queue leaves the head (a newer prompt) intact rather than eating it,
 // while still lowering the in-flight guard.
 func TestClearPromptMatchedDequeue(t *testing.T) {
-	i := &Instance{Title: "matched"}
+	i := &Instance{ident: identity{title: "matched"}}
 	i.QueuePrompt("keep me")
 	_, ok := i.ClaimPrompt()
 	require.True(t, ok)
@@ -72,7 +72,7 @@ func TestClearPromptMatchedDequeue(t *testing.T) {
 // it must leave the head's timeout clock untouched so a chatty boot keeps accumulating
 // toward its 60s valve.
 func TestClearPromptSendingKeepsClock(t *testing.T) {
-	i := &Instance{Title: "defer"}
+	i := &Instance{ident: identity{title: "defer"}}
 	i.QueuePrompt("do the thing")
 	queuedAt := i.PromptQueuedAt()
 	require.False(t, queuedAt.IsZero())
@@ -86,14 +86,14 @@ func TestClearPromptSendingKeepsClock(t *testing.T) {
 
 func TestClaimPrompt(t *testing.T) {
 	t.Run("nothing queued refuses the claim", func(t *testing.T) {
-		i := &Instance{Title: "empty"}
+		i := &Instance{ident: identity{title: "empty"}}
 		_, ok := i.ClaimPrompt()
 		require.False(t, ok)
 		require.False(t, i.PromptSending(), "a refused claim must not raise the in-flight guard")
 	})
 
 	t.Run("queued prompt is claimed exactly once", func(t *testing.T) {
-		i := &Instance{Title: "claim"}
+		i := &Instance{ident: identity{title: "claim"}}
 		i.QueuePrompt("do the thing")
 
 		prompt, ok := i.ClaimPrompt()
@@ -106,7 +106,7 @@ func TestClaimPrompt(t *testing.T) {
 	})
 
 	t.Run("deferred send can be reclaimed", func(t *testing.T) {
-		i := &Instance{Title: "reclaim"}
+		i := &Instance{ident: identity{title: "reclaim"}}
 		i.QueuePrompt("do the thing")
 		_, ok := i.ClaimPrompt()
 		require.True(t, ok)
@@ -118,7 +118,7 @@ func TestClaimPrompt(t *testing.T) {
 	})
 
 	t.Run("delivered prompt cannot be reclaimed", func(t *testing.T) {
-		i := &Instance{Title: "done"}
+		i := &Instance{ident: identity{title: "done"}}
 		i.QueuePrompt("do the thing")
 		_, ok := i.ClaimPrompt()
 		require.True(t, ok)
@@ -135,7 +135,7 @@ func TestClaimPrompt(t *testing.T) {
 // (pollTargets, collectMetadata) — and during an attach the keeper both reads and
 // writes it — while the main loop queues, claims, and settles prompts.
 func TestPromptStateConcurrentAccess(t *testing.T) {
-	i := &Instance{Title: "race"}
+	i := &Instance{ident: identity{title: "race"}}
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 

@@ -165,7 +165,7 @@ func gitContextHeader(instance *session.Instance, stats *git.DiffStats) string {
 	}
 
 	var segs []string
-	if branch := instance.Branch; branch != "" {
+	if branch := instance.Branch(); branch != "" {
 		if baseRef != "" {
 			segs = append(segs, metaStyle().Render(fmt.Sprintf("%s ← %s", baseRef, branch)))
 		} else {

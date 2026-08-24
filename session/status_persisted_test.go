@@ -24,7 +24,7 @@ import (
 // obvious fixture to reach for here, is exactly the one reattach returns early on, so
 // it cannot stand in for it.
 func TestStatusChangedAtRoundTrip(t *testing.T) {
-	inst := &Instance{Title: "d", status: NeedsInput, started: true, direct: true, Path: t.TempDir(), Program: "claude"}
+	inst := &Instance{ident: identity{title: "d"}, status: NeedsInput, started: true, direct: true, Path: t.TempDir(), Program: "claude"}
 	changed := time.Date(2026, 8, 1, 9, 33, 16, 0, time.UTC)
 	inst.statusChangedAt = changed
 
@@ -66,7 +66,7 @@ func TestStatusChangedAtAbsentFromOlderStateFile(t *testing.T) {
 // encoding/json omits only basic types, so a reader who trusts the tag would expect
 // an absent key and get "0001-01-01T00:00:00Z" instead.
 func TestStatusChangedAtZeroSerializesAsZero(t *testing.T) {
-	inst := &Instance{Title: "d", status: Paused, started: true, direct: true, Path: t.TempDir(), Program: "claude"}
+	inst := &Instance{ident: identity{title: "d"}, status: Paused, started: true, direct: true, Path: t.TempDir(), Program: "claude"}
 	blob, err := json.Marshal(inst.ToInstanceData())
 	require.NoError(t, err)
 

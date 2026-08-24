@@ -50,7 +50,7 @@ func writeRepoScriptConfig(t *testing.T, entry config.RepoScript) string {
 
 func TestRunSetupScript_RunsTheScriptInTheWorktree(t *testing.T) {
 	dir := writeRepoScriptConfig(t, config.RepoScript{Name: "any", SetupScript: "pwd > ran.txt"})
-	inst := &Instance{Title: "web", Path: dir}
+	inst := &Instance{ident: identity{title: "web"}, Path: dir}
 
 	inst.RunSetupScript(dir)
 
@@ -71,7 +71,7 @@ func TestRunSetupScript_ExportsTheSessionEnvironment(t *testing.T) {
 		SetupScript: `printf '%s\n%s\n' "$ATRIUM_WORKTREE" "$CACHE_DIR" > env.txt`,
 		SessionEnv:  map[string]string{"CACHE_DIR": "/tmp/cache-{{.Session.Title}}"},
 	})
-	inst := &Instance{Title: "web", Path: dir}
+	inst := &Instance{ident: identity{title: "web"}, Path: dir}
 
 	inst.RunSetupScript(dir)
 
@@ -87,7 +87,7 @@ func TestRunSetupScript_FailureIsRecordedWithItsStderr(t *testing.T) {
 		Name:        "web",
 		SetupScript: "echo boom >&2; exit 3",
 	})
-	inst := &Instance{Title: "web", Path: dir}
+	inst := &Instance{ident: identity{title: "web"}, Path: dir}
 
 	inst.RunSetupScript(dir)
 
@@ -110,7 +110,7 @@ func TestRunSetupScript_UnconfiguredRepoRunsNothing(t *testing.T) {
 	restore := stubSetupExec(func(context.Context, setupRun) (string, error) { ran = true; return "", nil })
 	defer restore()
 
-	(&Instance{Title: "web", Path: dir}).RunSetupScript(dir)
+	(&Instance{ident: identity{title: "web"}, Path: dir}).RunSetupScript(dir)
 
 	assert.False(t, ran, "an unconfigured repo must not spawn a process")
 }
@@ -122,7 +122,7 @@ func TestRunSetupScript_NonMatchingEntryRunsNothing(t *testing.T) {
 		RemoteMatches: []string{"someone-else/thing"},
 		SetupScript:   "touch ran.txt",
 	})
-	inst := &Instance{Title: "web", Path: dir}
+	inst := &Instance{ident: identity{title: "web"}, Path: dir}
 
 	inst.RunSetupScript(dir)
 
@@ -134,7 +134,7 @@ func TestRunSetupScript_NonMatchingEntryRunsNothing(t *testing.T) {
 // otherwise hand a shell a command with a hole in it.
 func TestRunSetupScript_InvalidEntryRunsNothing(t *testing.T) {
 	dir := writeRepoScriptConfig(t, config.RepoScript{SetupScript: "npm ci {{.Session.Wortree}}"})
-	inst := &Instance{Title: "web", Path: dir}
+	inst := &Instance{ident: identity{title: "web"}, Path: dir}
 
 	var ran bool
 	restore := stubSetupExec(func(context.Context, setupRun) (string, error) { ran = true; return "", nil })
@@ -150,7 +150,7 @@ func TestRunSetupScript_InvalidEntryRunsNothing(t *testing.T) {
 // because "during" is otherwise unobservable without a race.
 func TestRunSetupScript_PhaseIsSetWhileRunningAndClearedAfter(t *testing.T) {
 	dir := writeRepoScriptConfig(t, config.RepoScript{SetupScript: "true"})
-	inst := &Instance{Title: "web", Path: dir}
+	inst := &Instance{ident: identity{title: "web"}, Path: dir}
 
 	var during string
 	restore := stubSetupExec(func(context.Context, setupRun) (string, error) {
@@ -170,7 +170,7 @@ func TestRunSetupScript_PhaseIsSetWhileRunningAndClearedAfter(t *testing.T) {
 // pause must not still be showing after a resume whose script succeeded.
 func TestRunSetupScript_ClearsAPreviousFailure(t *testing.T) {
 	dir := writeRepoScriptConfig(t, config.RepoScript{SetupScript: "true"})
-	inst := &Instance{Title: "web", Path: dir}
+	inst := &Instance{ident: identity{title: "web"}, Path: dir}
 	inst.setSetupResult("stale output", errors.New("stale failure"))
 
 	inst.RunSetupScript(dir)
@@ -185,7 +185,7 @@ func TestRunSetupScript_BoundsTheRecordedOutput(t *testing.T) {
 	dir := writeRepoScriptConfig(t, config.RepoScript{
 		SetupScript: "for i in $(seq 1 20000); do echo pad-line-$i; done; exit 1",
 	})
-	inst := &Instance{Title: "web", Path: dir}
+	inst := &Instance{ident: identity{title: "web"}, Path: dir}
 
 	inst.RunSetupScript(dir)
 
@@ -204,7 +204,7 @@ func TestAbortSetupScript_EndsARunningScript(t *testing.T) {
 	// `exec` so the shell BECOMES sleep: a shell that forks leaves the grandchild
 	// holding the output pipe, and Run then blocks for the full sleep anyway.
 	dir := writeRepoScriptConfig(t, config.RepoScript{SetupScript: "exec sleep 60 >/dev/null 2>&1"})
-	inst := &Instance{Title: "web", Path: dir}
+	inst := &Instance{ident: identity{title: "web"}, Path: dir}
 
 	done := make(chan struct{})
 	go func() {
@@ -226,5 +226,5 @@ func TestAbortSetupScript_EndsARunningScript(t *testing.T) {
 // Aborting when nothing is running is a no-op, because the shutdown path calls it for
 // every Loading session without knowing which of them has a script.
 func TestAbortSetupScript_IsSafeWhenNothingIsRunning(t *testing.T) {
-	assert.NotPanics(t, func() { (&Instance{Title: "web"}).AbortSetupScript() })
+	assert.NotPanics(t, func() { (&Instance{ident: identity{title: "web"}}).AbortSetupScript() })
 }

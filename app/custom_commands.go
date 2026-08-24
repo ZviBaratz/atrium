@@ -44,12 +44,16 @@ type customCommandRow struct {
 
 // customCommandSpec is everything a run needs, resolved to strings.
 //
-// The type is the thread-safety argument, not a comment about it. Instance's Title,
-// Branch, displayName and Path are unguarded fields read on the update thread, so a
-// tea.Cmd that closed over an *Instance and read them in a goroutine would race
-// every rename and every restore. Rendering the template, building the environment
-// and resolving the argv all happen on the update thread; only this struct crosses
-// over. TestCustomCommandSpecCarriesOnlyStrings is what keeps that true.
+// The type is the freshness argument, not a comment about it. A tea.Cmd that closed over
+// an *Instance and read its identity in a goroutine would run the command under whatever
+// name a concurrent rename or restore happened to leave — the guard on those fields (#795)
+// serialises the read, it does not decide which side of the rename the command belongs to.
+// Path is unguarded, though SetPath refuses a started instance — the same reachability
+// argument that leaves SetTitle without a race case, so the honest reading is that the
+// freshness argument is what carries this type, not a live data race. Rendering the template,
+// building the environment and resolving the argv all happen on the update thread; only
+// this struct crosses over. TestCustomCommandSpecCarriesOnlyStrings is what keeps that
+// true.
 type customCommandSpec struct {
 	key     string
 	desc    string
@@ -311,9 +315,9 @@ func customCommandCtx(inst *session.Instance) customcmd.Ctx {
 	}
 	ctx := customcmd.Ctx{
 		Session: customcmd.SessionCtx{
-			Title:  inst.Title,
+			Title:  inst.Title(),
 			Name:   inst.DisplayName(),
-			Branch: inst.Branch,
+			Branch: inst.Branch(),
 			// The managed port (#389), empty for a session whose repo declares no
 			// port_range — which is what dims a `curl localhost:{{.Session.Port}}` row
 			// rather than running it against a port nothing is serving.
@@ -444,7 +448,7 @@ func (m *home) customCommandSpec(c customcmd.Command) (customCommandSpec, string
 
 	var sessionName string
 	if inst != nil {
-		sessionName = inst.Title
+		sessionName = inst.Title()
 	}
 	return customCommandSpec{
 		key:     c.Key,

@@ -136,7 +136,7 @@ func (i *Instance) probeRunTmux(name string) *tmux.Session {
 	if name == "" {
 		return nil
 	}
-	return newRunSession(i.baseContext(), name, "run: "+i.Title, runProbeProgram)
+	return newRunSession(i.baseContext(), name, "run: "+i.Title(), runProbeProgram)
 }
 
 // runSessionExists answers the has-session for the run command this session owns.
@@ -233,7 +233,7 @@ func (i *Instance) StartRunCommand() error {
 		}
 	}
 
-	ts := newRunSession(i.baseContext(), name, "run: "+i.Title, run.run)
+	ts := newRunSession(i.baseContext(), name, "run: "+i.Title(), run.run)
 	// The command's own environment, on the same `new-session -e` channel the agent's
 	// pane uses: $ATRIUM_PORT plus the repo's session_env. It has to be set before the
 	// launch, because a tmux session's environment can only be set as it is born — the
@@ -308,7 +308,7 @@ func (i *Instance) adoptOwnedRunSession() *tmux.Session {
 	if err := ts.Restore(); err != nil {
 		// Up but unattachable — wedged. Kill it and let the caller start clean, the same
 		// recovery the terminal pane makes for its own shell.
-		log.WarningLog.Printf("run command for %q: session %q is wedged, recreating: %v", i.Title, name, err)
+		log.WarningLog.Printf("run command for %q: session %q is wedged, recreating: %v", i.Title(), name, err)
 		_ = i.releaseRunTmux()
 		return nil
 	}
@@ -363,7 +363,7 @@ func (i *Instance) pauseRunCommand() {
 		return
 	}
 	if err := i.closeRunSession(); err != nil {
-		log.WarningLog.Printf("pause %q: %v", i.Title, err)
+		log.WarningLog.Printf("pause %q: %v", i.Title(), err)
 	}
 }
 
@@ -375,7 +375,7 @@ func (i *Instance) resumeRunCommand() {
 		return
 	}
 	if err := i.StartRunCommand(); err != nil {
-		log.WarningLog.Printf("resume %q: %v", i.Title, err)
+		log.WarningLog.Printf("resume %q: %v", i.Title(), err)
 	}
 }
 
@@ -488,7 +488,7 @@ func (i *Instance) ApplyRunState(r RunState) {
 		// releaseRunTmux, not a bare drop: the cached Session may hold the attach pty
 		// this process opened, and Close is the only thing that gives it back.
 		if err := i.releaseRunTmux(); err != nil {
-			log.WarningLog.Printf("run command for %q: %v", i.Title, err)
+			log.WarningLog.Printf("run command for %q: %v", i.Title(), err)
 		}
 	}
 }

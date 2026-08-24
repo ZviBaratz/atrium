@@ -340,7 +340,7 @@ func (m *home) liveSessionOwns(d outbox.Disclosure) bool {
 		if inst == nil || !inst.Started() {
 			continue
 		}
-		if d.Branch != "" && inst.Branch == d.Branch && inst.Path == d.Repo {
+		if d.Branch != "" && inst.Branch() == d.Branch && inst.Path == d.Repo {
 			return true
 		}
 		if d.TmuxName != "" && inst.TmuxSessionName() == d.TmuxName {

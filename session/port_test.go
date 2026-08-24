@@ -196,7 +196,7 @@ func TestRunSetupScript_ExportsTheAllocatedPortToTheScript(t *testing.T) {
 		SetupScript: `echo "$ATRIUM_PORT" > port.txt`,
 		PortRange:   fmt.Sprintf("%d-%d", base, base),
 	})
-	inst := &Instance{Title: "web", Path: dir}
+	inst := &Instance{ident: identity{title: "web"}, Path: dir}
 
 	inst.RunSetupScript(dir)
 
@@ -216,7 +216,7 @@ func TestRunSetupScript_RendersThePortIntoTheTemplate(t *testing.T) {
 		SetupScript: `echo {{.Session.Port}} > port.txt`,
 		PortRange:   fmt.Sprintf("%d-%d", base, base),
 	})
-	inst := &Instance{Title: "web", Path: dir}
+	inst := &Instance{ident: identity{title: "web"}, Path: dir}
 
 	inst.RunSetupScript(dir)
 
@@ -235,7 +235,7 @@ func TestResolveSetupRun_CarriesThePortInTheSessionEnvironment(t *testing.T) {
 		PortRange:   fmt.Sprintf("%d-%d", base, base),
 		SessionEnv:  map[string]string{"CACHE": "/tmp/c"},
 	})
-	inst := &Instance{Title: "web", Path: dir}
+	inst := &Instance{ident: identity{title: "web"}, Path: dir}
 
 	run, ok := inst.resolveSetupRun(dir)
 
@@ -250,7 +250,7 @@ func TestResolveSetupRun_CarriesThePortInTheSessionEnvironment(t *testing.T) {
 func TestResolveSetupRun_LeavesAPortlessRepoWithout(t *testing.T) {
 	isolatePorts(t)
 	dir := writeRepoScriptConfig(t, config.RepoScript{SetupScript: "true", SessionEnv: map[string]string{"CACHE": "/tmp/c"}})
-	inst := &Instance{Title: "web", Path: dir}
+	inst := &Instance{ident: identity{title: "web"}, Path: dir}
 
 	run, ok := inst.resolveSetupRun(dir)
 
@@ -271,7 +271,7 @@ func TestReservePort_KeepsThePortASessionAlreadyHolds(t *testing.T) {
 		SetupScript: "true",
 		PortRange:   fmt.Sprintf("%d-%d", base, base+4),
 	})
-	inst := &Instance{Title: "web", Path: dir}
+	inst := &Instance{ident: identity{title: "web"}, Path: dir}
 	_, ok := inst.resolveSetupRun(dir)
 	require.True(t, ok)
 	first := inst.Port()
@@ -296,7 +296,7 @@ func TestReservePort_ReportsAnExhaustedRangeWithoutStoppingTheSession(t *testing
 		SetupScript: "true",
 		PortRange:   fmt.Sprintf("%d-%d", taken, taken),
 	})
-	inst := &Instance{Title: "web", Path: dir}
+	inst := &Instance{ident: identity{title: "web"}, Path: dir}
 
 	run, ok := inst.resolveSetupRun(dir)
 
@@ -315,7 +315,7 @@ func TestReleasePort_ReturnsThePortToTheRange(t *testing.T) {
 		SetupScript: "true",
 		PortRange:   fmt.Sprintf("%d-%d", base, base),
 	})
-	first := &Instance{Title: "web-1", Path: dir}
+	first := &Instance{ident: identity{title: "web-1"}, Path: dir}
 	_, ok := first.resolveSetupRun(dir)
 	require.True(t, ok)
 	require.Equal(t, base, first.Port())
@@ -323,7 +323,7 @@ func TestReleasePort_ReturnsThePortToTheRange(t *testing.T) {
 	first.releasePort()
 
 	assert.Zero(t, first.Port())
-	second := &Instance{Title: "web-2", Path: dir}
+	second := &Instance{ident: identity{title: "web-2"}, Path: dir}
 	_, ok = second.resolveSetupRun(dir)
 	require.True(t, ok)
 	assert.Equal(t, base, second.Port(), "the freed port is the next session's")
@@ -352,7 +352,7 @@ func TestPauseResume_KeepsThePort(t *testing.T) {
 	require.NoError(t, inst.Pause())
 
 	assert.Equal(t, base, inst.Port(), "a parked session still owns its port")
-	other := &Instance{Title: "other", Path: wt.GetRepoPath()}
+	other := &Instance{ident: identity{title: "other"}, Path: wt.GetRepoPath()}
 	_, ok = other.resolveSetupRun(wt.GetWorktreePath())
 	require.True(t, ok)
 	assert.Zero(t, other.Port(), "and no other session may be handed it")
@@ -377,7 +377,7 @@ func TestPause_KeepsThePortWhenThePaneIsGone(t *testing.T) {
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, errors.New("no server running on /tmp/none") },
 	}
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", newRecordingPtyFactory(t, nil), goneExec)
-	inst := &Instance{Title: "sess", Path: dir, status: Running, started: true, direct: true, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "sess"}, Path: dir, status: Running, started: true, direct: true, tmuxSession: ts}
 	_, ok := inst.resolveSetupRun(dir)
 	require.True(t, ok)
 	require.Equal(t, base, inst.Port())
@@ -385,7 +385,7 @@ func TestPause_KeepsThePortWhenThePaneIsGone(t *testing.T) {
 	_ = inst.RecoverLostSession()
 
 	assert.Equal(t, base, inst.Port(), "a park does not take the session's number away from it")
-	next := &Instance{Title: "next", Path: dir}
+	next := &Instance{ident: identity{title: "next"}, Path: dir}
 	_, ok = next.resolveSetupRun(dir)
 	require.True(t, ok)
 	assert.Zero(t, next.Port(), "and no other session may be handed it while the park stands")
@@ -397,7 +397,7 @@ func TestKill_ReleasesThePort(t *testing.T) {
 	isolatePorts(t)
 	base := freePort(t)
 	dir := writeRepoScriptConfig(t, config.RepoScript{Name: "any", PortRange: fmt.Sprintf("%d-%d", base, base)})
-	inst := &Instance{Title: "web", Path: dir}
+	inst := &Instance{ident: identity{title: "web"}, Path: dir}
 	_, ok := inst.resolveSetupRun(dir)
 	require.True(t, ok)
 	require.Equal(t, base, inst.Port())
@@ -405,7 +405,7 @@ func TestKill_ReleasesThePort(t *testing.T) {
 	require.NoError(t, inst.Kill())
 
 	assert.Zero(t, inst.Port())
-	next := &Instance{Title: "web-2", Path: dir}
+	next := &Instance{ident: identity{title: "web-2"}, Path: dir}
 	_, ok = next.resolveSetupRun(dir)
 	require.True(t, ok)
 	assert.Equal(t, base, next.Port())
@@ -415,7 +415,7 @@ func TestKill_ReleasesThePort(t *testing.T) {
 // restart that renumbered the session would leave the row advertising a port nothing is
 // serving.
 func TestInstanceData_CarriesThePortAcrossARestart(t *testing.T) {
-	inst := &Instance{Title: "web", Path: t.TempDir(), direct: true}
+	inst := &Instance{ident: identity{title: "web"}, Path: t.TempDir(), direct: true}
 	inst.setPort(3007)
 
 	restored, err := FromInstanceData(context.Background(), inst.ToInstanceData(), "")
@@ -430,12 +430,12 @@ func TestFromInstanceData_ReclaimsThePersistedPort(t *testing.T) {
 	isolatePorts(t)
 	base := freePort(t)
 	dir := writeRepoScriptConfig(t, config.RepoScript{Name: "any", PortRange: fmt.Sprintf("%d-%d", base, base)})
-	data := (&Instance{Title: "restored", Path: dir, direct: true, port: base}).ToInstanceData()
+	data := (&Instance{ident: identity{title: "restored"}, Path: dir, direct: true, port: base}).ToInstanceData()
 
 	_, err := FromInstanceData(context.Background(), data, "")
 	require.NoError(t, err)
 
-	fresh := &Instance{Title: "fresh", Path: dir}
+	fresh := &Instance{ident: identity{title: "fresh"}, Path: dir}
 	_, ok := fresh.resolveSetupRun(dir)
 	require.True(t, ok)
 	assert.Zero(t, fresh.Port(), "the restored session's port is not free")
@@ -449,8 +449,8 @@ func TestFromInstanceData_ReclaimsThePersistedPort(t *testing.T) {
 func TestPortRegistry_TwoReposWithTheSameSessionNameGetDifferentPorts(t *testing.T) {
 	isolatePorts(t)
 	rng := synthetic(t)
-	one := &Instance{Title: "web", Path: "/projects/alpha"}
-	two := &Instance{Title: "web", Path: "/projects/beta"}
+	one := &Instance{ident: identity{title: "web"}, Path: "/projects/alpha"}
+	two := &Instance{ident: identity{title: "web"}, Path: "/projects/beta"}
 
 	first, ok := livePorts.allocate(rng, one.portOwner())
 	require.True(t, ok)

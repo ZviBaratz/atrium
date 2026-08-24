@@ -31,7 +31,7 @@ func shellPane(t *testing.T, title string) (*TerminalPane, *session.Instance, st
 	tp.SetSize(80, 30)
 	t.Cleanup(tp.Close)
 
-	key, err := tp.EnsureSession(inst, inst.Title)
+	key, err := tp.EnsureSession(inst, inst.Title())
 	require.NoError(t, err)
 	require.NotEmpty(t, key)
 	require.True(t, shellNamed(t, key), "precondition: the shell is alive on the socket")
@@ -60,7 +60,7 @@ func renameAndAdopt(t *testing.T, inst *session.Instance, newTitle string) {
 func TestDeepRenameLeavesTheShellReapable(t *testing.T) {
 	tp, inst, key := shellPane(t, "rename-reap")
 
-	renameAndAdopt(t, inst, inst.Title+"-renamed")
+	renameAndAdopt(t, inst, inst.Title()+"-renamed")
 
 	// assert, not require: the socket check at the end is the one about the bug, and a
 	// fatal above it would stop it running under the mutations that prove it.
@@ -83,7 +83,7 @@ func TestDeepRenameLeavesTheShellReapable(t *testing.T) {
 func TestDeepRenameDoesNotMintASecondShell(t *testing.T) {
 	tp, inst, key := shellPane(t, "rename-second-shell")
 
-	renameAndAdopt(t, inst, inst.Title+"-renamed")
+	renameAndAdopt(t, inst, inst.Title()+"-renamed")
 
 	// The name a derivation would reach for now — what the pane would create a shell
 	// under if the key still followed the agent session.
@@ -91,7 +91,7 @@ func TestDeepRenameDoesNotMintASecondShell(t *testing.T) {
 	require.NotEqual(t, key, derivedNow, "precondition: the rename moved the derived name")
 
 	require.NoError(t, tp.UpdateContent(inst))
-	again, err := tp.EnsureSession(inst, inst.Title)
+	again, err := tp.EnsureSession(inst, inst.Title())
 	require.NoError(t, err)
 
 	assert.Equal(t, key, again, "EnsureSession must return the owned key, not a re-derived one")
@@ -118,7 +118,7 @@ func TestFailedDeepRenameLeavesTheShellCachedAndAlive(t *testing.T) {
 
 	// Make the git half fail the way worktree.Rename's pre-flight does: the target branch
 	// already exists, so it refuses before renaming anything.
-	newTitle := inst.Title + "-taken"
+	newTitle := inst.Title() + "-taken"
 	target := git.BranchNameForSession(config.LoadConfig().BranchPrefix, newTitle)
 	require.NotEmpty(t, target)
 	branch := exec.CommandContext(context.Background(), "git", "branch", target)
@@ -156,7 +156,7 @@ func TestFailedDeepRenameLeavesTheShellCachedAndAlive(t *testing.T) {
 func TestAFreshPaneAdoptsTheOwnedShellAfterARename(t *testing.T) {
 	_, inst, key := shellPane(t, "rename-restart")
 
-	renameAndAdopt(t, inst, inst.Title+"-renamed")
+	renameAndAdopt(t, inst, inst.Title()+"-renamed")
 	derivedNow := inst.MintTerminalSessionName()
 	require.NotEqual(t, key, derivedNow, "precondition: the rename moved the derived name")
 
@@ -164,7 +164,7 @@ func TestAFreshPaneAdoptsTheOwnedShellAfterARename(t *testing.T) {
 	t.Cleanup(fresh.Close)
 	fresh.SetSize(80, 30)
 
-	adopted, err := fresh.EnsureSession(inst, inst.Title)
+	adopted, err := fresh.EnsureSession(inst, inst.Title())
 	require.NoError(t, err)
 
 	assert.Equal(t, key, adopted, "the next run must adopt the shell it left running")
@@ -181,7 +181,7 @@ func TestAFreshPaneAdoptsTheOwnedShellAfterARename(t *testing.T) {
 func TestReapReleasesTheNameSoTheNextShellFollowsTheRename(t *testing.T) {
 	tp, inst, key := shellPane(t, "rename-reap-release")
 
-	renameAndAdopt(t, inst, inst.Title+"-renamed")
+	renameAndAdopt(t, inst, inst.Title()+"-renamed")
 	derivedNow := inst.MintTerminalSessionName()
 	require.NotEqual(t, key, derivedNow, "precondition: the rename moved the derived name")
 
@@ -189,7 +189,7 @@ func TestReapReleasesTheNameSoTheNextShellFollowsTheRename(t *testing.T) {
 	require.Empty(t, inst.TerminalSessionName(), "a reap must give the shell's name up")
 	assert.Equal(t, derivedNow, terminalKey(inst), "the key must follow the current title again")
 
-	next, err := tp.EnsureSession(inst, inst.Title)
+	next, err := tp.EnsureSession(inst, inst.Title())
 	require.NoError(t, err)
 	assert.Equal(t, derivedNow, next, "the shell created after a reap must carry the new name")
 	assert.True(t, shellNamed(t, derivedNow), "and must actually be on the socket under it")
@@ -300,7 +300,7 @@ func TestReapForAnInstanceWithNoTmuxNameLeavesThePaneAlone(t *testing.T) {
 	tp.mu.Unlock()
 	require.True(t, splashBefore, "precondition: a nil selection leaves the pane on the idle splash")
 
-	tp.CloseForInstance(&session.Instance{Title: "never-started"})
+	tp.CloseForInstance(mkInst(t, "never-started", t.TempDir()))
 
 	tp.mu.Lock()
 	splashAfter, message, gens := tp.splash, tp.fallbackMessage, len(tp.reapGen)
@@ -332,7 +332,7 @@ func TestAFailedCreateReleasesTheNameItMinted(t *testing.T) {
 	tp.SetSize(80, 30)
 	minted := inst.MintTerminalSessionName()
 
-	_, err := tp.EnsureSession(inst, inst.Title)
+	_, err := tp.EnsureSession(inst, inst.Title())
 	require.Error(t, err, "precondition: the create must fail")
 
 	assert.Empty(t, inst.TerminalSessionName(),
@@ -359,7 +359,7 @@ func TestAnAbortedInstallReleasesTheNameItMinted(t *testing.T) {
 	minted := inst.MintTerminalSessionName()
 	tp.beforeInstall = tp.Close
 
-	key, err := tp.EnsureSession(inst, inst.Title)
+	key, err := tp.EnsureSession(inst, inst.Title())
 	require.NoError(t, err)
 	require.Empty(t, key, "precondition: the install must have been refused")
 
@@ -382,7 +382,7 @@ func TestDeepRenameKeepsThePaneRenderingTheShell(t *testing.T) {
 	require.NotContains(t, tp.String(), "Opening terminal",
 		"precondition: the pane must be past the opening fallback before the rename")
 
-	renameAndAdopt(t, inst, inst.Title+"-renamed")
+	renameAndAdopt(t, inst, inst.Title()+"-renamed")
 	require.NoError(t, tp.UpdateContent(inst))
 
 	assert.NotContains(t, tp.String(), "Opening terminal",

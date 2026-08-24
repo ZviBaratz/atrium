@@ -331,7 +331,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// and surface the loss like the manual send path rather than leaving the session
 		// Ready-but-idle with no sign the prompt was lost.
 		msg.instance.ClearPrompt(msg.prompt)
-		return m, m.handleError(fmt.Errorf("failed to deliver prompt to %q: %w", msg.instance.Title, msg.err))
+		return m, m.handleError(fmt.Errorf("failed to deliver prompt to %q: %w", msg.instance.Title(), msg.err))
 	case tea.MouseMsg:
 		return m.handleMouse(msg)
 	case branchSearchDebounceMsg:
@@ -617,13 +617,12 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state = stateRename
 			return m, m.handleError(msg.err)
 		}
-		// Adopt the identity the I/O earned, on the update thread: both fields are plain
-		// and unmutexed, so a second concurrent writer would be a data race with no lock
-		// to serialise it. This is the only writer of Title and Branch that can run
-		// against a STARTED instance — SetTitle writes Title too, but refuses one that
-		// has started, so the two cannot overlap. Keeping the write here is necessary
-		// and not sufficient; AdoptRename carries the per-reader argument for the other
-		// goroutines, and #719 the readers still outside it.
+		// Adopt the identity the I/O earned, on the update thread. Not for safety — the
+		// fields are behind identityMu since #795, and Start's SetBranch is a second
+		// writer that has always been off this thread — but because this is where the
+		// rename becomes VISIBLE. Adopting here means a row takes the new name only once
+		// the tmux session and the git branch have both moved, and never for a rename
+		// that failed halfway. The two label writes below ride the same instant.
 		msg.instance.AdoptRename(msg.renamed)
 		// The deep rename replaced the real title, so the cosmetic label must go or
 		// it would keep shadowing it.
@@ -934,14 +933,14 @@ func (m *home) reconcileInFlightStarts(ctx context.Context) {
 			// the dead ctx and couldn't clean up. Rebind to a live ctx and retry.
 			inst.RebindBaseContext(context.WithoutCancel(ctx))
 			if err := inst.Kill(); err != nil {
-				log.WarningLog.Printf("shutdown: teardown of in-flight session %q: %v", inst.Title, err)
+				log.WarningLog.Printf("shutdown: teardown of in-flight session %q: %v", inst.Title(), err)
 			}
 			m.settleCreateRequest(inst, errors.New("atrium exited before it finished starting"))
 		default:
 			// Ctx still live: the force-quit abandon, or a rare non-signal event-loop
 			// error from p.Run(). Kill's teardown works as-is, no rebind needed.
 			if err := inst.Kill(); err != nil {
-				log.WarningLog.Printf("exit: teardown of in-flight session %q: %v", inst.Title, err)
+				log.WarningLog.Printf("exit: teardown of in-flight session %q: %v", inst.Title(), err)
 			}
 			m.settleCreateRequest(inst, errors.New("atrium exited before it finished starting"))
 		}

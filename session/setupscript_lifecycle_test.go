@@ -254,7 +254,7 @@ func TestStart_RunsTheSetupScriptBeforeTheAgentLaunches(t *testing.T) {
 
 	fake := newFakeTmux(t, marker)
 	ts := tmux.NewSessionWithDeps(context.Background(), "started", "claude", fake, fake.exec())
-	inst := &Instance{Title: "started", Path: repoPath, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "started"}, Path: repoPath, tmuxSession: ts}
 
 	require.NoError(t, inst.Start(true))
 	t.Cleanup(func() { _ = inst.Kill() })
@@ -275,7 +275,7 @@ func TestStart_AFailingSetupScriptLeavesTheSessionUsable(t *testing.T) {
 
 	fake := newFakeTmux(t, "")
 	ts := tmux.NewSessionWithDeps(context.Background(), "failing", "claude", fake, fake.exec())
-	inst := &Instance{Title: "failing", Path: repoPath, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "failing"}, Path: repoPath, tmuxSession: ts}
 
 	require.NoError(t, inst.Start(true), "a non-zero setup script must not fail Start")
 	t.Cleanup(func() { _ = inst.Kill() })
@@ -296,7 +296,7 @@ func TestResume_RerunsTheSetupScriptOnARecreatedWorktree(t *testing.T) {
 
 	fake := newFakeTmux(t, "")
 	ts := tmux.NewSessionWithDeps(context.Background(), "resumed", "claude", fake, fake.exec())
-	inst := &Instance{Title: "resumed", status: Running, started: true, gitWorktree: wt, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "resumed"}, status: Running, started: true, gitWorktree: wt, tmuxSession: ts}
 
 	require.NoError(t, inst.Pause())
 	require.NoDirExists(t, wtPath, "pause must remove the worktree for this test to mean anything")
@@ -316,7 +316,7 @@ func TestResume_KeepsAMaterializedWorktreeAndSkipsTheScript(t *testing.T) {
 
 	fake := newFakeTmux(t, "")
 	ts := tmux.NewSessionWithDeps(context.Background(), "parked", "claude", fake, fake.exec())
-	inst := &Instance{Title: "parked", status: Paused, started: true, gitWorktree: wt, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "parked"}, status: Paused, started: true, gitWorktree: wt, tmuxSession: ts}
 
 	require.NoError(t, inst.Resume())
 
@@ -337,7 +337,7 @@ func TestStart_InjectsSessionEnvIntoTheAgentPane(t *testing.T) {
 
 	fake := newFakeTmux(t, "")
 	ts := tmux.NewSessionWithDeps(context.Background(), "envd", "claude", fake, fake.exec())
-	inst := &Instance{Title: "envd", Path: repoPath, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "envd"}, Path: repoPath, tmuxSession: ts}
 
 	require.NoError(t, inst.Start(true))
 	t.Cleanup(func() { _ = inst.Kill() })
@@ -353,7 +353,7 @@ func TestStart_InjectsSessionEnvWithNoSetupScript(t *testing.T) {
 
 	fake := newFakeTmux(t, "")
 	ts := tmux.NewSessionWithDeps(context.Background(), "envonly", "claude", fake, fake.exec())
-	inst := &Instance{Title: "envonly", Path: seed.GetRepoPath(), tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "envonly"}, Path: seed.GetRepoPath(), tmuxSession: ts}
 
 	require.NoError(t, inst.Start(true))
 	t.Cleanup(func() { _ = inst.Kill() })
@@ -369,7 +369,7 @@ func TestStart_UnconfiguredRepoAddsNoEnv(t *testing.T) {
 
 	fake := newFakeTmux(t, "")
 	ts := tmux.NewSessionWithDeps(context.Background(), "plain", "claude", fake, fake.exec())
-	inst := &Instance{Title: "plain", Path: seed.GetRepoPath(), tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "plain"}, Path: seed.GetRepoPath(), tmuxSession: ts}
 
 	require.NoError(t, inst.Start(true))
 	t.Cleanup(func() { _ = inst.Kill() })
@@ -392,7 +392,7 @@ func TestRunSetupScript_PathMatchesTestsTheRepositoryRoot(t *testing.T) {
 		PathMatches: []string{filepath.Base(repoPath)},
 		SetupScript: "touch MATCHED",
 	})
-	inst := &Instance{Title: "web", gitWorktree: wt}
+	inst := &Instance{ident: identity{title: "web"}, gitWorktree: wt}
 
 	inst.RunSetupScript(wt.GetWorktreePath())
 
@@ -409,7 +409,7 @@ func TestRunSetupScript_PathMatchesDoesNotTestTheWorktreePath(t *testing.T) {
 		PathMatches: []string{"/worktrees/"},
 		SetupScript: "touch MATCHED",
 	})
-	inst := &Instance{Title: "web", gitWorktree: wt}
+	inst := &Instance{ident: identity{title: "web"}, gitWorktree: wt}
 
 	inst.RunSetupScript(wt.GetWorktreePath())
 
@@ -430,7 +430,7 @@ func TestStart_DirectSessionGetsTheEnvironmentButNotTheScript(t *testing.T) {
 
 	fake := newFakeTmux(t, "")
 	ts := tmux.NewSessionWithDeps(context.Background(), "plainrepo", "claude", fake, fake.exec())
-	inst := &Instance{Title: "plainrepo", Path: dir, direct: true, tmuxSession: ts}
+	inst := &Instance{ident: identity{title: "plainrepo"}, Path: dir, direct: true, tmuxSession: ts}
 
 	require.NoError(t, inst.Start(true))
 	t.Cleanup(func() { _ = inst.Kill() })

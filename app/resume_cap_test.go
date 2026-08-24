@@ -45,7 +45,7 @@ func TestResumeAll_OverSoftCapNamesHostBudget(t *testing.T) {
 		"Host capacity is 4, with 2 already running — 3 more will queue rather than parallelize.")
 	assert.Contains(t, rendered, "Press y (or ctrl+r) to resume 3 sessions, n or esc to cancel")
 	for _, inst := range h.list.GetInstances() {
-		if inst.Title == "live-1" || inst.Title == "live-2" {
+		if inst.Title() == "live-1" || inst.Title() == "live-2" {
 			continue
 		}
 		assert.True(t, inst.Paused(), "nothing resumes until the user confirms")
