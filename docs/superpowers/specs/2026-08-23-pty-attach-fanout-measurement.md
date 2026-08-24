@@ -102,10 +102,15 @@ every one of them.
 this as wontfix.* It is 0.00 %.
 
 The goroutine snapshot is where the fanout does show up, and it is the cleanest
-statement of the in-process cost: **29 goroutines in `session/tmux.Pty.Start.func1`**
-— one per client, each parked in `os/exec.(*Cmd).Wait` → `pidfdWait` → `Waitid` —
-out of 80 goroutines in the process. Parked in a wait, so they cost scheduler
-bookkeeping and a stack, and no CPU.
+statement of the in-process cost: **29 goroutines in `session/tmux.Pty.Start.func1`**,
+each parked in `os/exec.(*Cmd).Wait` → `pidfdWait` → `Waitid`, out of 80 goroutines in
+the process. Parked in a wait, so they cost scheduler bookkeeping and a stack, and no
+CPU.
+
+Twenty-nine, against the thirty clients section 3.1 counts, because the two readings
+are minutes apart and the count churns: `Restore` runs again on every detach, so a
+client is torn down and replaced during ordinary use. The controlled arm is what
+establishes the ratio — there, goroutines track clients exactly at N = 1, 5 and 15.
 
 ### 3.3 Arm D — the live drop
 
@@ -225,12 +230,14 @@ badly; it is host load being measured. These runs shared an 8-core laptop with t
 developer's own 28-session Atrium and its live agents, and the tmux server is
 single-threaded, so it competes for whatever is left.
 
-**So no per-client server figure is quoted here.** What survives two runs is a bound
-and a sign that will not settle: every per-client difference falls within ±0.7 s per
-15 s (±4.6 % of a core), and it is negative at N=1 in both. The negative is the one
-suggestive result — a client nobody drains would apply backpressure, stopping the
-server pushing, stopping it reading the pane, throttling the writer — but two runs
-cannot establish a mechanism, and this page does not claim one.
+**So no per-client server figure is quoted here.** The six per-client differences
+span **−3.84 s to +0.61 s per 15 s**, which is −25.6 % to +4.1 % of a core — a range
+wide enough that calling it a bound would flatter it. The one thing both runs agree
+on is the *sign at N=1*: negative, and by far the largest excursion either way. A
+client nobody drains would apply backpressure — stopping the server pushing, stopping
+it reading the pane, throttling the writer — and that asymmetry is consistent with it.
+Consistent is all it is: two runs on a busy host cannot establish a mechanism, and
+this page does not claim one.
 
 Resolving it needs a quiet host, which this was not. `scripts/measure-fanout.sh` is
 how; section 6's re-measure list says when it would be worth doing.
