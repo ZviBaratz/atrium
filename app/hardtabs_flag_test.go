@@ -7,6 +7,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/creack/pty"
@@ -55,9 +56,15 @@ func TestSuppressHardTabsMovesAndRestoresTheFlag(t *testing.T) {
 
 // TestSuppressHardTabsRestoreHealsAChildsTermios is what makes "the whole Oflag" above
 // more than a coincidence: nothing in that test moves any other bit, so a restore
-// narrowed to TABDLY alone passes it. Here a bit the fix never touches is cleared while
+// narrowed to TABDLY alone passes it. Here bits the fix never touches are cleared while
 // the suppression is in effect, standing in for a custom command that ran `stty -echo`
 // and died before putting it back.
+//
+// TWO fields, and the second is the point. ECHO lives in Lflag, so an Oflag-only
+// assertion leaves the `stty -echo` case this docstring names entirely unguarded —
+// measured, by narrowing the restore to write back Oflag alone, which the whole package
+// stayed green through. The claim is "the termios app.Run found", so the fixture has to
+// differ somewhere outside the word the fix moves.
 //
 // The heal is load-bearing because bubbletea does not do it. RestoreTerminal re-snapshots
 // its own restore state from term.MakeRaw inside initInput, so after an exec the state it
@@ -76,10 +83,22 @@ func TestSuppressHardTabsRestoreHealsAChildsTermios(t *testing.T) {
 	require.NotZero(t, before.Oflag&unix.OPOST,
 		"precondition: a fresh pty has OPOST on, so clearing it below is a real change")
 
-	restore := suppressHardTabs(tty)
+	require.NotZero(t, before.Lflag&unix.ECHO,
+		"precondition: a fresh pty has ECHO on, so clearing it below is a real change")
+
+	// The restore has to run mid-test, before the reads below, AND be guaranteed against
+	// a failing require between here and there: a leaked hardTabsAsFound stays set for
+	// the rest of the package and fails TestYieldHardTabsIsANoOpWhenNothingIsSuppressed
+	// as a cascade, which reports a second, confusing failure for the first one's sake.
+	// Once-only so the two spellings cannot both fire.
+	var once sync.Once
+	suppressed := suppressHardTabs(tty)
+	restore := func() { once.Do(suppressed) }
+	defer restore()
 
 	mangled := *before
 	mangled.Oflag &^= unix.OPOST
+	mangled.Lflag &^= unix.ECHO
 	require.NoError(t, unix.IoctlSetTermios(fd, setTermios, &mangled))
 
 	restore()
@@ -89,6 +108,9 @@ func TestSuppressHardTabsRestoreHealsAChildsTermios(t *testing.T) {
 	require.Equal(t, before.Oflag, after.Oflag,
 		"restore must put back the termios app.Run found, not only the field it moved — "+
 			"otherwise a child that mangled the tty and died hands the user's shell back broken")
+	require.Equal(t, before.Lflag, after.Lflag,
+		"including the fields the fix never touches: `stty -echo` in a custom command that "+
+			"died is the case the whole-word write exists for, and it is not in Oflag")
 }
 
 // TestSuppressHardTabsToleratesANonTerminal pins the degradation. A frame with

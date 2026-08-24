@@ -23,9 +23,10 @@ import (
 // restoreTerm is seamed because #375 stage C added the first test to drive the raw-mode
 // SUCCESS path (asserting a raw takeover does NOT borrow SIGINT), and a fake makeRaw has
 // no real *term.State to hand back. Unseamed, that test either nil-derefs inside
-// term.Restore or fabricates a zeroed State — and `go test` run from a terminal has that
-// terminal on stdin, so the fabricated one applies a zeroed termios to the developer's
-// own tty. The seam is the only spelling that is safe wherever the suite runs.
+// term.Restore or fabricates a zeroed State, which would apply a zeroed termios to
+// whatever stdin is. `go test` itself is safe from that — it hands the test binary
+// /dev/null — but a directly-run test binary or a debugger inherits the developer's own
+// tty. The seam is the only spelling that is safe wherever the suite runs.
 //
 // suspendInterrupt is seamed for the same reason one rung up: the alternative is a test
 // that raises a process-global SIGINT at the test binary.

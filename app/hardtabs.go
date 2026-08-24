@@ -60,6 +60,12 @@ func suppressHardTabs(f *os.File) (restore func()) {
 		// the last cooked child left — a custom command that ran `stty -echo` and died
 		// before restoring hands the user's shell back with echo off. Atrium's own defer
 		// is what heals that, and it can only heal what it saved.
+		//
+		// The cost, since a heal cannot tell a crash from an intention: a tty change the
+		// user made ON PURPOSE mid-session — `stty -ixon` typed into an interactive custom
+		// command to free Ctrl+S — is undone at quit too, where before it survived. The
+		// trade is deliberate. Handing a terminal back broken is the failure a user cannot
+		// diagnose; losing a setting they typed themselves is one they can.
 		_ = unix.IoctlSetTermios(fd, setTermios, before)
 		hardTabsAsFound = nil
 	}

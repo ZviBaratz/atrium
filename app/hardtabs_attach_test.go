@@ -89,9 +89,9 @@ func TestAttachCommandRun_RawKeepsHardTabs(t *testing.T) {
 // for. It needs the yield exactly as much as a cooked request does, so this branch is
 // keyed on the outcome and not on a.raw.
 //
-// Note the asymmetry with the SIGINT borrow three lines above it in Run, which is
-// deliberately NOT extended to rawModeFailed. That is a judgement about who should
-// receive a Ctrl+C; this is only a question of what the tty driver is doing.
+// Note the asymmetry with suspendInterrupt, whose own condition in Run is deliberately
+// NOT extended to rawModeFailed. That is a judgement about who should receive a Ctrl+C;
+// this is only a question of what the tty driver is doing.
 func TestAttachCommandRun_FailedRawYieldsHardTabs(t *testing.T) {
 	origIsTerminal, origMakeRaw := isTerminal, makeRaw
 	t.Cleanup(func() { isTerminal, makeRaw = origIsTerminal, origMakeRaw })

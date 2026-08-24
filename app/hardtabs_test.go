@@ -75,9 +75,14 @@ func renderThroughPTY(t *testing.T, frame string, w, h int, suppress bool) strin
 	//
 	// Registered with Cleanup as well, and made once-only so the two spellings cannot
 	// both fire. A require between here and the explicit call aborts the goroutine, and
-	// hardTabsAsFound would stay set for the rest of the package — where it is the sole
-	// thing keeping the untouched cooked cases in attach_rawmode_test.go from ioctl-ing
-	// the developer's own tty through the real yieldHardTabs.
+	// hardTabsAsFound would stay set for the rest of the package, where
+	// TestYieldHardTabsIsANoOpWhenNothingIsSuppressed asserts it is nil — one failure
+	// reported twice, the second time for a reason that has nothing to do with it.
+	//
+	// It does NOT reach the developer's tty. `go test` hands the test binary /dev/null on
+	// stdin (measured: a character device, and term.IsTerminal false on it), so the cooked
+	// cases in attach_rawmode_test.go that call the real yieldHardTabs bail at its first
+	// ioctl and write nothing.
 	restoreTabs := func() {}
 	if suppress {
 		var once sync.Once
