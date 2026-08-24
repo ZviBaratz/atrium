@@ -173,7 +173,11 @@ func TestAttachFanoutCost(t *testing.T) {
 			require.Equal(t, with.clients, with.ptmx,
 				"every attach client should hold exactly one pty master; a mismatch means classifyFD "+
 					"does not recognise this host's spelling of it")
-			require.Zero(t, without.ptmx, "dropping the clients must drop their pty masters")
+			// A bookkeeping self-check, not evidence about tmux: dropAttachClient closed
+			// these masters itself and checked each Close, so what this catches is
+			// countFDClasses failing to notice. The client count above is the assertion
+			// carrying the "the teardown really happened" weight.
+			require.Zero(t, without.ptmx, "the fd accounting must see the closed masters")
 
 			t.Log(with.row())
 			t.Log(without.row())
@@ -271,11 +275,17 @@ func measureArm(t *testing.T, arm string, sessions []*Session, window time.Durat
 
 	clientsBefore := attachClientPids(t)
 	serverPid := serverPidFor(t, sessions)
-
-	selfBefore, ok := readProcCost(os.Getpid())
-	require.True(t, ok, "%s: pricing the test process", arm)
 	serverBefore, serverOK := procCostOf(serverPid)
 	beforeByPid := costByPid(clientsBefore)
+
+	// Read self LAST of the "before" readings, immediately before the window opens.
+	// costByPid prices N clients — two procfs reads each — and any of that work done
+	// after this point lands inside the window it precedes. The with-clients arm has N
+	// clients to price and the control has none, so taking this reading first charges
+	// the with arm an N-proportional instrumentation cost that the control never pays,
+	// in the very column section 5 calls the noise floor.
+	selfBefore, ok := readProcCost(os.Getpid())
+	require.True(t, ok, "%s: pricing the test process", arm)
 
 	time.Sleep(window)
 
@@ -462,9 +472,17 @@ func (s fanoutSample) clientMemCell() string {
 // harness exists for — divided by the fleet size, so it reads as the cost of one
 // more session rather than of this particular fleet.
 func marginalRow(size int, mode string, with, without fanoutSample) string {
-	per := func(d time.Duration) time.Duration { return d / time.Duration(size) }
+	// Guarded like perInt and divBytes beside it. Unreachable while fanoutSizes
+	// requires a positive size, but a divisor that panics where its three siblings
+	// return is the kind of asymmetry a later caller inherits.
+	per := func(d time.Duration) time.Duration {
+		if size == 0 {
+			return d
+		}
+		return d / time.Duration(size)
+	}
 	return fmt.Sprintf("  -> per client at N=%d %s: ptmx %+d, epoll %+d, pidfd %+d, fds %+d, goroutines %+d, "+
-		"self_cpu %+v, srv_cpu %v, client_cpu %v, client_mem %s",
+		"self_cpu %v, srv_cpu %v, client_cpu %v, client_mem %s",
 		size, mode,
 		perInt(with.ptmx-without.ptmx, size),
 		perInt(with.eventPoll-without.eventPoll, size),

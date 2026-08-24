@@ -170,9 +170,19 @@ Two runs are shown because they disagree, and where they disagree matters more t
 either of them alone. Every object count and every zero above reproduced exactly.
 The `srv_cpu` column of the *active* arms did not — see section 4.
 
-Per client, from the with-minus-without difference. Every row above the rule is
-identical at N = 1, 5 and 15; the last row is the one that is not, and section 4
-takes it apart:
+Both runs predate one harness fix, and it is named here rather than left for someone
+to find by re-running: `self_cpu`'s "before" reading was taken before the harness
+priced the N clients, so the with-clients arm charged its own instrumentation into
+that column and the empty control did not. It biases nothing else — the object
+counts, the client CPU, the memory and the server CPU are all read independently of
+when the test process prices itself — and section 5 already declines to read anything
+into `self_cpu`. A re-run today produces the same table with a slightly smaller
+`self_cpu`.
+
+Per client, from the with-minus-without difference. The object counts and the client
+CPU reproduce **exactly** at N = 1, 5 and 15 and across both runs; the two rows above
+the rule that do not are marked, and the row below it is the one section 4 takes
+apart:
 
 | Axis | Per attach client |
 |---|---|
@@ -182,8 +192,8 @@ takes it apart:
 | goroutines | **+1** |
 | **epoll instances** | **+0** |
 | client CPU, idle or active | **0**, at a resolution of 10 ms over 15 s |
-| client Pss | **~1.0–1.1 MiB** at these sizes |
-| tmux-server CPU, idle pane | **0** |
+| client Pss | ~1.0–1.1 MiB — *not constant*: it falls as more clients share pages, 1.1 / 1.1 / 1.0 MiB at N = 1 / 5 / 15 |
+| tmux-server CPU, idle pane | 0 *within tick resolution* — the three readings are −10 ms, 0 and +0.7 ms per client |
 | — | — |
 | tmux-server CPU, active pane | **not measurable here** — the two runs disagree by 5.6× and do not share an ordering |
 
@@ -224,9 +234,11 @@ runs at identical parameters on the same commit:
 | N=15 | 12.17 s / 7.42 s → **+0.32 s** | 6.33 s / 5.49 s → **+0.06 s** |
 
 They disagree by 5.6× at N=15 and do not share an ordering: run A rises with N, run B
-peaks at N=5. The `without` column alone — the same arm, the same work, no clients
-at all — swings from 7.42 s to 12.31 s. That is not a per-client cost being measured
-badly; it is host load being measured. These runs shared an 8-core laptop with the
+peaks at N=5. The `without` column is the tell — the same arm, the same work, no
+clients at all — and at N=1 it reads 7.93 s in one run and 12.31 s in the other, a
+4.4 s spread on an arm where nothing under test is present. Across the column the
+readings run 4.84 s to 12.31 s. That is not a per-client cost being measured badly;
+it is host load being measured. These runs shared an 8-core laptop with the
 developer's own 28-session Atrium and its live agents, and the tmux server is
 single-threaded, so it competes for whatever is left.
 
@@ -342,6 +354,7 @@ scripts/measure-fanout.sh 1,10,30 20   # explicit sizes and window seconds
 ```
 
 The harness is opt-in (`ATRIUM_MEASURE_FANOUT=1`) and `just ci` skips it; what CI
-does run is `session/tmux/proccost_linux_test.go`, which holds the instrument — the
-procfs reader — to reading the right fields. The measurement being expensive is not
-a reason for the thing doing the measuring to be unguarded.
+does run is `session/tmux/proccost_guards_linux_test.go`, which holds the instrument
+— the procfs reader in `session/tmux/proccost_linux_test.go` — to reading the right
+fields. The measurement being expensive is not a reason for the thing doing the
+measuring to be unguarded.

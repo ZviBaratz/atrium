@@ -52,7 +52,8 @@ if ! command -v tmux >/dev/null 2>&1; then
   exit 1
 fi
 if [[ "$(uname -s)" != "Linux" ]]; then
-  echo "the measurement reads /proc, which only Linux has; see proccost_other.go" >&2
+  echo "the measurement reads /proc, which only Linux has (see the reader in" >&2
+  echo "session/tmux/proccost_linux_test.go); nothing to fall back to off Linux" >&2
   exit 1
 fi
 
