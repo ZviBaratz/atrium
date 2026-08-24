@@ -2205,18 +2205,27 @@ func (m *home) stashDirtyCreateForm() {
 }
 
 // cancelPromptOverlay cancels the prompt overlay.
+//
+// Every mutation here runs on the update loop, the menu reset included. It used
+// to ride a tea.Sequence element instead, which put it on a Cmd goroutine racing
+// the loop's own reads of the same menu (#527, absorbed by #794) — the standing
+// rule being that a tea.Cmd is a goroutine, so a Cmd computes and returns a
+// message and the handler applies it. There is nothing left to hand back here:
+// every caller is already on the loop, so the write belongs beside the state and
+// overlay resets above rather than behind a message that would only travel back
+// to this same goroutine.
+//
+// Ordering the reset before the resize rather than after it is not load-bearing.
+// The resize handler's only reach into the menu is SetSize, and the height it
+// passes comes from menuVisible, which switches on home.state — reset
+// synchronously above — not on the menu's own state.
 func (m *home) cancelPromptOverlay() tea.Cmd {
 	m.stashDirtyCreateForm()
 	m.textInputOverlay = nil
 	m.state = stateDefault
+	m.menu.SetState(ui.StateDefault)
 	m.resetTitleCheck()
-	return tea.Sequence(
-		tea.RequestWindowSize,
-		func() tea.Msg {
-			m.menu.SetState(ui.StateDefault)
-			return nil
-		},
-	)
+	return tea.RequestWindowSize
 }
 
 // killDataWarning returns a parenthetical suffix for the kill confirmation that

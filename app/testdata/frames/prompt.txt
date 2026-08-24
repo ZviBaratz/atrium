@@ -8,7 +8,7 @@
 │               │  Base: HEAD (current branch)                 │               │
 │               │  Title  name this session        (required)  │               │
 │               │  Prompt                                      │               │
-│               │  Optional — sent to the agent once it        │               │
+│               │  Optional (Enter or Tab to skip)             │               │
 │               │  Variants  → 1 session                       │               │
 │               │   ✻ claude ×1                                │               │
 │               │  Model                                       │               │

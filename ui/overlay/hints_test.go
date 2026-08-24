@@ -25,6 +25,12 @@ var hintLadders = map[string][]string{
 	"modelCustomHelp":       modelCustomHelp,
 	"variantFocusHelp":      variantFocusHelp,
 	"checkpointFooterHints": checkpointFooterHints,
+	// The prompt placeholder's two ladders. They are fitted by fitPlaceholder rather
+	// than fitHint, which is fitHint plus an ellipsizing tail — the rung selection
+	// these two tests are about is the same, so registering them here is what buys
+	// them the ordering and floor-budget guards (#690/#797).
+	"promptPlaceholderOptionalRungs": promptPlaceholderOptionalRungs,
+	"promptPlaceholderForkRungs":     promptPlaceholderForkRungs,
 }
 
 // TestFitHint_PicksWidestThatFits pins the helper's contract at its edges, because
