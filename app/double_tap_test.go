@@ -64,6 +64,18 @@ type doubleTapDialog struct {
 // (pauseSelected goes straight to beginAsyncAction), so there is nothing to double-tap.
 // Single resume is present only in its over-capacity form, the one branch of
 // resumeSelected that opens a dialog.
+//
+// Batch pause is PRESENT despite carrying the sharpest fact in the set — its message
+// is the only place a user is told that removing a worktree deletes gitignored files
+// like .env for good, and unlike kill there is no retention ref to undo it from. That
+// is not an oversight against the over-capacity exclusion just above, but the other
+// side of the same test. The over-capacity dialogs exist to state a fact the user
+// meets rarely and cannot anticipate, so a reflex confirm defeats their whole reason
+// to exist; pause is a verb the user runs constantly, whose repetition is the friction
+// #520 exists to relieve, and whose fact stays on screen at full size either way — a
+// double-tap shortens the motion, never the copy. The user who wants the second press
+// to cost more has one switch, double_tap_confirm, and it does not take the warning
+// with it. That asymmetry is the whole argument against #391's per-dialog opt-outs.
 func doubleTapDialogs() []doubleTapDialog {
 	return []doubleTapDialog{
 		{

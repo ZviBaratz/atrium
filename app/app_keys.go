@@ -845,8 +845,13 @@ func (m *home) pushSelected() (tea.Model, tea.Cmd) {
 	// that no row on screen shows: the commit (only when there is one to make) and the
 	// browser tab. Read off the cached diff stats, never a fresh git call — this is the
 	// UI thread, and GetDiffStats is the same poll-maintained snapshot killDataWarning
-	// keys off. A nil snapshot (never polled) reads as clean, which is the quiet answer:
-	// a clause promising a commit that does not happen is worse than a missing one.
+	// keys off. That snapshot lags: its dirty flag is cached for dirtyCacheTTL on top
+	// of the poll tick, so an edit made in the pane a moment before P can still read
+	// clean, exactly as a nil snapshot (never polled) does. Both err the same way, and
+	// that direction is the deliberate one: a clause promising a commit that does not
+	// happen is worse than a missing one, and the commit itself is unconditional in
+	// PushChanges either way. What the user loses to a stale read is the warning, not
+	// the work.
 	dirty := false
 	if stats := selected.GetDiffStats(); stats != nil {
 		dirty = stats.Dirty

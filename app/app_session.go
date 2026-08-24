@@ -2432,9 +2432,10 @@ func (m *home) applyKillDone(msg killDoneMsg) tea.Cmd {
 
 // confirmKill shows the kill-confirmation overlay for inst and stashes the
 // teardown action. inst need not be the selected instance: the in-session kill
-// key (Ctrl+X) and the auto-open path target a specific session regardless of
-// the current list selection, so the action keys on inst (and KillInstance)
-// rather than on whatever happens to be selected when the user confirms.
+// key (Ctrl+X) arrives here through attachFinishedMsg carrying the instance that
+// was ATTACHED, and the selection can have moved by the time the user detaches, so
+// the action keys on inst (and KillInstance) rather than on whatever happens to be
+// selected when the user confirms.
 func (m *home) confirmKill(inst *session.Instance) tea.Cmd {
 	if inst == nil || inst.GetStatus() == session.Loading {
 		return nil
@@ -2445,8 +2446,8 @@ func (m *home) confirmKill(inst *session.Instance) tea.Cmd {
 		message += killDataWarning(stats.Dirty, stats.Unpushed)
 	}
 	// The label names its object because this dialog need not target the SELECTED
-	// session: the in-session chord and the auto-open path both kill a specific one
-	// (see the doc above). pausing…/resuming… stay object-less for the opposite
+	// session: the in-session chord kills the session it was attached to, whatever
+	// the list highlights now (see the doc above). pausing…/resuming… stay object-less for the opposite
 	// reason — they always act on the highlighted row. Don't "fix" that asymmetry.
 	arm, action := m.armTeardown([]*session.Instance{inst}, killIOCmd(m, inst))
 	cmd := m.confirmAction(message, busyLabel(fmt.Sprintf("killing '%s'…", inst.DisplayName())), action)
@@ -2457,7 +2458,7 @@ func (m *home) confirmKill(inst *session.Instance) tea.Cmd {
 	m.confirmationOverlay.SetDestructive()
 	// A second press of the kill key confirms, so Ctrl+X Ctrl+X kills in one motion.
 	// The chord rather than a threaded key: this dialog also opens from the in-session
-	// key and the auto-open path, neither of which is a list keypress at all.
+	// Ctrl+X, by way of attachFinishedMsg, which is not a list keypress at all.
 	m.armDoubleTap(keys.KillKey())
 	return cmd
 }
