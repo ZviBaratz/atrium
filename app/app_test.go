@@ -816,7 +816,7 @@ func TestConfirmKillDoubleTapAltKey(t *testing.T) {
 	t.Run("toggle off leaves the alt key unset", func(t *testing.T) {
 		off := false
 		cfg := config.DefaultConfig()
-		cfg.KillDoubleTapConfirm = &off
+		cfg.DoubleTapConfirm = &off
 		h, inst := newHomeWithInstance(t, cfg)
 		h.confirmKill(inst)
 		require.NotNil(t, h.confirmationOverlay)

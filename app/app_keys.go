@@ -518,7 +518,17 @@ func (m *home) handleMultiSelectState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 	case "x":
 		// Plain x kills the marked set (the bar advertises "x"); ctrl+x (the global
 		// kill chord, KeyKill below) does the same. Each hands its own key to the
-		// confirmation so the double-tap is the key the user actually pressed.
+		// confirmation so the double-tap is the key the user actually pressed: the
+		// literal here because no registry Entry owns this "x", msg.String() below
+		// because the arm holds the keystroke and its siblings all forward theirs.
+		//
+		// Below it can only ever BE the kill key: "kill" is in attachedLayerActions,
+		// which keys.Apply refuses to bind to more than one key, because the attach
+		// layer forwards a single raw byte and a second alias would type itself into
+		// the agent's pane. So msg.String() and keys.KillKey() cannot diverge there —
+		// it is uniformity with the siblings, not a fix. Don't write the multi-key
+		// drift test for it; the binding it would need is rejected before it applies
+		// (keys/override.go, and the guard over that refusal in override_test.go).
 		return m, m.killMarked("x")
 	}
 
@@ -541,11 +551,11 @@ func (m *home) handleMultiSelectState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 		m.list.Down()
 		return m, m.instanceChanged()
 	case keys.KeyPause:
-		return m, m.pauseMarked()
+		return m, m.pauseMarked(msg.String())
 	case keys.KeyResume:
-		return m, m.resumeMarked()
+		return m, m.resumeMarked(msg.String())
 	case keys.KeyKill:
-		return m, m.killMarked(keys.KillKey())
+		return m, m.killMarked(msg.String())
 	default:
 		return m, nil
 	}
@@ -840,7 +850,24 @@ func (m *home) pushSelected() (tea.Model, tea.Cmd) {
 	}
 
 	// Show confirmation modal; the push runs off the UI thread only on confirm.
-	message := fmt.Sprintf("Push changes from session '%s'?", selected.DisplayName())
+	//
+	// The clause names the two things confirming does that the question does not, and
+	// that no row on screen shows: the commit (only when there is one to make) and the
+	// browser tab. Read off the cached diff stats, never a fresh git call — this is the
+	// UI thread, and GetDiffStats is the same poll-maintained snapshot killDataWarning
+	// keys off. That snapshot lags: its dirty flag is cached for dirtyCacheTTL on top
+	// of the poll tick, so an edit made in the pane a moment before P can still read
+	// clean, exactly as a nil snapshot (never polled) does. Both err the same way, and
+	// that direction is the deliberate one: a clause promising a commit that does not
+	// happen is worse than a missing one, and the commit itself is unconditional in
+	// PushChanges either way. What the user loses to a stale read is the warning, not
+	// the work.
+	dirty := false
+	if stats := selected.GetDiffStats(); stats != nil {
+		dirty = stats.Dirty
+	}
+	message := fmt.Sprintf("Push changes from session '%s'?%s",
+		selected.DisplayName(), pushConsequenceClause(dirty))
 	confirm := m.confirmWorktreeAction(message, "pushing…", selected, func(worktree *git.Worktree) tea.Msg {
 		// Default commit message with timestamp.
 		commitMsg := fmt.Sprintf("[atrium] update from '%s' on %s", selected.DisplayName(), time.Now().Format(time.RFC822))
@@ -849,13 +876,34 @@ func (m *home) pushSelected() (tea.Model, tea.Cmd) {
 		}
 		return pushedMsg{}
 	})
-	// Verb label only, deliberately scoped that way (#399). Note for whoever revisits
-	// this: PushChanges commits any uncommitted work first (with the auto message
-	// above) and then opens the branch in a browser, neither of which this question
-	// names — by the confirmation-voice rule in app_feedback.go that is a candidate
-	// clause, left out of a copy-only PR rather than decided silently.
 	m.confirmationOverlay.SetConfirmLabel("push")
+	m.armDoubleTap(keys.PrimaryKey(keys.KeySubmit))
 	return m, confirm
+}
+
+// pushConsequenceClause is the parenthetical on the push confirmation: what
+// confirming does beyond pushing, and that the session row cannot show (#469).
+//
+// Two effects, one of them conditional. PushChanges commits any uncommitted work
+// first, under a generated message the user never sees and cannot edit — a no-op on a
+// clean worktree, so the surprise lands exactly on the user who had work in progress,
+// and the clause appears exactly there. Then it opens the branch in a browser, which
+// happens every time and is named every time.
+//
+// It borrows killDataWarning's data and its question-first-with-a-parenthetical shape
+// — the confirmation-voice rule in app_feedback.go, and #469's preferred option of the
+// three it offered — but not its risk-only rule: killDataWarning's whole clause
+// vanishes when nothing is at risk, and this one never can, because the browser tab
+// opens on every push. Only the commit half is conditional.
+//
+// It says "your uncommitted work" rather than naming the commit message: the message
+// is `[atrium] update from '<name>' on <time>`, and quoting it would cost two rendered
+// lines to tell the user something they cannot act on from inside the dialog.
+func pushConsequenceClause(dirty bool) string {
+	if dirty {
+		return " (commits your uncommitted work first, then opens the branch in your browser)"
+	}
+	return " (opens the branch in your browser)"
 }
 
 // mergeSelected confirms and squash-merges the selected session's open PR, gated
@@ -898,6 +946,7 @@ func (m *home) mergeSelected() (tea.Model, tea.Cmd) {
 		return prMergedMsg{number: number, instance: selected}
 	})
 	m.confirmationOverlay.SetConfirmLabel(fmt.Sprintf("merge PR #%d", number))
+	m.armDoubleTap(keys.PrimaryKey(keys.KeyMerge))
 	return m, confirm
 }
 
@@ -950,6 +999,7 @@ func (m *home) createPRForSelected() (tea.Model, tea.Cmd) {
 	// The label names only what this action does: CreateBlockedReason above already
 	// refused an unpushed branch, so the PR is all that gets created here (#399).
 	m.confirmationOverlay.SetConfirmLabel("create the PR")
+	m.armDoubleTap(keys.PrimaryKey(keys.KeyCreate))
 	return m, confirm
 }
 

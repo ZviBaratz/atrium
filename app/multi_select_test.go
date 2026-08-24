@@ -110,7 +110,7 @@ func TestMultiSelect_PauseConfirmsPausableSubset(t *testing.T) {
 	// The literal itself is pinned once, in dialog_voice_test.go; what this test is
 	// about is that `p` opened the pause dialog over the right kind and count.
 	assert.Contains(t, rendered, pauseConfirmMessage("marked", 2))
-	assert.Contains(t, rendered, "Press y to pause 2 sessions, n or esc to cancel")
+	assert.Contains(t, rendered, "Press y (or p) to pause 2 sessions, n or esc to cancel")
 }
 
 // r confirms over only the *paused* subset of the marked set.
@@ -128,7 +128,7 @@ func TestMultiSelect_ResumeConfirmsPausedSubset(t *testing.T) {
 	require.Equal(t, stateConfirm, h.state)
 	rendered := flattenOverlay(h.confirmationOverlay.Render())
 	assert.Contains(t, rendered, resumeConfirmMessage("marked", 1))
-	assert.Contains(t, rendered, "Press y to resume 1 session, n or esc to cancel")
+	assert.Contains(t, rendered, "Press y (or r) to resume 1 session, n or esc to cancel")
 }
 
 // x confirms over the killable subset and wears the danger border (kill is the
@@ -232,7 +232,7 @@ func TestMultiSelect_KillDoubleTapEchoesTheOpeningKey(t *testing.T) {
 	t.Run("with the toggle off neither key confirms", func(t *testing.T) {
 		off := false
 		cfg := config.DefaultConfig()
-		cfg.KillDoubleTapConfirm = &off
+		cfg.DoubleTapConfirm = &off
 		h := openWith(t, func(h *home) { h.appConfig = cfg; pressRune(h, 'x') })
 
 		assert.Equal(t, "", h.confirmationOverlay.ConfirmAltKey)
