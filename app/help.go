@@ -456,16 +456,16 @@ func (m *home) handleHelpState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // closeTextOverlay dismisses the modal text overlay (help or info) and
 // restores the default state. Shared by every dismissal path: any-key from
 // the help and info states, and a click outside the box.
+//
+// The menu reset runs here on the update loop, for the reason cancelPromptOverlay
+// documents at length: a tea.Cmd is a goroutine, so a menu write inside one races
+// the loop's own reads of the same field (#527, absorbed by #794). Every caller is
+// already on the loop, so there is no message to hand back.
 func (m *home) closeTextOverlay() (tea.Model, tea.Cmd) {
 	m.textOverlay.Dismiss()
 	m.state = stateDefault
-	return m, tea.Sequence(
-		tea.RequestWindowSize,
-		func() tea.Msg {
-			m.menu.SetState(ui.StateDefault)
-			return nil
-		},
-	)
+	m.menu.SetState(ui.StateDefault)
+	return m, tea.RequestWindowSize
 }
 
 // textOverlayContains reports whether the screen cell (x, y) falls inside the

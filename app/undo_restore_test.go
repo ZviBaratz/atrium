@@ -386,6 +386,62 @@ func TestASuccessfulRestoreReleasesTheRetainedBranch(t *testing.T) {
 		"the retained branch must be released with the record, or nothing can ever release it")
 }
 
+// TestAFailedRestoreDoesNotStrandTheBranchItRecreated. restoreOne recreates the killed
+// branch from the retention ref and then calls Resume. When Resume fails, what this call
+// created has to go back with it, and the branch is the sharp half.
+//
+// Resume soft-resets the tip off pause's auto-commit before it launches, so a branch left
+// behind by a failed restore sits at a SHA the entry does not name — and restoreBlocker
+// answers "has moved on since" to every later attempt at that entry. The record outlives
+// the in-memory refusal one run keeps, so that wedge is permanent: a failure the user
+// could simply retry becomes one only `git branch` undoes. The worktree Resume may have
+// materialized goes the same way, and nothing else would ever reach it — the instance is
+// never added to the list, so it has no row to park or kill.
+//
+// This is also the one rollback whose branch really is disposable, which is why it lives
+// here and not in recreateSession, where #741 removed it: e.Ref still points at the same
+// commits, so `branch -D` costs nothing. The ref assertion is what pins that — a teardown
+// that took the ref as well would leave nothing to restore FROM.
+//
+// The fixture stops Resume at the worktree, which is deterministic and needs no tmux
+// server. That is short of the unwind, so the tip never moves here and a surviving branch
+// would still match e.SHA: what discriminates in this test is the branch EXISTING, which
+// is the fact the rollback owns. Removing the unwindFailedRestore call makes it fail.
+func TestAFailedRestoreDoesNotStrandTheBranchItRecreated(t *testing.T) {
+	entry, repo := retainedRepo(t, "fix-auth")
+
+	// A regular file where the worktree has to go, so Resume cannot validate one there
+	// and gives up. A launch failure's shape without needing a tmux server to refuse.
+	blocked := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(blocked, []byte("a file where a directory must be\n"), 0o644))
+
+	snapshot, err := json.Marshal(session.InstanceData{
+		Title: "fix-auth", Path: repo, Branch: entry.Branch, Program: "claude",
+		Worktree: session.GitWorktreeData{
+			RepoPath:     repo,
+			WorktreePath: filepath.Join(blocked, "wt-fix-auth"),
+			SessionName:  "fix-auth",
+			BranchName:   entry.Branch,
+		},
+	})
+	require.NoError(t, err)
+	entry.Snapshot = snapshot
+
+	h := undoHome(t)
+	h.ctx = context.Background()
+	require.Empty(t, h.restoreBlocker(entry, nil), "precondition: the entry starts restorable")
+
+	_, err = h.restoreOne(entry, "zvi/")
+	require.Error(t, err, "the fixture must not be able to bring the session back")
+
+	_, exists := git.BranchTip(context.Background(), repo, entry.Branch)
+	require.False(t, exists,
+		"the failed restore left behind the branch it recreated, which is what wedges every later undo of this entry")
+	_, refStillThere := git.RefExists(context.Background(), repo, entry.Ref)
+	require.True(t, refStillThere,
+		"and the retention ref must survive the unwind, or there is nothing left to restore from")
+}
+
 // TestHandleUndoDoneFlashesEverythingTheRestoreOwesTheUser. The notice builders are
 // pure and separately pinned; this is the wire between them and the screen, and it
 // is the only thing that makes README's promise ("the notice after the restore says

@@ -11,6 +11,7 @@ import (
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/internal/undo"
 	"github.com/ZviBaratz/atrium/keys"
+	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/session/tmux"
@@ -113,6 +114,7 @@ func (m *home) restoreOne(e undo.Entry, branchPrefix string) (*session.Instance,
 		return nil, fmt.Errorf("its record could not be read: %w", err)
 	}
 
+	recreatedBranch := false
 	if !e.Direct {
 		// Recreate the branch only when it is actually gone. A session flagged as
 		// sitting on a pre-existing branch never lost it, and restoreBlocker has
@@ -121,6 +123,7 @@ func (m *home) restoreOne(e undo.Entry, branchPrefix string) (*session.Instance,
 			if err := git.CreateBranchAt(m.ctx, e.RepoPath, e.Branch, e.Ref); err != nil {
 				return nil, fmt.Errorf("its branch could not be recreated: %w", err)
 			}
+			recreatedBranch = true
 		}
 	}
 
@@ -129,9 +132,46 @@ func (m *home) restoreOne(e undo.Entry, branchPrefix string) (*session.Instance,
 		return nil, fmt.Errorf("its session could not be rebuilt: %w", err)
 	}
 	if err := inst.Resume(); err != nil {
+		if recreatedBranch {
+			m.unwindFailedRestore(inst, e)
+		}
 		return nil, err
 	}
 	return inst, nil
+}
+
+// unwindFailedRestore tears down what a failed restore built, so the journal entry it
+// came from stays restorable.
+//
+// This is the rollback #741 took out of recreateSession, in the one place its argument
+// is true. There the branch was always the session's history; here this call recreated it
+// from e.Ref seconds ago and e.Ref still points at the same commits, so deleting it loses
+// nothing — which is why the gate is recreatedBranch rather than "we have a worktree".
+//
+// Leaving it is what costs. Resume soft-resets the tip off pause's auto-commit before it
+// launches, so a branch abandoned here sits at a SHA the entry does not name, and
+// restoreBlocker answers every later attempt with "has moved on since" — permanently,
+// since the entry outlives the in-memory refusal a single run records. A failure the user
+// could retry would become one only `git branch` can undo. The same teardown takes the
+// worktree Resume may have materialized, which nothing else would: the instance is never
+// added to the list, so no row, no park and no kill will ever reach it.
+//
+// Bounded to the branch this call created. A session restored onto a branch kill never
+// deleted takes the same soft reset and wedges the same way, but that branch is the
+// user's and deleting it is not ours to do; Cleanup declines it on the same flag
+// (isExistingBranch), and the case pre-dates this.
+//
+// Best-effort and unreported: the restore has already failed, and that failure is the
+// error the user is being shown.
+func (m *home) unwindFailedRestore(inst *session.Instance, e undo.Entry) {
+	wt, err := inst.GetGitWorktree()
+	if err != nil {
+		log.WarningLog.Printf("undo %s: cannot resolve the worktree of a failed restore: %v", e.Title, err)
+		return
+	}
+	if err := wt.Cleanup(); err != nil {
+		log.WarningLog.Printf("undo %s: cannot unwind a failed restore: %v", e.Title, err)
+	}
 }
 
 // restoreBlocker reports why e cannot be restored right now, or "" when it can.
@@ -390,8 +430,8 @@ func restoredNotice(instances []*session.Instance, entries []undo.Entry, freshAg
 // either as fresh would announce a loss on the strength of not having checked,
 // which is the same coin-flip-printed-as-fact the confirmation copy refuses.
 //
-// A package-level var — the repo's existing seam idiom (worktreeCleanup,
-// checkGHCLI) — because the fields it reads are written only by a real relaunch,
+// A package-level var — this package's own seam idiom (checkDrift, detectAgents) —
+// because the fields it reads are written only by a real relaunch,
 // so it returns 0 for every instance a test can build by hand. Without something
 // to inject, nothing could prove handleUndoDone passes this count rather than a
 // literal 0, and the clause it feeds could be switched off with the suite green.
