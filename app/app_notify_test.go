@@ -98,14 +98,14 @@ func TestNotifyStateThrottle(t *testing.T) {
 	st := &notifyState{}
 	// First of each edge passes; an immediate repeat of the same edge is throttled;
 	// the other edge is tracked independently.
-	require.False(t, st.throttled(notify.EventFinished, notifyThrottle), "first finish passes")
-	require.True(t, st.throttled(notify.EventFinished, notifyThrottle), "immediate second finish is throttled")
-	require.False(t, st.throttled(notify.EventNeedsInput, notifyThrottle), "needs-input has its own budget")
-	require.True(t, st.throttled(notify.EventNeedsInput, notifyThrottle), "immediate second needs-input is throttled")
+	require.False(t, st.throttled(notify.EventFinished, notifyThrottleWindow()), "first finish passes")
+	require.True(t, st.throttled(notify.EventFinished, notifyThrottleWindow()), "immediate second finish is throttled")
+	require.False(t, st.throttled(notify.EventNeedsInput, notifyThrottleWindow()), "needs-input has its own budget")
+	require.True(t, st.throttled(notify.EventNeedsInput, notifyThrottleWindow()), "immediate second needs-input is throttled")
 
 	// After the throttle window elapses, the edge fires again.
-	st.lastFinished = time.Now().Add(-2 * notifyThrottle)
-	require.False(t, st.throttled(notify.EventFinished, notifyThrottle), "finish passes again once the window elapsed")
+	st.lastFinished = time.Now().Add(-2 * notifyThrottleWindow())
+	require.False(t, st.throttled(notify.EventFinished, notifyThrottleWindow()), "finish passes again once the window elapsed")
 }
 
 // newNotifyHome builds a home with a bell notifier writing to buf, a real list, and an
@@ -325,7 +325,7 @@ func TestMaybeNotifyThrottleStaysKeyedOnEvent(t *testing.T) {
 	finishOnce(h, target)
 	require.Equal(t, "\a", buf.String(), "the finish rings")
 
-	// Well inside notifyThrottle, but a different event, so it keeps its own budget.
+	// Well inside the default throttle window, but a different event, so it keeps its own budget.
 	blockEdge(h, target, config.NotificationsBell)
 	require.Equal(t, "\a\a", buf.String(), "the block has its own throttle budget")
 }
@@ -607,7 +607,7 @@ func TestMaybeNotifyQuestionHasItsOwnThrottleBudget(t *testing.T) {
 	require.NotEmpty(t, buf.String(), "the first finish rings and spends the finish budget")
 	buf.Reset()
 
-	// Positive control: a second finish inside notifyThrottle is swallowed, so the
+	// Positive control: a second finish inside the default throttle window is swallowed, so the
 	// throttle demonstrably applies on this path.
 	target.SetStatus(session.Running)
 	finishEdge(h, target, false, config.NotificationsBell)

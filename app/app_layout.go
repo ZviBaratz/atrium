@@ -383,9 +383,10 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 			m.list.SetContextThresholds(m.appConfig.GetContextWarnPercent(), m.appConfig.GetContextDangerPercent())
 		}
 	case "pending_watchdog_minutes":
-		// The cap lives in the session package, which owns the reconciliation; the
-		// running poll goroutines pick the new value up on their next Pending poll.
-		session.SetPendingWatchdog(time.Duration(m.appConfig.GetPendingWatchdogMinutes()) * time.Minute)
+		// The cap lives in the session package, which owns the reconciliation, and is
+		// read on each applyPending rather than captured — so the next Pending poll
+		// uses the new value with nothing here to re-arm.
+		session.SetPendingWatchdog(m.appConfig.PendingWatchdogOverride())
 	case "os_chrome":
 		// Recompute now rather than waiting a tick: enabling shows the current fleet
 		// on the next frame, and disabling zeroes the title and bar, which the

@@ -105,3 +105,51 @@ func TestContextWarnRowRefusesInversion(t *testing.T) {
 	require.NoError(t, danger.set(cfg, "30"), "lowering danger under the stored warn is allowed")
 	assert.Equal(t, 30, cfg.GetContextWarnPercent(), "and the accessor holds warn under it")
 }
+
+// TestWarnRowIsNotMarkedModifiedBySibling covers the one row here whose displayed value
+// another field can move. Lowering context_danger_percent collapses the warn band onto it,
+// so the warn row's effective value diverges from its advertised default while the user has
+// touched nothing — and the plain value comparison isModified would otherwise make reads
+// that as "changed from default".
+//
+// The marker is not cosmetic in that state: the way back is `r`, whose reset clears a field
+// that is already clear. A user would press it, watch nothing happen, and press it again.
+//
+// TestNoRowIsModifiedOnAFreshConfig and TestResetRestoresTheDefault both start from a
+// default config, where the two bands are ordered and the collapse never fires, so neither
+// can see this.
+func TestWarnRowIsNotMarkedModifiedBySibling(t *testing.T) {
+	cfg := config.DefaultConfig()
+	o := NewSettingsOverlay(cfg)
+
+	warn := rowIndex(t, o, "context_warn_percent")
+	require.False(t, o.isModified(warn), "an untouched pair is not modified")
+
+	// 40 is below the built-in warn band, so the collapse fires.
+	low := 40
+	cfg.ContextDangerPercent = &low
+	require.Equal(t, low, cfg.GetContextWarnPercent(),
+		"fixture check: the warn band must actually have collapsed, or this proves nothing")
+	assert.False(t, o.isModified(warn),
+		"a warn band moved by its sibling is not a value the user changed")
+	assert.True(t, o.isModified(rowIndex(t, o, "context_danger_percent")),
+		"the field the user DID set is still marked — the gate must not suppress both")
+
+	// And the marker still works for its own field, so the gate is not a blanket off switch.
+	half := 20
+	cfg.ContextWarnPercent = &half
+	assert.True(t, o.isModified(warn), "a warn band the user set is marked")
+}
+
+// rowIndex finds a row's position in the overlay's own slice, which is what isModified
+// takes — rowByKey returns the row itself and cannot answer for the overlay.
+func rowIndex(t *testing.T, o *SettingsOverlay, key string) int {
+	t.Helper()
+	for i, r := range o.rows {
+		if r.key == key {
+			return i
+		}
+	}
+	t.Fatalf("no row keyed %q", key)
+	return -1
+}

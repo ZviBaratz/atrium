@@ -205,10 +205,14 @@ func (s *SettingsOverlay) SetRailIndex(i int) {
 
 // isModified reports whether row i's value differs from its built-in default, for
 // the "changed from default" marker. A row with no fixed default (see
-// settingRow.defaultDisplay) is never modified.
+// settingRow.defaultDisplay) is never modified, and neither is one whose modifiedWhen
+// says the divergence came from a sibling field rather than from the user.
 func (s *SettingsOverlay) isModified(i int) bool {
 	row := s.rows[i]
 	if row.defaultDisplay == nil {
+		return false
+	}
+	if row.modifiedWhen != nil && !row.modifiedWhen(s.cfg) {
 		return false
 	}
 	return row.get(s.cfg) != row.defaultDisplay()

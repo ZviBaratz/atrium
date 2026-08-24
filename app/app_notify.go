@@ -8,18 +8,6 @@ import (
 	"github.com/ZviBaratz/atrium/session"
 )
 
-// notifyThrottle is the DEFAULT minimum spacing between two notifications of the same
-// edge for the same session. Edges already fire only on status transitions, so this only
-// guards a markerless agent's classifier flapping (e.g. prompt detection flipping
-// NeedsInput↔Running); it is deliberately coarse.
-//
-// Since #799 the spacing is user-configurable (config.GetNotifyThrottleSeconds), and
-// throttled() takes it as a parameter rather than reading config, so the value is
-// resolved once per edge on the main Update thread. This constant remains what an unset
-// config resolves to, asserted against config.DefaultNotifyThrottleSeconds so the two
-// cannot drift apart.
-const notifyThrottle = 3 * time.Second
-
 // notifyState tracks a single instance's notification bookkeeping: the last time
 // each edge was signalled, for throttling. Its mere presence in home.notifySeen also
 // means "this instance has been observed at least once" — the first-observation gate.

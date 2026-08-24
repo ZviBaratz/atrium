@@ -2,6 +2,7 @@ package config
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -146,15 +147,44 @@ func TestCadenceDefaultsMatchTheirExportedReaders(t *testing.T) {
 // self-comparison cannot notice a default being "tidied" to a rounder number — which is
 // precisely what a mutation of each of these survived until this test existed.
 //
-// Two of these defaults have a live twin elsewhere, and neither twin is asserted here:
-// app.notifyThrottle (TestNotifyThrottleDefaultMatchesConfig, in app) and ui's
-// contextWarnPct/contextDangerPct fallback (TestContextDefaultsMatchTheConfigAccessors, in
-// ui). Both guards live in the package holding the twin, because that is the package that
-// can see it.
+// One of these defaults still has a live twin elsewhere and is not asserted here: ui's
+// contextWarnPct/contextDangerPct fallback, held by TestContextDefaultsMatchTheConfigAccessors
+// in ui, because that is the package that can see it. app once held a second throttle
+// constant; it was deleted rather than pinned, since nothing outside a test read it.
 func TestCadenceDefaultsReproduceThePreConfigConstants(t *testing.T) {
 	assert.Equal(t, 3, DefaultNotifyThrottleSeconds())
 	assert.Equal(t, 75, DefaultContextWarnPercent())
 	assert.Equal(t, 90, DefaultContextDangerPercent())
 	assert.Equal(t, 30, DefaultPendingWatchdogMinutes())
 	assert.Equal(t, 15, DefaultDiffRefreshSeconds())
+}
+
+// TestPendingWatchdogOverrideDistinguishesUnset is the guard the ladder needs and the
+// clamp table cannot give it. GetPendingWatchdogMinutes answers "what cap is in force",
+// which is never zero; PendingWatchdogOverride answers "did the user ask for one", which
+// must be zero when they did not.
+//
+// Conflating the two is not a rounding error in the value — it silently deletes a rung.
+// session.SetPendingWatchdog treats any positive value as the user's opinion, so an
+// installer fed the accessor pins every session at 30 minutes and no adapter override can
+// ever run. That is the defect this method exists to make unrepresentable.
+func TestPendingWatchdogOverrideDistinguishesUnset(t *testing.T) {
+	assert.Zero(t, (&Config{}).PendingWatchdogOverride(),
+		"an unset field must install nothing, so the adapter rung stays reachable")
+	assert.Zero(t, (*Config)(nil).PendingWatchdogOverride(), "a nil Config expresses no opinion either")
+
+	// Deliberately not DefaultPendingWatchdogMinutes: a user who types the default HAS
+	// expressed an opinion, and it must outrank an adapter exactly as any other value does.
+	def := DefaultPendingWatchdogMinutes()
+	assert.Equal(t, time.Duration(def)*time.Minute, (&Config{PendingWatchdogMinutes: intp(def)}).PendingWatchdogOverride(),
+		"a value equal to the default is still a value")
+
+	assert.Equal(t, 7*time.Minute, (&Config{PendingWatchdogMinutes: intp(7)}).PendingWatchdogOverride(),
+		"the field is minutes — a seconds or milliseconds reading would be off by orders of magnitude")
+
+	// The accessor's clamp is what makes a hand-edited 0 safe: read literally, a zero cap
+	// would reconcile every Pending row on its first poll. It must clamp to the floor
+	// rather than fall through to "unset", which would be a second meaning for one value.
+	assert.Equal(t, 1*time.Minute, (&Config{PendingWatchdogMinutes: intp(0)}).PendingWatchdogOverride(),
+		"a hand-edited 0 is a request for the floor, not an absence")
 }

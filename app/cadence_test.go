@@ -12,7 +12,6 @@ import (
 	"github.com/ZviBaratz/atrium/ui/theme"
 
 	"charm.land/lipgloss/v2"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -39,7 +38,7 @@ func TestNotifyThrottleHonoursTheConfiguredWindow(t *testing.T) {
 		require.False(t, st.throttled(notify.EventFinished, time.Hour), "first edge passes")
 		// Older than the built-in window, so the default would let this through; the
 		// configured hour must not.
-		st.lastFinished = time.Now().Add(-2 * notifyThrottle)
+		st.lastFinished = time.Now().Add(-2 * notifyThrottleWindow())
 		require.True(t, st.throttled(notify.EventFinished, time.Hour),
 			"a window longer than the default is what decides")
 	})
@@ -50,9 +49,9 @@ func TestNotifyThrottleHonoursTheConfiguredWindow(t *testing.T) {
 		// after the stamp is set, so the difference is never exactly the window. That
 		// boundary is unreachable through this API rather than untested.
 		st := &notifyState{}
-		require.False(t, st.throttled(notify.EventFinished, notifyThrottle))
-		st.lastFinished = time.Now().Add(-notifyThrottle)
-		require.False(t, st.throttled(notify.EventFinished, notifyThrottle),
+		require.False(t, st.throttled(notify.EventFinished, notifyThrottleWindow()))
+		st.lastFinished = time.Now().Add(-notifyThrottleWindow())
+		require.False(t, st.throttled(notify.EventFinished, notifyThrottleWindow()),
 			"the window has elapsed, so the edge is due")
 	})
 
@@ -63,18 +62,21 @@ func TestNotifyThrottleHonoursTheConfiguredWindow(t *testing.T) {
 		require.False(t, st.throttled(notify.EventFinished, time.Nanosecond),
 			"a millisecond gap clears a nanosecond window")
 		st.lastFinished = time.Now().Add(-time.Millisecond)
-		require.True(t, st.throttled(notify.EventFinished, notifyThrottle),
+		require.True(t, st.throttled(notify.EventFinished, notifyThrottleWindow()),
 			"positive control: the same gap is still inside the default window")
 	})
 }
 
-// TestNotifyThrottleDefaultMatchesConfig pins the constant against the config default. The
-// constant is what an unset config resolves to, and the two live in different packages —
-// exactly the drift nothing else here would notice.
-func TestNotifyThrottleDefaultMatchesConfig(t *testing.T) {
-	assert.Equal(t, notifyThrottle,
-		time.Duration(config.DefaultNotifyThrottleSeconds())*time.Second,
-		"the app's built-in throttle and config's default must be one value")
+// notifyThrottleWindow is the spacing an unset notify_throttle_seconds resolves to, for the
+// tests that need a window they can step either side of.
+//
+// It is read from config rather than declared here. app used to hold its own 3-second
+// constant; since #799 nothing in the app reads it — maybeNotify derives the window from
+// config on every edge — so a second literal would be a mirror of a value config owns,
+// and the guard pinning them together would fail a legitimate change to the default
+// instead of propagating it.
+func notifyThrottleWindow() time.Duration {
+	return time.Duration(config.DefaultNotifyThrottleSeconds()) * time.Second
 }
 
 // TestDiffContentDueHonoursTheConfiguredFloor pins that the staleness bound is the caller's
@@ -211,19 +213,32 @@ func TestContextThresholdsApplyLive(t *testing.T) {
 // is the session package rather than the list. session.PendingWatchdog is the setter's
 // counterpart, so what is asserted is the value actually in force for every caller that
 // reaches applyPending — this loop, the attach keeper's goroutine, and the daemon.
+//
+// The unconfigured rungs are asserted as ZERO, and that is the load-bearing half. A cap
+// installed for a user who never asked for one is not a harmless default: it is positive,
+// so session's ladder stops at its first rung and agent.Adapter.PendingWatchdog can never
+// run again. Seeding the accessor's value here — the obvious spelling — is exactly that
+// defect, and every assertion about a CONFIGURED cap passes under it.
 func TestPendingWatchdogAppliesLive(t *testing.T) {
 	t.Cleanup(func() { session.SetPendingWatchdog(0) })
 	h, cfg := contextHome(t, config.ContextIndicatorPercent)
 
-	require.Equal(t, time.Duration(config.DefaultPendingWatchdogMinutes())*time.Minute,
-		session.PendingWatchdog(),
-		"assembleHome seeds the cap, so an unconfigured launch installs the default rather than nothing")
+	require.Zero(t, session.PendingWatchdog(),
+		"an unconfigured launch installs nothing, leaving the adapter rung reachable")
 
 	mins := 7
 	cfg.PendingWatchdogMinutes = &mins
 	_ = h.applySettingChange("pending_watchdog_minutes")
 	require.Equal(t, 7*time.Minute, session.PendingWatchdog(),
 		"the configured cap is installed on the package that runs the watchdog, live")
+
+	// Reset is the path back. It clears the field rather than writing the default, so the
+	// install must clear too — otherwise resetting a row leaves the fleet pinned at 30
+	// minutes with nothing in config.json to explain it.
+	cfg.PendingWatchdogMinutes = nil
+	_ = h.applySettingChange("pending_watchdog_minutes")
+	require.Zero(t, session.PendingWatchdog(),
+		"clearing the row hands the decision back to the adapter, live")
 }
 
 // TestMaybeNotifyHonoursTheConfiguredThrottle drives the whole notification path rather

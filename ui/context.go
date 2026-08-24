@@ -164,21 +164,23 @@ func contextLevel(pct, rungs int) int {
 	return idx
 }
 
-// contextColor returns the chip's colour. Dim until the window is three
-// quarters gone, Attention past that, Danger near the ceiling — so "which
-// session is about to compact?" is answerable by scanning rather than reading
-// every row. The number carries the same signal, so colour is reinforcement and
-// never the only channel.
+// contextColor returns the chip's colour: Dim below the warn band, Attention between
+// the two, Danger at or above the danger band — so "which session is about to compact?"
+// is answerable by scanning rather than reading every row. The number carries the same
+// signal, so colour is reinforcement and never the only channel.
+//
+// warn and danger are the configured bands (config.GetContextWarnPercent and its
+// danger twin, exposed by #799); either at zero falls back to this package's own
+// default, which contextBands owns.
 //
 // A count (unknown model) always stays dim: without a ceiling there is nothing
 // to be near, and a raw number must not imply urgency it cannot know about.
 //
 // So does every cost chip, for the same reason written larger. Occupancy has a
-// ceiling, so "three quarters gone" is a fact about the session. Spend has none:
-// $5 is alarming on one plan and rounding on another, and any threshold Atrium
-// picked would be a guess dressed as a warning. The number is the whole signal.
-// warn and danger are the configured bands; either at zero falls back to the
-// package default (see contextBands).
+// ceiling, so how far through the window a session has got is a fact about it. Spend has
+// none: $5 is alarming on one plan and rounding on another, and any threshold Atrium
+// picked would be a guess dressed as a warning. The number is the whole signal — which
+// is also why the bands above are a preference worth exposing and a cost band is not.
 func contextColor(th *theme.Theme, u transcript.Usage, mode string, warn, danger int) theme.Color {
 	if mode == contextModeCost {
 		return th.Palette.FgDim

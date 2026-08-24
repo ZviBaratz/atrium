@@ -1766,7 +1766,7 @@ func (i *Instance) ApplyPaneState(state tmux.PaneState) (tapped bool) {
 		// backstops one failure — a SubagentStop that never fired, leaving a latched id stuck
 		// forever — and a footer chip cannot fail that way: it is re-scraped every poll and
 		// gone the moment the work exits. Expiring it would re-commit the exact "done while
-		// still working" bug this state exists to fix, at the 30-minute mark, and a persistent
+		// still working" bug this state exists to fix once the cap elapsed, and a persistent
 		// Monitor legitimately runs for the whole session. A dead pane is still caught by
 		// tmux liveness (PaneDead) before the pane is ever classified.
 		//

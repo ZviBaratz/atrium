@@ -29,6 +29,8 @@ package config
 // Adding a fifth knob is a decision to record, not a drive-by: it belongs in a
 // program design record, the way these four do.
 
+import "time"
+
 // Cadence knob defaults and bounds. Each is the value the corresponding
 // hardcoded constant held before it became configurable, so an unset config
 // reproduces the pre-#799 behaviour exactly.
@@ -143,4 +145,21 @@ func (c *Config) GetDiffRefreshSeconds() int {
 		return defaultDiffRefreshSeconds
 	}
 	return clampInt(*c.DiffRefreshSeconds, 1, maxDiffRefreshSeconds)
+}
+
+// PendingWatchdogOverride returns the user's Pending cap as a duration, or 0 when
+// pending_watchdog_minutes is unset.
+//
+// It is deliberately not GetPendingWatchdogMinutes. That accessor resolves an absent
+// field to the built-in 30 minutes, so a caller that installed its result would call
+// session.SetPendingWatchdog with a positive value on every launch — pinning the
+// fleet-wide cap and leaving agent.Adapter.PendingWatchdog, the middle rung of that
+// package's three-rung ladder, permanently inert. The zero returned here is exactly what
+// SetPendingWatchdog reads as "the user has expressed no opinion", which is what hands
+// the decision on to the adapter and then the default.
+func (c *Config) PendingWatchdogOverride() time.Duration {
+	if c == nil || c.PendingWatchdogMinutes == nil {
+		return 0
+	}
+	return time.Duration(c.GetPendingWatchdogMinutes()) * time.Minute
 }

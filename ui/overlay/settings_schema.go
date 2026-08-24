@@ -191,6 +191,22 @@ type settingRow struct {
 	// always active. An inert row is dimmed and carries a reason chip while staying
 	// fully editable — a user may configure ahead of enabling the parent (spec §5).
 	activeWhen func(c *config.Config) bool
+	// modifiedWhen gates the "changed from default" marker for a row whose displayed
+	// value a SIBLING field can move. nil means the plain value comparison decides.
+	//
+	// The comparison alone answers "does the effective value differ from the default",
+	// which is the wrong question wherever the user did not cause the difference:
+	// context_warn_percent collapses onto a lower context_danger_percent, so an untouched
+	// warn row would show the marker and then not clear it, because its reset — which
+	// clears a field that is already clear — genuinely has nothing to do.
+	modifiedWhen func(c *config.Config) bool
+}
+
+// withModifiedWhen gates a row's "changed from default" marker on the user having set the
+// field, for a row whose value a sibling can move. See settingRow.modifiedWhen.
+func withModifiedWhen(r settingRow, modifiedWhen func(c *config.Config) bool) settingRow {
+	r.modifiedWhen = modifiedWhen
+	return r
 }
 
 // footerText composes the row's single-column footer help: the summary, then any
@@ -834,7 +850,7 @@ func newSettingRows(cfg *config.Config) []settingRow {
 				}
 			},
 		},
-		cadenceRow("context_warn_percent", catSessionList, "Context warn at",
+		withModifiedWhen(cadenceRow("context_warn_percent", catSessionList, "Context warn at",
 			"How full the context window must be before the chip turns amber.",
 			"A percentage of the model's window, so it only applies where the window is "+
 				"known. Held at or below Context danger at, which outranks it. "+cadenceNote,
@@ -847,6 +863,7 @@ func newSettingRows(cfg *config.Config) []settingRow {
 				}
 				return nil
 			}),
+			func(c *config.Config) bool { return c.ContextWarnPercent != nil }),
 		cadenceRow("context_danger_percent", catSessionList, "Context danger at",
 			"How full the context window must be before the chip turns red.",
 			"A percentage of the model's window, so it only applies where the window is "+
@@ -854,12 +871,10 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			config.DefaultContextDangerPercent(), 1, 100,
 			(*config.Config).GetContextDangerPercent,
 			func(c *config.Config, v *int) { c.ContextDangerPercent = v },
-			func(c *config.Config, n int) error {
-				if n < 1 {
-					return fmt.Errorf("danger must be at least 1")
-				}
-				return nil
-			}),
+			// No extra validator: cadenceRow's own [1,100] refusal is the whole rule here,
+			// and a second copy of the floor would be unreachable — it can only ever run on
+			// a value that already passed the bound it restates.
+			nil),
 		cadenceRow("diff_refresh_seconds", catSessionList, "Diff chip refresh",
 			"How stale a background session's +/- chip may get, in seconds.",
 			"Backstops the writers no agent status can see: the terminal tab's shell, a "+

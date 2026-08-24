@@ -168,7 +168,7 @@ const backgroundFooter = "───────────────\n❯ \n�
 // A pane held Pending by the FOOTER CHIP is exempt from the watchdog. The cap backstops a
 // SubagentStop that never fired — a latch that can leak — and a chip cannot leak: it is
 // re-scraped every poll and gone when the work exits. Expiring it would re-commit the exact
-// "done while still working" bug at the 30-minute mark, and a persistent Monitor legitimately
+// "done while still working" bug once the cap elapsed, and a persistent Monitor legitimately
 // outlives any cap.
 func TestApplyBackground_IsNeverReconciledByTheWatchdog(t *testing.T) {
 	c := backgroundFooter
