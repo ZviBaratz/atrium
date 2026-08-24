@@ -109,9 +109,23 @@ type fanoutSample struct {
 
 	selfCPU      time.Duration
 	selfChildCPU time.Duration
-	serverCPU    time.Duration
 	clientCPU    time.Duration
-	clientPss    int64
+
+	// serverCPU is meaningful only when serverCPUKnown is set. A server that exits
+	// between the two readings would otherwise yield after-minus-before as a large
+	// NEGATIVE number, which is indistinguishable from the genuine negative this
+	// harness found at N=1 and spends a paragraph of the record interpreting.
+	serverCPU      time.Duration
+	serverCPUKnown bool
+
+	// clientPrivate is the clients' combined memory; the two flags beside it say what
+	// kind of number it is. procCost.Private is Pss where the kernel offers
+	// smaps_rollup and resident size where it does not, and the two differ by roughly
+	// an order of magnitude on processes that share as much as N tmux clients do —
+	// so printing the sum unlabelled would let a fallback reading be quoted as a Pss.
+	clientPrivate      int64
+	clientPrivateIsPss bool
+	clientsUnpriced    int
 }
 
 // TestAttachFanoutCost is the measurement. It is not an assertion about a threshold —
@@ -127,8 +141,10 @@ func TestAttachFanoutCost(t *testing.T) {
 		t.Skipf("attach-fanout measurement is off; run scripts/measure-fanout.sh to set %s=1", measureFanoutEnv)
 	}
 	// Past the gate, a missing prerequisite is a failure and not a skip: someone asked
-	// for the measurement, and a silent skip would answer them with nothing.
-	require.True(t, procCostSupported, "the measurement needs /proc")
+	// for the measurement, and a silent skip would answer them with nothing. /proc is
+	// not among the prerequisites checked here — this file is linux-tagged, so off
+	// Linux it does not exist to be run, and scripts/measure-fanout.sh refuses there
+	// with a reason rather than leaving the caller to wonder.
 	testutil.RequireTmux(t)
 
 	window := fanoutWindow(t)
@@ -149,6 +165,15 @@ func TestAttachFanoutCost(t *testing.T) {
 
 			require.Positive(t, with.clients, "the with-clients arm must actually hold clients")
 			require.Zero(t, without.clients, "the control must actually have dropped them")
+			// The pty count is the fanout itself, so a classifier that stopped
+			// recognising a master would report the fleet holding none — "the fanout is
+			// free", arrived at by a broken instrument rather than by measurement. The
+			// count is asserted, not just printed, for the same reason the client count
+			// above is.
+			require.Equal(t, with.clients, with.ptmx,
+				"every attach client should hold exactly one pty master; a mismatch means classifyFD "+
+					"does not recognise this host's spelling of it")
+			require.Zero(t, without.ptmx, "dropping the clients must drop their pty masters")
 
 			t.Log(with.row())
 			t.Log(without.row())
@@ -257,24 +282,28 @@ func measureArm(t *testing.T, arm string, sessions []*Session, window time.Durat
 	clientsAfter := attachClientPids(t)
 	selfAfter, ok := readProcCost(os.Getpid())
 	require.True(t, ok, "%s: re-pricing the test process", arm)
-	serverAfter, _ := procCostOf(serverPid)
+	serverAfter, serverAfterOK := procCostOf(serverPid)
 
 	fds, ok := countFDClasses(os.Getpid())
 	require.True(t, ok, "%s: counting descriptors", arm)
 
 	sample := fanoutSample{
-		arm:          arm,
-		clients:      len(clientsAfter),
-		ptmx:         fds.Ptmx,
-		eventPoll:    fds.EventPoll,
-		pidFD:        fds.PidFD,
-		fdTotal:      fds.Total,
-		goroutines:   runtime.NumGoroutine(),
-		selfCPU:      selfAfter.CPU - selfBefore.CPU,
-		selfChildCPU: selfAfter.ChildCPU - selfBefore.ChildCPU,
+		arm:                arm,
+		clients:            len(clientsAfter),
+		ptmx:               fds.Ptmx,
+		eventPoll:          fds.EventPoll,
+		pidFD:              fds.PidFD,
+		fdTotal:            fds.Total,
+		goroutines:         runtime.NumGoroutine(),
+		selfCPU:            selfAfter.CPU - selfBefore.CPU,
+		selfChildCPU:       selfAfter.ChildCPU - selfBefore.ChildCPU,
+		clientPrivateIsPss: true,
 	}
-	if serverOK {
-		sample.serverCPU = serverAfter.CPU - serverBefore.CPU
+	// Both ends, not either: a difference is only a rate when both of its terms were
+	// read. Missing the "after" is the dangerous half — it would print the whole
+	// before-reading as a negative window.
+	if serverOK && serverAfterOK {
+		sample.serverCPU, sample.serverCPUKnown = serverAfter.CPU-serverBefore.CPU, true
 	}
 	// Only clients present at both ends are charged: one that appeared mid-window has
 	// no "before" to subtract, and charging its whole lifetime to this window would
@@ -289,7 +318,14 @@ func measureArm(t *testing.T, arm string, sessions []*Session, window time.Durat
 			continue
 		}
 		sample.clientCPU += after.CPU - before.CPU
-		sample.clientPss += after.Private
+		if !after.PrivateKnown {
+			sample.clientsUnpriced++
+			continue
+		}
+		if !after.PrivateIsPss {
+			sample.clientPrivateIsPss = false
+		}
+		sample.clientPrivate += after.Private
 	}
 	return sample
 }
@@ -383,16 +419,43 @@ func procCmdline(pid int) string {
 
 // fanoutHeader is the column header the rows below line up under.
 func fanoutHeader() string {
-	return fmt.Sprintf("%-28s %7s %5s %6s %6s %6s %6s %10s %10s %10s %10s %12s",
+	return fmt.Sprintf("%-28s %7s %5s %6s %6s %6s %6s %10s %10s %10s %10s %16s",
 		"arm", "clients", "ptmx", "epoll", "pidfd", "fds", "gorout",
-		"self_cpu", "child_cpu", "srv_cpu", "clnt_cpu", "clnt_pss")
+		"self_cpu", "child_cpu", "srv_cpu", "clnt_cpu", "clnt_mem")
 }
 
 // row renders one arm as a line under fanoutHeader.
 func (s fanoutSample) row() string {
-	return fmt.Sprintf("%-28s %7d %5d %6d %6d %6d %6d %10s %10s %10s %10s %12s",
+	return fmt.Sprintf("%-28s %7d %5d %6d %6d %6d %6d %10s %10s %10s %10s %16s",
 		s.arm, s.clients, s.ptmx, s.eventPoll, s.pidFD, s.fdTotal, s.goroutines,
-		s.selfCPU, s.selfChildCPU, s.serverCPU, s.clientCPU, humanBytes(s.clientPss))
+		s.selfCPU, s.selfChildCPU, s.serverCPUCell(), s.clientCPU, s.clientMemCell())
+}
+
+// serverCPUCell renders the server column, distinguishing a measured zero from a
+// window whose two readings could not both be taken.
+func (s fanoutSample) serverCPUCell() string {
+	if !s.serverCPUKnown {
+		return "n/a"
+	}
+	return s.serverCPU.String()
+}
+
+// clientMemCell renders the clients' combined memory with what kind of number it is.
+//
+// The column is "clnt_mem" and not "clnt_pss" because it is only a Pss where the
+// kernel offered smaps_rollup for every client sampled; the statm fallback is a
+// resident size, which counts shared pages once per process. An unlabelled column
+// would let that fallback be quoted as a Pss and overstate the marginal client by
+// roughly an order of magnitude.
+func (s fanoutSample) clientMemCell() string {
+	cell := humanBytes(s.clientPrivate)
+	if s.clientPrivate > 0 && !s.clientPrivateIsPss {
+		cell += " rss"
+	}
+	if s.clientsUnpriced > 0 {
+		cell += fmt.Sprintf(" +%d?", s.clientsUnpriced)
+	}
+	return cell
 }
 
 // marginalRow renders the with-minus-without difference — the number the whole
@@ -401,7 +464,7 @@ func (s fanoutSample) row() string {
 func marginalRow(size int, mode string, with, without fanoutSample) string {
 	per := func(d time.Duration) time.Duration { return d / time.Duration(size) }
 	return fmt.Sprintf("  -> per client at N=%d %s: ptmx %+d, epoll %+d, pidfd %+d, fds %+d, goroutines %+d, "+
-		"self_cpu %+v, srv_cpu %+v, client_cpu %v, client_pss %s",
+		"self_cpu %+v, srv_cpu %v, client_cpu %v, client_mem %s",
 		size, mode,
 		perInt(with.ptmx-without.ptmx, size),
 		perInt(with.eventPoll-without.eventPoll, size),
@@ -409,9 +472,27 @@ func marginalRow(size int, mode string, with, without fanoutSample) string {
 		perInt(with.fdTotal-without.fdTotal, size),
 		perInt(with.goroutines-without.goroutines, size),
 		per(with.selfCPU-without.selfCPU),
-		per(with.serverCPU-without.serverCPU),
+		serverDeltaPerClient(with, without, size),
 		per(with.clientCPU),
-		humanBytes(divBytes(with.clientPss, size)))
+		with.clientMemPerClient(size))
+}
+
+// serverDeltaPerClient renders the per-client server difference, or "n/a" when either
+// arm could not read the server at both ends. Subtracting an unknown from a known one
+// would produce a number with no meaning and no marking.
+func serverDeltaPerClient(with, without fanoutSample, size int) string {
+	if !with.serverCPUKnown || !without.serverCPUKnown || size == 0 {
+		return "n/a"
+	}
+	return ((with.serverCPU - without.serverCPU) / time.Duration(size)).String()
+}
+
+// clientMemPerClient renders the per-client share of the combined memory, carrying the
+// same labels the whole-fleet cell does.
+func (s fanoutSample) clientMemPerClient(size int) string {
+	per := s
+	per.clientPrivate = divBytes(s.clientPrivate, size)
+	return per.clientMemCell()
 }
 
 // perInt divides a count by the fleet size, rounding toward zero — these are whole

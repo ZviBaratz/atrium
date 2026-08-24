@@ -162,6 +162,15 @@ func startTimeOf(ticks int64) (time.Time, bool) {
 	return boot.Add(ticksToDuration(ticks)), true
 }
 
+// ticksToDuration converts a USER_HZ tick count to a duration.
+//
+// The multiply is split rather than done as ticks*time.Second/userHZ, which overflows
+// int64 on any host up for a few years — about 2.9 years of ticks at USER_HZ 100.
+func ticksToDuration(ticks int64) time.Duration {
+	return time.Duration(ticks/userHZ)*time.Second +
+		time.Duration(ticks%userHZ)*(time.Second/userHZ)
+}
+
 // parseStat reads the comm, parent pid and starttime out of a raw /proc/<pid>/stat
 // line.
 //

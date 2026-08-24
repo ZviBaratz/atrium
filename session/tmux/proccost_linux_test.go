@@ -2,235 +2,287 @@
 
 package tmux
 
+// The procfs cost reader behind the #800 attach-fanout measurement.
+//
+// Test-only, and deliberately so. Its single consumer is the opt-in harness in
+// fanout_measure_linux_test.go; nothing Atrium ships reads a process's CPU ticks,
+// Pss or descriptor classes. Shipping it as ordinary package code would put a
+// completeness flag (PrivateKnown) into session/tmux under a naming convention that
+// internal/doctor's evidence audit reserves for channels a health report may claim
+// from — and this is not one. When something in the product does need per-process
+// costs (doctor depth, #833), moving it out is the change that earns the audit row.
+//
+// The guards for everything here live in proccost_guards_linux_test.go.
+
 import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"testing"
+	"strings"
 	"time"
-
-	"github.com/stretchr/testify/require"
 )
 
-// statLine builds a /proc/<pid>/stat line with the given comm and the four CPU tick
-// fields, padding the rest so the field offsets are the real ones.
+// procCost is what one live process costs, as procfs will admit to it.
 //
-// The padding matters: parseProcCPU re-bases past the comm, so a fixture with the
-// wrong number of leading or trailing fields would agree with an off-by-one reader.
-func statLine(comm string, utime, stime, cutime, cstime string) string {
-	// Fields 1..2 are pid and comm; the rest are counted from field 3 (state).
-	fields := make([]string, 0, 52)
-	fields = append(fields, "1234", "("+comm+")")
-	for f := 3; f <= 52; f++ {
-		switch f {
-		case statUTimeField:
-			fields = append(fields, utime)
-		case statSTimeField:
-			fields = append(fields, stime)
-		case statCUTimeField:
-			fields = append(fields, cutime)
-		case statCSTimeField:
-			fields = append(fields, cstime)
-		case statStateField:
-			fields = append(fields, "S")
+// It exists for #800: Atrium holds one `tmux attach-session` pty client per started
+// session for that session's whole life (Restore), and #548 filed that fanout as
+// unmeasured. Pricing it needs a per-process reading rather than a whole-machine
+// one, because the question is marginal — what does one *more* session add — and
+// because the cost is spread across three processes: Atrium, the client, and the
+// tmux server serving it.
+//
+// CPU and ChildCPU are cumulative since the process started, so a rate is the
+// difference between two readings over a known window — never a single reading,
+// which describes a lifetime and not a moment.
+type procCost struct {
+	// CPU is utime+stime: time this process's own threads spent on a CPU.
+	CPU time.Duration
+	// ChildCPU is cutime+cstime: time its *reaped* children spent. A child that is
+	// still running contributes nothing here — it is priced by reading its own pid.
+	ChildCPU time.Duration
+	// Private is the memory that would actually be returned if the process went
+	// away: Pss where the kernel offers smaps_rollup, resident size where it does
+	// not. The difference matters here because N tmux clients share one text
+	// segment, so RSS counts the same pages N times and answers "how much does one
+	// more cost?" with roughly an order of magnitude too much.
+	Private int64
+	// PrivateIsPss records which of those two Private holds, so a report can say
+	// which question it answered rather than letting a reader assume the better one.
+	// False also when PrivateKnown is false; check that first.
+	PrivateIsPss bool
+	// PrivateKnown separates "this process holds no memory" from "neither smaps_rollup
+	// nor statm would answer". Private is 0 in both cases and they mean opposite
+	// things — the same conflation the CPU fields avoid by failing the whole read.
+	// The CPU fields stay valid when this is false, which is why an unreadable memory
+	// figure does not fail the sample outright.
+	PrivateKnown bool
+}
+
+// fdCounts is a process's open file descriptors sorted into the classes that say
+// something about per-session fanout.
+//
+// Ptmx and EventPoll are the two #548 asks about by name: one pty per attach client
+// is the fanout itself, and the epoll count was flagged there as "flat but large and
+// unexplained" — 125 at 11 sessions — which is only answerable by watching how it
+// moves as sessions are added, not by reading one number.
+//
+// Total counts every descriptor, including ones no class claimed and ones whose link
+// vanished mid-walk, so Ptmx+EventPoll+PidFD+Socket+Other can be less than Total.
+type fdCounts struct {
+	Ptmx      int
+	EventPoll int
+	PidFD     int
+	Socket    int
+	Other     int
+	Total     int
+}
+
+const (
+	// The 1-indexed /proc/<pid>/stat fields the cost reader adds to the ones
+	// orphan_linux.go already names; parseProcCPU re-bases them past the comm the
+	// same way parseStat does.
+	//
+	// All four, not just the first two. #546's original investigation reported
+	// Atrium's cost from utime+stime alone and missed 19.4% of a core — a third of
+	// the total — sitting in cutime+cstime, because a process blocked in wait4 pays
+	// for its child only once that child is reaped. A reader that stops at field 15
+	// gives a plausible-looking wrong answer rather than an obvious failure, which
+	// is precisely the shape that survives review.
+	statUTimeField  = 14
+	statSTimeField  = 15
+	statCUTimeField = 16
+	statCSTimeField = 17
+)
+
+// readProcCost prices one live process. ok is false when the process is gone or
+// procfs refuses the read, which for a fleet measurement means "drop this sample",
+// never "the cost was zero".
+func readProcCost(pid int) (procCost, bool) {
+	return readProcCostIn(filepath.Join(procRoot, strconv.Itoa(pid)))
+}
+
+// readProcCostIn is readProcCost over an explicit /proc/<pid> directory, so a test can
+// build one file by file.
+//
+// That seam exists for the memory fallback specifically: on any host that offers
+// smaps_rollup the statm branch is unreachable, so without a fake procfs the fallback
+// ships measured by nothing — and it is the branch that decides whether a reported
+// number is a Pss or a resident size several times larger.
+func readProcCostIn(dir string) (procCost, bool) {
+	raw, err := os.ReadFile(filepath.Join(dir, "stat"))
+	if err != nil {
+		return procCost{}, false
+	}
+	own, children, ok := parseProcCPU(string(raw))
+	if !ok {
+		return procCost{}, false
+	}
+	cost := procCost{CPU: own, ChildCPU: children}
+	if rollup, err := os.ReadFile(filepath.Join(dir, "smaps_rollup")); err == nil {
+		if pss, ok := parsePssBytes(string(rollup)); ok {
+			cost.Private, cost.PrivateIsPss, cost.PrivateKnown = pss, true, true
+			return cost, true
+		}
+	}
+	// smaps_rollup arrived in 4.14 and can be absent under a hardened or containerised
+	// procfs, so resident size is the fallback rather than the sample being dropped —
+	// an over-count that is labelled is worth more than a hole. Labelled is the
+	// operative word: PrivateIsPss stays false here, and a report that prints this
+	// number as a Pss is off by roughly an order of magnitude on shared pages.
+	statm, err := os.ReadFile(filepath.Join(dir, "statm"))
+	if err != nil {
+		return cost, true
+	}
+	if rss, ok := parseStatmRSSBytes(string(statm)); ok {
+		cost.Private, cost.PrivateKnown = rss, true
+	}
+	return cost, true
+}
+
+// parseProcCPU reads the four CPU tick fields out of a raw /proc/<pid>/stat line.
+//
+// It splits after the LAST ") " for the same reason parseStat does: field 2 is the
+// comm in parentheses, the kernel neither escapes nor quotes it, and a tmux server's
+// comm is "tmux: server" — the embedded space shifts every later column. Getting
+// this wrong on the very processes this file exists to price would report a busy
+// client as idle.
+func parseProcCPU(raw string) (own, children time.Duration, ok bool) {
+	closed := strings.LastIndex(raw, ") ")
+	if closed < 0 || strings.IndexByte(raw, '(') < 0 {
+		return 0, 0, false
+	}
+	fields := strings.Fields(raw[closed+len(") "):])
+	// Re-based past the comm: field 3 is index 0, so field N is index N-3.
+	uIdx := statUTimeField - statStateField
+	sIdx := statSTimeField - statStateField
+	cuIdx := statCUTimeField - statStateField
+	csIdx := statCSTimeField - statStateField
+	if len(fields) <= csIdx {
+		return 0, 0, false
+	}
+	var ticks [4]int64
+	for i, idx := range [4]int{uIdx, sIdx, cuIdx, csIdx} {
+		v, err := strconv.ParseInt(fields[idx], 10, 64)
+		if err != nil {
+			return 0, 0, false
+		}
+		ticks[i] = v
+	}
+	return ticksToDuration(ticks[0]) + ticksToDuration(ticks[1]),
+		ticksToDuration(ticks[2]) + ticksToDuration(ticks[3]), true
+}
+
+// parsePssBytes reads the Pss line out of a raw /proc/<pid>/smaps_rollup.
+//
+// Pss and not Rss: the whole question here is what one more attach client adds, and
+// the client's text and libc pages are shared with every other one, so Rss answers a
+// different question several times over.
+func parsePssBytes(raw string) (int64, bool) {
+	for _, line := range strings.Split(raw, "\n") {
+		rest, found := strings.CutPrefix(line, "Pss:")
+		if !found {
+			continue
+		}
+		fields := strings.Fields(rest)
+		// "Pss:  1117 kB" — the value, then its unit. procfs states kB here for every
+		// field; a line without both parts is not one this can price.
+		if len(fields) < 2 || fields[1] != "kB" {
+			return 0, false
+		}
+		kb, err := strconv.ParseInt(fields[0], 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		return kb * 1024, true
+	}
+	return 0, false
+}
+
+// parseStatmRSSBytes reads the resident-pages field (the second) out of a raw
+// /proc/<pid>/statm and converts it to bytes.
+func parseStatmRSSBytes(raw string) (int64, bool) {
+	fields := strings.Fields(raw)
+	if len(fields) < 2 {
+		return 0, false
+	}
+	pages, err := strconv.ParseInt(fields[1], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return pages * int64(os.Getpagesize()), true
+}
+
+// countFDClasses sorts a live process's open descriptors into classes.
+func countFDClasses(pid int) (fdCounts, bool) {
+	return countFDClassesIn(filepath.Join(procRoot, strconv.Itoa(pid), "fd"))
+}
+
+// countFDClassesIn is countFDClasses over an explicit directory, so a test can build
+// one out of dangling symlinks instead of needing a process that holds the fds.
+//
+// A descriptor that cannot be read is counted in Total and left out of every class:
+// the walk races the process, and a link that vanishes mid-walk is still evidence the
+// process held it a moment ago.
+func countFDClassesIn(dir string) (fdCounts, bool) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fdCounts{}, false
+	}
+	var c fdCounts
+	for _, e := range entries {
+		c.Total++
+		target, err := os.Readlink(filepath.Join(dir, e.Name()))
+		if err != nil {
+			continue
+		}
+		switch classifyFD(target) {
+		case fdPtmx:
+			c.Ptmx++
+		case fdEventPoll:
+			c.EventPoll++
+		case fdPidFD:
+			c.PidFD++
+		case fdSocket:
+			c.Socket++
 		default:
-			fields = append(fields, "0")
+			c.Other++
 		}
 	}
-	out := fields[0]
-	for _, f := range fields[1:] {
-		out += " " + f
-	}
-	return out + "\n"
+	return c, true
 }
 
-// TestParseProcCPUReadsAllFourTickFields holds parseProcCPU to reporting utime+stime
-// as own time and cutime+cstime as child time — separately, and at USER_HZ.
+// fdClass names the kinds of descriptor countFDClassesIn separates.
+type fdClass int
+
+const (
+	fdOther fdClass = iota
+	fdPtmx
+	fdEventPoll
+	fdPidFD
+	fdSocket
+)
+
+// classifyFD names what an fd symlink target is.
 //
-// Both halves, because #546's investigation read only utime+stime and missed a third
-// of Atrium's cost in the reaped-children fields. A reader that dropped either half
-// would still return a plausible number.
-func TestParseProcCPUReadsAllFourTickFields(t *testing.T) {
-	own, children, ok := parseProcCPU(statLine("atrium", "700", "300", "1100", "400"))
-	require.True(t, ok)
-	require.Equal(t, 10*time.Second, own, "utime 700 + stime 300 ticks at 100Hz")
-	require.Equal(t, 15*time.Second, children, "cutime 1100 + cstime 400 ticks at 100Hz")
-}
-
-// TestParseProcCPUSurvivesACommWithSpacesAndParens is the case the naive whole-line
-// split gets wrong on exactly the processes this file prices: a tmux server's comm is
-// "tmux: server", and the kernel neither escapes nor quotes it, so an embedded space
-// shifts every later column.
-func TestParseProcCPUSurvivesACommWithSpacesAndParens(t *testing.T) {
-	for _, comm := range []string{"tmux: server", "tmux: client", "weird ) name", "a (b) c"} {
-		t.Run(comm, func(t *testing.T) {
-			own, children, ok := parseProcCPU(statLine(comm, "150", "50", "0", "0"))
-			require.True(t, ok)
-			require.Equal(t, 2*time.Second, own)
-			require.Equal(t, time.Duration(0), children)
-		})
+// The pty master is matched on exact targets rather than a "pts" substring so a
+// pane's own /dev/pts/N slave — which an attached client legitimately holds — is not
+// counted as one more of the masters this measurement is about. Both spellings of
+// the master are accepted: a devpts mounted with newinstance (containers, some
+// systemd setups) makes /dev/ptmx a symlink and the fd resolves to /dev/pts/ptmx
+// instead. Missing that spelling would report a fleet holding zero ptys — the
+// "the fanout is free" answer this measurement exists not to give by accident. The
+// name still separates it from a slave, which is always /dev/pts/<number>.
+func classifyFD(target string) fdClass {
+	switch {
+	case target == "/dev/ptmx", target == "/dev/pts/ptmx":
+		return fdPtmx
+	case strings.HasPrefix(target, "anon_inode:[eventpoll]"):
+		return fdEventPoll
+	case strings.HasPrefix(target, "anon_inode:[pidfd]"):
+		return fdPidFD
+	case strings.HasPrefix(target, "socket:["):
+		return fdSocket
+	default:
+		return fdOther
 	}
 }
-
-// TestParseProcCPURejectsUnreadableLines holds the reader to failing rather than
-// guessing. A truncated line is what a racing read of a dying process returns, and a
-// zero from it would read as "this client cost nothing" — the exact conclusion this
-// measurement must not reach by accident.
-func TestParseProcCPURejectsUnreadableLines(t *testing.T) {
-	full := statLine("atrium", "1", "1", "1", "1")
-	cases := map[string]string{
-		"no parens":        "1234 atrium S 0 0\n",
-		"truncated fields": "1234 (atrium) S 0 0 0\n",
-		"non-numeric tick": statLine("atrium", "1", "x", "1", "1"),
-		"empty":            "",
-	}
-	for name, raw := range cases {
-		t.Run(name, func(t *testing.T) {
-			_, _, ok := parseProcCPU(raw)
-			require.False(t, ok)
-		})
-	}
-	// The control: the same builder with every field well-formed does parse, so the
-	// cases above fail for the reason named and not because the fixture is broken.
-	_, _, ok := parseProcCPU(full)
-	require.True(t, ok)
-}
-
-// TestTicksToDurationDoesNotOverflow covers the reason the conversion is split: a
-// straight ticks*time.Second overflows int64 above ~9.2e9 ticks, which is three
-// years of CPU — reachable by a long-lived server, and it wraps to a negative
-// duration rather than failing.
-func TestTicksToDurationDoesNotOverflow(t *testing.T) {
-	const threeYearsOfTicks = 3 * 365 * 24 * 60 * 60 * userHZ
-	got := ticksToDuration(threeYearsOfTicks)
-	require.Equal(t, 3*365*24*time.Hour, got)
-	require.Positive(t, got)
-	require.Equal(t, 10*time.Millisecond, ticksToDuration(1), "one tick at USER_HZ 100")
-}
-
-// TestParsePssBytesReadsTheRollup pins the unit conversion: procfs states kB, the
-// caller wants bytes, and a report that silently mixed the two would be off by 1024
-// in the direction of "this is fine".
-func TestParsePssBytesReadsTheRollup(t *testing.T) {
-	rollup := "Rss:               7532 kB\nPss:                571 kB\nPss_Dirty:          400 kB\n"
-	got, ok := parsePssBytes(rollup)
-	require.True(t, ok)
-	require.Equal(t, int64(571*1024), got)
-}
-
-// TestParsePssBytesPrefersPssOverRssAndPssDirty guards the line the reader picks.
-// "Pss:" is a prefix of "Pss_Dirty:" only after the colon is included, and Rss sits
-// above it in the file — a reader keyed on a looser match would answer with the
-// number that over-counts shared pages, which is the whole thing Pss is here to avoid.
-func TestParsePssBytesPrefersPssOverRssAndPssDirty(t *testing.T) {
-	got, ok := parsePssBytes("Pss_Dirty:          400 kB\nRss:               7532 kB\nPss:                571 kB\n")
-	require.True(t, ok)
-	require.Equal(t, int64(571*1024), got)
-}
-
-// TestParsePssBytesRejectsAMissingOrMalformedLine keeps a rollup without a usable Pss
-// from being priced at zero, which is what sends readProcCost to the statm fallback.
-func TestParsePssBytesRejectsAMissingOrMalformedLine(t *testing.T) {
-	for name, raw := range map[string]string{
-		"no Pss line":  "Rss:               7532 kB\n",
-		"no unit":      "Pss:                571\n",
-		"wrong unit":   "Pss:                571 MB\n",
-		"not a number": "Pss:                 many kB\n",
-	} {
-		t.Run(name, func(t *testing.T) {
-			_, ok := parsePssBytes(raw)
-			require.False(t, ok)
-		})
-	}
-}
-
-// TestParseStatmRSSBytesReadsTheSecondField pins which column resident size is.
-// statm's first field is total program size and its second is resident — adjacent,
-// both plausible, and the first is always the larger, so reading it would inflate
-// every memory number this measurement reports.
-func TestParseStatmRSSBytesReadsTheSecondField(t *testing.T) {
-	got, ok := parseStatmRSSBytes("2451 1883 1204 12 0 176 0\n")
-	require.True(t, ok)
-	require.Equal(t, int64(1883)*int64(os.Getpagesize()), got)
-
-	_, ok = parseStatmRSSBytes("2451\n")
-	require.False(t, ok, "a single field cannot name a resident size")
-}
-
-// TestCountFDClassesSeparatesPtysFromPaneSlaves is the classification that makes the
-// fanout countable: an attach client's pty master (/dev/ptmx, held by Atrium) is the
-// per-session cost, while /dev/pts/N is the slave end a pane legitimately holds. A
-// substring match on "pts" would count both and double the reported fanout.
-func TestCountFDClassesSeparatesPtysFromPaneSlaves(t *testing.T) {
-	dir := t.TempDir()
-	targets := []string{
-		"/dev/ptmx", "/dev/ptmx", "/dev/ptmx",
-		"/dev/pts/7",
-		"anon_inode:[eventpoll]",
-		"anon_inode:[eventpoll]",
-		"anon_inode:[pidfd]",
-		"socket:[12345]",
-		"/home/zvi/.atrium/state.json",
-	}
-	for i, target := range targets {
-		require.NoError(t, os.Symlink(target, filepath.Join(dir, strconv.Itoa(i))))
-	}
-
-	got, ok := countFDClassesIn(dir)
-	require.True(t, ok)
-	require.Equal(t, fdCounts{
-		Ptmx:      3,
-		EventPoll: 2,
-		PidFD:     1,
-		Socket:    1,
-		Other:     2, // the pane slave and the state file
-		Total:     len(targets),
-	}, got)
-}
-
-// TestCountFDClassesFailsOnAnUnreadableDirectory holds the reader to reporting "could
-// not look" rather than an empty inventory. A process owned by another uid returns
-// exactly this, and a zeroed fdCounts from it would read as a session holding no
-// descriptors at all.
-func TestCountFDClassesFailsOnAnUnreadableDirectory(t *testing.T) {
-	_, ok := countFDClassesIn(filepath.Join(t.TempDir(), "does-not-exist"))
-	require.False(t, ok)
-}
-
-// TestReadProcCostPricesThisProcess is the end-to-end read against real procfs: the
-// test binary has burned some CPU and holds some memory by the time it runs, so a
-// reader wired to the wrong fields or the wrong file shows up as a zero.
-func TestReadProcCostPricesThisProcess(t *testing.T) {
-	// Burn CPU deliberately rather than assuming the test binary has. USER_HZ is
-	// 100, so a whole test run can finish inside one tick and a bare reading of a
-	// just-started process is legitimately 0 — an assertion on it would be flaky in
-	// the direction of "the measurement works", which is the worst direction.
-	before, ok := readProcCost(os.Getpid())
-	require.True(t, ok)
-	burnCPU(80 * time.Millisecond)
-
-	cost, ok := readProcCost(os.Getpid())
-	require.True(t, ok)
-	require.Greater(t, cost.CPU, before.CPU, "the burn must show up as own CPU")
-	require.Positive(t, cost.Private, "the test binary holds memory")
-
-	fds, ok := countFDClasses(os.Getpid())
-	require.True(t, ok)
-	require.Positive(t, fds.Total, "at least stdin/stdout/stderr")
-}
-
-// burnCPU spins for at least d of wall time doing arithmetic the compiler cannot
-// elide, so the caller's own utime moves by more than procfs's 10ms granularity.
-func burnCPU(d time.Duration) {
-	deadline := time.Now().Add(d)
-	sink := 0
-	for time.Now().Before(deadline) {
-		for i := 0; i < 1000; i++ {
-			sink += i * i
-		}
-	}
-	burnSink = sink
-}
-
-// burnSink keeps burnCPU's work observable so it is not optimised away.
-var burnSink int

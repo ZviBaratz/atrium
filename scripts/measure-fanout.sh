@@ -67,6 +67,14 @@ echo "  cpus:   $(nproc)"
 echo "  commit: $(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 echo "  sizes:  ${SIZES:-1,5,15 (default)}"
 echo "  window: ${WINDOW:-10 (default)}s"
+# `go test` compiles the WORKING TREE, not HEAD, so a dirty tree makes the commit
+# above describe something other than what ran. Say so rather than let a pasted run
+# be cited to a commit that cannot reproduce it.
+if ! git diff --quiet HEAD 2>/dev/null; then
+  echo
+  echo "  WARNING: the working tree differs from that commit. These numbers came from"
+  echo "           the tree, not from the commit -- do not cite them to that SHA."
+fi
 echo
 
 # The gate is exported here rather than baked into the test so the harness stays

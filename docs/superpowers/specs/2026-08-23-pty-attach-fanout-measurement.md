@@ -123,7 +123,9 @@ the client's.
 
 ### 3.4 Arm B — the synthetic fleet, with and without clients
 
-`scripts/measure-fanout.sh 1,5,15 15` at commit `43b385a`, tmux 3.6, go 1.26.6.
+`scripts/measure-fanout.sh 1,5,15 15` on the branch of PR #837, tmux 3.6, go 1.26.6.
+The PR is the citation rather than a SHA: the harness does not exist on any commit
+before it, and a squash merge means the branch SHAs never land on `main` either.
 Each arm watched for 15 s. `srv_cpu` is the tmux server's own CPU over the window;
 `clnt_cpu` is every client's combined.
 
@@ -210,7 +212,7 @@ So under a pane writing as fast as the pty allows, an attached client costs the
 server about 2 % of a core, and fifteen of them add roughly a third of a core to a
 process that cannot use more than one. **Arm A is what keeps that from being the
 headline**: with 30 real clients and real `claude` panes working, the whole tmux
-server ran at 12.9 % of a core — a sixth of what 30 × 2.1 % would predict. The
+server ran at **12.9 % of a core, against the 63 % that 30 × 2.1 % predicts**. The
 server-side term is real, and it is a function of how fast the panes write, not of
 how many clients exist. Agents do not write anything like that fast.
 
@@ -258,9 +260,9 @@ bufferful) explains why that is structural rather than lucky.
 
 The one non-zero is the tmux server under panes writing at pty speed — about 2 % of
 a core per client at N=15. It does not carry the verdict, because the live fleet
-prices the same server at 12.9 % of a core with 30 real clients and working agents,
-a sixth of what that rate would predict. It is written into the re-measure list
-below rather than dismissed.
+prices the same server at **12.9 % of a core** with 30 real clients and working
+agents, against the **63 %** that rate predicts. It is written into the re-measure
+list below rather than dismissed.
 
 #548 named a risk for the lazy-attach work: that a re-attached session's first
 capture comes back differently shaped, because the attach is what restores the
@@ -279,9 +281,16 @@ preview in the app.
 
 **Two axes to re-measure, if anyone does, and neither is Atrium's own CPU:**
 
-1. **File descriptors.** Two per session against a default `RLIMIT_NOFILE` of 1024
-   is the only term here with a hard ceiling rather than a slope, and it is what a
-   fleet of a few hundred sessions meets first.
+1. **File descriptors — but not soon, and an earlier draft of this page had this
+   badly wrong.** It claimed 1024 as the ceiling and a few hundred sessions as where
+   a fleet meets it. Measured on this host: both `RLIMIT_NOFILE` limits are
+   **524288**, and Go raises a process's soft limit to its hard limit at startup, so
+   the hard limit is what binds — about 250 000 sessions at two descriptors each.
+   This is the only term in the fanout with a ceiling rather than a slope, which is
+   why it stays on the list, but on a systemd-era Linux desktop it is not a
+   near-term one. Where it *would* bite is a host that sets a low hard limit;
+   containers commonly ship 1024, and there two descriptors per session is a real
+   constraint.
 2. **The tmux server under fast-writing panes.** It is single-threaded, the
    per-client render cost is real at ~2 % of a core under the synthetic upper
    bound, and it is the *only* axis where dropping clients would save anything. The
