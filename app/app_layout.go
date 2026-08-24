@@ -293,16 +293,19 @@ func applySplashConfig(cfg *config.Config) {
 // given row — or, for "profiles", after its record editor changed the profile
 // list — then live-applies whatever that field controls. Fields without a case
 // here are read live at their point of use (auto_attach, max_sessions,
-// kill_double_tap_confirm, image_preview) or only consumed by later operations
-// (branch_prefix; daemon_poll_interval on the next daemon run), so persisting is
-// all they need.
+// kill_double_tap_confirm, image_preview, notify_throttle_seconds,
+// diff_refresh_seconds) or only consumed by later operations (branch_prefix;
+// daemon_poll_interval on the next daemon run), so persisting is all they need.
 //
-// image_preview is named in that list deliberately rather than left to fall
+// Those three are named in that list deliberately rather than left to fall
 // through, because nothing here guards the omission: no test asserts that every
 // row key is handled or knowingly unhandled, so a field that needed an arm and
-// did not get one would simply not apply until relaunch. This one is resolved
-// when the overlay opens (openImagePreview → kittyEligible), so the next image
-// obeys the new value and there is nothing to restyle.
+// did not get one would simply not apply until relaunch. image_preview is
+// resolved when the overlay opens (openImagePreview → kittyEligible), so the next
+// image obeys the new value and there is nothing to restyle;
+// notify_throttle_seconds is read per notification edge in maybeNotify and
+// diff_refresh_seconds per tick in diffContentFloor, so the next edge and the
+// next tick already carry the new value.
 func (m *home) applySettingChange(key string) tea.Cmd {
 	if err := config.SaveConfig(m.appConfig); err != nil {
 		return m.handleError(err)

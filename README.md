@@ -1715,7 +1715,7 @@ Advanced — shown in the Category column below. The seven keys with no panel ro
 | `effort_indicator` | Session list | string | `"on"` | per-session reasoning-effort chip: `on` / `off` |
 | `context_indicator` | Session list | string | `"percent"` | per-session transcript chip: `percent` / `count` / `bar` / `cost` / `off` (the occupancy modes fall back to a count when the model's window is unknown; `cost` is a list-rate estimate, not a bill) |
 | `context_warn_percent` | Session list | int | `75` | occupancy at which the context chip turns amber; `1`–`100`, held at or below `context_danger_percent` ([Cadence knobs](#cadence-knobs)) |
-| `context_danger_percent` | Session list | int | `90` | occupancy at which the context chip turns red; `1`–`100` ([Cadence knobs](#cadence-knobs)) |
+| `context_danger_percent` | Session list | int | `90` | occupancy at which the context chip turns red; `1`–`100`, held at or above `context_warn_percent` ([Cadence knobs](#cadence-knobs)) |
 | `diff_refresh_seconds` | Session list | int | `15` | how stale a background session's +/- chip may get; `1`–`3600` ([Cadence knobs](#cadence-knobs)) |
 | `session_sort` | Session list | string | `"creation"` | within-group order: `creation` / `status` |
 | `group_mode` | Session list | string | `"repo"` | list grouping: `repo` / `account` |

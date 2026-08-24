@@ -867,14 +867,26 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		cadenceRow("context_danger_percent", catSessionList, "Context danger at",
 			"How full the context window must be before the chip turns red.",
 			"A percentage of the model's window, so it only applies where the window is "+
-				"known. Lowering it past Context warn at pulls that band down with it. "+cadenceNote,
+				"known. Refused below a set Context warn at; while that row is unset, its "+
+				"default band follows this one down. "+cadenceNote,
 			config.DefaultContextDangerPercent(), 1, 100,
 			(*config.Config).GetContextDangerPercent,
 			func(c *config.Config, v *int) { c.ContextDangerPercent = v },
-			// No extra validator: cadenceRow's own [1,100] refusal is the whole rule here,
-			// and a second copy of the floor would be unreachable — it can only ever run on
-			// a value that already passed the bound it restates.
-			nil),
+			func(c *config.Config, n int) error {
+				// The mirror of the warn row's refusal, and it reads the STORED warn, not
+				// GetContextWarnPercent: the accessor already collapses an inverted pair onto
+				// danger, so comparing against it would refuse nothing. Without this the stored
+				// warn becomes invisible — the warn row renders the collapsed value, so the
+				// number the user set is neither displayed nor reachable, and pressing r on it
+				// clears a field without changing a thing on screen. Refusing here is also what
+				// makes GetContextWarnPercent's "the settings row refuses the inversion up
+				// front" true from both directions; the collapse remains for a hand-edited
+				// config.json, which has no row to refuse at.
+				if c != nil && c.ContextWarnPercent != nil && n < *c.ContextWarnPercent {
+					return fmt.Errorf("danger must not fall below the warn threshold (%d)", *c.ContextWarnPercent)
+				}
+				return nil
+			}),
 		cadenceRow("diff_refresh_seconds", catSessionList, "Diff chip refresh",
 			"How stale a background session's +/- chip may get, in seconds.",
 			"Backstops the writers no agent status can see: the terminal tab's shell, a "+

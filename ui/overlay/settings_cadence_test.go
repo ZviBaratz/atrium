@@ -88,8 +88,14 @@ func TestCadenceRowsRefuseOutOfRange(t *testing.T) {
 }
 
 // TestContextWarnRowRefusesInversion covers the one cross-field rule at the surface that
-// has a user to tell. The accessor's silent collapse is the right answer for a file nobody
-// is reading; in the panel it would look like the value simply did not take.
+// has a user to tell, in BOTH directions. The accessor's silent collapse is the right
+// answer for a file nobody is reading; in the panel it would look like the value simply
+// did not take.
+//
+// The downward direction was the one missing: lowering danger under a stored warn was
+// allowed, and the warn row then rendered the collapsed value — so the number the user had
+// set was neither displayed nor reachable from the panel, and raising danger again made a
+// band reappear that the panel had never shown.
 func TestContextWarnRowRefusesInversion(t *testing.T) {
 	cfg := config.DefaultConfig()
 	warn := rowByKey(t, cfg, "context_warn_percent")
@@ -100,10 +106,16 @@ func TestContextWarnRowRefusesInversion(t *testing.T) {
 	require.NoError(t, warn.set(cfg, "60"), "equal is allowed: the warn band may narrow to nothing")
 	require.NoError(t, warn.set(cfg, "59"))
 
-	// The reverse direction is deliberately NOT refused: lowering danger under an
-	// existing warn is a coherent request, and the accessor pulls warn down with it.
-	require.NoError(t, danger.set(cfg, "30"), "lowering danger under the stored warn is allowed")
-	assert.Equal(t, 30, cfg.GetContextWarnPercent(), "and the accessor holds warn under it")
+	assert.Error(t, danger.set(cfg, "30"), "a danger band under the stored warn is refused too")
+	assert.Equal(t, 60, cfg.GetContextDangerPercent(), "and the refusal did not store it")
+	require.NoError(t, danger.set(cfg, "59"), "equal is allowed from this side as well")
+	require.NoError(t, danger.set(cfg, "95"), "raising it is unconstrained")
+
+	// The refusal reads the STORED warn, so it constrains nothing while that row is unset —
+	// which is the case TestWarnRowIsNotMarkedModifiedBySibling covers.
+	cfg.ContextWarnPercent = nil
+	require.NoError(t, danger.set(cfg, "30"), "an unset warn band still follows danger down")
+	assert.Equal(t, 30, cfg.GetContextWarnPercent(), "and the accessor holds it under")
 }
 
 // TestWarnRowIsNotMarkedModifiedBySibling covers the one row here whose displayed value

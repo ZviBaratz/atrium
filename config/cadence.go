@@ -138,8 +138,15 @@ func (c *Config) GetPendingWatchdogMinutes() int {
 
 // GetDiffRefreshSeconds returns how stale a background session's +/- chip may
 // get. A nil field — or a nil Config — defaults to 15; values outside [1,3600]
-// clamp. The floor is 1 rather than 0 because zero means "recompute every
-// session's diff on every sweep", which is the load the floor exists to bound.
+// clamp.
+//
+// The floor is 1 rather than 0 so the row cannot be set to a value that reads as
+// "off" while still costing a git walk. It is not what bounds the load, and the
+// bottom of the range is close to inert: a background row is only visited on a
+// full metadata sweep (app's metadataFullSweepEvery, ~2s), so by the time this
+// floor is consulted the chip is already that old and a 1 and a 2 buy the same
+// thing: a per-session numstat on every sweep. That cost is real, but the sweep
+// interval, not this floor, is what puts a bottom on it.
 func (c *Config) GetDiffRefreshSeconds() int {
 	if c == nil || c.DiffRefreshSeconds == nil {
 		return defaultDiffRefreshSeconds
