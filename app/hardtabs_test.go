@@ -72,9 +72,18 @@ func renderThroughPTY(t *testing.T, frame string, w, h int, suppress bool) strin
 	// Not deferred: the restore has to run while tty is still open, and the explicit
 	// Close below is what ends the reader. A defer here would fire after it, ioctl-ing
 	// an fd this process has already released — and would exercise only the set half.
+	//
+	// Registered with Cleanup as well, and made once-only so the two spellings cannot
+	// both fire. A require between here and the explicit call aborts the goroutine, and
+	// hardTabsAsFound would stay set for the rest of the package — where it is the sole
+	// thing keeping the untouched cooked cases in attach_rawmode_test.go from ioctl-ing
+	// the developer's own tty through the real yieldHardTabs.
 	restoreTabs := func() {}
 	if suppress {
-		restoreTabs = suppressHardTabs(tty)
+		var once sync.Once
+		restore := suppressHardTabs(tty)
+		restoreTabs = func() { once.Do(restore) }
+		t.Cleanup(restoreTabs)
 	}
 
 	var mu sync.Mutex

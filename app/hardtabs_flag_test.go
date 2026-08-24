@@ -53,6 +53,44 @@ func TestSuppressHardTabsMovesAndRestoresTheFlag(t *testing.T) {
 	require.Equal(t, before.Oflag, after.Oflag, "restore must put the whole Oflag back")
 }
 
+// TestSuppressHardTabsRestoreHealsAChildsTermios is what makes "the whole Oflag" above
+// more than a coincidence: nothing in that test moves any other bit, so a restore
+// narrowed to TABDLY alone passes it. Here a bit the fix never touches is cleared while
+// the suppression is in effect, standing in for a custom command that ran `stty -echo`
+// and died before putting it back.
+//
+// The heal is load-bearing because bubbletea does not do it. RestoreTerminal re-snapshots
+// its own restore state from term.MakeRaw inside initInput, so after an exec the state it
+// puts back at shutdown is whatever the last child left. Atrium's defer is the only thing
+// that still holds the terminal as the user's shell had it — and it can only heal what it
+// saved.
+func TestSuppressHardTabsRestoreHealsAChildsTermios(t *testing.T) {
+	ptmx, tty, err := pty.Open()
+	require.NoError(t, err)
+	defer func() { _ = ptmx.Close() }()
+	defer func() { _ = tty.Close() }()
+	fd := int(tty.Fd())
+
+	before, err := unix.IoctlGetTermios(fd, getTermios)
+	require.NoError(t, err)
+	require.NotZero(t, before.Oflag&unix.OPOST,
+		"precondition: a fresh pty has OPOST on, so clearing it below is a real change")
+
+	restore := suppressHardTabs(tty)
+
+	mangled := *before
+	mangled.Oflag &^= unix.OPOST
+	require.NoError(t, unix.IoctlSetTermios(fd, setTermios, &mangled))
+
+	restore()
+
+	after, err := unix.IoctlGetTermios(fd, getTermios)
+	require.NoError(t, err)
+	require.Equal(t, before.Oflag, after.Oflag,
+		"restore must put back the termios app.Run found, not only the field it moved — "+
+			"otherwise a child that mangled the tty and died hands the user's shell back broken")
+}
+
 // TestSuppressHardTabsToleratesANonTerminal pins the degradation. A frame with
 // tab bytes in it is a blemish; refusing to start is not a trade Atrium should
 // make for it, and Run calls this unconditionally — including when stdin is a

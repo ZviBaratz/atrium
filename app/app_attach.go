@@ -147,11 +147,20 @@ func (a *attachCommand) Run() error {
 	// session they cannot detach from, and it must stay.
 	if cooked := !a.raw; cooked {
 		defer suspendInterrupt()()
-		// A cooked child keeps OPOST, so the tab-delay field app.Run set on the way in
-		// would have the driver expand THIS child's tabs, miscounting its ANSI escapes as
-		// columns. Hand the field back for its span and take it again on the way out,
-		// before bubbletea's RestoreTerminal re-reads it (yieldHardTabs, #796). Not the
-		// raw branch: makeRaw clears OPOST, so the field is not consulted there.
+	}
+	// OPOST is what makes the tab-delay field app.Run set apply to the CHILD: with it on,
+	// the driver expands the child's tabs itself and counts the bytes of its ANSI escapes
+	// as printable columns. Hand the field back for the child's span and take it again on
+	// the way out, before bubbletea's RestoreTerminal re-reads it (yieldHardTabs, #796).
+	//
+	// Keyed on the OUTCOME, unlike the SIGINT borrow above, and that difference is the
+	// whole point of the two conditions sitting apart. What decides here is whether OPOST
+	// survived, and makeRaw clears it — so a raw takeover that GOT raw mode has nothing to
+	// yield, while one that asked and failed is running cooked with OPOST on and needs the
+	// yield exactly as much as a request for cooked mode did. The borrow's exclusion of
+	// rawModeFailed is a deliberate judgement about who should receive a Ctrl+C; this is
+	// not a judgement at all, just what the tty is doing.
+	if opost := !a.raw || a.rawModeFailed; opost {
 		defer yieldTabs(os.Stdin)()
 	}
 	ch, err := a.attach()

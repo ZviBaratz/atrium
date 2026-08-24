@@ -54,7 +54,13 @@ func suppressHardTabs(f *os.File) (restore func()) {
 		return noop
 	}
 	return func() {
-		_ = restoreTabDelay(fd)
+		// The WHOLE termios, not just the field this function moved. bubbletea
+		// re-snapshots its own restore state from term.MakeRaw inside initInput on every
+		// RestoreTerminal, so after an exec the state it puts back at shutdown is whatever
+		// the last cooked child left — a custom command that ran `stty -echo` and died
+		// before restoring hands the user's shell back with echo off. Atrium's own defer
+		// is what heals that, and it can only heal what it saved.
+		_ = unix.IoctlSetTermios(fd, setTermios, before)
 		hardTabsAsFound = nil
 	}
 }
@@ -63,10 +69,11 @@ func suppressHardTabs(f *os.File) (restore func()) {
 // put back — by the restore above, and for the span of a handover by
 // yieldHardTabs. nil means nothing is suppressed and there is nothing to yield.
 //
-// Written once by suppressHardTabs before tea.NewProgram, and read afterwards only
-// from the suspended event-loop goroutine, which cannot be running until the
-// program that owns it exists. So the two never overlap and this needs no lock,
-// the same ordering attachCommand's outcome relies on.
+// Every access is ordered by p.Run(): suppressHardTabs writes it before the call,
+// yieldHardTabs reads it from the suspended event-loop goroutine during it, and the
+// restore clears it after the call returns. The program's start and return are the
+// happens-before edges, so no two accesses overlap and this needs no lock — the same
+// ordering attachCommand's outcome relies on.
 var hardTabsAsFound *unix.Termios
 
 // yieldHardTabs hands the tab-delay field back for as long as a child owns the
@@ -99,9 +106,10 @@ func yieldHardTabs(f *os.File) (resuppress func()) {
 	return func() { _ = expandTabs(fd) }
 }
 
-// expandTabs and restoreTabDelay move the TABDLY field alone, leaving the rest of
-// the termios as they find it. That matters on the way back from a handover: the
-// child had the terminal, and whatever else it changed is not ours to revert. They
+// expandTabs and restoreTabDelay serve the handover, and move the TABDLY field alone
+// so that the rest of the termios stays as they find it: the child had the terminal
+// for that span, and whatever else it changed is not ours to revert. (The app-exit
+// restore above is the opposite case and deliberately writes the whole word.) They
 // read-modify-write separately rather than share a helper because Termios.Oflag is
 // uint32 on Linux and the BSDs and uint64 on Darwin, so the field has no one name to
 // pass it under.
