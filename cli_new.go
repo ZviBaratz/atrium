@@ -14,6 +14,7 @@ import (
 	"github.com/ZviBaratz/atrium/internal/outbox"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/agent"
 
 	"github.com/spf13/cobra"
 )
@@ -24,6 +25,9 @@ var (
 	newProfileFlag  string
 	newVariantsFlag string
 	newBranchFlag   string
+	newModelFlag    string
+	newModeFlag     string
+	newEffortFlag   string
 	newForceFlag    bool
 	newWaitFlag     time.Duration
 
@@ -73,6 +77,16 @@ var (
 			"with no --branch each variant starts from the target's HEAD at its own\n" +
 			"creation time, so pass --branch when the comparison must share a start\n" +
 			"point.\n\n" +
+			"--model, --effort and --permission-mode pin the claude flags of the same\n" +
+			"names on what the new session runs — the create form's model, effort and\n" +
+			"mode fields, as flags. A pin replaces the same flag in a profile's program,\n" +
+			"and it needs a program that runs claude: a session that would run anything\n" +
+			"else is refused rather than quietly unpinned. A fan-out is the one softer\n" +
+			"case, matching the form: the pins ride the claude variants, leave the other\n" +
+			"members untouched, and only a batch with no claude member is refused. With\n" +
+			"no --program or --profile a pin resolves the configured default program now,\n" +
+			"from the stored config, where an unpinned request leaves that choice to the\n" +
+			"draining TUI.\n\n" +
 			"The first prompt is optional, as it is in the create form. Pass \"-\" to read it\n" +
 			"from stdin, which is what makes a multi-line prompt practical to pipe in; omit\n" +
 			"the argument entirely and the session starts with no prompt at all.",
@@ -93,6 +107,9 @@ var (
 				variants:    newVariantsFlag,
 				variantsSet: cmd.Flags().Changed("variants"),
 				branch:      newBranchFlag,
+				model:       newModelFlag,
+				mode:        newModeFlag,
+				effort:      newEffortFlag,
 				prompt:      prompt,
 				force:       newForceFlag,
 				wait:        newWaitFlag,
@@ -119,9 +136,18 @@ type newRequest struct {
 	variants    string
 	variantsSet bool
 	branch      string
-	prompt      string
-	force       bool
-	wait        time.Duration
+	// model, mode and effort are the claude pins --model, --permission-mode and
+	// --effort asked for ("" = not asked). They are folded into each resolved
+	// program at spool time by agent.ComposeProgramFlags — the create form's own
+	// composition — rather than carried as fields of the spooled record: the
+	// program string is something every draining TUI already honors verbatim,
+	// where a new record field would be silently dropped by one older than it.
+	model  string
+	mode   string
+	effort string
+	prompt string
+	force  bool
+	wait   time.Duration
 }
 
 // firstPrompt returns the session's first prompt: the second argument, or stdin
@@ -241,9 +267,20 @@ func runNew(out, errOut io.Writer, r newRequest) error {
 
 // resolveCreatePrograms settles what each requested session will run, and settles it
 // against nothing but the config: one program for the single-session form, one per
-// variant in spec order for a fan-out. Length is what the plan below reads it by, so
-// "how many sessions" and "what each runs" are one answer rather than two.
+// variant in spec order for a fan-out, each with the claude pins folded in. Length is
+// what the plan below reads it by, so "how many sessions" and "what each runs" are
+// one answer rather than two.
 func resolveCreatePrograms(cfg *config.Config, r newRequest) ([]string, error) {
+	programs, err := resolveBasePrograms(cfg, r)
+	if err != nil {
+		return nil, err
+	}
+	return applyProgramPins(cfg, r, programs)
+}
+
+// resolveBasePrograms is resolveCreatePrograms before the pins: what --program,
+// --profile or --variants named, with "" standing for the draining TUI's default.
+func resolveBasePrograms(cfg *config.Config, r newRequest) ([]string, error) {
 	if !r.fansOut() {
 		program, err := resolveNewProgram(cfg, r.program, r.profile)
 		if err != nil {
@@ -256,6 +293,68 @@ func resolveCreatePrograms(cfg *config.Config, r newRequest) ([]string, error) {
 		return nil, err
 	}
 	return resolveVariantPrograms(cfg, specs)
+}
+
+// applyProgramPins folds --model, --permission-mode and --effort into each resolved
+// program, exactly as the create form's submit folds its model, mode and effort
+// fields: agent.ComposeProgramFlags applies a pin only to a program that resolves to
+// claude, so a mixed fan-out carries the pins on its claude members and leaves the
+// rest untouched. What the CLI adds is the refusal — the form cannot take a value
+// for an agent it renders no field for, and the flag-shaped equivalent of "no field"
+// is an error rather than a silent drop, so a request none of whose members runs
+// claude is refused whole, before anything is spooled.
+//
+// A pinned request with no --program or --profile resolves the configured default
+// here rather than spooling the "" an unpinned one carries: "" defers the choice of
+// program to the draining TUI, and a pin cannot be folded into a choice not yet
+// made. The value read is the stored config's, on runNew's standing terms — a TUI
+// launched with a one-off root --program override would have chosen differently,
+// and the drain's own gates still hold either way.
+func applyProgramPins(cfg *config.Config, r newRequest, programs []string) ([]string, error) {
+	if r.model == "" && r.mode == "" && r.effort == "" {
+		return programs, nil
+	}
+	claude := 0
+	for i, program := range programs {
+		if program == "" {
+			program = cfg.GetProgram()
+		}
+		if agent.Resolve(program).Key == agent.KeyClaude {
+			claude++
+		}
+		composed, err := agent.ComposeProgramFlags(program, r.model, r.mode, r.effort)
+		if err != nil {
+			return nil, err
+		}
+		programs[i] = composed
+	}
+	if claude == 0 {
+		if len(programs) == 1 {
+			return nil, fmt.Errorf("%s pins claude's flags, but the session would run %q, "+
+				"which is not claude; drop the pin or pick a claude profile",
+				pinFlagNames(r), programs[0])
+		}
+		return nil, fmt.Errorf("%s pins claude's flags, but none of the %d requested variants "+
+			"runs claude; drop the pin or add a claude entry to --variants",
+			pinFlagNames(r), len(programs))
+	}
+	return programs, nil
+}
+
+// pinFlagNames names the pin flags this command line actually passed, so a refusal
+// tells the caller which of their own flags to drop rather than listing all three.
+func pinFlagNames(r newRequest) string {
+	var names []string
+	if r.model != "" {
+		names = append(names, "--model")
+	}
+	if r.mode != "" {
+		names = append(names, "--permission-mode")
+	}
+	if r.effort != "" {
+		names = append(names, "--effort")
+	}
+	return strings.Join(names, "/")
 }
 
 // planCreateRequests turns the command line into the records to spool: one for an

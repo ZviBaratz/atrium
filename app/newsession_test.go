@@ -581,48 +581,6 @@ func TestCreateSessionFromForm_SyncBranchExistsBlocksSubmit(t *testing.T) {
 	assert.Equal(t, titleErrBranchExists, h.textInputOverlay.TitleError())
 }
 
-// composeProgramFlags is the submit-time backstop the form's field gating makes
-// otherwise unreachable: the model field reverts charset-invalid input and the mode
-// chips are a closed valid set, so these rejections only fire on UI/enum drift. Test
-// them directly, plus the compose and pass-through cases.
-func TestComposeProgramFlags(t *testing.T) {
-	t.Run("invalid model name is rejected", func(t *testing.T) {
-		_, err := composeProgramFlags("claude", "bad model!", "", "")
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid model name")
-	})
-	t.Run("invalid permission mode is rejected", func(t *testing.T) {
-		_, err := composeProgramFlags("claude", "", "bogusmode", "")
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid permission mode")
-	})
-	t.Run("invalid effort level is rejected", func(t *testing.T) {
-		_, err := composeProgramFlags("claude", "", "", "ultracode")
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid effort level")
-	})
-	t.Run("valid model, mode, and effort compose onto a claude program", func(t *testing.T) {
-		got, err := composeProgramFlags("claude", "opus", "plan", "xhigh")
-		require.NoError(t, err)
-		assert.Equal(t, "claude --model opus --permission-mode plan --effort xhigh", got)
-	})
-	t.Run("effort alone composes", func(t *testing.T) {
-		got, err := composeProgramFlags("claude", "", "", "high")
-		require.NoError(t, err)
-		assert.Equal(t, "claude --effort high", got)
-	})
-	t.Run("a non-claude program is left untouched", func(t *testing.T) {
-		got, err := composeProgramFlags("echo", "opus", "plan", "xhigh")
-		require.NoError(t, err)
-		assert.Equal(t, "echo", got)
-	})
-	t.Run("empty overrides leave the program untouched", func(t *testing.T) {
-		got, err := composeProgramFlags("claude", "", "", "")
-		require.NoError(t, err)
-		assert.Equal(t, "claude", got)
-	})
-}
-
 // The per-session link_paths opt-out (#481) must survive the whole submit path: the
 // form's chip → createSessionFromForm → spawnPlan → startNewSession →
 // session.InstanceOptions → the Instance the list holds. Every hop is a place the

@@ -84,6 +84,11 @@ const guidePage = "You are an AI agent running inside an Atrium session. Atrium 
 	"  so it will not contain work you have not merged. When the next agent needs to\n" +
 	"  start from where you stopped, pass `--branch` naming your own branch.\n" +
 	"\n" +
+	"  When the follow-up should run on a given model, pin it at creation instead\n" +
+	"  of asking for it in the prompt: `--model`, `--effort` and `--permission-mode`\n" +
+	"  set claude's flags on the new session, and are refused when what would run\n" +
+	"  is not claude.\n" +
+	"\n" +
 	"  A title is a branch: the branch and tmux names derive from it, and a title\n" +
 	"  whose names are already taken is refused rather than quietly suffixed — with\n" +
 	"  one exception, `--variants`, which `atrium new --help` owns. An over-long\n" +

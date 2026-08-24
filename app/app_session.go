@@ -1532,40 +1532,6 @@ func (m *home) resetTitleCheck() {
 	m.titleBranchName = ""
 }
 
-// composeProgramFlags folds the optional Claude model, permission-mode, and
-// effort overrides into program, returning the augmented command. Each is applied only when non-empty
-// and the program resolves to claude — the sole agent whose --model / --permission-mode
-// flags these compose — and is re-validated as a backstop: the create form already
-// filters the model field to agent.ValidModelName's charset (see ui/overlay/modelField.go)
-// and offers a closed set of valid mode chips, so an invalid value reaching here means
-// drift between the UI and the agent enums, caught before a dead launch rather than
-// after. The mode check sees the model-augmented program, matching the form's submit
-// order; since --model leaves the base command claude, Resolve is unaffected.
-// Effort is composed the same way, but note the CLI soft-validates --effort
-// (an unknown value is warned-and-ignored, not rejected like --permission-mode),
-// so ValidEffort here is a UI/enum-drift backstop rather than a launch guard.
-func composeProgramFlags(program, model, mode, effort string) (string, error) {
-	if model != "" && agent.Resolve(program).Key == agent.KeyClaude {
-		if !agent.ValidModelName(model) {
-			return "", fmt.Errorf("invalid model name %q (letters, digits, . _ : / - only)", model)
-		}
-		program = agent.WithModelFlag(program, model)
-	}
-	if mode != "" && agent.Resolve(program).Key == agent.KeyClaude {
-		if !agent.ValidPermissionMode(mode) {
-			return "", fmt.Errorf("invalid permission mode %q", mode)
-		}
-		program = agent.WithPermissionModeFlag(program, mode)
-	}
-	if effort != "" && agent.Resolve(program).Key == agent.KeyClaude {
-		if !agent.ValidEffort(effort) {
-			return "", fmt.Errorf("invalid effort level %q", effort)
-		}
-		program = agent.WithEffortFlag(program, effort)
-	}
-	return program, nil
-}
-
 const (
 	// maxVariantBatch is session.MaxVariantBatch under the name this package's
 	// refusals and their width tests already spell. The rule moved to session when
@@ -1802,15 +1768,17 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	}
 
 	// Pre-compose each variant's program so an invalid model/effort/mode override
-	// aborts the whole batch before any session is created. composeProgramFlags gates
-	// the claude overrides on each program independently, so a mixed batch (AC5)
+	// aborts the whole batch before any session is created. agent.ComposeProgramFlags
+	// gates the claude overrides on each program independently, so a mixed batch (AC5)
 	// carries the flags on its claude sessions alone and leaves codex/aider variants
 	// untouched. The flags are folded into the persisted program string, so launch,
-	// pause/resume, and the daemon all see them with no extra plumbing.
+	// pause/resume, and the daemon all see them with no extra plumbing — and
+	// `atrium new`'s pin flags compose through the same function, so the headless
+	// spelling cannot drift from this one.
 	model, mode, effort := ov.GetModel(), ov.GetPermissionMode(), ov.GetEffort()
 	programs := make([]string, total)
 	for i, vprog := range variants {
-		program, err := composeProgramFlags(vprog, model, mode, effort)
+		program, err := agent.ComposeProgramFlags(vprog, model, mode, effort)
 		if err != nil {
 			ov.Submitted = false
 			return m.handleError(err)

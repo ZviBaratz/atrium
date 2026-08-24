@@ -50,9 +50,10 @@ var claudeEffortEnum = map[string]bool{
 }
 
 // ValidEffort reports whether s is an --effort level Atrium offers. A cheap
-// backstop behind the chip set (the field is the only source of values):
-// composeProgramFlags errors on a miss so UI/enum drift is caught before launch,
-// rather than silently handed to the CLI (which would only warn-and-ignore it).
+// backstop behind the chip set (the create form's field is one source of values,
+// `atrium new --effort` the other): ComposeProgramFlags errors on a miss so a
+// drifted enum or a flag typo is caught before launch, rather than silently
+// handed to the CLI (which would only warn-and-ignore it).
 func ValidEffort(s string) bool { return claudeEffortEnum[s] }
 
 // WithEffortFlag returns program with `--effort level` applied: verbatim append
