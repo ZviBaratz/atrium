@@ -240,6 +240,9 @@ func TestGuideAdvertisesRegisteredFlags(t *testing.T) {
 		{"reap", "kill"},
 		{"new", "branch"},
 		{"new", "variants"},
+		{"new", "model"},
+		{"new", "effort"},
+		{"new", "permission-mode"},
 	} {
 		t.Run(tc.command+"/"+tc.flag, func(t *testing.T) {
 			require.Contains(t, guidePage, "--"+tc.flag,

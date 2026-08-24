@@ -699,6 +699,12 @@ func init() {
 	newCmd.Flags().StringVar(&newVariantsFlag, "variants", "",
 		"Create several sessions from one prompt, e.g. --variants claude:2,codex:1")
 	newCmd.Flags().StringVar(&newBranchFlag, "branch", "", "Existing base branch to start the session on")
+	newCmd.Flags().StringVar(&newModelFlag, "model", "",
+		"Pin claude's --model in the new session (an alias like 'opus', or a full model name)")
+	newCmd.Flags().StringVar(&newModeFlag, "permission-mode", "",
+		"Pin claude's --permission-mode in the new session (e.g. plan, acceptEdits, auto)")
+	newCmd.Flags().StringVar(&newEffortFlag, "effort", "",
+		"Pin claude's --effort in the new session (low, medium, high, xhigh, max)")
 	newCmd.Flags().BoolVar(&newForceFlag, "force", false,
 		"Create even past host capacity, or on a fully rate-limited account pool")
 	newCmd.Flags().DurationVar(&newWaitFlag, "wait", 0,
