@@ -130,8 +130,8 @@ Each arm watched for 15 s. `srv_cpu` is the tmux server's own CPU over the windo
 `clnt_cpu` is every client's combined.
 
 ```
-arm                          clients  ptmx  epoll  pidfd    fds gorout   self_cpu  child_cpu    srv_cpu   clnt_cpu     clnt_pss
-baseline (no sessions)             0     0      1      0      6      2       30ms         0s         0s         0s          0 B
+RUN A                        clients  ptmx  epoll  pidfd    fds gorout   self_cpu  child_cpu    srv_cpu   clnt_cpu     clnt_mem
+baseline (no sessions)             0     0      1      0      6      2       30ms         0s        n/a         0s          0 B
 N=1  idle   with-clients           1     1      1      1      8      3       40ms         0s         0s         0s      1.1 MiB
 N=1  idle   no-clients             0     0      1      0      6      2       20ms         0s       10ms         0s          0 B
 N=1  active with-clients           1     1      1      1      8      3       10ms         0s      4.09s         0s      1.1 MiB
@@ -144,7 +144,26 @@ N=15 idle   with-clients          15    15      1     15     36     17       20m
 N=15 idle   no-clients             0     0      1      0      6      2       10ms         0s         0s         0s          0 B
 N=15 active with-clients          15    15      1     15     36     17       30ms         0s     12.17s         0s     15.4 MiB
 N=15 active no-clients             0     0      1      0      6      2       20ms         0s      7.42s         0s          0 B
+
+RUN B (same parameters, same commit, ~1 h later)
+baseline (no sessions)             0     0      1      0      6      2       30ms         0s        n/a         0s          0 B
+N=1  idle   with-clients           1     1      1      1      8      3         0s         0s         0s         0s      1.1 MiB
+N=1  idle   no-clients             0     0      1      0      6      2       30ms         0s         0s         0s          0 B
+N=1  active with-clients           1     1      1      1      8      3       10ms         0s     10.96s         0s      1.1 MiB
+N=1  active no-clients             0     0      1      0      6      2       10ms         0s     12.31s         0s          0 B
+N=5  idle   with-clients           5     5      1      5     16      7       20ms         0s       10ms         0s      5.5 MiB
+N=5  idle   no-clients             0     0      1      0      6      2       10ms         0s         0s         0s          0 B
+N=5  active with-clients           5     5      1      5     16      7       10ms         0s      7.88s         0s      5.5 MiB
+N=5  active no-clients             0     0      1      0      6      2       30ms         0s      4.84s         0s          0 B
+N=15 idle   with-clients          15    15      1     15     36     17       30ms         0s       10ms         0s     15.6 MiB
+N=15 idle   no-clients             0     0      1      0      6      2       20ms         0s         0s         0s          0 B
+N=15 active with-clients          15    15      1     15     36     17       30ms         0s      6.33s         0s     15.5 MiB
+N=15 active no-clients             0     0      1      0      6      2       30ms         0s      5.49s         0s          0 B
 ```
+
+Two runs are shown because they disagree, and where they disagree matters more than
+either of them alone. Every object count and every zero above reproduced exactly.
+The `srv_cpu` column of the *active* arms did not — see section 4.
 
 Per client, from the with-minus-without difference. Every row above the rule is
 identical at N = 1, 5 and 15; the last row is the one that is not, and section 4
@@ -161,7 +180,7 @@ takes it apart:
 | client Pss | **~1.0–1.1 MiB** at these sizes |
 | tmux-server CPU, idle pane | **0** |
 | — | — |
-| tmux-server CPU, active pane | **not constant**: −3.84 s at N=1, +0.10 s at N=5, +0.32 s at N=15, per client per 15 s |
+| tmux-server CPU, active pane | **not measurable here** — the two runs disagree by 5.6× and do not share an ordering |
 
 ## 4. Reading
 
@@ -188,33 +207,33 @@ client's pty. `Attach` starts a pump goroutine; a session that has never been
 interactively attached has no reader at all. So the client writes until the pty
 buffer fills and then blocks in `write` for the rest of its life.
 
-**The cost that does exist is the server's, not the client's, and only under an
-active pane.** Attached clients are what the tmux server renders for, and under the
-synthetic upper bound that shows up plainly — but only once there are several of
-them:
+**The server-side question is one this harness did not answer, and an earlier draft
+of this page claimed it did.** Attached clients are what the tmux server renders for,
+so under the synthetic active pane there ought to be a per-client server cost. Two
+runs at identical parameters on the same commit:
 
-| Active arm | server CPU with clients | without | difference | per client |
-|---|---:|---:|---:|---:|
-| N=1 | 4.09 s | 7.93 s | **−3.84 s** | −3.84 s |
-| N=5 | 8.93 s | 8.43 s | +0.50 s | +0.10 s ≈ 0.7 % of a core |
-| N=15 | 12.17 s | 7.42 s | **+4.75 s** | +0.32 s ≈ 2.1 % of a core |
+| Active arm | run A: with / without → per client | run B: with / without → per client |
+|---|---|---|
+| N=1 | 4.09 s / 7.93 s → **−3.84 s** | 10.96 s / 12.31 s → **−1.35 s** |
+| N=5 | 8.93 s / 8.43 s → +0.10 s | 7.88 s / 4.84 s → **+0.61 s** |
+| N=15 | 12.17 s / 7.42 s → **+0.32 s** | 6.33 s / 5.49 s → **+0.06 s** |
 
-Two things in that table matter more than the headline. The **no-clients column is
-flat** at ~7.4–8.4 s regardless of whether one pane is streaming or fifteen are:
-the tmux server is single-threaded, and with nobody to render for it settles into
-an equilibrium with its writers. And the **N=1 difference is negative** — the
-server did materially *less* work with a client attached. The mechanism that
-explains both is backpressure: a client nobody drains stops the server pushing,
-which stops it reading the pane, which throttles the writer. At N=1 that throttling
-dominates; by N=15 the render work dominates instead.
+They disagree by 5.6× at N=15 and do not share an ordering: run A rises with N, run B
+peaks at N=5. The `without` column alone — the same arm, the same work, no clients
+at all — swings from 7.42 s to 12.31 s. That is not a per-client cost being measured
+badly; it is host load being measured. These runs shared an 8-core laptop with the
+developer's own 28-session Atrium and its live agents, and the tmux server is
+single-threaded, so it competes for whatever is left.
 
-So under a pane writing as fast as the pty allows, an attached client costs the
-server about 2 % of a core, and fifteen of them add roughly a third of a core to a
-process that cannot use more than one. **Arm A is what keeps that from being the
-headline**: with 30 real clients and real `claude` panes working, the whole tmux
-server ran at **12.9 % of a core, against the 63 % that 30 × 2.1 % predicts**. The
-server-side term is real, and it is a function of how fast the panes write, not of
-how many clients exist. Agents do not write anything like that fast.
+**So no per-client server figure is quoted here.** What survives two runs is a bound
+and a sign that will not settle: every per-client difference falls within ±0.7 s per
+15 s (±4.6 % of a core), and it is negative at N=1 in both. The negative is the one
+suggestive result — a client nobody drains would apply backpressure, stopping the
+server pushing, stopping it reading the pane, throttling the writer — but two runs
+cannot establish a mechanism, and this page does not claim one.
+
+Resolving it needs a quiet host, which this was not. `scripts/measure-fanout.sh` is
+how; section 6's re-measure list says when it would be worth doing.
 
 **Memory is the only axis with a number worth quoting.** ~1 MiB of Pss per client
 at small N, and 6.4–17.1 MB total across ~30 real ones — the range is wide because
@@ -231,6 +250,11 @@ this host's RAM.
   same zero, which is why the proxy is acceptable rather than why it is faithful.
 - **One host, one kernel, one tmux.** Linux 7.0, 8 cores, tmux 3.6. The client cost
   being zero is a statement about this tmux's behaviour when its output blocks.
+- **The host was not quiet.** Every synthetic run shared an 8-core laptop with a
+  live 28-session Atrium and its agents. The object counts, the zeros and the memory
+  figures were unaffected — they reproduced exactly across two runs — but the active
+  arms' server CPU was not, and section 4 declines to quote it for that reason. A
+  measurement that needs the server-side term wants a dedicated host.
 - **The live-fleet arm is uncontrolled.** Arm A's `atr` and tmux-server figures were
   taken while real agents worked; they are context, not a controlled comparison.
   Everything load-bearing comes from Arm B, which is controlled.
@@ -258,11 +282,12 @@ the pty path came in under 5 % of Atrium's profile. It is 0.00 %, and the mechan
 (nobody drains a background client's pty, so it blocks forever after the first
 bufferful) explains why that is structural rather than lucky.
 
-The one non-zero is the tmux server under panes writing at pty speed — about 2 % of
-a core per client at N=15. It does not carry the verdict, because the live fleet
-prices the same server at **12.9 % of a core** with 30 real clients and working
-agents, against the **63 %** that rate predicts. It is written into the re-measure
-list below rather than dismissed.
+The one axis this did not settle is the tmux server under panes writing at pty
+speed: two runs at identical parameters disagreed by 5.6× and would not agree on a
+sign, so section 4 quotes no per-client figure for it. It does not carry the
+verdict either way, because the live fleet prices that whole server at **12.9 % of
+a core** while serving 30 real clients for working agents. It is written into the
+re-measure list below rather than dismissed.
 
 #548 named a risk for the lazy-attach work: that a re-attached session's first
 capture comes back differently shaped, because the attach is what restores the
@@ -291,14 +316,16 @@ preview in the app.
    near-term one. Where it *would* bite is a host that sets a low hard limit;
    containers commonly ship 1024, and there two descriptors per session is a real
    constraint.
-2. **The tmux server under fast-writing panes.** It is single-threaded, the
-   per-client render cost is real at ~2 % of a core under the synthetic upper
-   bound, and it is the *only* axis where dropping clients would save anything. The
-   live fleet says agents are nowhere near that rate — 30 real clients, 12.9 % of a
-   core for the whole server — so this is a wontfix conditional on agent output
-   rates, not an unconditional one. If a future agent streams (a long tool output,
-   a verbose build, a TUI redrawing at video rates) on many sessions at once, this
-   is the number that moves, and `scripts/measure-fanout.sh` is how to re-take it.
+2. **The tmux server under fast-writing panes — still unmeasured, and it is the
+   *only* axis where dropping clients could save anything.** It is single-threaded,
+   and two runs of the synthetic active arm disagreed by 5.6× because the host was
+   busy running the developer's own fleet. What bounds it in practice is the live
+   fleet: 30 real clients and working agents put the whole server at 12.9 % of a
+   core, so at agent output rates there is little there to save. If a future agent
+   streams hard (long tool output, a verbose build, a TUI redrawing at video rates)
+   on many sessions at once, this is the number that moves. Re-take it with
+   `scripts/measure-fanout.sh` **on an otherwise idle host** — that, not the harness,
+   is what these two runs lacked.
 
 ## 7. Reproducing
 
