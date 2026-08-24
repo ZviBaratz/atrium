@@ -276,7 +276,7 @@ func TestResumeInstances_GatesPerInstance(t *testing.T) {
 	h.resumeInstances([]*session.Instance{
 		pausedLike(t, "rotted", "personal", "/h/dir-personal"),
 		pausedLike(t, "unstamped", "", ""),
-	}, "Resume 2 sessions?")
+	}, "Resume 2 sessions?", "")
 
 	require.NotNil(t, h.pendingConfirmAction, "resumeInstances staged no action")
 	msg, ok := h.pendingConfirmAction().(batchResumeDoneMsg)

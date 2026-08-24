@@ -378,9 +378,26 @@ type Config struct {
 	// overlay once after the app updates to a newer version. nil means use the
 	// default (on), so configs written before it existed keep it.
 	ShowReleaseNotesAfterUpdate *bool `json:"show_release_notes_after_update,omitempty"`
-	// KillDoubleTapConfirm, when true, lets a second press of the kill key (Ctrl+X)
-	// confirm the kill dialog, so Ctrl+X Ctrl+X tears a session down in one motion.
-	// nil means use the default (on), so configs written before it existed keep it.
+	// DoubleTapConfirm, when true, lets a second press of the key that OPENED a
+	// confirmation confirm it, so the destructive verbs are one motion: kill twice,
+	// push twice, merge twice. It gates the shortcut, never the dialog — the box and
+	// its copy stay on screen either way, which is the whole reason this is one
+	// switch rather than a per-dialog opt-out (#520): a user who silenced the kill
+	// confirmation to stop enter-smashing would also silence the unpushed-commit
+	// count that is the only warning of what the kill costs.
+	//
+	// nil means use the default (on), so configs written before it existed keep it —
+	// except that the deprecated KillDoubleTapConfirm below is consulted first, so an
+	// explicit opt-out survives the rename. See GetDoubleTapConfirm.
+	DoubleTapConfirm *bool `json:"double_tap_confirm,omitempty"`
+	// KillDoubleTapConfirm was the kill-only spelling of DoubleTapConfirm, back when
+	// the kill dialog was the only one with a double-tap.
+	//
+	// Superseded by DoubleTapConfirm, and kept for back-compat: when that field is
+	// nil this bool still decides (see GetDoubleTapConfirm), so a config that turned
+	// the shortcut OFF keeps it off rather than silently regaining it on every keyed
+	// confirmation.
+	// It has no settings row — the panel edits its successor.
 	KillDoubleTapConfirm *bool `json:"kill_double_tap_confirm,omitempty"`
 	// Theme selects the UI color palette and border style by name (see ui/theme
 	// registry: "tokyo-night", "catppuccin-mocha", "tokyo-night-day",

@@ -77,7 +77,7 @@ func TestMerge_MergeablePROpensConfirmation(t *testing.T) {
 	require.NotNil(t, h.pendingConfirmAction, "the confirmed merge action must be staged")
 	rendered := flattenOverlay(h.confirmationOverlay.Render())
 	assert.Contains(t, rendered, "Merge PR #42 from 'feat' as a squash merge?")
-	assert.Contains(t, rendered, "Press y to merge PR #42, n or esc to cancel")
+	assert.Contains(t, rendered, "Press y (or m) to merge PR #42, n or esc to cancel")
 	assert.NotContains(t, rendered, "CI is still running", "passing CI has no caveat")
 }
 
