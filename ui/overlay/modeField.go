@@ -46,6 +46,11 @@ type ModeField struct {
 	chipRow
 }
 
+// modeLabel is the field's label — "Permissions", not "Mode": the row is the
+// --permission-mode override and the form has no other mode. A const for the
+// reason effortLabel is one.
+const modeLabel = "Permissions"
+
 // NewModeField builds the mode field, starting on the no-op chip.
 func NewModeField() *ModeField {
 	return &ModeField{chipRow{
@@ -72,7 +77,7 @@ func (f *ModeField) Value() string { return f.selected() }
 // placeholder instead, mirroring the model field's inert state.
 func (f *ModeField) Render() string {
 	var s strings.Builder
-	s.WriteString(mfLabelStyle().Render("Permissions"))
+	s.WriteString(mfLabelStyle().Render(modeLabel))
 	if f.disabled {
 		s.WriteString("\n\n")
 		s.WriteString(mfDimStyle().Render(claudeFieldNA))

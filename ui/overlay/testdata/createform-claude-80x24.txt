@@ -1,0 +1,24 @@
+╭──────────────────────────────────────────────╮
+│                                              │
+│  New session                                 │
+│                                              │
+│  Project (filter/path: ▌)                    │
+│  > /repo/a                                   │
+│  Base: HEAD (current branch)                 │
+│  Title  name this session        (required)  │
+│  Prompt                                      │
+│  Optional (Enter or Tab to skip)             │
+│  Variants  → 1 session                       │
+│   ✻ Claude ×1  |  ≡ Aider ×0                 │
+│  Model                                       │
+│   inherit · fable · haiku · opus · sonnet    │
+│  Effort                                      │
+│   inherit · low · med · high · xhigh · max   │
+│  ──────────────────────────────────────────  │
+│  Permissions                                 │
+│   inherit · plan · accept-edits · auto       │
+│  ──────────────────────────────────────────  │
+│  Tab/↑↓ move · ⌃S create · ⌃R clear          │
+│   Create                                     │
+│                                              │
+╰──────────────────────────────────────────────╯

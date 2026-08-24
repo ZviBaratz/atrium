@@ -1,6 +1,9 @@
 package overlay
 
-import "charm.land/lipgloss/v2"
+import (
+	"charm.land/lipgloss/v2"
+	"github.com/muesli/reflow/truncate"
+)
 
 // fitHint picks the widest rung whose composed line — prefix plus the rung — fits
 // width, falling back to the last (narrowest) rung when none does.
@@ -35,4 +38,26 @@ func fitHint(width int, prefix string, rungs ...string) string {
 		}
 	}
 	return rungs[len(rungs)-1]
+}
+
+// fitPlaceholder is fitHint for a line that has no prefix and no reader downstream
+// to cut it honestly: it picks the widest rung that fits, then ELLIPSIZES what is
+// left over.
+//
+// The extra step is the difference between the two helpers, and it exists because
+// the prompt textarea is not fitOverlay. fitOverlay truncates with a tail, so a
+// create-form line it cuts at least says it was cut; the textarea cuts its
+// placeholder at its own width silently and then pads the row back out to that
+// width — which is also why no width assertion could ever see the loss (#690). The
+// ladder is meant to make the cut unnecessary at every supported width; the tail is
+// what a terminal narrower than the 80-col floor gets, and it is a signal rather than
+// a fix.
+//
+// Width 0 (unsized) yields the widest rung uncut, matching fitHint's convention.
+func fitPlaceholder(width int, rungs ...string) string {
+	fitted := fitHint(width, "", rungs...)
+	if width <= 0 || lipgloss.Width(fitted) <= width {
+		return fitted
+	}
+	return truncate.StringWithTail(fitted, uint(width), "…")
 }
