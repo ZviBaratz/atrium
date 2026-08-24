@@ -518,7 +518,17 @@ func (m *home) handleMultiSelectState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 	case "x":
 		// Plain x kills the marked set (the bar advertises "x"); ctrl+x (the global
 		// kill chord, KeyKill below) does the same. Each hands its own key to the
-		// confirmation so the double-tap is the key the user actually pressed.
+		// confirmation so the double-tap is the key the user actually pressed: the
+		// literal here because no registry Entry owns this "x", msg.String() below
+		// because the arm holds the keystroke and its siblings all forward theirs.
+		//
+		// Below it can only ever BE the kill key: "kill" is in attachedLayerActions,
+		// which keys.Apply refuses to bind to more than one key, because the attach
+		// layer forwards a single raw byte and a second alias would type itself into
+		// the agent's pane. So msg.String() and keys.KillKey() cannot diverge there —
+		// it is uniformity with the siblings, not a fix. Don't write the multi-key
+		// drift test for it; the binding it would need is rejected before it applies
+		// (keys/override.go, and the guard over that refusal in override_test.go).
 		return m, m.killMarked("x")
 	}
 
@@ -545,7 +555,7 @@ func (m *home) handleMultiSelectState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 	case keys.KeyResume:
 		return m, m.resumeMarked(msg.String())
 	case keys.KeyKill:
-		return m, m.killMarked(keys.KillKey())
+		return m, m.killMarked(msg.String())
 	default:
 		return m, nil
 	}
