@@ -432,17 +432,29 @@ func (t *TextInputOverlay) renderCreateForm(divider string) string {
 // in place of Model, Effort and Permissions: the three labels on one line, then
 // the single claudeFieldNA sentence they used to render one each.
 //
-// Two rows, not three. A live field renders its label, a blank, then a chip row
-// the user moves a cursor along (see ModeField.Render); the blank separates the
-// two. Nothing here is a chip row and none of these three can take focus while
-// they are inert (stopEnabled skips them), so the separator has nothing to
-// separate. Nothing in this block changes with focus, which is what keeps the
-// form's height still as Tab walks it — the variant control is the thing that
-// does move it, see collapsedClaudeSectionLines.
+// Two rows of content, then blank rows out to the height the three sections it
+// replaces occupied. The padding is the point and is explained at
+// collapsedClaudeSectionLines: shortening here would re-centre the overlay under
+// the keypress that triggered the collapse. fitOverlay sheds blank lines first, so
+// the padding costs nothing on the terminal where rows are scarce.
+//
+// Two rows of content, not three: a live field renders its label, a blank, then a
+// chip row the user moves a cursor along (see ModeField.Render), and the blank
+// separates the two. Nothing here is a chip row and none of these three can take
+// focus while they are inert (stopEnabled skips them), so the separator has
+// nothing to separate.
 func renderCollapsedClaudeFields() string {
+	// -1 for the divider section() adds after this block, which is counted in
+	// collapsedClaudeSectionLines exactly as it is in the three it replaces.
+	pad := collapsedClaudeSectionLines - 1 - collapsedClaudeContentRows
 	return mfLabelStyle().Render(collapsedClaudeLabel) + "\n" +
-		mfDimStyle().Render(claudeFieldNA)
+		mfDimStyle().Render(claudeFieldNA) + strings.Repeat("\n", pad)
 }
+
+// collapsedClaudeContentRows is how many rows of renderCollapsedClaudeFields say
+// anything: the shared label and the single n/a sentence. Everything past this is
+// padding held for the reason collapsedClaudeSectionLines gives.
+const collapsedClaudeContentRows = 2
 
 // renderEnterButton renders the submit button, highlighted when it holds focus.
 func (t *TextInputOverlay) renderEnterButton() string {

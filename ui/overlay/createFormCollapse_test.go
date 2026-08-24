@@ -159,8 +159,15 @@ func TestCollapsedClaudeFields_LabelNamesEveryCollapsedField(t *testing.T) {
 // could be flattened back to one line — which fits a developer's wide terminal and
 // is cut on the 80-col one the whole issue is about.
 func TestCollapsedClaudeFields_WrappedBecauseOneLineDoesNotFit(t *testing.T) {
-	rows := strings.Split(renderCollapsedClaudeFields(), "\n")
-	require.Len(t, rows, 2, "the collapsed block is two rows")
+	// The block's text rows, not its total: it pads out to the height the three
+	// sections had (see collapsedClaudeSectionLines), and the padding is blank.
+	var rows []string
+	for _, row := range strings.Split(renderCollapsedClaudeFields(), "\n") {
+		if strings.TrimSpace(xansi.Strip(row)) != "" {
+			rows = append(rows, row)
+		}
+	}
+	require.Len(t, rows, 2, "the collapsed block says its piece in two rows")
 	for _, row := range rows {
 		assert.LessOrEqualf(t, lipgloss.Width(xansi.Strip(row)), claudeFieldInnerWidth,
 			"each row must fit the 42 cells an 80-col terminal gives the form: %q", row)
@@ -370,60 +377,146 @@ func renderedHeight(o *TextInputOverlay) int {
 	return len(strings.Split(xansi.Strip(o.Render()), "\n"))
 }
 
-// formHeightAt builds a form of the given terminal height and returns what it
-// renders to, with the claude variant selected and then deselected.
-func formHeightAt(t *testing.T, height int) (claude, nonClaude int) {
+// claudeAndNonClaudeForms builds the same form twice at one terminal height: once
+// with the claude variant selected, once driven to a non-claude-only batch through
+// the variant control the user would use.
+func claudeAndNonClaudeForms(t *testing.T, height int) (claude, nonClaude *TextInputOverlay) {
 	t.Helper()
-	build := func(prepare func(*TextInputOverlay)) int {
+	build := func(prepare func(*TextInputOverlay)) *TextInputOverlay {
 		o := NewSessionCreateOverlay(mixedProfiles, nil, []string{"/repo/a"}, "", nil)
 		o.SetBranchResults([]string{"main", "develop"}, o.BranchFilterVersion())
 		o.SetSize(createOverlayWidth, height)
 		if prepare != nil {
 			prepare(o)
 		}
-		return renderedHeight(o)
+		return o
 	}
 	return build(nil), build(selectOnlyNonClaude)
 }
 
-// TestCollapsedClaudeFields_HeightHoldsAsTheVariantFlips is the guard for the
-// cost the collapse would otherwise impose, which is not a width defect and not
-// one Tab can reach.
+// variantRowIndex is the rendered row the variant control sits on — the row the
+// user is holding a key on when the collapse fires. Rendered, not composed:
+// fitOverlay's shedding is part of what decides where it lands, and the screen
+// position is the whole subject here.
+func variantRowIndex(t *testing.T, o *TextInputOverlay) int {
+	t.Helper()
+	for i, r := range strings.Split(xansi.Strip(o.Render()), "\n") {
+		if strings.Contains(r, "Variants") {
+			return i
+		}
+	}
+	t.Fatalf("no variant row in the rendered form")
+	return -1
+}
+
+// shedsRows reports whether fitOverlay had to drop anything to fit this form —
+// i.e. whether the composed form was taller than the terminal allows. Derived
+// rather than expressed as a terminal height, because the height where shedding
+// starts is a function of every section constant in this form and would go stale
+// the first time one of them was tuned.
+func shedsRows(t *testing.T, o *TextInputOverlay) bool {
+	t.Helper()
+	content, _, _ := o.compose()
+	const boxChrome = 4 // border top/bottom + vertical padding
+	return len(strings.Split(content, "\n"))+boxChrome > renderedHeight(o)
+}
+
+// TestCollapsedClaudeFields_HoldsTheFormStill is the guard for the cost the
+// collapse would otherwise impose, and it measures the thing that actually moves.
 //
-// The collapse is driven by the variant control — a ↑/↓ on the very row the user
-// is holding a key on — and the app centres this overlay with PlaceOverlay, which
-// re-centres on every height change. So any row the collapse frees and does not
-// hand back comes off the form's height and shifts that row out from under the
-// cursor, then back on the next press. Un-refitted the shift is the full nine
-// rows the three sections cost.
+// The collapse flips under a ↑/↓ on the variant control, and the app centres this
+// overlay with PlaceOverlay, which re-centres on every height change. So a section
+// that got shorter here would walk the form up the screen under the very keypress
+// that triggered it, and walk it back on the next press. Holding the section's
+// height is what stops that, and the first assertion is the whole mechanism: the
+// form is the same size either way, at every terminal height.
 //
-// fitRows therefore budgets the collapsed section instead of the three, and
-// syncClaudeFieldsEnabled re-fits when the flip happens rather than only at
-// SetSize. That converts the freed rows into picker and prompt rows — while there
-// is room to convert them into. Past roughly a 46-row terminal both forms sit at
-// maxPickerRows with the prompt at its preferred height, and there is nothing left
-// to absorb with; the assertion below states that residual rather than pretending
-// it is gone, and bounds it by the only thing that can move here.
-func TestCollapsedClaudeFields_HeightHoldsAsTheVariantFlips(t *testing.T) {
-	const absorbBand = 45 // above this both forms are pinned at their row caps
+// Note what the second assertion measures: the row's position, not the form's
+// height. Those come apart, and the difference is not academic. An earlier attempt
+// at this fix handed the freed rows to the pickers and the prompt so the form's
+// HEIGHT barely moved — and made the defect worse, because those sections render
+// above the variant row, so the row was pushed down by the reflow while the
+// re-centre lifted the form, and the two added. Height moved by one row; the row
+// under the cursor moved eight. A guard on height passed the whole time.
+//
+// Where fitOverlay is shedding, the row can still shift a little: the two forms
+// offer it different blank rows to drop, so it drops different ones. The form does
+// not move — only the row's place inside it — and the bound is asserted rather
+// than described.
+func TestCollapsedClaudeFields_HoldsTheFormStill(t *testing.T) {
+	// The most a shed can shift the row. Not a tuning knob: raising it would be
+	// accepting a bigger jump, which is the defect this test exists for.
+	const shedSlack = 3
 
 	for h := floorFormHeight; h <= 60; h++ {
-		claude, nonClaude := formHeightAt(t, h)
-		delta := claude - nonClaude
+		claude, nonClaude := claudeAndNonClaudeForms(t, h)
+
+		require.Equalf(t, renderedHeight(claude), renderedHeight(nonClaude),
+			"at %d rows the collapse must not change the form's height, or PlaceOverlay "+
+				"re-centres it under the keypress that caused the collapse", h)
+
+		delta := variantRowIndex(t, nonClaude) - variantRowIndex(t, claude)
 		if delta < 0 {
 			delta = -delta
 		}
-		if h <= absorbBand {
-			assert.LessOrEqualf(t, delta, 3,
-				"at %d rows the freed rows must go to the pickers and the prompt, "+
-					"not come off the height (claude=%d non-claude=%d)", h, claude, nonClaude)
+		if shedsRows(t, claude) || shedsRows(t, nonClaude) {
+			assert.LessOrEqualf(t, delta, shedSlack,
+				"at %d rows fitOverlay is shedding, so the variant row may settle "+
+					"differently — but not by more than %d rows", h, shedSlack)
 			continue
 		}
-		assert.LessOrEqualf(t, delta, collapsedClaudeRowsSaved(),
-			"above the absorb band the collapse may shorten the form, but by no more "+
-				"than the rows it frees — anything larger is a second cause (h=%d "+
-				"claude=%d non-claude=%d)", h, claude, nonClaude)
+		assert.Zerof(t, delta,
+			"at %d rows nothing is shed, so the variant row — the row the user is "+
+				"holding a key on when the collapse fires — must not move at all", h)
 	}
+}
+
+// TestCollapsedClaudeFields_PaddingIsShedAtTheFloor is the other half of the
+// bargain the padding strikes. Holding the height costs rows, and the terminal
+// where rows are scarce is the one #690 measured the defect on — so the padding
+// must not be what a 80×24 form spends its budget on.
+//
+// It is not, and the mechanism is fitOverlay's shedding order: blank lines go
+// before dividers, which go before anything with text on it. This asserts the
+// consequence rather than the order — at the floor the form carries no more blank
+// rows than the claude form it must stay level with.
+func TestCollapsedClaudeFields_PaddingIsShedAtTheFloor(t *testing.T) {
+	claude, nonClaude := claudeAndNonClaudeForms(t, floorFormHeight)
+
+	blanks := func(o *TextInputOverlay) int {
+		n := 0
+		for _, r := range strings.Split(xansi.Strip(o.Render()), "\n") {
+			if strings.TrimSpace(r) == "" {
+				n++
+			}
+		}
+		return n
+	}
+	assert.LessOrEqual(t, blanks(nonClaude), blanks(claude),
+		"the padding must be shed at the floor, not spent there")
+}
+
+// TestCollapsedClaudeFields_BlockOccupiesWhatItClaims ties the rendered block to
+// the constant fitRows budgets for it. Without this the constant is only ever
+// compared against itself: collapsedClaudeSectionLines feeds both the budget and
+// every test computed from it, so understating it moves the budget and the
+// expectation together and nothing notices — while the form composes a row taller
+// than budgeted and fitOverlay silently sheds one.
+func TestCollapsedClaudeFields_BlockOccupiesWhatItClaims(t *testing.T) {
+	rows := strings.Split(renderCollapsedClaudeFields(), "\n")
+
+	// -1 for the divider section() adds, which the constant counts.
+	assert.Equal(t, collapsedClaudeSectionLines-1, len(rows),
+		"the block must occupy exactly the rows fitRows budgets for it")
+
+	said := 0
+	for _, r := range rows {
+		if strings.TrimSpace(xansi.Strip(r)) != "" {
+			said++
+		}
+	}
+	assert.Equal(t, collapsedClaudeContentRows, said,
+		"only the label and the n/a sentence may carry text; the rest is padding")
 }
 
 // TestCollapsedClaudeFields_HeightReturnsOnTheRoundTrip is the same property as a

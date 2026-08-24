@@ -55,27 +55,30 @@ const (
 	// TestFitOverlay_DropsTheHeadingBeforeTheCreateButton, which fail if this section
 	// grows a second RENDERED row, and are indifferent to this number.
 	depsSectionLines = 2
-	// collapsedClaudeSectionLines is the height of the ONE section a non-claude form
-	// renders in place of the three above: the shared label row, the single n/a
-	// sentence, and a divider (see renderCollapsedClaudeFields). No blank row — the
-	// live sections spend one separating their label from a chip row the user can
-	// move a cursor along, and there is no chip row here.
+	// collapsedClaudeSectionLines is the height the ONE section a non-claude form
+	// renders (see renderCollapsedClaudeFields) occupies. It is deliberately the sum
+	// of the three it replaces, not the two rows it has anything to say in: the block
+	// pads itself back out to this.
 	//
-	// fitRows substitutes this for the three section constants whenever the fields
-	// are collapsed, so the rows the collapse frees go to the pickers and the prompt
-	// instead of coming off the form's height. That matters because the collapse
-	// flips under a keypress on the variant control, and PlaceOverlay re-centres on
-	// every height change: rows the form does not hand back move the very row the
-	// user is holding a key on. Absorbing them is only possible while the pickers
-	// and the prompt are below their caps — past roughly a 46-row terminal both
-	// forms are pinned at maxPickerRows and the freed rows do come off the height.
-	// TestCollapsedClaudeFields_HeightHoldsAsTheVariantFlips pins the band where
-	// that holds, and states the residual rather than asserting it away.
+	// Padding rather than shrinking, because this section sits ABOVE nothing and
+	// BELOW the variant control that toggles it. The collapse flips under a ↑/↓ on
+	// that control, and the app centres this overlay with PlaceOverlay, which
+	// re-centres on every height change — so a section that shortened here would
+	// move the very row the user is holding a key on, and move it back on the next
+	// press. Handing the freed rows to the pickers and the prompt instead is WORSE,
+	// not better: those render above the variant row, so the row is pushed down by
+	// the reflow at the same time as the re-centre lifts the form, and the two add
+	// (measured: 8 rows against 4 for a plain shrink, 0 for this).
 	//
-	// Like every constant here it must agree with what the section actually renders,
-	// and nothing checks that agreement directly; it is not what keeps the form
-	// inside the screen either (fitOverlay's shedding is, per depsSectionLines).
-	collapsedClaudeSectionLines = 3
+	// The rows are not wasted at the size where rows are scarce. fitOverlay drops
+	// blank lines before anything else, so at the 80×24 floor this block's padding is
+	// the first thing shed and the form is exactly what it would have been had the
+	// block never padded — which is where #690 measured the defect and where
+	// TestCreateForm_FloorGoldens renders it.
+	//
+	// Derived, not written down: a hand-written number here could drift from the
+	// three constants it must equal, and the drift would be a silent re-centre.
+	collapsedClaudeSectionLines = modelSectionLines + effortSectionLines + modeSectionLines
 )
 
 // SetSize is given the full terminal dimensions. The create form keeps every section at a
@@ -126,18 +129,14 @@ func (t *TextInputOverlay) fitRows(height int) (pickerRows, promptRows int) {
 	if t.variantPicker != nil {
 		chrome += variantSectionLines
 	}
-	if t.claudeFieldsCollapsed() {
-		chrome += collapsedClaudeSectionLines
-	} else {
-		if t.modelField != nil {
-			chrome += modelSectionLines
-		}
-		if t.modeField != nil {
-			chrome += modeSectionLines
-		}
-		if t.effortField != nil {
-			chrome += effortSectionLines
-		}
+	if t.modelField != nil {
+		chrome += modelSectionLines
+	}
+	if t.modeField != nil {
+		chrome += modeSectionLines
+	}
+	if t.effortField != nil {
+		chrome += effortSectionLines
 	}
 	if t.hasAccountSection() {
 		chrome += accountSectionLines

@@ -161,17 +161,6 @@ func (t *TextInputOverlay) syncClaudeFieldsEnabled() {
 	t.modeField.SetDisabled(!includesClaude)
 	t.effortField.SetDisabled(!includesClaude)
 
-	// The three sections collapse to one when they all go inert, which frees rows
-	// mid-form. Re-fit here rather than only at SetSize: this flip happens under a
-	// keypress on the variant control, and PlaceOverlay re-centres the overlay on
-	// every height change, so rows the form does not hand back to the pickers and
-	// the prompt come off its height and shift the row the user is holding a key on
-	// (see collapsedClaudeSectionLines). SetSize does not call back into this, so
-	// the recursion stops here.
-	if t.isCreateForm && t.height > 0 {
-		t.SetSize(t.width, t.height)
-	}
-
 	// Push the pin state each field's no-op-chip hint names. Every field reports
 	// whether a pin exists separately from what to call it: the raw pin decides
 	// "pinned", and a label is supplied only when Atrium can name the value. All

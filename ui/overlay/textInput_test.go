@@ -851,22 +851,6 @@ func TestSessionCreateOverlay_ModelSectionHeightConstant(t *testing.T) {
 	assert.Equal(t, modelFocused, titleFocused, "overlay height must not change with model focus")
 }
 
-// collapsedClaudeRowsSaved is the number of rows renderCollapsedClaudeFields frees,
-// computed from the size constants rather than written down: three full sections
-// replaced by one. A test asserting the number by hand would keep passing if the
-// collapsed block grew a row.
-//
-// Rows freed, not rows the form loses. fitRows hands them to the pickers and the
-// prompt wherever those are below their caps, so the form's height moves by much
-// less than this and often not at all — which is the point, and what
-// TestCollapsedClaudeFields_HeightHoldsAsTheVariantFlips uses this as the ceiling
-// for. At the 80×24 floor fitOverlay has already shed the blank rows before the
-// collapse can free them, so what is visibly recovered there is smaller again
-// (#690 measures it there; TestCreateForm_FloorGoldens renders it).
-func collapsedClaudeRowsSaved() int {
-	return modelSectionLines + effortSectionLines + modeSectionLines - collapsedClaudeSectionLines
-}
-
 // fitOverlay's height pass must compact a too-tall body down to t.height by shedding
 // only blank lines, leaving the bordered box within the terminal.
 func TestFitOverlay_CompactsHeightWithinTerminal(t *testing.T) {
