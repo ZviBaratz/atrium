@@ -34,6 +34,7 @@ var (
 	makeRaw          = term.MakeRaw
 	restoreTerm      = term.Restore
 	suspendInterrupt = lifecycle.SuspendTerminalSignals
+	yieldTabs        = yieldHardTabs
 )
 
 // handoverHold is seamed for the reason the term calls above are: the tests that drive
@@ -146,6 +147,12 @@ func (a *attachCommand) Run() error {
 	// session they cannot detach from, and it must stay.
 	if cooked := !a.raw; cooked {
 		defer suspendInterrupt()()
+		// A cooked child keeps OPOST, so the tab-delay field app.Run set on the way in
+		// would have the driver expand THIS child's tabs, miscounting its ANSI escapes as
+		// columns. Hand the field back for its span and take it again on the way out,
+		// before bubbletea's RestoreTerminal re-reads it (yieldHardTabs, #796). Not the
+		// raw branch: makeRaw clears OPOST, so the field is not consulted there.
+		defer yieldTabs(os.Stdin)()
 	}
 	ch, err := a.attach()
 	if err != nil {

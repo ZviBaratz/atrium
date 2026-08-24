@@ -26,8 +26,9 @@ import (
 // checkOptimizedMovements, so "not TAB0" is the entire contract going in;
 // coming out, anything short of the original word is a leak.
 func TestSuppressHardTabsMovesAndRestoresTheFlag(t *testing.T) {
-	_, tty, err := pty.Open()
+	ptmx, tty, err := pty.Open()
 	require.NoError(t, err)
+	defer func() { _ = ptmx.Close() }()
 	defer func() { _ = tty.Close() }()
 	fd := int(tty.Fd())
 
@@ -95,15 +96,78 @@ func TestRunSuppressesHardTabs(t *testing.T) {
 		if !ok {
 			return true
 		}
-		ast.Inspect(d, func(n ast.Node) bool {
-			if id, ok := n.(*ast.Ident); ok && id.Name == "suppressHardTabs" {
-				deferred = true
-			}
-			return !deferred
-		})
+		// The shape, not just the name: `defer suppressHardTabs(os.Stdin)()` defers the
+		// RESTORE the call returns, so the suppression itself runs now. Drop the trailing
+		// pair and `defer suppressHardTabs(os.Stdin)` still compiles — the returned func
+		// is simply discarded — but the fix is then inert (TABDLY is still TAB0 when
+		// checkOptimizedMovements reads it) and the suppression lands at Run's EXIT with
+		// its restore thrown away, leaving the user's shell expanding tabs. Measured: with
+		// only the name asserted, every other test in this file stays green through that.
+		inner, ok := d.Call.Fun.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if id, ok := inner.Fun.(*ast.Ident); ok && id.Name == "suppressHardTabs" {
+			deferred = true
+		}
 		return !deferred
 	})
 	require.True(t, deferred,
-		"Run must defer suppressHardTabs, or every frame Atrium draws carries the tab bytes "+
-			"TestFrameEmitsNoRawTab forbids (#796)")
+		"Run must defer the restore that suppressHardTabs returns — `defer suppressHardTabs(os.Stdin)()` "+
+			"— or every frame Atrium draws carries the tab bytes TestFrameEmitsNoRawTab forbids (#796)")
+}
+
+// TestYieldHardTabsHandsTheFieldBackAndTakesItAgain drives the real round trip on a
+// pty, because the attach guard in hardtabs_attach_test.go stubs the seam and so
+// proves only that Run calls something at the right moment — a yieldHardTabs that
+// moved nothing would leave it green.
+//
+// The order is the contract: as-found while the child holds the terminal, expanded
+// again by the time it returns, since bubbletea re-reads the field on the way in.
+func TestYieldHardTabsHandsTheFieldBackAndTakesItAgain(t *testing.T) {
+	ptmx, tty, err := pty.Open()
+	require.NoError(t, err)
+	defer func() { _ = ptmx.Close() }()
+	defer func() { _ = tty.Close() }()
+	fd := int(tty.Fd())
+
+	asFound, err := unix.IoctlGetTermios(fd, getTermios)
+	require.NoError(t, err)
+
+	restore := suppressHardTabs(tty)
+	defer restore()
+	require.NotZero(t, delayOf(t, fd), "precondition: the fix is in effect")
+
+	resuppress := yieldHardTabs(tty)
+	require.Equal(t, uint64(asFound.Oflag&tabdly), delayOf(t, fd),
+		"a cooked child must inherit the field as the user's shell had it, or the driver "+
+			"expands its tabs and miscounts its ANSI escapes as columns (#796)")
+
+	resuppress()
+	require.NotZero(t, delayOf(t, fd),
+		"and the field must be back before bubbletea's RestoreTerminal re-reads it")
+}
+
+// A yield with nothing suppressed must not invent a state to restore: yieldHardTabs
+// runs on every cooked attach, including on the platforms and terminals where
+// suppressHardTabs bailed out.
+func TestYieldHardTabsIsANoOpWhenNothingIsSuppressed(t *testing.T) {
+	ptmx, tty, err := pty.Open()
+	require.NoError(t, err)
+	defer func() { _ = ptmx.Close() }()
+	defer func() { _ = tty.Close() }()
+	fd := int(tty.Fd())
+
+	require.Nil(t, hardTabsAsFound, "precondition: no suppression is in flight")
+	before := delayOf(t, fd)
+	require.NotPanics(t, func() { yieldHardTabs(tty)() })
+	require.NotPanics(t, func() { yieldHardTabs(nil)() })
+	require.Equal(t, before, delayOf(t, fd), "an unsuppressed tty must come back untouched")
+}
+
+func delayOf(t *testing.T, fd int) uint64 {
+	t.Helper()
+	term, err := unix.IoctlGetTermios(fd, getTermios)
+	require.NoError(t, err)
+	return uint64(term.Oflag & tabdly)
 }

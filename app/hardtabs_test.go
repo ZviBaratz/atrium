@@ -1,3 +1,12 @@
+//go:build linux || solaris || aix || darwin || freebsd || dragonfly
+
+// This file carries hardtabs.go's build tag rather than none, because its positive
+// control is only true where the fix is. On NetBSD and OpenBSD suppressHardTabs is the
+// no-op in hardtabs_other.go and bubbletea never enables hard tabs, so an untagged
+// TestHardTabSuppressionIsLoadBearing would require a total that is structurally zero
+// and fail there for no defect, telling its reader to re-sweep frameStates() over a
+// platform that has nothing to sweep.
+
 package app
 
 import (
@@ -60,8 +69,12 @@ func renderThroughPTY(t *testing.T, frame string, w, h int, suppress bool) strin
 	defer func() { _ = ptmx.Close() }()
 	require.NoError(t, pty.Setsize(tty, &pty.Winsize{Cols: uint16(w), Rows: uint16(h)}))
 
+	// Not deferred: the restore has to run while tty is still open, and the explicit
+	// Close below is what ends the reader. A defer here would fire after it, ioctl-ing
+	// an fd this process has already released — and would exercise only the set half.
+	restoreTabs := func() {}
 	if suppress {
-		defer suppressHardTabs(tty)()
+		restoreTabs = suppressHardTabs(tty)
 	}
 
 	var mu sync.Mutex
@@ -99,6 +112,7 @@ func renderThroughPTY(t *testing.T, frame string, w, h int, suppress bool) strin
 	_, err = p.Run()
 	require.NoError(t, err)
 
+	restoreTabs()
 	// Closing the slave is what ends the reader's Read loop; without it the
 	// goroutine blocks and the returned bytes are whatever raced in.
 	require.NoError(t, tty.Close())

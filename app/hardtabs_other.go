@@ -14,3 +14,7 @@ import "os"
 // removes everywhere else. Atrium drives tmux, which Windows has no port of, so
 // that gap has no user today; it is still a gap, not coverage.
 func suppressHardTabs(*os.File) (restore func()) { return func() {} }
+
+// yieldHardTabs is a no-op for the same reason: with nothing suppressed there is
+// nothing to hand back for a cooked child's span.
+func yieldHardTabs(*os.File) (resuppress func()) { return func() {} }
