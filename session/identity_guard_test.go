@@ -12,16 +12,47 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// identityAccessors are the methods that may touch ident, and every one of them must take
-// identityMu. Writers as well as readers: a write with no lock races the next reader just
-// as surely, and SetBranch is the writer Start calls from its own goroutine.
-var identityAccessors = []string{
-	"Identity",
-	"Title", "SetTitle",
-	"Branch", "SetBranch",
-	"DisplayName", "SetDisplayName",
-	"Note", "SetNote",
-	"AdoptRename",
+// identityAccessors are the *Instance methods in identity.go that touch ident, DERIVED from
+// the file rather than listed here.
+//
+// Derived because a hardcoded list only covers the accessors that existed when it was
+// written, and the whole reason for this change is that wave 1 adds readers of these fields
+// — an eleventh accessor added to identity.go with no lock would have passed a fixed list
+// silently. It is also the reason expected is asserted below: a derivation that quietly
+// found nothing would pass every check in this file.
+//
+// Writers count as well as readers: a write with no lock races the next reader just as
+// surely, and SetBranch is the writer Start calls from its own goroutine.
+func identityAccessors(t *testing.T, file *ast.File) map[string]*ast.FuncDecl {
+	t.Helper()
+	found := map[string]*ast.FuncDecl{}
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv == nil || fn.Body == nil {
+			continue
+		}
+		var touches bool
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if ok && sel.Sel.Name == "ident" {
+				touches = true
+			}
+			return !touches
+		})
+		if touches {
+			found[fn.Name.Name] = fn
+		}
+	}
+	// The ten that exist today. Not a whitelist — a floor, so a derivation that silently
+	// stopped finding methods fails here instead of passing everything downstream.
+	for _, name := range []string{
+		"Identity", "Title", "SetTitle", "Branch", "SetBranch",
+		"DisplayName", "SetDisplayName", "Note", "SetNote", "AdoptRename",
+	} {
+		require.Containsf(t, found, name,
+			"%s touches ident but was not derived — the derivation is broken, not the code", name)
+	}
+	return found
 }
 
 // TestEveryIdentityAccessorTakesTheLock is the half of #795's guard the normal gate can
@@ -38,19 +69,8 @@ var identityAccessors = []string{
 // that is simply not there.
 func TestEveryIdentityAccessorTakesTheLock(t *testing.T) {
 	file := parseIdentityFile(t)
-	bodies := map[string]*ast.FuncDecl{}
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Recv == nil {
-			continue
-		}
-		bodies[fn.Name.Name] = fn
-	}
 
-	for _, name := range identityAccessors {
-		fn, ok := bodies[name]
-		require.Truef(t, ok, "%s must live in identity.go beside the field it guards", name)
-
+	for name, fn := range identityAccessors(t, file) {
 		var takesLock bool
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
 			sel, ok := n.(*ast.SelectorExpr)
@@ -116,76 +136,58 @@ func parseIdentityFile(t *testing.T) *ast.File {
 	return file
 }
 
-// TestIdentityIsNeverReadInsideTheLiveStateLock holds the one invariant that makes a second
-// mutex safe rather than a deadlock waiting to happen: identityMu and i.mu are never held
-// together.
+// TestIdentityMuIsALeafLock holds the one invariant that makes a second mutex in Instance
+// safe rather than a deadlock waiting to happen: nothing is called while identityMu is held.
 //
-// A second lock in a struct that already has one is a lock-ordering hazard by default. This
-// package keeps it out of that class by never nesting the two — AdoptRename writes ident and
-// tmuxName under sequential acquisitions, and SetupFailureReport takes its title before
-// entering i.mu's span rather than inside it, which is the site that made this test worth
-// writing.
+// A leaf lock cannot be the outer half of a cycle, so the order i.mu → identityMu — which
+// this package takes constantly, and several calls deep (recordStatusChange, portOwner,
+// probeRunTmux and reservePort all read an identity while an i.mu span is open) — is safe
+// without anyone having to know about it.
 //
-// The check is positional, and it has to track the whole span rather than just the
-// acquisition. Both shapes are in this package and they differ: SetupFailureReport defers
-// its Unlock, so its span runs to the end of the body and a call after the Lock is nested;
-// Start unlocks explicitly and then calls SetBranch, which is sequential and fine. The first
-// draft of this test assumed every span was deferred and failed on Start within a minute of
-// being written. So a call counts as nested only while the running Lock/Unlock depth is
-// positive, with a deferred Unlock holding the span open to the end of the body.
+// An earlier draft of this guard asserted the stronger "the two are never held together" and
+// tried to enforce it by rejecting an accessor call inside an i.mu span. It was wrong twice
+// over: the invariant was already false in this package's own status path, and the check
+// could not see a call one hop deeper anyway, so it would have reported a clean tree while
+// the property it named was broken. The leaf property is the one that is both true and
+// checkable, because every span that could break it is in this one file.
 //
-// What it does not see: an accessor reached one call deeper, from a helper invoked inside the
-// span. That is the same limit ui's capture-path guard has, and the same answer — the nesting
-// it does catch is the shape this package actually writes.
-func TestIdentityIsNeverReadInsideTheLiveStateLock(t *testing.T) {
-	accessors := map[string]bool{}
-	for _, name := range identityAccessors {
-		accessors[name] = true
-	}
-
+// The check: inside any identityMu span in identity.go, the only calls allowed are on
+// identityMu itself. That covers the shape that would actually reintroduce the hazard —
+// AdoptRename moving its i.mu acquisition inside the identityMu span it currently follows.
+func TestIdentityMuIsALeafLock(t *testing.T) {
 	fset := token.NewFileSet()
-	sources, err := filepath.Glob("*.go")
+	file, err := parser.ParseFile(fset, "identity.go", nil, parser.SkipObjectResolution)
 	require.NoError(t, err)
 
-	for _, path := range sources {
-		if strings.HasSuffix(path, "_test.go") {
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
 			continue
 		}
-		file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-		require.NoError(t, err)
-
-		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Body == nil {
-				continue
-			}
-			span := liveStateLockSpan(fn)
-			if len(span) == 0 {
-				continue
-			}
-			ast.Inspect(fn.Body, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok || !accessors[sel.Sel.Name] || !isReceiver(sel.X) || !span.holdsAt(call.Pos()) {
-					return true
-				}
-				require.Failf(t, "identity accessor called inside the i.mu span",
-					"%s:%d — %s.%s() runs while %s holds i.mu, which nests identityMu inside it. "+
-						"Take the value before the lock; the two must never be held together (#795).",
-					filepath.Base(path), fset.Position(call.Pos()).Line,
-					"i", sel.Sel.Name, fn.Name.Name)
-				return true
-			})
+		span := identityLockSpan(fn)
+		if len(span) == 0 {
+			continue
 		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || !span.holdsAt(call.Pos()) {
+				return true
+			}
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+				if mu, ok := sel.X.(*ast.SelectorExpr); ok && mu.Sel.Name == "identityMu" {
+					return true
+				}
+			}
+			require.Failf(t, "call inside the identityMu span",
+				"identity.go:%d — %s calls out while holding identityMu, which stops it being a "+
+					"leaf lock and puts it back in the deadlock class a second mutex invites (#795).",
+				fset.Position(call.Pos()).Line, fn.Name.Name)
+			return true
+		})
 	}
 }
 
-// lockEvent is one acquisition or release of i.mu inside a function body. A deferred
-// release is recorded with releases=false at the end of the body's reach: it closes nothing
-// before then.
+// lockEvent is one acquisition or release of a mutex inside a function body.
 type lockEvent struct {
 	pos     token.Pos
 	acquire bool
@@ -196,7 +198,7 @@ type lockEvent struct {
 
 type lockSpan []lockEvent
 
-// holdsAt reports whether i.mu is held at pos: the depth of acquisitions minus
+// holdsAt reports whether the lock is held at pos: the depth of acquisitions minus
 // non-deferred releases that precede it.
 func (s lockSpan) holdsAt(pos token.Pos) bool {
 	depth := 0
@@ -214,8 +216,12 @@ func (s lockSpan) holdsAt(pos token.Pos) bool {
 	return depth > 0
 }
 
-// liveStateLockSpan collects the function's i.mu events in source order.
-func liveStateLockSpan(fn *ast.FuncDecl) lockSpan {
+// identityLockSpan collects the function's identityMu events in source order.
+//
+// Both shapes are in this file and they differ: the accessors defer their release, so the
+// span runs to the end of the body, while AdoptRename releases explicitly and then takes
+// i.mu — which is sequential, and the whole point.
+func identityLockSpan(fn *ast.FuncDecl) lockSpan {
 	deferred := map[token.Pos]bool{}
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		if d, ok := n.(*ast.DeferStmt); ok {
@@ -236,7 +242,7 @@ func liveStateLockSpan(fn *ast.FuncDecl) lockSpan {
 			return true
 		}
 		mu, ok := sel.X.(*ast.SelectorExpr)
-		if !ok || mu.Sel.Name != "mu" || !isReceiver(mu.X) {
+		if !ok || mu.Sel.Name != "identityMu" {
 			return true
 		}
 		span = append(span, lockEvent{pos: sel.Pos(), acquire: acquire, deferred: deferred[sel.Pos()]})
@@ -244,11 +250,4 @@ func liveStateLockSpan(fn *ast.FuncDecl) lockSpan {
 	})
 	sort.Slice(span, func(a, b int) bool { return span[a].pos < span[b].pos })
 	return span
-}
-
-// isReceiver reports whether the expression is the bare identifier `i`, which is what every
-// *Instance method in this package names its receiver.
-func isReceiver(x ast.Expr) bool {
-	id, ok := x.(*ast.Ident)
-	return ok && id.Name == "i"
 }

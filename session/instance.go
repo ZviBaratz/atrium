@@ -141,11 +141,15 @@ type Instance struct {
 	// identity accessors are called from nearly every path in the tree, so one lock serving
 	// both would spread that rule everywhere.
 	//
-	// The two are NEVER HELD TOGETHER, in either order — that is the invariant, and it is
-	// what makes a second lock free of the deadlock it would otherwise invite. AdoptRename
-	// writes ident and tmuxName under separate, sequential acquisitions for this reason;
-	// SetupFailureReport takes its title before entering i.mu's span for the same one.
-	// TestIdentityIsNeverReadInsideTheLiveStateLock holds it.
+	// identityMu is a LEAF: nothing is called while it is held, so it can never be the
+	// outer half of a cycle. That, not an ordering convention, is what makes a second lock
+	// in this struct free of the deadlock it would otherwise invite — and it is the only
+	// form of the rule that survives contact with this package, where i.mu spans routinely
+	// reach an identity accessor two or three calls deep (recordStatusChange, portOwner,
+	// probeRunTmux, reservePort, …). Holding i.mu and then taking identityMu is fine and
+	// happens constantly; the reverse never happens. AdoptRename is the one place that
+	// touches both, and it writes ident and tmuxName under separate, sequential
+	// acquisitions rather than nesting them. TestIdentityMuIsALeafLock holds it.
 	//
 	// Always go through the accessors in identity.go; nothing outside that file touches ident.
 	identityMu sync.RWMutex
@@ -692,7 +696,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		data.Worktree = GitWorktreeData{
 			RepoPath:         wt.GetRepoPath(),
 			WorktreePath:     wt.GetWorktreePath(),
-			SessionName:      i.Title(),
+			SessionName:      id.Title,
 			BranchName:       wt.GetBranchName(),
 			BaseCommitSHA:    wt.GetBaseCommitSHA(),
 			BaseRef:          wt.GetBaseRef(),
@@ -1422,10 +1426,13 @@ func (i *Instance) sessionBrief() tmux.SessionBrief {
 		log.ErrorLog.Printf("session brief disabled for %s: cannot resolve worktrees dir: %v", i.Title(), err)
 		return tmux.SessionBrief{}
 	}
+	// One snapshot: the brief is rendered from a tea.Cmd goroutine at every launch, so
+	// separate reads could name the session after a rename and its branch from before it.
+	id := i.Identity()
 	return tmux.SessionBrief{
-		Name:          i.Title(),
+		Name:          id.Title,
 		Origin:        wt.GetRepoPath(),
-		Branch:        i.Branch(),
+		Branch:        id.Branch,
 		WorktreesRoot: root,
 	}
 }

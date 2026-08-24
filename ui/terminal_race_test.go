@@ -100,8 +100,9 @@ var frameScopedInstanceReads = map[string]bool{
 //   - The instance aliased into a local first (`x := instance; x.Title`), which is not a
 //     selector on a parameter.
 //
-// That is why the -race test above is the primary guard and this one is the companion the
-// normal gate can fail on.
+// Neither gap is covered elsewhere in this file any more — the -race test this one used to
+// partner has been deleted (see the note at the top) — so what it does not see, nothing here
+// sees.
 func TestCaptureGoroutineTakesItsIdentityByParameter(t *testing.T) {
 	for _, target := range captureGoroutineFuncs {
 		fset := token.NewFileSet()
@@ -120,10 +121,12 @@ func TestCaptureGoroutineTakesItsIdentityByParameter(t *testing.T) {
 			if !ok || !receivers[ident.Name] {
 				return true
 			}
-			t.Errorf("%s reads %s.%s at %s — the handler that adopts a rename writes Title, "+
-				"Branch, displayName and note on the update thread with no lock, so reading "+
-				"any of them on the capture goroutine is a data race (#718). Snapshot the "+
-				"value on the update thread (frameTarget.termTitle) and pass it in instead.",
+			t.Errorf("%s reads %s.%s at %s — the handler that adopts a rename rewrites Title, "+
+				"Branch, displayName and note on the update thread, so a read here takes them "+
+				"from a different instant than the frame being captured. Guarded since #795, so "+
+				"the detector will not object; the shell is simply named from a frame nobody "+
+				"rendered (#718). Snapshot on the update thread (frameTarget.termTitle) and pass "+
+				"it in instead.",
 				target.fn, ident.Name, sel.Sel.Name, fset.Position(sel.Pos()))
 			return true
 		})

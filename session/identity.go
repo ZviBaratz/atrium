@@ -40,6 +40,19 @@ type identity struct {
 	branch string
 }
 
+// name is the label rule — displayName, falling back to title — and it is the ONE home
+// for it. DisplayName and the Identity snapshot both read it from here rather than each
+// spelling the fallback out, which is how the two stay the same rule.
+//
+// A value method on the struct, so it can be called on a copy taken under the lock rather
+// than inside the span: identityMu is a leaf and nothing is called while it is held.
+func (id identity) name() string {
+	if id.displayName != "" {
+		return id.displayName
+	}
+	return id.title
+}
+
 // Identity is a consistent snapshot of the identity fields, taken under one lock.
 //
 // Use it wherever two of them are needed together — the session brief, the repo-script
@@ -48,21 +61,27 @@ type identity struct {
 // it does not make it current, so anything crossing a goroutine boundary still wants a
 // value snapshotted on the update thread rather than a live accessor call (#718).
 type Identity struct {
-	Title       string
+	Title string
+	// DisplayName is the raw label, empty when none is set. Name is what to render.
 	DisplayName string
-	Note        string
-	Branch      string
+	// Name is the label resolved through the fallback: DisplayName, or Title when the
+	// label is unset. Carried in the snapshot so a consumer never re-derives the rule.
+	Name   string
+	Note   string
+	Branch string
 }
 
 // Identity returns the instance's identity fields as one snapshot.
 func (i *Instance) Identity() Identity {
 	i.identityMu.RLock()
-	defer i.identityMu.RUnlock()
+	snap := i.ident
+	i.identityMu.RUnlock()
 	return Identity{
-		Title:       i.ident.title,
-		DisplayName: i.ident.displayName,
-		Note:        i.ident.note,
-		Branch:      i.ident.branch,
+		Title:       snap.title,
+		DisplayName: snap.displayName,
+		Name:        snap.name(),
+		Note:        snap.note,
+		Branch:      snap.branch,
 	}
 }
 
@@ -108,11 +127,9 @@ func (i *Instance) SetBranch(branch string) {
 // not only onto displayName.
 func (i *Instance) DisplayName() string {
 	i.identityMu.RLock()
-	defer i.identityMu.RUnlock()
-	if i.ident.displayName != "" {
-		return i.ident.displayName
-	}
-	return i.ident.title
+	snap := i.ident
+	i.identityMu.RUnlock()
+	return snap.name()
 }
 
 // SetDisplayName sets the cosmetic display label. Unlike SetTitle it works at any time

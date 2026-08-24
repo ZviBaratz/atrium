@@ -48,7 +48,9 @@ type customCommandRow struct {
 // an *Instance and read its identity in a goroutine would run the command under whatever
 // name a concurrent rename or restore happened to leave — the guard on those fields (#795)
 // serialises the read, it does not decide which side of the rename the command belongs to.
-// Path is genuinely unguarded and would still be a data race. Rendering the template,
+// Path is unguarded, though SetPath refuses a started instance — the same reachability
+// argument that leaves SetTitle without a race case, so the honest reading is that the
+// freshness argument is what carries this type, not a live data race. Rendering the template,
 // building the environment and resolving the argv all happen on the update thread; only
 // this struct crosses over. TestCustomCommandSpecCarriesOnlyStrings is what keeps that
 // true.

@@ -150,7 +150,10 @@ func TestIdentityReadsDoNotRaceItsWrites(t *testing.T) {
 	// once — the case that fails if a future field joins the struct without joining the lock.
 	t.Run("Identity", func(t *testing.T) {
 		i := raceInstance()
-		driveIdentityRace(func() string { id := i.Identity(); return id.Title + id.Branch + id.DisplayName + id.Note }, func(turn int) {
+		driveIdentityRace(func() string {
+			id := i.Identity()
+			return id.Title + id.Branch + id.DisplayName + id.Name + id.Note
+		}, func(turn int) {
 			i.AdoptRename(RenamedIdentity{
 				Title:  renameTurnValue(turn, "after", "after-again"),
 				Branch: renameTurnValue(turn, "zvi/after", "zvi/after-again"),
@@ -191,10 +194,11 @@ func TestAdoptRenameSwapsTitleAndBranchTogether(t *testing.T) {
 		}
 	}()
 
+	after := Identity{Title: "after", Name: "after", Branch: "zvi/after"}
 	for range identityRaceTurns {
 		got := i.Identity()
 		require.Contains(t,
-			[]Identity{before, {Title: "after", Branch: "zvi/after"}}, got,
+			[]Identity{before, after}, got,
 			"a snapshot must come from one side of the rename or the other, never half of each")
 	}
 	close(stop)

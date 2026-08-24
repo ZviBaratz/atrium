@@ -373,12 +373,16 @@ func (i *Instance) originRemote(repoPath string) string {
 // a script (see Instance.Start). If a leaf that can be absent is ever added, the
 // `rm -rf {{.Session.X}}/build` case comes back and that guard has to come with it.
 func (i *Instance) repoScriptCtx(dir, repoPath string) repocfg.Ctx {
+	// One snapshot, for the same reason as sessionBrief: this context is built on the
+	// Start goroutine, and a script that is told one title and a branch from the other
+	// side of a rename is worse than one told a stale pair.
+	id := i.Identity()
 	return repocfg.Ctx{
 		Session: repocfg.SessionCtx{
 			Port:     i.PortText(),
-			Title:    i.Title(),
-			Name:     i.DisplayName(),
-			Branch:   i.Branch(),
+			Title:    id.Title,
+			Name:     id.Name,
+			Branch:   id.Branch,
 			Worktree: dir,
 		},
 		Repo: repocfg.RepoCtx{Path: repoPath, Name: i.GroupKey()},
@@ -522,15 +526,12 @@ func (i *Instance) ClearSetupError() {
 // SetupFailureReport is the message the user sees for a failed setup script: what
 // failed, followed by the tail of what it said. Empty when the last run succeeded.
 func (i *Instance) SetupFailureReport() string {
-	// Taken before i.mu, not inside it: identityMu and i.mu are never held together
-	// (see Instance.identityMu), and this is the one site that would have nested them.
-	title := i.Title()
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	if i.setupErr == nil {
 		return ""
 	}
-	report := fmt.Sprintf("The setup script for %q failed: %v\n\nThe session is running — its worktree and branch are intact, but whatever the script installs is not there.", title, i.setupErr)
+	report := fmt.Sprintf("The setup script for %q failed: %v\n\nThe session is running — its worktree and branch are intact, but whatever the script installs is not there.", i.Title(), i.setupErr)
 	if i.setupOutput != "" {
 		report += "\n\n" + i.setupOutput
 	}
