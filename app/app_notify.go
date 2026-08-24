@@ -8,12 +8,6 @@ import (
 	"github.com/ZviBaratz/atrium/session"
 )
 
-// notifyThrottle is the minimum spacing between two notifications of the same edge
-// for the same session. Edges already fire only on status transitions, so this only
-// guards a markerless agent's classifier flapping (e.g. prompt detection flipping
-// NeedsInput↔Running); it is deliberately coarse.
-const notifyThrottle = 3 * time.Second
-
 // notifyState tracks a single instance's notification bookkeeping: the last time
 // each edge was signalled, for throttling. Its mere presence in home.notifySeen also
 // means "this instance has been observed at least once" — the first-observation gate.
@@ -144,16 +138,20 @@ func (m *home) maybeNotify(inst *session.Instance, old session.Status, prevUnrea
 	if rung == config.NotificationsOff {
 		return
 	}
-	if st.throttled(ev) {
+	if st.throttled(ev, time.Duration(m.appConfig.GetNotifyThrottleSeconds())*time.Second) {
 		return
 	}
 	m.notifier.Emit(rung, m.appConfig.GetNotifyCommand(), inst.DisplayName(), ev)
 }
 
-// throttled reports whether an edge of type ev fired too recently to signal again,
-// stamping the current time when it permits the notification. Each event carries its own
-// budget — a question must not be swallowed because a finish moments earlier spent one.
-func (st *notifyState) throttled(ev notify.Event) bool {
+// throttled reports whether an edge of type ev fired within the last window, stamping the
+// current time when it permits the notification. Each event carries its own budget — a
+// question must not be swallowed because a finish moments earlier spent one.
+//
+// A window of zero (notify_throttle_seconds: 0) never throttles: the comparison is
+// strictly less-than, so a zero-length window admits every edge, including two in the same
+// nanosecond. That is the configured meaning of 0, not an accident of the arithmetic.
+func (st *notifyState) throttled(ev notify.Event, window time.Duration) bool {
 	now := time.Now()
 	last := &st.lastFinished
 	switch ev {
@@ -162,7 +160,7 @@ func (st *notifyState) throttled(ev notify.Event) bool {
 	case notify.EventAsked:
 		last = &st.lastAsked
 	}
-	if now.Sub(*last) < notifyThrottle {
+	if now.Sub(*last) < window {
 		return true
 	}
 	*last = now

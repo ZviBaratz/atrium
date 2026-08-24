@@ -19,8 +19,8 @@ package memo
 // require the two frames byte-identical — the net that catches an input nobody
 // enumerated in a key.
 //
-// A package var rather than a Config field: this is a test seam, not a setting
-// (the diffContentFloor idiom in app/app_poll.go). It is read on the render path,
+// A package var rather than a Config field: this is a test seam, not a setting. It
+// is read on the render path,
 // which is main-thread only, so flip it around a synchronous render and restore it
 // with the returned function.
 //

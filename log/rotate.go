@@ -14,8 +14,7 @@ import (
 // and a long-lived install accumulated hundreds of MB.
 //
 // A bound on a diagnostic artifact, not a setting: a Config field would put a
-// knob on something no user has a reason to tune (the memo.Enabled and
-// diffContentFloor idiom).
+// knob on something no user has a reason to tune.
 const maxLogBytes = 16 << 20
 
 // rotationSuffix names the single previous generation kept beside the live log.

@@ -405,6 +405,15 @@ func (l *List) SetContextIndicator(mode string) {
 	l.renderer.contextIndicator = mode
 }
 
+// SetContextThresholds sets the context chip's colour bands (see
+// InstanceRenderer.contextWarnPct). The app passes the clamped
+// config.GetContextWarnPercent / GetContextDangerPercent values at startup and on
+// settings changes. A zero for either restores that band's package default.
+func (l *List) SetContextThresholds(warn, danger int) {
+	l.renderer.contextWarnPct = warn
+	l.renderer.contextDangerPct = danger
+}
+
 // SetFilter updates the incremental filter query and clamps the selection to the
 // nearest still-visible item. Pass an empty string to disable filtering.
 func (l *List) SetFilter(query string) {

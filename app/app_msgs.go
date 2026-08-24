@@ -731,7 +731,7 @@ func (m *home) resumeAfterSuspendedLoop(extra ...tea.Cmd) tea.Cmd {
 	selected := m.list.GetSelectedInstance()
 	m.lastStatusPollSelection = selected
 	cmds := []tea.Cmd{m.instanceChanged(),
-		sweepMetadataNowCmd(m.ctx, m.snapshotActiveInstances(), selected, m.attachGen, m.usagePolicy())}
+		sweepMetadataNowCmd(m.ctx, m.snapshotActiveInstances(), selected, m.attachGen, m.usagePolicy(), m.diffContentFloor())}
 	return m.repaintAfterAttach(append(cmds, extra...)...)
 }
 

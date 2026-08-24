@@ -486,6 +486,12 @@ func (s *SettingsOverlay) pagedSearchCursor(key string, count int) int {
 // — for theme, a full ClearScreen repaint — every time r is pressed on a row already at its
 // default.
 //
+// The comparison is the wrong discriminator for a row whose get reports an EFFECTIVE
+// value: clearing a field that stores exactly the default changes nothing on screen, so
+// the reset would be reported as no change and never persisted, leaving config.json
+// holding a value the panel says was cleared. Such a row supplies resetChanges, which
+// answers from the stored state instead and is consulted first.
+//
 // A nil reset is a silent no-op, not an error: kindReadOnly has nothing to set, and
 // default_program and branch_prefix have no fixed default to return to (spec §5). There is
 // deliberately no arm for r on the rail either: category reset is spec §2's non-goal, and the
@@ -494,6 +500,13 @@ func (s *SettingsOverlay) resetRow(row *settingRow) string {
 	s.lastErr = ""
 	if row.reset == nil {
 		return ""
+	}
+	if row.resetChanges != nil {
+		if !row.resetChanges(s.cfg) {
+			return ""
+		}
+		row.reset(s.cfg)
+		return row.key
 	}
 	before := row.get(s.cfg)
 	row.reset(s.cfg)

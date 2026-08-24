@@ -252,13 +252,13 @@ func TestCategoryRowCounts(t *testing.T) {
 		catSessions:      4,
 		catWorktrees:     6,
 		catAppearance:    6,
-		catSessionList:   6,
-		catNotifications: 4,
+		catSessionList:   9,
+		catNotifications: 5,
 		catAutomation:    4,
 		catInput:         3,
 		catProjects:      2,
 		catUpdates:       2,
-		catAdvanced:      3, // 2 settings + the read-only config-file row
+		catAdvanced:      4, // 3 settings + the read-only config-file row
 	}
 	got := map[settingCategory]int{}
 	total := 0
@@ -266,7 +266,7 @@ func TestCategoryRowCounts(t *testing.T) {
 		got[r.category]++
 		total++
 	}
-	assert.Equal(t, 40, total, "39 config rows plus the read-only config-file row")
+	assert.Equal(t, 45, total, "44 config rows plus the read-only config-file row")
 	for _, c := range allCategories() {
 		assert.Equalf(t, want[c], got[c], "category %q row count", c.label())
 	}

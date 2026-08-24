@@ -9,6 +9,7 @@ import (
 	"github.com/ZviBaratz/atrium/cmd"
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/log"
+	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/tmux"
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/theme"
@@ -292,16 +293,19 @@ func applySplashConfig(cfg *config.Config) {
 // given row — or, for "profiles", after its record editor changed the profile
 // list — then live-applies whatever that field controls. Fields without a case
 // here are read live at their point of use (auto_attach, max_sessions,
-// double_tap_confirm, image_preview) or only consumed by later operations
-// (branch_prefix; daemon_poll_interval on the next daemon run), so persisting is
-// all they need.
+// double_tap_confirm, image_preview, notify_throttle_seconds,
+// diff_refresh_seconds) or only consumed by later operations (branch_prefix;
+// daemon_poll_interval on the next daemon run), so persisting is all they need.
 //
-// image_preview is named in that list deliberately rather than left to fall
+// Those three are named in that list deliberately rather than left to fall
 // through, because nothing here guards the omission: no test asserts that every
 // row key is handled or knowingly unhandled, so a field that needed an arm and
-// did not get one would simply not apply until relaunch. This one is resolved
-// when the overlay opens (openImagePreview → kittyEligible), so the next image
-// obeys the new value and there is nothing to restyle.
+// did not get one would simply not apply until relaunch. image_preview is
+// resolved when the overlay opens (openImagePreview → kittyEligible), so the next
+// image obeys the new value and there is nothing to restyle;
+// notify_throttle_seconds is read per notification edge in maybeNotify and
+// diff_refresh_seconds per tick in diffContentFloor, so the next edge and the
+// next tick already carry the new value.
 func (m *home) applySettingChange(key string) tea.Cmd {
 	if err := config.SaveConfig(m.appConfig); err != nil {
 		return m.handleError(err)
@@ -373,6 +377,19 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 		if m.list != nil {
 			m.list.SetContextIndicator(m.appConfig.GetContextIndicator())
 		}
+	case "context_warn_percent", "context_danger_percent":
+		// Both keys re-seed the pair, not just the one that moved: the accessors hold
+		// warn ≤ danger, so raising danger can also raise the warn band it was
+		// capping, and pushing only the edited half would leave the renderer with the
+		// stale other one until the next restart.
+		if m.list != nil {
+			m.list.SetContextThresholds(m.appConfig.GetContextWarnPercent(), m.appConfig.GetContextDangerPercent())
+		}
+	case "pending_watchdog_minutes":
+		// The cap lives in the session package, which owns the reconciliation, and is
+		// read on each applyPending rather than captured — so the next Pending poll
+		// uses the new value with nothing here to re-arm.
+		session.SetPendingWatchdog(m.appConfig.PendingWatchdogOverride())
 	case "os_chrome":
 		// Recompute now rather than waiting a tick: enabling shows the current fleet
 		// on the next frame, and disabling zeroes the title and bar, which the

@@ -22,6 +22,14 @@ import (
 // correct and a configured non-default would be ignored.
 func contextHome(t *testing.T, mode string) (*home, *config.Config) {
 	t.Helper()
+	return contextHomeWithBands(t, mode, nil, nil)
+}
+
+// contextHomeWithBands is contextHome with the context colour bands (#799) configured
+// BEFORE assembleHome runs, so a test can see the frame the constructor produces rather
+// than one a later applySettingChange corrected. nil for either leaves it unset.
+func contextHomeWithBands(t *testing.T, mode string, warn, danger *int) (*home, *config.Config) {
+	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	t.Cleanup(theme.Set("unicode"))
 	t.Cleanup(theme.SetGlyphSet(theme.GlyphSetPlain))
@@ -29,6 +37,7 @@ func contextHome(t *testing.T, mode string) (*home, *config.Config) {
 
 	cfg := config.DefaultConfig()
 	cfg.ContextIndicator = mode
+	cfg.ContextWarnPercent, cfg.ContextDangerPercent = warn, danger
 	st := config.DefaultState()
 	storage, err := session.NewStorage(st)
 	require.NoError(t, err)
