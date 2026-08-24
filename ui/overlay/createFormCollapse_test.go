@@ -363,3 +363,86 @@ func compareOverlayGolden(t *testing.T, path, got string) {
 	}
 	t.Fatalf("%s differs in length: want %d lines, got %d", path, len(wl), len(gl))
 }
+
+// renderedHeight is the form's height as PlaceOverlay sees it — after fitOverlay,
+// because that is the number the app centres.
+func renderedHeight(o *TextInputOverlay) int {
+	return len(strings.Split(xansi.Strip(o.Render()), "\n"))
+}
+
+// formHeightAt builds a form of the given terminal height and returns what it
+// renders to, with the claude variant selected and then deselected.
+func formHeightAt(t *testing.T, height int) (claude, nonClaude int) {
+	t.Helper()
+	build := func(prepare func(*TextInputOverlay)) int {
+		o := NewSessionCreateOverlay(mixedProfiles, nil, []string{"/repo/a"}, "", nil)
+		o.SetBranchResults([]string{"main", "develop"}, o.BranchFilterVersion())
+		o.SetSize(createOverlayWidth, height)
+		if prepare != nil {
+			prepare(o)
+		}
+		return renderedHeight(o)
+	}
+	return build(nil), build(selectOnlyNonClaude)
+}
+
+// TestCollapsedClaudeFields_HeightHoldsAsTheVariantFlips is the guard for the
+// cost the collapse would otherwise impose, which is not a width defect and not
+// one Tab can reach.
+//
+// The collapse is driven by the variant control — a ↑/↓ on the very row the user
+// is holding a key on — and the app centres this overlay with PlaceOverlay, which
+// re-centres on every height change. So any row the collapse frees and does not
+// hand back comes off the form's height and shifts that row out from under the
+// cursor, then back on the next press. Un-refitted the shift is the full nine
+// rows the three sections cost.
+//
+// fitRows therefore budgets the collapsed section instead of the three, and
+// syncClaudeFieldsEnabled re-fits when the flip happens rather than only at
+// SetSize. That converts the freed rows into picker and prompt rows — while there
+// is room to convert them into. Past roughly a 46-row terminal both forms sit at
+// maxPickerRows with the prompt at its preferred height, and there is nothing left
+// to absorb with; the assertion below states that residual rather than pretending
+// it is gone, and bounds it by the only thing that can move here.
+func TestCollapsedClaudeFields_HeightHoldsAsTheVariantFlips(t *testing.T) {
+	const absorbBand = 45 // above this both forms are pinned at their row caps
+
+	for h := floorFormHeight; h <= 60; h++ {
+		claude, nonClaude := formHeightAt(t, h)
+		delta := claude - nonClaude
+		if delta < 0 {
+			delta = -delta
+		}
+		if h <= absorbBand {
+			assert.LessOrEqualf(t, delta, 3,
+				"at %d rows the freed rows must go to the pickers and the prompt, "+
+					"not come off the height (claude=%d non-claude=%d)", h, claude, nonClaude)
+			continue
+		}
+		assert.LessOrEqualf(t, delta, collapsedClaudeRowsSaved(),
+			"above the absorb band the collapse may shorten the form, but by no more "+
+				"than the rows it frees — anything larger is a second cause (h=%d "+
+				"claude=%d non-claude=%d)", h, claude, nonClaude)
+	}
+}
+
+// TestCollapsedClaudeFields_HeightReturnsOnTheRoundTrip is the same property as a
+// round trip: whatever the flip costs in height, flipping back must pay it
+// straight back. A refit that only ran in one direction would leave the form a
+// different size than it started, which is the shift above made permanent.
+func TestCollapsedClaudeFields_HeightReturnsOnTheRoundTrip(t *testing.T) {
+	for _, h := range []int{floorFormHeight, 32, 40, 52} {
+		o := NewSessionCreateOverlay(mixedProfiles, nil, []string{"/repo/a"}, "", nil)
+		o.SetBranchResults([]string{"main", "develop"}, o.BranchFilterVersion())
+		o.SetSize(createOverlayWidth, h)
+
+		before := renderedHeight(o)
+		selectOnlyNonClaude(o)
+		require.True(t, o.claudeFieldsCollapsed(), "h=%d: the flip must have happened", h)
+		selectClaude(o)
+		require.False(t, o.claudeFieldsCollapsed(), "h=%d: the flip must have reversed", h)
+
+		assert.Equalf(t, before, renderedHeight(o),
+			"at %d rows the form must be the size it started after a full round trip", h)
+	}
+}

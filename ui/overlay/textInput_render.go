@@ -432,11 +432,13 @@ func (t *TextInputOverlay) renderCreateForm(divider string) string {
 // in place of Model, Effort and Permissions: the three labels on one line, then
 // the single claudeFieldNA sentence they used to render one each.
 //
-// Two rows, not three-plus-a-blank. The live fields spend a blank row on a
-// constant-height hint that only a focused field fills (see ModeField.Render);
-// none of these three can take focus while they are inert (stopEnabled skips
-// them), so there is no hint to reserve room for and nothing here changes with
-// focus — the form's height still does not move as Tab walks it.
+// Two rows, not three. A live field renders its label, a blank, then a chip row
+// the user moves a cursor along (see ModeField.Render); the blank separates the
+// two. Nothing here is a chip row and none of these three can take focus while
+// they are inert (stopEnabled skips them), so the separator has nothing to
+// separate. Nothing in this block changes with focus, which is what keeps the
+// form's height still as Tab walks it — the variant control is the thing that
+// does move it, see collapsedClaudeSectionLines.
 func renderCollapsedClaudeFields() string {
 	return mfLabelStyle().Render(collapsedClaudeLabel) + "\n" +
 		mfDimStyle().Render(claudeFieldNA)

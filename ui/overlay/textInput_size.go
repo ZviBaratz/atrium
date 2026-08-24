@@ -57,20 +57,24 @@ const (
 	depsSectionLines = 2
 	// collapsedClaudeSectionLines is the height of the ONE section a non-claude form
 	// renders in place of the three above: the shared label row, the single n/a
-	// sentence, and a divider (see renderCollapsedClaudeFields). No blank row —
-	// nothing there can take focus, so there is no hint to reserve room for.
+	// sentence, and a divider (see renderCollapsedClaudeFields). No blank row — the
+	// live sections spend one separating their label from a chip row the user can
+	// move a cursor along, and there is no chip row here.
 	//
-	// Unlike its neighbours this is not added to fitRows' chrome, and the omission is
-	// deliberate rather than an oversight. fitRows runs at SetSize; the collapse is
-	// driven by the variant selection and flips long after it, so a chrome figure
-	// that tracked it would be stale exactly when it mattered. Leaving fitRows
-	// budgeting for the three full sections only ever over-reserves, which costs a
-	// picker row on a tall terminal and can never overflow — and the real bound is
-	// fitOverlay's shedding either way, per depsSectionLines above.
+	// fitRows substitutes this for the three section constants whenever the fields
+	// are collapsed, so the rows the collapse frees go to the pickers and the prompt
+	// instead of coming off the form's height. That matters because the collapse
+	// flips under a keypress on the variant control, and PlaceOverlay re-centres on
+	// every height change: rows the form does not hand back move the very row the
+	// user is holding a key on. Absorbing them is only possible while the pickers
+	// and the prompt are below their caps — past roughly a 46-row terminal both
+	// forms are pinned at maxPickerRows and the freed rows do come off the height.
+	// TestCollapsedClaudeFields_HeightHoldsAsTheVariantFlips pins the band where
+	// that holds, and states the residual rather than asserting it away.
 	//
-	// It is live data even so: TestSessionCreateOverlay_{Model,Mode}SectionHeightConstant
-	// compute the rows the collapse recovers from these constants and check the
-	// rendered form against the answer.
+	// Like every constant here it must agree with what the section actually renders,
+	// and nothing checks that agreement directly; it is not what keeps the form
+	// inside the screen either (fitOverlay's shedding is, per depsSectionLines).
 	collapsedClaudeSectionLines = 3
 )
 
@@ -122,14 +126,18 @@ func (t *TextInputOverlay) fitRows(height int) (pickerRows, promptRows int) {
 	if t.variantPicker != nil {
 		chrome += variantSectionLines
 	}
-	if t.modelField != nil {
-		chrome += modelSectionLines
-	}
-	if t.modeField != nil {
-		chrome += modeSectionLines
-	}
-	if t.effortField != nil {
-		chrome += effortSectionLines
+	if t.claudeFieldsCollapsed() {
+		chrome += collapsedClaudeSectionLines
+	} else {
+		if t.modelField != nil {
+			chrome += modelSectionLines
+		}
+		if t.modeField != nil {
+			chrome += modeSectionLines
+		}
+		if t.effortField != nil {
+			chrome += effortSectionLines
+		}
 	}
 	if t.hasAccountSection() {
 		chrome += accountSectionLines

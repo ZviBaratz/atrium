@@ -161,6 +161,17 @@ func (t *TextInputOverlay) syncClaudeFieldsEnabled() {
 	t.modeField.SetDisabled(!includesClaude)
 	t.effortField.SetDisabled(!includesClaude)
 
+	// The three sections collapse to one when they all go inert, which frees rows
+	// mid-form. Re-fit here rather than only at SetSize: this flip happens under a
+	// keypress on the variant control, and PlaceOverlay re-centres the overlay on
+	// every height change, so rows the form does not hand back to the pickers and
+	// the prompt come off its height and shift the row the user is holding a key on
+	// (see collapsedClaudeSectionLines). SetSize does not call back into this, so
+	// the recursion stops here.
+	if t.isCreateForm && t.height > 0 {
+		t.SetSize(t.width, t.height)
+	}
+
 	// Push the pin state each field's no-op-chip hint names. Every field reports
 	// whether a pin exists separately from what to call it: the raw pin decides
 	// "pinned", and a label is supplied only when Atrium can name the value. All
@@ -375,9 +386,11 @@ func (t *TextInputOverlay) SetPromptPlaceholder(s string) {
 }
 
 // PromptPlaceholder is what the empty prompt field says about itself, at full length —
-// the ladder's widest rung, not the rung the current width happens to show. Callers
-// ask this to tell the two placeholders apart (see app/app_fork.go), a question the
-// answer must not depend on the terminal for.
+// the ladder's widest rung, not the rung the current width happens to show. Nothing in
+// the app reads it: app/app_fork.go only sets it, and the readers are that package's
+// fork tests and this one's. It exists so those can tell the two placeholders apart
+// without the answer depending on how wide the terminal was, which is the whole
+// property SetPromptPlaceholder's ladder puts at risk.
 func (t *TextInputOverlay) PromptPlaceholder() string {
 	if len(t.promptRungs) == 0 {
 		return ""
