@@ -347,9 +347,11 @@ guard that forces the decision; the rest are still found by reading.
    the frame; nil for a state that renders in the frame itself), `keys` (the handler
    `handleKeyPress` routes to — every entry's handler runs before the global esc/quit
    handling, so the ordering that used to be a per-guard comment is structural now),
-   `barVisible` (`menuVisible`'s bit), `size` (the overlay's resize policy; the walk
-   runs every entry's closure, which nil-checks its own overlay field — one closure
-   per FIELD, so a state sharing another's overlay leaves size nil and says so),
+   `barVisible` (`menuVisible`'s bit), `size` (the overlay's resize policy as data —
+   the overlay's own `overlay.SizeSpec`, declared beside it in `ui/overlay` in OUTER
+   cells, plus a `target` returning the overlay field for the walk to size; one
+   entry per FIELD, so a state sharing another's overlay leaves size zero and says
+   so, and `TestEverySizedOverlayFieldHasOneOwner` counts the owners),
    `paste` (nil means a paste is inert there), and `fixture` (the golden's name).
    `TestEverySurfaceSpecIsComplete` fails a forgotten or misplaced slot, a duplicate
    fixture name, and a fixture with no golden; `TestSurfaceSpecHasNotGrownAField`
@@ -403,19 +405,25 @@ tripwire** and is deliberately fixture-specific — `TestViewFitsTerminalBoundsE
 when your state needs a pathological fixture the generic sweep cannot produce — an
 unbounded list, user-authored text with no natural width.
 
-- `SetSize` semantics are the usual defect in a `size` closure — but check which way
-  round before "fixing" one. **lipgloss v2 counts the border and padding INSIDE
+- `SetSize` semantics are the usual defect in an overlay's sizing — but check which
+  way round before "fixing" one. **lipgloss v2 counts the border and padding INSIDE
   `Width`**, so `Width(w)` renders exactly `w` columns (`style.go`:
   `width -= horizontalBorderSize`). That inverted the v1 behaviour this line used to
   describe, and it inverted silently; the in-tree statement of it is
   `ui/theme/panel.go`'s comment ("Width and Height are the box's TOTAL size, borders
-  included … the upgrade guide does not mention it").
+  included … the upgrade guide does not mention it"). Since #802 every `SetSize` in
+  `ui/overlay` takes OUTER cells — the geometry arrives as `overlay.SizeSpec.Fit`'s
+  result — and `TestEverySizerHonorsItsSpec` holds each rendered line to the claim,
+  with a content-reach assertion for the two boxes (#802's queue and history) whose
+  inner width once drifted two columns narrow while the box stayed on-claim.
   **Copy `commandPalette.go`** — `Width(p.width)` beside `inner := p.width - 6` is the
   self-consistent pair, and `cmdLogOverlay.go` carries the same one since #638
-  corrected its v1-era `+2`. (`textOverlay.go`'s `+2` is fine: its `boxWidth()` is
-  *defined* border-exclusive and capped against the terminal.) The live defect class
-  is hand-subtracting the frame a second time and rendering every box two columns
-  narrow.
+  corrected its v1-era `+2`. (`textOverlay.go`'s render-side `+2` is fine: its
+  `boxWidth()` is *defined* border-exclusive, capped against the terminal, and
+  snapped to full bleed inside the cap by `SnapFullBleed` — the one statement of
+  #695's inset rule, which settings and accounts route their caps through too.)
+  The live defect class is hand-subtracting the frame a second time and rendering
+  every box two columns narrow.
 - Charge **every** non-list row to the height budget, including the conditional ones
   (`paletteChrome`'s trailing `+1` for "… N more"). A row that appears only sometimes is
   a row no golden and no bounds sweep renders — `frameStates()`' wire only *opens* an
