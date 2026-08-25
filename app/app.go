@@ -433,6 +433,14 @@ type home struct {
 	// is invisible in the UI — the palette simply is not in the picker — so the only
 	// symptom is an absence, which is exactly the failure a user cannot diagnose.
 	pendingThemeProblems []error
+	// themeProblemsSeen is the message of every theme problem this run has already put in
+	// front of the user, so re-reading the directory does not re-report what they have
+	// dismissed. The panel re-reads on every open (reloadUserThemes), and without this a
+	// user with one file they cannot fix today would meet the same modal every time they
+	// touched any setting — a report that cannot be dismissed is a report nobody reads.
+	// Keyed on the message rather than the file so breaking a file a SECOND way still
+	// speaks up.
+	themeProblemsSeen map[string]bool
 	// unrecordedCreates holds the disclosures this process wrote for the OTHER #732 case: a
 	// create whose session is live and whose row is not, because persistInstances failed.
 	// Those are never reported by this process — the session is in the list, so a modal
@@ -952,6 +960,10 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 	h.pendingDeferredRecovery, h.pendingEarlierRecovery = pendingParkReports(deferred, instances, time.Now())
 	h.pendingCreateDisclosures = pendingDisclosures
 	h.pendingThemeProblems = themeProblems
+	h.themeProblemsSeen = make(map[string]bool, len(themeProblems))
+	for _, p := range themeProblems {
+		h.themeProblemsSeen[p.Error()] = true
+	}
 	// Write back any account identities assembleHome healed (#470). Doing it here
 	// keeps that constructor IO-free, and persisting eagerly is what lets `atrium ls`
 	// and the daemon — separate processes that read the stored rows raw — agree with

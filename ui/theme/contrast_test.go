@@ -1,6 +1,7 @@
 package theme
 
 import (
+	"fmt"
 	"testing"
 
 	"charm.land/lipgloss/v2"
@@ -114,22 +115,32 @@ func TestValidatePassesEveryShippedPalette(t *testing.T) {
 // needs-input and pending for pending. Before #813 the neutral arms painted fg_dim,
 // which is 1.44:1 on tokyo-night, and no pair floor covered the band at all.
 func TestBarBandColoursAreFloored(t *testing.T) {
-	floored := map[string]bool{}
+	floored := map[string]float64{}
 	for _, pair := range pairFloors {
-		floored[pair.name] = true
+		floored[pair.name] = pair.floor
 	}
-	for _, name := range []string{
-		"fg on bar_bg",
-		"success on bar_bg",
-		"attention on bar_bg",
-		"pending on bar_bg",
+	// The floor VALUE, not merely the name. ui/contextbar_contrast_test.go asserts the
+	// same band from the other side of the import boundary and cannot see this constant;
+	// it reads the number back out through Validate, so a tier changed here without
+	// changing it there is a divergence, not a silent pass. Naming the expected tier per
+	// pair is also what says out loud that these four are NOT one number: the neutral
+	// arms ride fg, which is the band's own foreground and floored as text.
+	for name, want := range map[string]float64{
+		"fg on bar_bg":        textFloor,
+		"success on bar_bg":   glyphFloor,
+		"attention on bar_bg": glyphFloor,
+		"pending on bar_bg":   glyphFloor,
 	} {
-		assert.Truef(t, floored[name], "barState paints this on the band, unfloored: %s", name)
+		got, ok := floored[name]
+		if assert.Truef(t, ok, "barState paints this on the band, unfloored: %s", name) {
+			assert.Equalf(t, want, got, "%s is floored at %.2f, not the %.2f tier it is documented at", name, got, want)
+		}
 	}
 	// The token that used to be there must not come back. Its own floor is 2.4 against
 	// Bg, which says nothing about the band — so a pair under this name would mean
 	// someone had floored the receding value rather than stopped painting it.
-	assert.Falsef(t, floored["fg_dim on bar_bg"],
+	_, fgDimFloored := floored["fg_dim on bar_bg"]
+	assert.Falsef(t, fgDimFloored,
 		"fg_dim is floored against the band, so barState is painting a receding token there again")
 }
 
@@ -257,5 +268,43 @@ func TestLightPaletteMatchesItsDarkTwin(t *testing.T) {
 					light, token, lr, dark, dr, ratio*100, lo*100, hi*100)
 			}
 		})
+	}
+}
+
+// TestARefusalNeverReportsAPassingRatio is the self-consistency of the message a user is
+// meant to act on: Validate refuses at the precision Violation.Error prints.
+//
+// Before `clears`, Validate compared the raw float while Error rendered %.2f, so a
+// palette measuring 4.4999 was refused with "fg: contrast 4.50, floor 4.50" — a message
+// telling its author their colour meets the floor it was just refused for, and offering
+// as remedy the one thing they can see is already satisfied. Both tiers are driven,
+// because the arithmetic is the same at either and the bug was not tier-specific.
+func TestARefusalNeverReportsAPassingRatio(t *testing.T) {
+	for _, name := range BuiltinNames() {
+		for _, v := range Validate(Get(name).Palette) {
+			require.Failf(t, "precondition", "%s is shipped and must not violate: %v", name, v)
+		}
+	}
+
+	// Every ratio in the neighbourhood of a floor, from just under to just over. The
+	// property is one implication: if it was refused, the printed ratio is BELOW the
+	// printed floor. A truncating message would satisfy this too, which is why the
+	// converse is asserted as well.
+	for _, floor := range []float64{glyphFloor, textFloor, 1.6, 1.1} {
+		for _, delta := range []float64{-0.02, -0.006, -0.005, -0.0049, -0.0001, 0, 0.0001, 0.02} {
+			got := floor + delta
+			v := Violation{Name: "probe", Got: got, Floor: floor}
+			shown := v.Error()
+			if clears(got, floor) {
+				continue
+			}
+			assert.NotContainsf(t, shown, fmt.Sprintf("contrast %.2f, floor %.2f", floor, floor),
+				"a refusal at %.6f reports the floor as met: %q", got, shown)
+		}
+		// And the converse: nothing that the message would show as short is allowed to pass.
+		for _, delta := range []float64{-0.02, -0.006} {
+			assert.Falsef(t, clears(floor+delta, floor),
+				"%.6f rounds below %.2f and must be refused, or the report shows a miss that passed", floor+delta, floor)
+		}
 	}
 }

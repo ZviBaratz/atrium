@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -34,8 +35,20 @@ import (
 // Matched case-insensitively, because a file copied off a case-insensitive filesystem
 // arrives as .JSON and silently doing nothing is the worst answer available. The stem
 // is NOT: nameRE demands lowercase, so midnight.json and midnight.JSON resolve to one
-// name, which is why Load refuses the pair rather than letting byte order pick a winner.
+// name, and Load registers NEITHER — see the collision branch there for why dropping
+// both is the only outcome that does not depend on sort order.
+//
+// Reachable on a case-SENSITIVE filesystem only. Where the filesystem folds case the two
+// names are one file, so the collision cannot arise and the branch is dead; that is why
+// its guard skips rather than fails on such a filesystem.
 const ext = ".json"
+
+// maxSize bounds a single theme file. A whole palette (theme.TokenNames) is under a
+// kilobyte, so
+// this is not a budget anyone can reach by writing a theme — it is the answer to a
+// multi-gigabyte file that acquired a .json name, which Load would otherwise read whole
+// into memory during startup, before any UI exists to say what it is waiting on.
+const maxSize = 64 << 10
 
 // nameRE is the shape a theme name (the filename stem) must have.
 //
@@ -45,10 +58,22 @@ const ext = ".json"
 // dashes is what every built-in already uses.
 var nameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
-// hexRE is canonical "#rrggbb". Shorthand (#fff) and colour words are refused rather
-// than accepted-and-expanded, because ui/splash's fresco.Palette.Validate holds every
-// REGISTERED theme to canonical hex — a shorthand accepted here would fail there, in a
-// package that has no idea a user file exists.
+// hexRE is canonical "#rrggbb". Shorthand (#fff) and colour words are refused rather than
+// accepted-and-expanded, because what is downstream of a palette is not only lipgloss.
+//
+// The splash renders from five of these tokens through fresco, which does NOT reject a
+// bad anchor at runtime — it falls back and paints something slightly wrong, silently
+// (ui/splash_test.go's TestSplashPalettesAreCanonicalHex says so, and exists because
+// Atrium's own palettes are compile-time constants that no runtime check would ever see).
+// That test iterates theme.Names(), so it covers the built-ins; a user theme is not
+// registered in its binary and never will be. Refusing here at the boundary that has a
+// filename and a key to name is the only place a user's `#fff` can be a message rather
+// than a slightly-off field of colour nobody can account for.
+//
+// And a colour WORD is worse than shorthand: lipgloss expands #fff to white but answers
+// NoColor for "red", which theme.Hex renders as the empty string and the contrast oracle
+// measures as luminance 0 — so it would be judged as black and drawn as the terminal's
+// own foreground.
 var hexRE = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 
 // file is the on-disk shape. Decoded with DisallowUnknownFields, so a misspelt
@@ -85,10 +110,29 @@ func Load(dir string) (map[string]*theme.Theme, []error) {
 
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
-		if e.IsDir() || !strings.EqualFold(filepath.Ext(e.Name()), ext) {
+		base := e.Name()
+		// A dot-prefixed name is a sidecar, never a theme: Emacs writes .#midnight.json
+		// beside the file the user is editing, and macOS zips carry ._midnight.json.
+		// filepath.Ext returns .json for both, so without this they reach nameRE and are
+		// REFUSED — a modal accusing the user of misnaming a file they never wrote, at the
+		// exact moment they are editing a theme, and one that sorts ahead of every real
+		// refusal ('.' is 0x2E) into a report that shows five.
+		if strings.HasPrefix(base, ".") || !strings.EqualFold(filepath.Ext(base), ext) {
 			continue
 		}
-		names = append(names, e.Name())
+		// Stat, not e.IsDir(). IsDir is false for a symlink to a directory AND for a FIFO,
+		// and os.ReadFile on a FIFO blocks until a writer appears — inside the launch path,
+		// before tmux.Init and before app.Run, so `mkfifo themes/x.json` would hang atrium,
+		// atrium doctor and the daemon with no output and no timeout. Stat FOLLOWS the link
+		// (unlike Lstat) on purpose: a symlinked theme file is how a dotfiles repo ships
+		// one, and that has to keep working; what is excluded is everything not a regular
+		// file, which is also how a symlinked directory becomes ignored rather than
+		// reported as a broken theme.
+		info, err := os.Stat(filepath.Join(dir, base))
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		names = append(names, base)
 	}
 	sort.Strings(names)
 
@@ -102,11 +146,17 @@ func Load(dir string) (map[string]*theme.Theme, []error) {
 			continue
 		}
 		// Two files can reach one name only through the extension, which is matched
-		// case-insensitively while the stem is not (see ext). Refusing names both files;
-		// keeping the first would make "my edits do nothing" the symptom, decided by
-		// sort order, with nothing said anywhere.
+		// case-insensitively while the stem is not (see ext).
+		//
+		// NEITHER is registered. Refusing only the second would leave the first loaded, and
+		// which one that is falls out of sort.Strings — 'J' (0x4A) precedes 'j' (0x6A), so
+		// a stale dusk.JSON beats the dusk.json its author is editing, and the symptom is
+		// "my edits do nothing" with the message blaming the live file. Dropping the pair
+		// costs one palette the user can restore by deleting a file, and makes the outcome
+		// independent of byte order, which is the only version of this worth having.
 		if first, dup := claimed[name]; dup {
-			problems = append(problems, fmt.Errorf("%s: theme name %q is already taken by %s", base, name, first))
+			problems = append(problems, fmt.Errorf("%s: theme name %q is also claimed by %s; neither loads", base, name, first))
+			delete(loaded, name)
 			continue
 		}
 		claimed[name] = base
@@ -120,8 +170,8 @@ func Load(dir string) (map[string]*theme.Theme, []error) {
 // Every error it returns leads with the file's base name, because a report lists
 // several and "unknown palette key" on its own does not say which file to open.
 //
-// What the messages deliberately do NOT carry is a vocabulary: not the eighteen token
-// names, not the five built-in theme names. An earlier draft interpolated both, and the
+// What the messages deliberately do NOT carry is a vocabulary: not the palette token
+// names (theme.TokenNames owns that count), not the built-in theme names. An earlier draft interpolated both, and the
 // startup modal — which hugs its content to the terminal width and clips a report line
 // at reportLineBudget — rendered "…is not a palette token (one of bg, bg_elevated,
 // bar_bg, fg, fg_dim, fg…", which is a list that stops exactly where it becomes useful.
@@ -149,6 +199,9 @@ func loadOne(path string) (string, *theme.Theme, error) {
 		return fail("%q is a built-in theme; a user theme cannot replace one", name)
 	}
 
+	if info, err := os.Stat(path); err == nil && info.Size() > maxSize {
+		return fail("the file is %d bytes; a theme is under a kilobyte and this is capped at %d", info.Size(), maxSize)
+	}
 	raw, err := os.ReadFile(path) // #nosec G304 -- the path is a directory listing of the data dir
 	if err != nil {
 		return fail("%v", err)
@@ -156,17 +209,26 @@ func loadOne(path string) (string, *theme.Theme, error) {
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return fail("the file is empty")
 	}
+	// Both halves of "the file says one thing and Atrium did another", which is the class
+	// this whole loader exists to make impossible, and neither is caught by decoding:
+	//
+	//   {"extends": "unicode", "extends": "tokyo-night"}   duplicate key
+	//   {"palette": {...}} {"palette": {...}}              a second object
+	//
+	// encoding/json accepts a repeated key with last-wins for scalars and a MERGE for
+	// maps, and DisallowUnknownFields does not change that — so a file whose visible first
+	// line says `extends: unicode` loads tokyo-night and reports nothing. And a Decoder
+	// reads ONE value and stops, so a duplicated block or a stray paste after the closing
+	// brace loads the first half and discards the rest in the same silence.
+	if key, dup := duplicateKey(raw); dup {
+		return fail("%q is set twice; JSON keeps the last one silently", key)
+	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	var f file
 	if err := dec.Decode(&f); err != nil {
 		return fail("%w", err)
 	}
-	// A Decoder reads ONE value and stops, so without this a duplicated block or a stray
-	// paste after the closing brace loads the first half and discards the rest in
-	// silence — the same no-op DisallowUnknownFields exists to prevent, arriving through
-	// the door beside it. json.Unmarshal rejects both, and cannot be used here because
-	// it has no way to forbid unknown fields.
 	var rest json.RawMessage
 	if err := dec.Decode(&rest); !errors.Is(err, io.EOF) {
 		return fail("there is content after the theme object; a file holds exactly one")
@@ -189,12 +251,19 @@ func loadOne(path string) (string, *theme.Theme, error) {
 	th := *theme.Get(baseName)
 	pal := th.Palette
 	for _, key := range sortedKeys(f.Palette) {
+		// The KEY before its value. A misspelt token with a shorthand colour is one typo in
+		// the reader's mind, and judging the colour first answers with "#fff is not a
+		// canonical #rrggbb colour" — a true statement about a line whose real problem is
+		// that `foreground` is not a token at all, and one that sends them to fix the half
+		// that was closer to right.
+		if !slices.Contains(theme.TokenNames(), key) {
+			return fail("palette.%s is not a palette token", key)
+		}
 		if !hexRE.MatchString(f.Palette[key]) {
 			return fail("palette.%s is %q, not a canonical #rrggbb colour", key, f.Palette[key])
 		}
-		if !theme.SetToken(&pal, key, theme.ParseHex(f.Palette[key])) {
-			return fail("palette.%s is not a palette token", key)
-		}
+		// Cannot fail: the name was just checked against the same table SetToken walks.
+		theme.SetToken(&pal, key, theme.ParseHex(f.Palette[key]))
 	}
 
 	if violations := theme.Validate(pal); len(violations) > 0 {
@@ -259,6 +328,65 @@ func (e *InvalidPaletteError) Error() string {
 		count = fmt.Sprintf(" (%d misses)", len(e.Violations))
 	}
 	return fmt.Sprintf("%s: palette is not legible%s: %s", e.File, count, strings.Join(msgs, "; "))
+}
+
+// duplicateKey reports the first object key that appears twice within one object, at any
+// depth. It is the check encoding/json does not have: RFC 8259 leaves repeated names
+// undefined, and Go resolves them silently rather than refusing.
+//
+// It walks tokens rather than decoding, because the information is gone by the time a
+// value exists — the merged palette map and the last-wins extends are both well-formed.
+// Tracking "am I expecting a key" per object level is what separates a key from a string
+// VALUE that happens to repeat: {"palette":{"fg":"#111","bg":"#111"}} has two identical
+// values and no duplicate key.
+//
+// A malformed document returns false and is left to Decode, whose message names the
+// offset and the syntax problem; this function has neither and would only get in front
+// of a better error.
+func duplicateKey(raw []byte) (string, bool) {
+	type frame struct {
+		object    bool
+		expectKey bool
+		keys      map[string]bool
+	}
+	var stack []*frame
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return "", false
+		}
+		top := (*frame)(nil)
+		if len(stack) > 0 {
+			top = stack[len(stack)-1]
+		}
+		if s, isStr := tok.(string); isStr && top != nil && top.object && top.expectKey {
+			if top.keys[s] {
+				return s, true
+			}
+			top.keys[s] = true
+			top.expectKey = false
+			continue
+		}
+		// Anything else is a value (or a bracket), and a value completes the pair.
+		if d, isDelim := tok.(json.Delim); isDelim {
+			switch d {
+			case '{':
+				stack = append(stack, &frame{object: true, expectKey: true, keys: map[string]bool{}})
+				continue
+			case '[':
+				stack = append(stack, &frame{})
+				continue
+			default: // '}' or ']' — the value that closes is the parent's
+				stack = stack[:len(stack)-1]
+			}
+		}
+		if len(stack) > 0 {
+			if parent := stack[len(stack)-1]; parent.object {
+				parent.expectKey = true
+			}
+		}
+	}
 }
 
 // sortedKeys orders a palette map so a file with two bad tokens reports the same one

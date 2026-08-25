@@ -286,19 +286,54 @@ neither. A theme carries both — `Glyphs` exported, the agent table behind
    within the table), not the derivation — a different letter meeting those is a review
    conversation, not a build break.
 
+## Adding a palette token — 5 sites, every one guarded
+
+A colour became a multi-home fact in #813, when user theme files gave the palette an
+**on-disk vocabulary**: a token is now a name a user types into JSON, not only a Go
+field. Adding a nineteenth field to `Palette` and stopping there ships a colour no theme
+file can set and no floor measures.
+
+| # | Site | Guarded by |
+|---|------|------------|
+| 1 | `ui/theme/theme.go` — the `Palette` struct field | site 2's guard, not lint: `revive:exported` does not reach struct fields |
+| 2 | `ui/theme/tokens.go` — the `paletteTokens` entry: on-disk name + `*Color` accessor | `TestTokenTableCoversEveryPaletteField` (reflects over the struct, **both** directions, by field ADDRESS); `TestTokenNamesAreStableAndOnDisk` |
+| 3 | `ui/theme/registry.go` — a value in **every** built-in palette, light twins included | `TestValidatePassesEveryShippedPalette` — but only for a **floored** token; see below |
+| 4 | `ui/theme/contrast.go` — `tokenFloors`, **or** `tokenFloorExempt` with a reason | `TestEveryTokenIsFlooredOrExempt` (a token in neither fails rather than defaulting to unchecked) |
+| 5 | `README.md` — a role bullet under `##### User themes` | `TestReadmeDocumentsEveryPaletteToken`, both directions over the bullets |
+
+Site 3 is the one with a real gap, and it is worth knowing which half is covered. A field
+left unset is a nil `Color`: `Hex` returns the **empty string** for it (not `#000000`) and
+the oracle measures its luminance as 0 — so a forgotten value does not fail as "missing",
+it fails as a *contrast* miss, naming a token nobody thinks they touched. That only fires
+if the token is floored. Add an **exempt** token and forget it in one palette, and nothing
+fails: `TestLightPaletteMatchesItsDarkTwin` skips unfloored tokens by design, and no other
+sweep reads a raw value. Fill all five by hand and check them.
+
+The **count** is spelled out in two places and bound in one: `TestReadmeDocumentsEveryPaletteToken`
+holds `len(TokenNames())` to `18` and the README to the word `eighteen`, so growing the
+palette fails there and nowhere else. `ui/theme/tokens.go`'s header owns it; every other
+comment says "a palette token" and points there. Do not restate it — nothing binds a Go
+comment, and #813's review found the number in four files.
+
+**Floors are measured on the RESOLVED palette**, which is why a new token needs a value in
+every built-in before it needs one anywhere else: a user file overriding two tokens
+inherits the rest, and a refusal can name a token that file never mentioned.
+
 ## Adding a UI state — 8 sites, four of them fixture files
 
 `app/app.go`'s state enum (which bumps `numStates`), plus a nullable overlay pointer
-field. Then six more, and the count is the thing to get right: adding the enum and
+field. Then the eight below, and the count is the thing to get right: adding the enum and
 stopping at `statemachine_test.go` is a hard CI fail, not an omission you find later.
 
 1. **`frameStates()`, in `app/frameparity_test.go`** — *not* `app/statemachine_test.go`,
    which only *consumes* it. `TestFrameStatesCoverEveryState` requires
    `len(frameStates()) == numStates`, so bumping the enum fails there immediately.
-   Everything below fans out from that one entry, so count the consumers rather than
-   trusting a number here: `grep -c 'frameStates()' app/*_test.go`. Today they are
-   frame parity, the three colour fingerprints, the bounds sweep, the
-   background-message state machine, the two no-colour checks, and the hard-tab sweep.
+   Everything below fans out from that one entry, so find the consumers rather than
+   trusting a number here: `grep -l 'frameStates()' app/*_test.go` names the four files.
+   `-c` is the wrong recipe — it counts mentions, doc comments and `t.Fatalf` strings
+   included, which is a bigger number than there are tests. The tests are frame parity,
+   the three colour fingerprints, the bounds sweep, the background-message state machine,
+   the two no-colour checks, and the hard-tab sweep.
 
    Give it a **`wire` func** that arms the overlay production would keep, or the state
    is swept half-constructed and the interesting dereference never happens. Prefer the

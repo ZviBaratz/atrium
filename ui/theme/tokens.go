@@ -1,6 +1,10 @@
 package theme
 
-// tokens.go is the one place the eighteen semantic palette tokens are NAMED.
+// tokens.go is the one place the eighteen semantic palette tokens are NAMED, and the one
+// place that number is written down in this package. Everywhere else says "a palette
+// token" or points here: readme_theme_test.go binds the README's spelling of it to
+// len(TokenNames()), and nothing binds a Go comment, so a restated count is a claim that
+// rots the moment the palette grows.
 //
 // Three consumers need the same list and cannot be allowed to disagree about it:
 // the contrast oracle (contrast.go) keys its floors by these names, a user theme
@@ -75,9 +79,13 @@ func SetToken(p *Palette, name string, c Color) bool {
 //
 // The oracle does NOT use it — Validate walks paletteTokens directly, since it wants
 // every token in declaration order rather than one by name. Its caller is
-// contrast_test.go's light/dark twin sweep, which iterates tokenFloors' keys and needs
-// the field each one names. Kept unexported for that reason: it is a lookup into this
-// file's table, not part of the palette vocabulary anyone outside it consumes.
+// contrast_test.go's light/dark twin sweep, which walks TokenNames, keeps the floored
+// ones, and needs the field each names. Kept unexported for that reason: it is a lookup
+// into this file's table, not part of the palette vocabulary anyone outside it consumes.
+//
+// So both it and TokenNames project paletteTokens, and a "tokenAt knows every name
+// TokenNames returns" assertion cannot fail. What is worth pinning is the pair of
+// reflection guards below, which hold that table against the Palette struct.
 func tokenAt(name string) func(*Palette) *Color {
 	for _, t := range paletteTokens {
 		if t.name == name {

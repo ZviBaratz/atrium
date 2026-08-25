@@ -331,19 +331,19 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 		// Styles read theme.Current() lazily at render time, so swapping the
 		// palette / glyph set plus a forced repaint restyles the whole UI in place.
 		//
-		// Through applyThemeSelection rather than theme.Set directly, so saving this row
-		// re-reads the themes directory: that is what makes editing a theme file take
-		// effect without a restart, which is the whole of the apply-on-save contract an
-		// fs-watcher was declined in favour of. Refusals are buffered, not toasted here
-		// — the settings overlay owns the screen at this moment, and the preview tick's
-		// flush is what waits for it to close.
+		// Set, not applyThemeSelection: the themes directory was re-read when this panel
+		// OPENED (reloadUserThemes), so the name being saved here is already registered and
+		// re-reading would only repeat the work — per keypress, since cycling a row calls
+		// this on every left/right press, and with it a second buffering of every refusal
+		// into a modal the user would meet on closing the panel.
 		//
-		// NOT ApplyThemeAtLaunch, whose extra step is SetScheme(initialScheme()): that
+		// And NOT ApplyThemeAtLaunch, whose extra step is SetScheme(initialScheme()): that
 		// reads COLORFGBG, which is silent on most terminals, and would overwrite a
 		// polarity OSC 11 had already detected. Saving glyph_set would then flip a
 		// correctly-detected light terminal to the dark default, with no re-query to
 		// correct it (applySchemeQueryCmd fires for the theme row alone).
-		m.pendingThemeProblems = applyThemeSelection(m.appConfig)
+		theme.Set(m.appConfig.GetTheme())
+		theme.SetGlyphSet(m.appConfig.GetGlyphSet())
 		// The spinner snapshots its frames at construction (assembleHome), so a
 		// rung change that alters them (ascii's |/-\ vs the Braille dots) would not
 		// show until relaunch. The list holds &m.spinner, so re-seeding the frames

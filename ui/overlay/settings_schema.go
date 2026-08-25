@@ -411,6 +411,15 @@ func newSettingRows(cfg *config.Config) []settingRow {
 	// would be irrecoverable.
 	rawDefaultProgram := cfg.DefaultProgram
 
+	// The same capture for the theme row, and for the same reason with a different cause.
+	// A configured user theme stops being registered whenever its file is absent —
+	// mid-edit, on a machine the dotfiles have not reached, or newly refused because an
+	// upgrade retuned the base palette it extends — and theme.SelectableNames() then does
+	// not offer the name. Without this the first ←/→ press would select `auto` (opts[0]),
+	// applySettingChange persists before anything else, and `esc` moves focus to the rail
+	// rather than cancelling: the name is gone and has to be retyped from memory.
+	rawTheme := cfg.GetTheme()
+
 	return []settingRow{
 		// ── Sessions ──────────────────────────────────────────────────────────
 		{
@@ -624,8 +633,17 @@ func newSettingRows(cfg *config.Config) []settingRow {
 				return nil
 			},
 			// auto first, then the registry sorted — SelectableNames owns that order
-			// so the picker's vocabulary and the theme package's cannot drift.
-			options: func(c *config.Config) []string { return theme.SelectableNames() },
+			// so the picker's vocabulary and the theme package's cannot drift. Plus the
+			// captured value if the registry has lost it, so cycling can always return;
+			// appended at the END rather than the front, because `auto` leading this list
+			// is what a reader of the summary above expects to find there.
+			options: func(c *config.Config) []string {
+				names := theme.SelectableNames()
+				if !slices.Contains(names, rawTheme) {
+					names = append(names, rawTheme)
+				}
+				return names
+			},
 		},
 		{
 			key: "splash", category: catAppearance, label: "Splash", kind: kindEnum,

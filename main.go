@@ -93,8 +93,8 @@ var (
 			// why the trigger is a signal rather than a flag.
 			defer profile.Install(ctx)()
 
-			// Resolve NO_COLOR here, above BOTH tmux.Init calls below, because the
-			// managed tmux config is rendered by those and tmux — not Bubble Tea —
+			// Resolve NO_COLOR here, above initAppearanceAndTmux below, because the
+			// managed tmux config is rendered there and tmux — not Bubble Tea —
 			// draws the in-session status band. Deciding this any later (inside
 			// app.Run, say) writes the band's colours into the config first and
 			// leaves every session started this run tinted, on the one surface the
@@ -518,7 +518,7 @@ var (
 			// never appears. The loaded names are printed too: a file in neither list is in
 			// the wrong directory, which no refusal message can say.
 			fmt.Println()
-			fmt.Print(doctor.RenderThemes(doctor.CheckThemes()))
+			fmt.Print(doctor.RenderThemes(doctor.CheckThemes(config.LoadConfig())))
 
 			// Account state keys: state.json indexes the cluster order, the rate-limit
 			// flags and the rotation cursors by account/pool NAME, so a rename can leave
@@ -545,11 +545,6 @@ var (
 		},
 	}
 )
-
-// ghAuthChecker reports whether gh is authenticated, for the doctor core-deps
-// probe. It runs `gh auth status` under the same short probe budget; any nonzero
-// exit (not logged in, misconfigured) counts as unauthenticated. gh is optional,
-// so this never fails the command — it only downgrades gh's reported state.
 
 // initAppearanceAndTmux activates the configured theme and THEN materializes the
 // managed tmux config, in that order, for both processes that render one: the
@@ -590,6 +585,10 @@ func initAppearanceAndTmux(cfg *config.Config) {
 	}
 }
 
+// ghAuthChecker reports whether gh is authenticated, for the doctor core-deps
+// probe. It runs `gh auth status` under the same short probe budget; any nonzero
+// exit (not logged in, misconfigured) counts as unauthenticated. gh is optional,
+// so this never fails the command — it only downgrades gh's reported state.
 func ghAuthChecker(ctx context.Context) error {
 	return exec.CommandContext(ctx, "gh", "auth", "status").Run()
 }

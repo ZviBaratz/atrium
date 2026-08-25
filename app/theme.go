@@ -1,6 +1,8 @@
 package app
 
 import (
+	"fmt"
+
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/ui/theme"
@@ -52,11 +54,21 @@ func ApplyThemeAtLaunch(cfg *config.Config) []error {
 // theme.Set for a palette that is not registered yet falls back to the default and
 // nothing later un-falls it.
 //
-// Idempotent, and deliberately so — it runs twice per launch and again whenever the
-// settings panel saves the theme or glyph_set row. Each run re-reads the themes
-// directory, which is one os.ReadDir of a directory that is empty on almost every
-// install, and is what makes editing a theme file take effect on save without an
-// fs-watcher (declined by the program design).
+// Idempotent, and deliberately so — it runs twice per launch and again each time the
+// settings panel OPENS. Each run re-reads the themes directory, which is one os.ReadDir
+// of a directory that is empty on almost every install, and is what makes editing a theme
+// file take effect without a restart and without an fs-watcher (declined by the program
+// design).
+//
+// Opening the panel is the event rather than saving the row, and the difference is not a
+// detail. The picker's options ARE theme.SelectableNames(), read live from this registry,
+// so a file written after launch is missing from the list a save would have to choose
+// from: cycling could not reach it, and the first keypress would select and persist some
+// other palette on the way past. Reloading when the panel opens is what makes the row's
+// vocabulary describe the directory the user just edited. It also takes the work off the
+// keypress — left/right cycling calls applySettingChange on EVERY press, which would put
+// an os.ReadDir plus a decode per file on the update loop for as long as an arrow key is
+// held.
 //
 // The cost of that idempotence is visible in one place: a refused file is logged once
 // per run, so a launch writes each refusal to the log twice (main.go, then newHome).
@@ -75,8 +87,74 @@ func applyThemeSelection(cfg *config.Config) []error {
 	}
 	theme.Set(cfg.GetTheme())
 	theme.SetGlyphSet(cfg.GetGlyphSet())
+	// The failure with no file behind it, and so the one every other surface is silent
+	// about by construction. A refusal needs a file that was READ and rejected; a theme
+	// whose file was deleted, renamed, or never arrived on this machine produces no
+	// refusal, no log line and no picker entry — just the default palette, permanently,
+	// with nothing said. For a light-terminal user configured onto a light theme that
+	// also means silently losing polarity.
+	//
+	// PREPENDED, because the modal shows the first five and this is the only entry that
+	// describes what the user is looking at rather than a file they may not care about
+	// today. It overlaps the refusal when the configured theme is itself the broken file —
+	// two lines for one cause — and that is the accepted cost of neither entry having to
+	// parse the other's message to find out.
+	if name := cfg.GetTheme(); !theme.IsRegistered(name) {
+		problems = append([]error{fmt.Errorf("theme %q is configured; no file loads under that name", name)}, problems...)
+	}
 	for _, p := range problems {
 		log.WarningLog.Printf("user theme file ignored: %v", p)
 	}
 	return problems
+}
+
+// reloadUserThemes re-reads the themes directory so the settings picker's options
+// describe what is on disk right now, and is called when that panel opens.
+//
+// It buffers only what this run has not already said. flushThemeProblems CLEARS the
+// buffer as it opens the modal, so an unfiltered refill would put the same report in
+// front of the user every time they touched any setting, with no way to stop it short of
+// fixing or deleting the file — and a report that cannot be dismissed is one nobody
+// reads. Keyed on the message, so a file broken a second way is news again.
+//
+// It APPENDS rather than assigning. A launch-time problem can still be waiting here: the
+// buffer is only drained in stateDefault, and the settings overlay is not that, so an
+// assignment would drop whatever the launch found on the way past.
+// It reports whether the tmux BAND's colours moved, which is a question the caller has to
+// ask because this call can repaint the whole UI. Re-reading the directory recomposes the
+// active palette — the user edited the file their `theme` names, or deleted it and fell
+// back — and the band is not part of this frame: it is a status-style baked into the
+// managed conf and a server option on the live tmux server. Repainting the TUI and not
+// the band leaves them on different palettes, which is #574's symptom arriving by a new
+// road. Compared on the two hexes barStyleColours actually pushes rather than on the
+// palette as a whole, so a change no session can see does not cost a conf rewrite.
+func (m *home) reloadUserThemes() (bandChanged bool) {
+	before := bandColours()
+	if m.themeProblemsSeen == nil {
+		m.themeProblemsSeen = map[string]bool{}
+	}
+	for _, p := range applyThemeSelection(m.appConfig) {
+		if m.themeProblemsSeen[p.Error()] {
+			continue
+		}
+		m.themeProblemsSeen[p.Error()] = true
+		m.pendingThemeProblems = append(m.pendingThemeProblems, p)
+	}
+	return bandColours() != before
+}
+
+// bandColours is the pair session/tmux's barStyleColours resolves for the status band,
+// read here only to tell whether it moved. It restates WHICH two tokens those are rather
+// than calling into that package, because barStyleColours is unexported and everything
+// exported beside it shells out to tmux — not something to do on the update loop merely
+// to compare two strings.
+//
+// So it is a claim about another package, and what holds it is
+// TestManagedConfCarriesTheConfiguredPalette (theme_launch_test.go), which renders the
+// managed conf for a real palette and asserts the band reads
+// "bg=<BarBg>,fg=<Fg>". Changing which tokens the band uses fails there; this function
+// then has to follow, and TestReloadPushesTheBandWhenThePaletteMoves is what notices.
+func bandColours() [2]string {
+	th := theme.Current()
+	return [2]string{theme.Hex(th.Palette.BarBg), theme.Hex(th.Palette.Fg)}
 }

@@ -1561,12 +1561,21 @@ func keyAllowedWhileBusy(name keys.KeyName) bool {
 // straight through.
 func (m *home) openSettings() tea.Cmd {
 	m.state = stateSettings
+	// Before the overlay is built, not after: newSettingRows captures the theme row's
+	// option list from theme.SelectableNames(), so a file written since launch is
+	// unreachable from the picker unless the registry is refreshed first.
+	bandMoved := m.reloadUserThemes()
 	m.settingsOverlay = overlay.NewSettingsOverlay(m.appConfig)
 	if m.settingsRail != nil {
 		m.settingsOverlay.SetRailIndex(*m.settingsRail)
 	}
 	m.refreshSettingsClusteringGate()
 	m.recomputeLayout() // the hint bar hides behind the modal; panes reclaim its row
+	if bandMoved {
+		// The reload recomposed the active palette — an edited or deleted theme file — so
+		// the TUI is about to repaint in colours the band knows nothing about.
+		return tea.Batch(m.barStylePushCmd(), tea.RequestWindowSize)
+	}
 	return tea.RequestWindowSize
 }
 

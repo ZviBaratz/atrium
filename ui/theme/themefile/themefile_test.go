@@ -254,6 +254,15 @@ func TestLoadIgnoresWhatIsNotAThemeFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("notes"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".midnight.json.swp"), []byte("junk"), 0o600))
 	require.NoError(t, os.Mkdir(filepath.Join(dir, "old.json"), 0o750))
+	// The sidecars, which are the ones that reach the extension filter: filepath.Ext of
+	// both is ".json", so before they were skipped by name their stems hit nameRE and the
+	// user got a refusal naming a file they never wrote — while editing a theme, and
+	// sorted ('.' is 0x2E) ahead of their own into a report that shows five.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".#midnight.json"), []byte("lock"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "._midnight.json"), []byte("appledouble"), 0o600))
+	// A symlink to a DIRECTORY named like a theme. e.IsDir() is false for it, which is
+	// what let it through to os.ReadFile and be reported as "is a directory".
+	require.NoError(t, os.Symlink(filepath.Join(dir, "old.json"), filepath.Join(dir, "linked.json")))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "midnight.json"),
 		[]byte(`{"palette": {"attention": "#ffb454"}}`), 0o600))
 
@@ -261,6 +270,37 @@ func TestLoadIgnoresWhatIsNotAThemeFile(t *testing.T) {
 	assert.Empty(t, problems)
 	assert.Len(t, loaded, 1)
 	assert.Contains(t, loaded, "midnight")
+}
+
+// TestLoadFollowsASymlinkedThemeFile is the other side of the filter above, and the
+// reason it is os.Stat rather than os.Lstat or DirEntry.Type(): a dotfiles repo ships a
+// theme by symlinking it into place, and either of those would see ModeSymlink, decide it
+// is not a regular file, and ignore a theme the user can see sitting in the directory.
+func TestLoadFollowsASymlinkedThemeFile(t *testing.T) {
+	src := t.TempDir()
+	target := filepath.Join(src, "midnight.json")
+	require.NoError(t, os.WriteFile(target, []byte(`{"palette": {"attention": "#ffb454"}}`), 0o600))
+
+	dir := t.TempDir()
+	require.NoError(t, os.Symlink(target, filepath.Join(dir, "midnight.json")))
+
+	loaded, problems := Load(dir)
+	assert.Empty(t, problems)
+	assert.Contains(t, loaded, "midnight")
+}
+
+// TestLoadRefusesAnOversizeFile. Without a cap Load reads whatever carries a .json name
+// wholly into memory during startup, before any UI exists to say what it is doing.
+func TestLoadRefusesAnOversizeFile(t *testing.T) {
+	dir := write(t, "huge.json", `{"palette": {"attention": "#ffb454"}}`)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "huge.json"),
+		append([]byte(`{"palette": {"attention": "#ffb454"}}`), make([]byte, maxSize)...), 0o600))
+
+	loaded, problems := Load(dir)
+	assert.Empty(t, loaded)
+	require.Len(t, problems, 1)
+	assert.Contains(t, problems[0].Error(), "huge.json")
+	assert.Contains(t, problems[0].Error(), "capped")
 }
 
 // TestLoadTreatsAMissingDirectoryAsNoThemes. Every install is in this state until
@@ -378,13 +418,84 @@ func TestExtendsCarriesTheBorderStyleAndNotTheGlyphs(t *testing.T) {
 // does nothing", reported by nobody, because neither the startup modal nor `atrium
 // doctor` had a second file to name.
 func TestDuplicateNameIsRefused(t *testing.T) {
-	dir := write(t, "dup.json", `{"palette": {"accent": "#7aa2f7"}}`)
+	dir := t.TempDir()
+	requireCaseSensitiveFS(t, dir)
+	writeInto(t, dir, "dup.json", `{"palette": {"accent": "#7aa2f7"}}`)
 	writeInto(t, dir, "dup.JSON", `{"palette": {"accent": "#89b4fa"}}`)
 
 	loaded, problems := Load(dir)
-	assert.Len(t, loaded, 1, "one name, one theme")
+	// NEITHER, and that is the assertion rather than a detail of it. Keeping one would
+	// mean keeping whichever sort.Strings reached first — 'J' (0x4A) before 'j' (0x6A) —
+	// so a stale dup.JSON would beat the dup.json its author is editing, with the message
+	// blaming the live file for the collision.
+	assert.Empty(t, loaded, "the pair is dropped; neither name is registered")
 	require.Len(t, problems, 1)
 	assert.Contains(t, problems[0].Error(), "dup.JSON")
 	assert.Contains(t, problems[0].Error(), "dup.json",
-		"the refusal must name BOTH files, or the reader cannot tell which one won")
+		"the refusal must name BOTH files, or the reader cannot tell which two collided")
+	assert.Contains(t, problems[0].Error(), "neither",
+		"and must say the surviving file is not loaded either, or the user tunes a palette that is gone")
+}
+
+// requireCaseSensitiveFS skips when dir's filesystem folds case.
+//
+// It has to exist, and be a skip rather than a fixture change, because the collision this
+// package refuses is REACHABLE only where case is significant. On APFS and NTFS,
+// dup.json and dup.JSON are one inode: the second write truncates the first, os.ReadDir
+// returns one entry, and Load correctly returns one theme and no problems. CI runs the
+// suite on macos-latest as well as ubuntu-latest (.github/workflows/build.yml), so a test
+// that asserts the collision unconditionally is red on half the matrix — and green on the
+// half a developer runs, which is how it would have merged.
+func requireCaseSensitiveFS(t *testing.T, dir string) {
+	t.Helper()
+	// No .json extension: Load must ignore the probe even if a failure path leaves it.
+	probe := filepath.Join(dir, "CaseProbe")
+	require.NoError(t, os.WriteFile(probe, nil, 0o600))
+	t.Cleanup(func() { _ = os.Remove(probe) })
+	if _, err := os.Stat(filepath.Join(dir, "caseprobe")); err == nil {
+		t.Skip("filesystem folds case, so two spellings of one stem cannot coexist here")
+	}
+}
+
+// TestDuplicateKeyIsRefused. encoding/json resolves a repeated name silently — last-wins
+// for a scalar, and a MERGE for an object — and DisallowUnknownFields does not change
+// that. So a file whose visible first line says `extends: unicode` loads tokyo-night, and
+// a file with two palette blocks loads neither of them but the union. Both are "the file
+// says one thing and Atrium did another", which is what this loader exists to prevent.
+func TestDuplicateKeyIsRefused(t *testing.T) {
+	for _, tc := range []struct{ name, body, want string }{
+		{"scalar", `{"extends": "unicode", "extends": "tokyo-night"}`, "extends"},
+		{"nested", `{"palette": {"fg": "#111111", "fg": "#222222"}}`, "fg"},
+		{"block", `{"palette": {"fg": "#111111"}, "palette": {"bg": "#222222"}}`, "palette"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loaded, problems := Load(write(t, "dupkey.json", tc.body))
+			assert.Empty(t, loaded)
+			require.Len(t, problems, 1)
+			assert.Contains(t, problems[0].Error(), tc.want,
+				"the refusal must name the key that is set twice")
+		})
+	}
+}
+
+// TestRepeatedVALUESAreNotADuplicateKey is the false positive the check above must not
+// have: two tokens set to the same colour is an ordinary theme, and the string that
+// repeats there is a value, not a name.
+func TestRepeatedVALUESAreNotADuplicateKey(t *testing.T) {
+	loaded, problems := Load(write(t, "twin.json", `{"palette": {"fg": "#c0caf5", "cyan": "#c0caf5"}}`))
+	assert.Empty(t, problems)
+	assert.Contains(t, loaded, "twin")
+}
+
+// TestAMisspeltTokenIsNamedBeforeItsColourIsJudged. A user who writes `foreground` also
+// tends to write `#fff`, and both checks are true of that line — but only one of them is
+// the mistake worth telling them about. Judging the colour first answers "#fff is not a
+// canonical #rrggbb colour", which sends them to fix the half that was closer to right
+// and leaves the key they invented in place for the next round.
+func TestAMisspeltTokenIsNamedBeforeItsColourIsJudged(t *testing.T) {
+	_, problems := Load(write(t, "typo.json", `{"palette": {"foreground": "#fff"}}`))
+	require.Len(t, problems, 1)
+	assert.Contains(t, problems[0].Error(), "not a palette token")
+	assert.NotContains(t, problems[0].Error(), "#rrggbb",
+		"the key is the mistake; naming the colour first buys the user another round trip")
 }

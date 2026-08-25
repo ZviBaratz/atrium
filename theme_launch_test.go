@@ -132,9 +132,14 @@ func TestMainCallsTmuxInitOnlyFromInitAppearanceAndTmux(t *testing.T) {
 	src, err := os.ReadFile("main.go")
 	require.NoError(t, err)
 
-	calls := regexp.MustCompile(`tmux\.Init\(`).FindAllStringIndex(string(src), -1)
+	// Both spellings. session/tmux.RewriteManagedConfig delegates straight to Init,
+	// passing the stored override back in, so a new main.go call site reaching for it
+	// would rewrite the managed conf from theme.Current() exactly as Init does — and a
+	// guard that greps one name would watch it happen. Grepping the name is the whole
+	// mechanism here, so the name it does not know is the hole.
+	calls := regexp.MustCompile(`tmux\.(Init|RewriteManagedConfig)\(`).FindAllStringIndex(string(src), -1)
 	require.Len(t, calls, 1,
-		"tmux.Init must be called only from initAppearanceAndTmux, which activates the theme first (#574)")
+		"the managed tmux conf must be rendered only from initAppearanceAndTmux, which activates the theme first (#574)")
 
 	fn := regexp.MustCompile(`(?m)^func initAppearanceAndTmux\(`).FindStringIndex(string(src))
 	require.NotNil(t, fn, "initAppearanceAndTmux is gone; the ordering has no owner")

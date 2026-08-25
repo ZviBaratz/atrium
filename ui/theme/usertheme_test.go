@@ -128,3 +128,47 @@ func TestUserPaletteDrivesIsLightAndTheBrandTable(t *testing.T) {
 	assert.True(t, differ,
 		"a light user palette must reach the light brand-accent table; no agent glyph changed colour")
 }
+
+// TestUserThemeCannotShadowByAnotherSpelling is the half of "cannot shadow" that the
+// collision drop got wrong at first: it indexed the built-in registry with the caller's
+// RAW key while Get normalises (ToLower+TrimSpace), so the drop was a spelling test
+// rather than a name test.
+//
+// Probed against the real package before it was fixed: SetUserThemes({"Tokyo-Night": th})
+// registered, Names and SelectableNames offered "Tokyo-Night", the picker let you select
+// and persist it — and Get lowercased it straight back onto the built-in, leaving a row
+// that is reachable, saved, and does nothing. Nothing in production reached it, because
+// themefile's nameRE demands lowercase — which is to say the property was being held up
+// by the loader-side policy in another package that dropping the entry here was written
+// to replace.
+func TestUserThemeCannotShadowByAnotherSpelling(t *testing.T) {
+	for _, spelling := range []string{"Tokyo-Night", "TOKYO-NIGHT", "  tokyo-night  "} {
+		t.Run(spelling, func(t *testing.T) {
+			imposter := userThemeFixture(spelling, func(p *Palette) { p.Bg = lipgloss.Color("#ff0000") })
+			defer SetUserThemes(map[string]*Theme{spelling: imposter})()
+
+			assert.NotContains(t, SelectableNames(), spelling,
+				"the picker must not offer a second spelling of a built-in")
+			assert.Equal(t, "#1a1b26", Hex(Get(spelling).Palette.Bg),
+				"and it must not be reachable through Get either")
+			assert.Equal(t, 1, countName(Names(), DefaultThemeName))
+		})
+	}
+}
+
+// TestUserThemeCannotClaimAuto. `auto` is not in the built-in registry at all — compose()
+// special-cases it, because Get must return a concrete palette and `auto` has none — so
+// the collision drop needs its own arm for it and does not get one for free.
+//
+// SelectableNames puts `auto` at the front unconditionally, so an entry that survived
+// registration would make the picker list it twice: the row would take two presses to
+// leave, which is the exact defect TestUserThemeCannotShadowABuiltin exists to prevent
+// one map over.
+func TestUserThemeCannotClaimAuto(t *testing.T) {
+	defer SetUserThemes(map[string]*Theme{AutoThemeName: userThemeFixture(AutoThemeName, nil)})()
+
+	assert.Equal(t, 1, countName(SelectableNames(), AutoThemeName),
+		"the picker lists `auto` once; a user entry under that name doubles it")
+	assert.NotContains(t, Names(), AutoThemeName,
+		"`auto` is composed, not registered; it must not appear in the registered set")
+}

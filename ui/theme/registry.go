@@ -334,10 +334,18 @@ func SetUserThemes(m map[string]*Theme) (restore func()) {
 	prev := userRegistry.Load()
 	next := make(map[string]*Theme, len(m))
 	for k, v := range m {
-		if _, builtin := registry[k]; builtin {
+		// Normalised the way Get normalises, or the drop is a spelling test rather than a
+		// name test: registry["Tokyo-Night"] misses, so the entry would survive, be listed
+		// by Names and offered by the picker — and then Get would lowercase it back onto the
+		// built-in, leaving a row that is selectable, persisted, and does nothing.
+		key := strings.ToLower(strings.TrimSpace(k))
+		// AutoThemeName is not in registry — compose() special-cases it — so it needs its own
+		// arm. SelectableNames puts `auto` at the front unconditionally; a user entry under
+		// that name would make the picker list it twice and take two presses to leave.
+		if _, builtin := registry[key]; builtin || key == AutoThemeName {
 			continue
 		}
-		next[k] = v
+		next[key] = v
 	}
 	userRegistry.Store(&next)
 	return func() { userRegistry.Store(prev) }
@@ -362,11 +370,12 @@ func Get(name string) *Theme {
 
 // BuiltinNames returns the names of the themes compiled into the binary, sorted.
 //
-// Separate from Names() because two callers need "the five", not "everything
-// registered": the user-theme loader, which refuses a filename that would shadow a
-// built-in and lists the legal `extends` values, and any report that distinguishes what
-// Atrium ships from what the user wrote. Deriving it from the same map Get() indexes is
-// what keeps that list from becoming a hand-maintained second copy of the registry.
+// Separate from Names() because a report needs "the five", not "everything registered":
+// `atrium doctor` prints them as the legal `extends` values beneath a refused theme file.
+// The loader itself does NOT use this — it asks IsBuiltin and deliberately carries no
+// vocabulary in its messages, since the startup modal clips one. Deriving it from the
+// same map Get() indexes is what keeps the list from becoming a hand-maintained second
+// copy of the registry.
 func BuiltinNames() []string {
 	names := make([]string, 0, len(registry))
 	for n := range registry {
@@ -374,6 +383,26 @@ func BuiltinNames() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// IsRegistered reports whether a name resolves to a theme of its own rather than falling
+// back to the default. `auto` counts: it is not in any map, but it resolves.
+//
+// Get cannot answer this — it never returns nil, so a caller asking "did my configured
+// theme survive?" gets the default palette back and no way to tell it apart from having
+// configured the default. That gap is the whole reason a user theme whose file was
+// deleted or renamed used to be reported by no surface at all: nothing was refused, so
+// there was no problem to print, and the picker simply stopped offering the name.
+func IsRegistered(name string) bool {
+	key := strings.ToLower(strings.TrimSpace(name))
+	if key == AutoThemeName {
+		return true
+	}
+	if _, ok := registry[key]; ok {
+		return true
+	}
+	_, ok := userThemes()[key]
+	return ok
 }
 
 // IsBuiltin reports whether a name is one of the themes compiled into the binary.
@@ -385,10 +414,12 @@ func IsBuiltin(name string) bool {
 // Names returns the registered theme names — built-in and user — unordered; useful for
 // docs/help.
 //
-// User themes are included so every sweep that iterates this list covers them too: the
-// splash's canonical-hex check, the glyph width sweep, the contrast oracle and the
-// settings picker were all written against "every registered theme", and a user palette
-// is exactly the kind that has not been reviewed by a human.
+// User themes are included so a sweep written against "every registered theme" covers
+// them too — the splash's canonical-hex check and the glyph width sweep among them, and a
+// user palette is exactly the kind no human has reviewed. Not the contrast oracle, which
+// walks the built-ins alone (contrast_test.go says so, and explains why): a user palette
+// reaches Get only after themefile ran Validate on it, so a sweep here would be asserting
+// the loader's own precondition.
 func Names() []string {
 	user := userThemes()
 	names := make([]string, 0, len(registry)+len(user))

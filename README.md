@@ -1788,10 +1788,19 @@ longer stand far enough off it. Override that one too.
 The report appears as a notice at launch and under `atrium doctor`, which prints every
 miss rather than the first, lists the themes that loaded, and names the directory it
 read (a file in neither list is in the wrong one). A refused theme is not offered in the
-settings picker, and a `theme` naming one falls back to the default.
+settings picker, and a `theme` naming one falls back to the default — as does a `theme`
+naming a file that is simply absent, which `atrium doctor` reports too since there is no
+refusal to show for a file nobody read.
 
-Changes take effect when you save the theme row in the settings panel (`,`) or on the
-next launch; there is no file watcher.
+Opening the settings panel (`,`) re-reads the directory, so a file you just wrote is in
+the picker without a restart; saving the theme row then activates it. There is no file
+watcher, so a file written while the panel is already open needs it closed and reopened.
+
+Two files that differ only in the case of their extension — `midnight.json` and
+`midnight.JSON`, which a round-trip through a case-insensitive filesystem can leave you
+with — resolve to one name, and **neither** loads. Delete one. A file is also refused if a
+key appears twice inside it, because JSON's own answer there is to keep the last one
+silently.
 
 ##### `NO_COLOR`
 

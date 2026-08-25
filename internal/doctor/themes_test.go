@@ -37,7 +37,7 @@ func TestCheckThemes_ReportsBothHalves(t *testing.T) {
 		"washed.json":   `{"palette": {"fg": "#111111"}}`,
 	})
 
-	dir, loaded, problems := CheckThemes()
+	dir, loaded, problems := CheckThemes(config.DefaultConfig())
 
 	assert.NotEmpty(t, dir)
 	assert.Equal(t, []string{"midnight"}, loaded)
@@ -59,7 +59,7 @@ func TestCheckThemes_ReportsBothHalves(t *testing.T) {
 // It costs one line on an install with no themes, which is most of them. The trade is
 // deliberate: the alternative spends nothing and answers nothing.
 func TestRenderThemes_NamesTheDirectoryWhenNothingLoaded(t *testing.T) {
-	dir, loaded, problems := CheckThemes()
+	dir, loaded, problems := CheckThemes(config.DefaultConfig())
 	require.Empty(t, loaded)
 	require.Empty(t, problems)
 
@@ -86,7 +86,7 @@ func TestRenderThemes_SaysNowhereWhenTheDirCannotBeResolved(t *testing.T) {
 func TestRenderThemes_PrintsEveryViolation(t *testing.T) {
 	writeThemes(t, map[string]string{"washed.json": `{"palette": {"fg": "#111111"}}`})
 
-	dir, loaded, problems := CheckThemes()
+	dir, loaded, problems := CheckThemes(config.DefaultConfig())
 	require.Empty(t, loaded)
 	require.Len(t, problems, 1)
 
@@ -118,4 +118,34 @@ func TestRenderThemes(t *testing.T) {
 	assert.Contains(t, clean, "/data/themes", "the directory is unconditional; it is the answer to a file in neither list")
 	assert.NotContains(t, clean, "may extend", "the vocabulary is help for a failure, not noise on every run")
 	assert.Contains(t, RenderThemes("/data/themes", nil, []error{errors.New("x.json: bad")}), "x.json")
+}
+
+// TestCheckThemes_ReportsAConfiguredThemeWithNoFile is the failure with no file behind
+// it, and the reason CheckThemes takes a config at all — the same join CheckRepoScripts
+// and CheckKeybindings make.
+//
+// themefile.Load reports only files it READ and rejected, so a theme whose file was
+// deleted, renamed, or never arrived on this machine produces no refusal anywhere: the
+// startup modal is silent, the picker simply stops offering the name, and the UI falls
+// back to DefaultThemeName rather than to `auto` — so a light-terminal user loses
+// polarity following, permanently, with nothing said. This is the only surface that can
+// notice.
+func TestCheckThemes_ReportsAConfiguredThemeWithNoFile(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := config.DefaultConfig()
+	cfg.Theme = "vanished"
+
+	_, loaded, problems := CheckThemes(cfg)
+	assert.Empty(t, loaded)
+	require.Len(t, problems, 1)
+	assert.Contains(t, problems[0].Error(), "vanished")
+	assert.Contains(t, problems[0].Error(), theme.DefaultThemeName,
+		"the report must name what it fell back TO; the name is not auto")
+
+	// A built-in and `auto` are both registered without a file, and must not be reported.
+	for _, name := range append(theme.BuiltinNames(), theme.AutoThemeName) {
+		cfg.Theme = name
+		_, _, problems := CheckThemes(cfg)
+		assert.Emptyf(t, problems, "%s needs no theme file", name)
+	}
 }

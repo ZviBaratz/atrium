@@ -14,8 +14,10 @@ import (
 // It started life in contrast_test.go and moved here, whole, for the reason
 // relLuminanceOf moved to scheme.go before it: production code cannot call a test
 // file, and a user theme file has to be VALIDATED at load time rather than merely
-// admired at review time (#813). contrast_test.go is now one of its callers rather
-// than its home; the other is ui/theme/themefile.
+// admired at review time (#813). ui/theme/themefile is the production caller, the one
+// that decides whether a file loads; the tests that call it are this package's own sweep
+// over the built-ins, themefile's, and app/frameparity_test.go, which asserts its user
+// theme fixture is a palette the loader would accept before pinning a golden from it.
 //
 // The floors were DERIVED from the minimum across the shipped dark themes with margin,
 // which is their provenance rather than a live description: the light palettes landed
@@ -62,14 +64,14 @@ func ContrastRatio(a, b Color) float64 {
 // badge_bg is a FILL (Theme.BadgeStyle sets it as a Background), so a floor measuring
 // its foreground contrast with Bg would be asking the wrong question of it.
 var tokenFloors = map[string]float64{
-	"fg":           4.5,
-	"accent":       4.5,
-	"purple":       4.5,
-	"success":      4.5,
-	"pending":      4.5,
-	"attention":    4.5,
-	"danger":       4.5,
-	"cyan":         4.5,
+	"fg":           textFloor,
+	"accent":       textFloor,
+	"purple":       textFloor,
+	"success":      textFloor,
+	"pending":      textFloor,
+	"attention":    textFloor,
+	"danger":       textFloor,
+	"cyan":         textFloor,
 	"success_dim":  3.0,
 	"fg_dim":       2.4,
 	"working":      2.4,
@@ -87,6 +89,13 @@ var tokenFloorExempt = map[string]string{
 	"badge_bg": "a fill, not a foreground: floored against bg and badge_fg as pairs below",
 	"badge_fg": "meets badge_bg, not the void: floored as a pair below",
 }
+
+// textFloor is the tier for anything meant to be READ — the status and text tokens, and
+// every pair where one sits directly on the other. Named rather than repeated as a
+// literal so a test can assert which tier a given entry is at: the four bar-band pairs
+// deliberately span both tiers, and a comment saying so is not something a reader can
+// check (TestBarBandColoursAreFloored does).
+const textFloor = 4.5
 
 // glyphFloor is the tier for a single width-1 mark rather than prose. It is the floor
 // TestAgentBrandColoursStayLegible already applies to the agent brand accents, reused
@@ -138,12 +147,12 @@ var pairFloors = []struct {
 	fg    func(Palette) Color
 	bg    func(Palette) Color
 }{
-	{"badge_fg on badge_bg", 4.5, func(p Palette) Color { return p.BadgeFg }, func(p Palette) Color { return p.BadgeBg }},
+	{"badge_fg on badge_bg", textFloor, func(p Palette) Color { return p.BadgeFg }, func(p Palette) Color { return p.BadgeBg }},
 	{"badge_bg on bg", glyphFloor, func(p Palette) Color { return p.BadgeBg }, func(p Palette) Color { return p.Bg }},
-	{"bg on accent", 4.5, func(p Palette) Color { return p.Bg }, func(p Palette) Color { return p.Accent }},
-	{"bg on attention", 4.5, func(p Palette) Color { return p.Bg }, func(p Palette) Color { return p.Attention }},
-	{"fg on bg_elevated", 4.5, func(p Palette) Color { return p.Fg }, func(p Palette) Color { return p.BgElevated }},
-	{"fg on bar_bg", 4.5, func(p Palette) Color { return p.Fg }, func(p Palette) Color { return p.BarBg }},
+	{"bg on accent", textFloor, func(p Palette) Color { return p.Bg }, func(p Palette) Color { return p.Accent }},
+	{"bg on attention", textFloor, func(p Palette) Color { return p.Bg }, func(p Palette) Color { return p.Attention }},
+	{"fg on bg_elevated", textFloor, func(p Palette) Color { return p.Fg }, func(p Palette) Color { return p.BgElevated }},
+	{"fg on bar_bg", textFloor, func(p Palette) Color { return p.Fg }, func(p Palette) Color { return p.BarBg }},
 	{"success on bar_bg", glyphFloor, func(p Palette) Color { return p.Success }, func(p Palette) Color { return p.BarBg }},
 	{"attention on bar_bg", glyphFloor, func(p Palette) Color { return p.Attention }, func(p Palette) Color { return p.BarBg }},
 	{"pending on bar_bg", glyphFloor, func(p Palette) Color { return p.Pending }, func(p Palette) Color { return p.BarBg }},
@@ -166,12 +175,28 @@ type Violation struct {
 // theme's bar_bg against the new bg. The name is still the actionable one (that is the
 // token to override next), but the message cannot promise the author has seen it before.
 //
-// Compact because several are joined into one line of a modal that wraps at 72 cells:
-// the token, what it measured, and what it had to clear is all three facts, and the
-// long form ("contrast is 1.10, below the 4.50 floor for its role") spent 30 cells per
-// violation restating the same sentence.
+// Compact because it is rendered into a modal line that clips: the token, what it
+// measured, and what it had to clear is all three facts, and the long form ("contrast is
+// 1.10, below the 4.50 floor for its role") spent 30 cells restating the same sentence.
+// `atrium doctor` prints one of these per miss, indented, which is the surface with room.
+//
+// Two decimals, and Validate refuses on the SAME two — see clears. Comparing the raw
+// float while reporting a rounded one is how a refusal comes to read "contrast 4.50,
+// floor 4.50", telling the author their colour meets the floor it was just refused for
+// and offering no remedy they cannot already see is satisfied.
 func (v Violation) Error() string {
 	return fmt.Sprintf("%s: contrast %.2f, floor %.2f", v.Name, v.Got, v.Floor)
+}
+
+// clears reports whether a measured ratio meets a floor, at the precision Violation.Error
+// prints. Rounding here rather than truncating in the message keeps the two agreeing in
+// both directions: nothing is refused that the report will show as passing, and nothing
+// passes that it would show as short.
+//
+// It loosens every floor by up to 0.005, which is below the precision any of them were
+// chosen at — they are round numbers from WCAG tiers, not measurements.
+func clears(got, floor float64) bool {
+	return math.Round(got*100)/100 >= floor
 }
 
 // Validate reports every floor a palette misses — never just the first.
@@ -191,12 +216,12 @@ func Validate(p Palette) []Violation {
 		if !ok {
 			continue
 		}
-		if got := ContrastRatio(*t.at(&p), p.Bg); got < floor {
+		if got := ContrastRatio(*t.at(&p), p.Bg); !clears(got, floor) {
 			out = append(out, Violation{Name: t.name, Got: got, Floor: floor})
 		}
 	}
 	for _, pair := range pairFloors {
-		if got := ContrastRatio(pair.fg(p), pair.bg(p)); got < pair.floor {
+		if got := ContrastRatio(pair.fg(p), pair.bg(p)); !clears(got, pair.floor) {
 			out = append(out, Violation{Name: pair.name, Got: got, Floor: pair.floor})
 		}
 	}

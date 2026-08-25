@@ -22,7 +22,13 @@ import (
 // It returns the loaded names and the directory as well, because the useful report is
 // all three: a user whose file is absent from BOTH lists has it in the wrong directory,
 // which no refusal can tell them, and only this report knows where the right one is.
-func CheckThemes() (dir string, loaded []string, problems []error) {
+//
+// It takes the config for the same reason CheckRepoScripts and CheckKeybindings do — the
+// interesting failures are joins between what is configured and what is present. Here
+// that join is the one failure with no file behind it: `theme` naming a palette that no
+// file loads under, which produces no refusal to print because nothing was read and
+// rejected.
+func CheckThemes(cfg *config.Config) (dir string, loaded []string, problems []error) {
 	dir, err := config.ThemesDir()
 	if err != nil {
 		return "", nil, []error{err}
@@ -32,6 +38,15 @@ func CheckThemes() (dir string, loaded []string, problems []error) {
 		loaded = append(loaded, name)
 	}
 	sort.Strings(loaded)
+
+	// Against what LOADED here rather than theme.IsRegistered: `atrium doctor` reports on
+	// the directory it just read, and the process-global registry is a different question
+	// that a doctor run has no reason to have answered.
+	if name := strings.ToLower(strings.TrimSpace(cfg.GetTheme())); name != theme.AutoThemeName && !theme.IsBuiltin(name) {
+		if _, ok := themes[name]; !ok {
+			problems = append(problems, fmt.Errorf("theme %q is configured; no file here loads under that name, so the UI falls back to %s", name, theme.DefaultThemeName))
+		}
+	}
 	return dir, loaded, problems
 }
 

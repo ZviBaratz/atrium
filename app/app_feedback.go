@@ -420,11 +420,12 @@ func (m *home) flushThemeProblems() tea.Cmd {
 // files, and both the filename and the failing value are user-authored.
 //
 // The heading counts PROBLEMS, not files, and that is the honest count rather than a
-// vaguer one. Most entries are a refused file, but ApplyThemeAtLaunch pushes
-// directory-level failures into the same slice — an unreadable themes/, or a data dir
-// that would not resolve — and those are one entry standing for every theme the user
-// owns. "1 theme file was ignored" would be a specific claim about a specific file in
-// exactly the case where no file was read at all.
+// vaguer one. Most entries are a refused file, but applyThemeSelection pushes two other
+// kinds into the same slice: directory-level failures — an unreadable themes/, or a data
+// dir that would not resolve — which are one entry standing for every theme the user
+// owns, and a configured `theme` that no file loads under, which names no file at all.
+// "1 theme file was ignored" would be a specific claim about a specific file in exactly
+// the cases where no file was read.
 func themeProblemsReport(problems []error) string {
 	if len(problems) == 0 {
 		return ""
@@ -445,9 +446,12 @@ func themeProblemsReport(problems []error) string {
 	if len(problems) > len(shown) {
 		lines = append(lines, fmt.Sprintf("  … and %d more", len(problems)-len(shown)))
 	}
-	// Naming the consequence: a refused theme is not in the picker at all, so the
-	// symptom is a palette that is simply missing — and if config.json names it, the
-	// UI falls back to the default without saying why.
+	// Naming the consequence, in ONE sentence that has to hold for all three kinds of
+	// entry this slice carries — a refused file, a directory that would not resolve, and a
+	// `theme` naming something no file loads under. An earlier pair of lines said "any
+	// palette named above" and "a theme naming one", both of which describe the first kind
+	// and are false of the other two: a directory-level failure names no palette, and the
+	// third entry IS the configured name rather than something that might be it.
 	//
 	// Three short lines rather than two long ones. The overlay hugs its content and caps
 	// at the terminal width less four, and pads two columns each side, so 72 cells is
@@ -457,8 +461,7 @@ func themeProblemsReport(problems []error) string {
 	// the trade every one of this modal's siblings makes. These do not have to.
 	// TestThemeProblemsReportFitsANarrowTerminal holds them to it.
 	lines = append(lines, "",
-		"Any palette named above is not selectable.",
-		"A `theme` naming one falls back to the default.",
+		"Nothing named above is selectable; `theme` falls back.",
 		"`atrium doctor` reports the same list, in full.")
 	return strings.Join(lines, "\n")
 }

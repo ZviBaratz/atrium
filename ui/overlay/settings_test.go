@@ -1282,3 +1282,41 @@ func TestSettingsOverlay_CycleContextIndicator(t *testing.T) {
 	o.HandleKeyPress(keyMsg("left"))
 	assert.Equal(t, config.ContextIndicatorOff, cfg.GetContextIndicator(), "left wraps backwards too")
 }
+
+// TestThemeRowOffersWhatIsRegisteredPlusTheConfiguredName is the picker half of #813's
+// apply-without-restart wire, and of the row's one destructive edge.
+//
+// Two properties, and each has a distinct failure. The options must be read from
+// theme.SelectableNames() LIVE, or a theme file registered after this package was built
+// is unreachable from the picker. And a configured name the registry does NOT hold must
+// still be offered, or cycling cannot return to it: applySettingChange persists before
+// anything else and `esc` moves focus to the rail rather than cancelling, so one arrow
+// press would destroy a name the user then has to retype from memory. default_program
+// solves the identical problem the identical way (settings_schema.go).
+func TestThemeRowOffersWhatIsRegisteredPlusTheConfiguredName(t *testing.T) {
+	const absent = "vanished-theme"
+	cfg := config.DefaultConfig()
+	cfg.Theme = absent
+
+	row := rowByKey(t, cfg, "theme")
+	opts := row.options(cfg)
+
+	assert.Equal(t, theme.AutoThemeName, opts[0],
+		"`auto` leads the list; the row summary points at it as the first thing there")
+	for _, name := range theme.SelectableNames() {
+		assert.Containsf(t, opts, name, "the picker must offer every registered theme (%s)", name)
+	}
+	assert.Contains(t, opts, absent,
+		"a configured theme the registry has lost must stay reachable, or one press destroys it")
+
+	// And it is not duplicated once the registry does hold it.
+	registered := theme.DefaultThemeName
+	cfg.Theme = registered
+	n := 0
+	for _, o := range rowByKey(t, cfg, "theme").options(cfg) {
+		if o == registered {
+			n++
+		}
+	}
+	assert.Equal(t, 1, n, "the captured value must not be appended when it is already offered")
+}
