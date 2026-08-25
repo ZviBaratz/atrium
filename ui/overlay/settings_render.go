@@ -77,21 +77,38 @@ func (s *SettingsOverlay) helpBlockHeight() int {
 }
 
 // maxPaneLines is the tallest content any rail entry could need: the All settings view, with
-// a header per category and a spacer between them. Capping paneHeight at it means the box
-// grows with the terminal but never past what it can fill. Pinned against the flat view's
-// real line count by TestMaxPaneLinesMatchesTheFlatView.
+// a header per category and a spacer between them. It caps the flat view's pane
+// (neededPaneLines), so the box grows with the terminal but never past what that view can
+// fill. Pinned against the flat view's real line count by TestMaxPaneLinesMatchesTheFlatView.
 func (s *SettingsOverlay) maxPaneLines() int {
 	cats := len(allCategories())
 	return max(len(railEntries()), len(s.rows)+cats+(cats-1))
 }
 
-// paneHeight is the shared height of the rail and rows panes.
-//
-// It is a function of the terminal size alone — not of the rail cursor, not of the row
-// cursor — so the centered box never changes height as you navigate. At 80x24 it is 13,
-// which is exactly the thirteen rail entries (spec §4's invariant).
+// neededPaneLines is the tallest pane the SELECTED VIEW can fill: the rail's own length
+// for every view but the flat one — no category, the profiles editor's default list, nor
+// a handoff note outgrows the thirteen rail entries beside them, and a view that someday
+// does will window with its "n more" markers rather than grow the box — and the flat
+// view's full grouped length there. Deliberately a function of the rail entry's KIND
+// alone: not the row set (an availability gate flipping a row must not resize the box),
+// not the filter (the search view rides the selected entry's height), not a cursor. The
+// box is therefore height-stable everywhere except crossing the All-settings boundary,
+// which is the one deliberate re-centre (#693 traded the always-terminal-tall box, three
+// quarters blank on every category, for this).
+func (s *SettingsOverlay) neededPaneLines() int {
+	if s.selectedEntry().kind == railAll {
+		return s.maxPaneLines()
+	}
+	return len(railEntries())
+}
+
+// paneHeight is the shared height of the rail and rows panes: the terminal's budget,
+// capped at what the selected view can fill (neededPaneLines) and floored at
+// settingsMinBody. At 80x24 it is 13 in every view, which is exactly the thirteen rail
+// entries (spec §4's invariant); on taller terminals a category view stays at 13 —
+// sizing to content is the point (#693) — while the flat view keeps growing.
 func (s *SettingsOverlay) paneHeight() int {
-	return clamp(s.height-settingsVChrome-s.helpBlockHeight(), settingsMinBody, s.maxPaneLines())
+	return clamp(s.height-settingsVChrome-s.helpBlockHeight(), settingsMinBody, s.neededPaneLines())
 }
 
 // rowLineParts is one rows-pane line decomposed into the plain-text segments the renderer
