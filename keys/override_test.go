@@ -407,6 +407,21 @@ func TestModeHints_UnboundActionLeavesNoEmptySegment(t *testing.T) {
 	}
 }
 
+// With both nav actions disabled the pane-focus bar has no key that scrolls, so
+// the scroll entry drops out whole (the VisualModeHints rule above) rather than
+// rendering a keyless " scroll" segment promising an action with no way to
+// reach it. Scroll mode itself stays reachable by wheel and shift-scroll; esc
+// survives because it is reserved and can never be unbound.
+func TestPaneFocusHints_UnboundNavDropsTheScrollEntry(t *testing.T) {
+	_, restore := Apply(map[string]Spec{"up": {Disabled: true}, "down": {Disabled: true}})
+	defer restore()
+
+	hints := PaneFocusHints()
+	if len(hints) != 1 || hints[0].Help().Key != "esc" {
+		t.Errorf("with up and down unbound the pane-focus bar must teach only esc, got %v", hints)
+	}
+}
+
 // checkKeys validated every key in an attach-layer action's list, but
 // installAttachChords installs only the primary one — so a second alias was live
 // on the list and, inside a pane, forwarded to the agent as its raw control byte

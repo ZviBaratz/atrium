@@ -1125,9 +1125,10 @@ func (m *home) handleKeyPress(msg tea.KeyPressMsg) (mod tea.Model, cmd tea.Cmd) 
 // somewhere to land.
 //
 // The prelude stays in handleKeyPress: state routing, esc's contextual roles,
-// quit, and the actionInFlight gate all run before a name is even resolved. A
-// caller reaching this directly bypasses all of them and must re-apply whichever
-// it needs (the palette re-checks the busy gate; see runPaletteAction).
+// quit, the actionInFlight gate and the focus router all run before this. A
+// caller reaching this directly bypasses all of them and must re-apply
+// whichever it needs (the palette re-checks the busy gate and the focus
+// router; see runPaletteAction).
 func (m *home) dispatchAction(name keys.KeyName) (tea.Model, tea.Cmd) {
 	switch name {
 	case keys.KeyHelp:

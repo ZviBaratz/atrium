@@ -162,3 +162,28 @@ func TestPaletteAllowsANavigationActionWhileBusy(t *testing.T) {
 
 	assert.False(t, h.menu.HasNotice(), "tab is allowed while busy; the palette must not refuse it")
 }
+
+// The palette runs exactly what the key runs, focus included: while the pane
+// holds focus, the palette's up/down rows scroll the snapshot the way the keys
+// do, instead of moving the list and killing the snapshot via the selection's
+// owner change. runPaletteAction is called directly because that is the state
+// the app reaches — the palette is dismissed (stateDefault restored) before
+// the chosen action runs.
+func TestPaletteNavActionScrollsPaneUnderFocus(t *testing.T) {
+	h := scrollHome(t)
+	selected := h.list.GetSelectedInstance()
+	bottom, ok := h.tabbedWindow.PreviewScrollContent()
+	require.True(t, ok)
+
+	_, _ = h.runPaletteAction(keys.KeyUp)
+	moved, ok := h.tabbedWindow.PreviewScrollContent()
+	require.True(t, ok, "the palette's up must keep the pane in scroll mode")
+	require.NotEqual(t, bottom, moved, "the palette's up must scroll the snapshot, like the key")
+	require.Same(t, selected, h.list.GetSelectedInstance(), "the palette's up must not move the list selection")
+
+	_, _ = h.runPaletteAction(keys.KeyDown)
+	_, _ = h.runPaletteAction(keys.KeyDown)
+	require.True(t, h.tabbedWindow.IsPreviewInScrollMode(),
+		"the palette's down must hold at the bottom, like the key")
+	require.Same(t, selected, h.list.GetSelectedInstance())
+}

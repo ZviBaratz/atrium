@@ -843,3 +843,11 @@ func (t *TerminalPane) IsScrolling() bool {
 	defer t.mu.Unlock()
 	return t.isScrolling
 }
+
+// ScrollAtBottom reports whether the snapshot viewport rests at its bottom —
+// false outside scroll mode, where there is no viewport position to report.
+func (t *TerminalPane) ScrollAtBottom() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.isScrolling && t.viewport.AtBottom()
+}

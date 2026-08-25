@@ -581,6 +581,12 @@ func (p *PreviewPane) ClearHintOverlay() {
 // InHintMode reports whether a hint overlay is currently displayed.
 func (p *PreviewPane) InHintMode() bool { return p.hintContent != "" }
 
+// ScrollAtBottom reports whether the snapshot viewport rests at its bottom —
+// false outside scroll mode, where there is no viewport position to report.
+func (p *PreviewPane) ScrollAtBottom() bool {
+	return p.isScrolling && p.viewport.AtBottom()
+}
+
 // IsScrolling reports whether the preview pane is in scroll mode. It mirrors
 // TerminalPane.IsScrolling so the tabbed window can query both panes the same way
 // instead of reaching into this pane's private field.

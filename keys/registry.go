@@ -681,18 +681,43 @@ func DiffCommentModeHints() []key.Binding {
 
 // PaneFocusHints teaches the bar while the tabbed panes hold keyboard focus
 // (today: the active pane is in scroll mode): the nav keys scroll the pane and
-// esc hands the keyboard back to the list. Unlike its siblings above this is
-// not a MenuState's vocabulary — the app derives pane focus from the pane
-// state and pushes it into the menu at render time (Menu.SetPaneFocus), so
-// the bar cannot outlive a scroll mode that exits inside the pane.
+// esc leaves scroll mode. Unlike its siblings above this is not a MenuState's
+// vocabulary — the app derives pane focus from the pane state and pushes it
+// into the menu at render time (Menu.SetPaneFocus), so the bar cannot outlive
+// a scroll mode that exits inside the pane.
 //
 // The move label names the keys the focus router actually resolves
-// (routeFocusKey, app package); esc is reserved, so it needs no lookup.
+// (routeFocusKey, app package); esc is reserved, so it needs no lookup. Esc's
+// description names the mechanism, not a destination: in the focus layout the
+// list is hidden, so "back to list" would promise a frame esc does not
+// produce, while leaving scroll mode is what the first esc does in every
+// layout the bar can appear in.
 func PaneFocusHints() []key.Binding {
-	move := Label(append(keysOf(KeyUp), keysOf(KeyDown)...))
-	return []key.Binding{
-		key.NewBinding(key.WithHelp(move, "scroll")),
-		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back to list")),
+	hints := make([]key.Binding, 0, 2)
+	// With both nav actions unbound the entry drops out whole rather than
+	// rendering a keyless " scroll" segment (VisualModeHints' rule): scroll
+	// mode stays reachable by wheel and shift+↑, but the bar can only teach
+	// keys that exist.
+	if move := Label(append(keysOf(KeyUp), keysOf(KeyDown)...)); move != "" {
+		hints = append(hints, key.NewBinding(key.WithHelp(move, "scroll")))
+	}
+	return append(hints, key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "exit scroll")))
+}
+
+// ModeHintTables enumerates every mode hint table above, keyed by the bar
+// variant that renders it. The drift guards consume this one list — the bar
+// scan in the ui package seeds its known keys from it and then requires every
+// table here to surface in a scanned bar, and the app package's
+// click-synthesis sweep checks every key it carries. A table wired into
+// Menu.String but missing here fails the scan's unknown-token direction; one
+// added here but rendered nowhere fails its completeness direction.
+func ModeHintTables() map[string][]key.Binding {
+	return map[string][]key.Binding{
+		"filter":       FilterModeHints(),
+		"hints":        HintModeHints(),
+		"visual":       VisualModeHints(),
+		"diff-comment": DiffCommentModeHints(),
+		"pane-focus":   PaneFocusHints(),
 	}
 }
 

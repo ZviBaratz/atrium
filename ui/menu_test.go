@@ -12,15 +12,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The three mode bars teach modal gesture vocabularies. Exact-text pins: the
-// bars render from the registry's mode hint tables through the same path as
-// renderHintLine, and these froze the text across that refactor — any change
-// to the words or separators is a deliberate UX decision, not a side effect.
+// The MenuState-keyed mode bars teach modal gesture vocabularies. Exact-text
+// pins: the bars render from the registry's mode hint tables through the same
+// path as renderHintLine, and these froze the text across that refactor — any
+// change to the words or separators is a deliberate UX decision, not a side
+// effect. (The pane-focus variant gets the same pin in TestMenu_PaneFocusBar.)
 func TestMenu_ModeBarsExactText(t *testing.T) {
 	for state, want := range map[MenuState]string{
-		StateFilter: "enter accept · esc clear · filter: status: dirty behind pr: account: note: effort: model: mode:",
-		StateHints:  "a–z copy · A–Z copy + open · esc cancel",
-		StateVisual: "space mark · p/r/x pause/resume/kill marked · esc exit",
+		StateFilter:      "enter accept · esc clear · filter: status: dirty behind pr: account: note: effort: model: mode:",
+		StateHints:       "a–z copy · A–Z copy + open · esc cancel",
+		StateVisual:      "space mark · p/r/x pause/resume/kill marked · esc exit",
+		StateDiffComment: "↑/k/↓/j move · K/J extend · enter comment · esc exit",
 	} {
 		m := NewMenu()
 		m.SetSize(200, 3)
@@ -66,11 +68,11 @@ func TestMenu_PaneFocusBar(t *testing.T) {
 
 	m.SetPaneFocus(true)
 	got := strings.TrimSpace(xansi.Strip(m.String()))
-	require.Equal(t, "↑/k/↓/j scroll · esc back to list", got, "pane-focus bar text")
+	require.Equal(t, "↑/k/↓/j scroll · esc exit scroll", got, "pane-focus bar text")
 
 	m.SetPaneFocus(false)
 	require.Contains(t, m.String(), "open", "context hints must return when focus does")
-	require.NotContains(t, m.String(), "back to list")
+	require.NotContains(t, m.String(), "exit scroll")
 
 	m.SetPaneFocus(true)
 	m.SetQuiet(true)

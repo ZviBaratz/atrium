@@ -32,22 +32,27 @@ const (
 	// can hold it explicitly (nothing sets that yet — the seam for review-mode
 	// file navigation).
 	focusTabs
-	// focusInspector is declared for the inspector surface, which does not
-	// exist yet; routeFocusKey treats it like focusTabs so the enum is
-	// complete, but nothing can reach it.
+	// focusInspector is declared for the inspector surface (#804/#805), which
+	// does not exist yet. routeFocusKey deliberately routes nothing for it —
+	// scrolling the tabbed panes on behalf of a pane the name does not point
+	// at would be worse than falling through — so until an inspector lands,
+	// only the esc pop (escLadder) acts on it. Nothing can reach it today.
 	focusInspector
 )
 
 // currentFocus is the effective focus target. It reads the explicit home.focus
-// first, then derives focusTabs from the ACTIVE tab's scroll mode — tab-scoped
-// on purpose, not TabbedWindow.paneScrolling: a preview snapshot left scrolled
-// in the background must not re-target the diff tab's nav keys (the diff pane
-// scrolls live without a mode and never claims focus). Deriving rather than
-// storing is what keeps the pane-internal scroll exits (wheel at the bottom,
-// snapshot owner change) from ever leaving a stale focus bit behind.
+// first, then derives focusTabs from the active tab's scroll mode
+// (TabbedWindow.ActivePaneInScrollMode — tab-scoped, so a preview snapshot
+// left scrolled in the background cannot re-target the diff tab's nav keys;
+// the esc ladder's scroll rung and the pane border read the same predicate).
+// Deriving rather than storing is what keeps the pane-internal scroll exits
+// (wheel at the bottom, snapshot owner change) from ever leaving a stale focus
+// bit behind.
 //
 // Focus is a stateDefault concept: in every other state the surface handler
-// owns the keys, so the question this answers does not arise there.
+// owns the keys, so the question this answers does not arise there. The nil
+// guard tolerates the minimal fixture homes (settings/account tests) that run
+// stateDefault without a tabbed window; escLadder's rungs guard the same way.
 func (m *home) currentFocus() focusTarget {
 	if m.state != stateDefault || m.tabbedWindow == nil {
 		return focusList
@@ -55,19 +60,27 @@ func (m *home) currentFocus() focusTarget {
 	if m.focus != focusList {
 		return m.focus
 	}
-	if (m.tabbedWindow.IsInPreviewTab() && m.tabbedWindow.IsPreviewInScrollMode()) ||
-		(m.tabbedWindow.IsInTerminalTab() && m.tabbedWindow.IsTerminalInScrollMode()) {
+	if m.tabbedWindow.ActivePaneInScrollMode() {
 		return focusTabs
 	}
 	return focusList
 }
 
-// routeFocusKey consumes the pane-local nav keys while the tabs (or, later,
-// the inspector) hold focus; every other key reports unhandled and falls
-// through to dispatchAction, so q quits, n creates, and the palette reaches
-// everything. Runs after the busy gate — the gate already admits the nav
-// keys, and keeping it the single busy chokepoint means any key this switch
-// grows is busy-checked the same way a dispatched one is.
+// routeFocusKey consumes the pane-local nav keys while the tabs hold focus;
+// every other key reports unhandled and falls through to dispatchAction, so q
+// quits, n creates, and the palette reaches everything. Both of its callers
+// run it after the busy gate (handleKeyPress, runPaletteAction) — the gate
+// already admits the nav keys, and keeping it the single busy chokepoint means
+// any key this switch grows is busy-checked the same way a dispatched one is.
+//
+// Down at the snapshot's bottom is consumed and held rather than passed to the
+// pane: the pane's own ScrollDown exits scroll mode there (the wheel's and
+// shift+↓'s tmux-copy-mode exit), and under key autorepeat that exit would
+// hand the very next press to the list and switch the selected session
+// mid-read. A held j pins at the bottom instead; esc stays the routed exit.
+// Up on a live pane enters scroll mode exactly as shift+↑ does (same
+// TabbedWindow.ScrollUp), and down with no snapshot is consumed with nothing
+// to do — the pane owns the key even when it has no travel.
 //
 // The routed keys return instanceChanged like the scroll actions in
 // dispatchAction do: the pane content repaints immediately instead of on the
@@ -75,15 +88,22 @@ func (m *home) currentFocus() focusTarget {
 // waits for fresh content).
 func (m *home) routeFocusKey(name keys.KeyName) (tea.Cmd, bool) {
 	switch m.currentFocus() {
-	case focusTabs, focusInspector:
+	case focusTabs:
 		switch name {
 		case keys.KeyUp:
 			m.tabbedWindow.ScrollUp(1)
 			return m.instanceChanged(), true
 		case keys.KeyDown:
+			if m.tabbedWindow.ActivePaneScrollAtBottom() {
+				return nil, true
+			}
 			m.tabbedWindow.ScrollDown(1)
 			return m.instanceChanged(), true
 		}
+	case focusInspector:
+		// No inspector pane exists yet (#804/#805): route nothing, so its nav
+		// keys fall through to dispatch instead of scrolling a pane the focus
+		// name does not point at. See the focusInspector const.
 	}
 	return nil, false
 }
@@ -102,20 +122,24 @@ type escRung struct {
 // order IS the behavior: a rung moved above another steals its press. The
 // ladder's order test pins each adjacent pair.
 //
-// A function returning the slice, not a package-level var: the rungs close
-// over home methods, and a package-level initializer here would join the
-// init-order contract surfaceSpecs documents (#856) for no benefit.
+// A function returning a fresh slice each call, like frameStates(); nothing
+// here needs package-level state.
+//
+// Each rung's when guards its own derefs against nil the way currentFocus
+// does: the minimal fixture homes (settings/account tests) run stateDefault
+// without a tabbed window, and esc must be as inert there as any other key.
 func escLadder() []escRung {
 	return []escRung{
 		// Scroll exit: the active tab's pane leaves scroll mode and resumes
-		// the live view. Tab-scoped like currentFocus, and for the same
-		// reason: esc on the diff tab must not kill a background preview
-		// snapshot. The two arms are mutually exclusive (one tab is active),
-		// so this is one rung, not an ordered pair.
+		// the live view. Tab-scoped like currentFocus (the shared
+		// ActivePaneInScrollMode), and for the same reason: esc on the diff
+		// tab must not kill a background preview snapshot. This rung cannot
+		// read currentFocus() == focusTabs instead: explicit focus satisfies
+		// that with no scroll mode to exit, and would steal the pop rung's
+		// press.
 		{
 			when: func(m *home) bool {
-				return (m.tabbedWindow.IsInPreviewTab() && m.tabbedWindow.IsPreviewInScrollMode()) ||
-					(m.tabbedWindow.IsInTerminalTab() && m.tabbedWindow.IsTerminalInScrollMode())
+				return m.tabbedWindow != nil && m.tabbedWindow.ActivePaneInScrollMode()
 			},
 			fire: func(m *home) tea.Cmd {
 				if m.tabbedWindow.IsInPreviewTab() {
@@ -144,7 +168,7 @@ func escLadder() []escRung {
 		// A committed filter (typed with /, accepted with Enter) is still
 		// narrowing the list; Esc clears it, the expected escape hatch.
 		{
-			when: func(m *home) bool { return m.list.FilterQuery() != "" },
+			when: func(m *home) bool { return m.list != nil && m.list.FilterQuery() != "" },
 			fire: func(m *home) tea.Cmd {
 				m.list.ClearFilter()
 				return m.instanceChanged()

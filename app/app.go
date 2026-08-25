@@ -617,8 +617,10 @@ type home struct {
 	// focus is the EXPLICIT keyboard-focus target for the stateDefault frame;
 	// read through currentFocus (focus.go), which also derives focusTabs from
 	// the active pane's scroll mode. Zero value focusList, so assembleHome
-	// needs no seeding. Not to be confused with focused below (terminal-window
-	// focus) or the "focus" layout preset (layoutIndex, app_presets.go).
+	// needs no seeding; the esc ladder's pop rung is the one reset — a future
+	// writer that points this at a pane owns clearing it when that pane goes
+	// away. Not to be confused with the focused field (terminal-window focus)
+	// or the "focus" layout preset (layoutIndex, app_presets.go).
 	focus focusTarget
 
 	// composingDiffComment is true while the diff-comment composer overlay is up
@@ -1134,7 +1136,9 @@ func (m *home) viewContent() string {
 		// Pushed at render time so the bar always shows the same frame's
 		// derived focus: scroll mode can exit inside a pane (wheel at the
 		// bottom, snapshot owner change), and no imperative writer could
-		// cover those paths without staling.
+		// cover those paths without staling. focusInspector pushes nothing on
+		// purpose — routeFocusKey routes nothing for it, so there is no pane
+		// vocabulary to teach until an inspector exists.
 		m.menu.SetPaneFocus(m.currentFocus() == focusTabs)
 		k.menu, k.hasMenu = m.menu.String(), true
 	}
