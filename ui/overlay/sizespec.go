@@ -43,11 +43,14 @@ type SizeSpec struct {
 // border, not as a modal over a background — one stray cell of frame beside a
 // border reads as a rendering fault — so such a box takes the full terminal
 // width instead. Gaps are either zero or at least two cells per side. The
-// content-huggers apply it inside their own width caps; spec-driven boxes
-// never reach the zone (their fractions leave real gaps), so Fit does not
-// call it. A box already wider than the terminal (a floor on an absurdly
-// narrow one) is left alone: PlaceOverlay anchors an oversize box, and
-// shrinking it here would undo the floor's promise.
+// content-huggers apply it inside their own width caps. Fit deliberately does
+// NOT: whether a near-edge width is a defect or the design depends on the box
+// — the confirm and welcome dialogs sit at termW-2 on narrow terminals on
+// purpose (the authored margin TestConfirmWidth pins), and a snap in Fit
+// would silently full-bleed both — so the rule lives with the caps that opt
+// in, not in the shared resolver. A box already wider than the terminal (a
+// floor on an absurdly narrow one) is left alone: PlaceOverlay anchors an
+// oversize box, and shrinking it here would undo the floor's promise.
 func SnapFullBleed(outer, termW int) int {
 	if termW > 0 && outer > termW-4 && outer <= termW {
 		return termW
