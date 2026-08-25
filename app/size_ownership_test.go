@@ -28,7 +28,10 @@ var sizeOwnershipExempt = map[string]string{
 // field's owner list grows past one, and the distinct-pointer count drops), a
 // deleted target (its field is unclaimed and not exempt), a target re-pointed
 // at another entry's field (one field double-claimed AND one unclaimed), and
-// an exemption kept after its field gained a target (exempt-yet-claimed).
+// an exemption kept after its field gained a target (exempt-yet-claimed —
+// reachable today only through stashedDraft: RenameOverlay has no SetSize, so
+// a target claiming it does not compile, which enforces that exemption
+// structurally).
 func TestEverySizedOverlayFieldHasOneOwner(t *testing.T) {
 	h := &home{
 		textInputOverlay:      &overlay.TextInputOverlay{},
