@@ -87,7 +87,10 @@ const guidePage = "You are an AI agent running inside an Atrium session. Atrium 
 	"  When the follow-up should run on a given model, pin it at creation instead\n" +
 	"  of asking for it in the prompt: `--model`, `--effort` and `--permission-mode`\n" +
 	"  set claude's flags on the new session, and are refused when what would run\n" +
-	"  is not claude.\n" +
+	"  is not claude. `--account` pins which configured Claude account it runs on,\n" +
+	"  by name; do not write `CLAUDE_CONFIG_DIR` into the program to do that —\n" +
+	"  whether on `--program` or in your config.json — which runs the session on one\n" +
+	"  account and records another.\n" +
 	"\n" +
 	"  A title is a branch: the branch and tmux names derive from it, and a title\n" +
 	"  whose names are already taken is refused rather than quietly suffixed — with\n" +

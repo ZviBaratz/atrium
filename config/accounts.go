@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -289,4 +290,118 @@ func containsAny(lower string, subs []string) bool {
 		}
 	}
 	return false
+}
+
+// ClaudeAccountNamed resolves a claude_accounts entry by the name it is configured
+// under. It is the lookup behind `atrium new --account`, where the caller names the
+// login instead of letting routing pick one — so unlike ResolveClaudeAccount it
+// consults no rules, no pool and no rotation cursor, and unlike FindClaudeAccount it
+// is asked before a session exists and so has no config dir to anchor on.
+//
+// Returning the whole account rather than its directory is the point. The pin's
+// stamped name and its injected CLAUDE_CONFIG_DIR both come off this one struct, which
+// is what stops them naming different logins (#854): a resolver that answered with a
+// dir alone would leave the name to be settled somewhere else, and somewhere else is
+// where routing already answers it.
+//
+// An exact match on Name, and exactly one. A name two entries share matches nothing:
+// which login it means is precisely what a pin exists to settle, and picking the first
+// would inject one dir under a name the caller may have meant for the other — the
+// divergence this lookup exists to close, re-introduced by the thing closing it.
+// (`atrium doctor` is where a config that ambiguous gets reported.) An empty name never
+// matches, so "not asked for" cannot resolve to an entry that also declares none.
+func (c *Config) ClaudeAccountNamed(name string) (ClaudeAccount, bool) {
+	if name == "" {
+		return ClaudeAccount{}, false
+	}
+	hit, hits := ClaudeAccount{}, 0
+	for _, a := range c.ClaudeAccounts {
+		if a.Name != name {
+			continue
+		}
+		hit, hits = a, hits+1
+	}
+	if hits != 1 {
+		return ClaudeAccount{}, false
+	}
+	return hit, true
+}
+
+// ClaudeAccountPinProblem says why a name cannot be pinned, and "" when
+// ClaudeAccountNamed accepts it. It is the diagnosis behind every `--account` refusal:
+// one function because two processes refuse the same name — `atrium new` as a courtesy
+// at the terminal, the create drain authoritatively against the config it will honour —
+// and two spellings of one diagnosis is how they come to disagree about the config.
+//
+// The four cases are separate because the remedy is. A name two entries share is a
+// config to repair, not a typo, and reporting it as "no such account" while listing the
+// name twice is a message that argues with itself. A pool name is the near miss the flag
+// invites: `--account` pins one entry, where the create form's picker can also select a
+// pool and rotate within it, so the pool the caller named is real and their sentence
+// about it is not. A config with no claude_accounts at all is a dormant feature rather
+// than a misspelling, and no name would have worked. What is left is a misspelling, and
+// there the names that exist are the useful thing to say.
+//
+// Callers supply the subject (`--account %q`) and may add their own context; this is the
+// predicate only, so it never claims which config was read.
+func (c *Config) ClaudeAccountPinProblem(name string) string {
+	if _, ok := c.ClaudeAccountNamed(name); ok {
+		return ""
+	}
+	if len(c.ClaudeAccounts) == 0 {
+		return "names no configured claude account: this config declares no claude_accounts " +
+			"at all, so there is no login to pin"
+	}
+	if n := c.countClaudeAccountsNamed(name); n > 1 {
+		return fmt.Sprintf("names %d entries in claude_accounts, and which login it means is "+
+			"exactly what a pin has to settle; give those entries distinct names "+
+			"(`atrium doctor` reports the clash)", n)
+	}
+	if members := c.claudePoolNamed(name); len(members) > 0 {
+		return fmt.Sprintf("names a pool, not an entry: --account pins one login, so name one of "+
+			"the entries in that pool (%s)", strings.Join(accountNames(members), ", "))
+	}
+	return "names no configured claude account; the configured names are " +
+		strings.Join(accountNames(c.ClaudeAccounts), ", ")
+}
+
+// countClaudeAccountsNamed counts exact-name matches, which is what separates "no such
+// account" from "more than one" — ClaudeAccountNamed collapses both into false because
+// neither is a resolution, and the caller of a refusal needs them apart.
+func (c *Config) countClaudeAccountsNamed(name string) int {
+	n := 0
+	for _, a := range c.ClaudeAccounts {
+		if a.Name == name {
+			n++
+		}
+	}
+	return n
+}
+
+// claudePoolNamed returns the accounts that declare pool as their pool, and nothing for a
+// name no entry groups under. Deliberately not PoolMembers, which also answers for a
+// singleton — an ungrouped account matched by its own name — because that is the case the
+// caller has already been told does not exist here.
+func (c *Config) claudePoolNamed(pool string) []ClaudeAccount {
+	if pool == "" {
+		return nil
+	}
+	var members []ClaudeAccount
+	for _, a := range c.ClaudeAccounts {
+		if a.Pool == pool {
+			members = append(members, a)
+		}
+	}
+	return members
+}
+
+// accountNames lists names in config order. Duplicates are not collapsed: a name listed
+// twice is why ClaudeAccountPinProblem refused it, and hiding that would make the message
+// argue against itself.
+func accountNames(accounts []ClaudeAccount) []string {
+	names := make([]string, 0, len(accounts))
+	for _, a := range accounts {
+		names = append(names, a.Name)
+	}
+	return names
 }

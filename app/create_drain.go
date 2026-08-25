@@ -27,6 +27,7 @@ import (
 	"github.com/ZviBaratz/atrium/internal/outbox"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/agent"
 	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/overlay"
@@ -1140,6 +1141,56 @@ func capRoomClause(limit, count, adding int) string {
 	return fmt.Sprintf("%d sessions from this atrium new are still queued with room for %d", adding, free)
 }
 
+// pinRequestedAccount turns a request's --account name into the same account pin the
+// create form's Account picker makes for a member entry, or refuses the request (#854).
+// A zero verdict is the success sentinel, as everywhere else in this file; a nil
+// selection with no refusal means the request pinned nothing.
+//
+// One resolution, one struct, one source. The account this returns is where BOTH halves
+// of the session's account identity come from — the name startNewSession stamps into
+// state.json and the CLAUDE_CONFIG_DIR it injects at launch — so the label and the login
+// cannot name different accounts. That divergence is what `--account` exists to remove,
+// and a second place deciding either half is how it comes back.
+//
+// Which is why the program is re-examined here and not only by the CLI. A program that
+// assigns CLAUDE_CONFIG_DIR itself is a second place deciding the login, and it wins
+// (agent.ProgramSetsClaudeConfigDir says why) — so a pin arriving beside one is refused
+// rather than stamped over it. The CLI refuses the same pair, but it cannot refuse this
+// one: the program tested here is the one that will actually run, which for a request
+// carrying no program of its own is the DRAINING atrium's default, a string the process
+// that spooled the request never saw.
+//
+// The name is resolved against the draining atrium's config, which is the copy that will
+// be honoured, and which this process read at startup and does not re-read. So an
+// account added to config.json since is not visible here, and a request naming one is
+// refused rather than silently routed — the refusal says so, because the remedy is to
+// restart the TUI rather than to fix the name. An unresolvable name is never quietly
+// downgraded to routing: routing is exactly the answer the caller passed a flag to avoid.
+//
+// Pool comes off the resolved account, matching the picker (a member entry carries its
+// own declared pool, "" when ungrouped), so a pinned session clusters where a picked one
+// would.
+func (m *home) pinRequestedAccount(r outbox.Request, program string) (*overlay.AccountSelection, createVerdict) {
+	if r.Account == "" {
+		return nil, createVerdict{}
+	}
+	if agent.ProgramSetsClaudeConfigDir(program) {
+		return nil, createRefusal(fmt.Sprintf(
+			"--account %q cannot hold: the program this session would run (%q) sets "+
+				"CLAUDE_CONFIG_DIR itself, which the agent reads in preference to the directory "+
+				"Atrium injects, so the pinned name would label a session running elsewhere",
+			r.Account, program))
+	}
+	acct, ok := m.appConfig.ClaudeAccountNamed(r.Account)
+	if !ok {
+		return nil, createRefusal(fmt.Sprintf(
+			"--account %q %s. This atrium read its config when it started and does not "+
+				"re-read it, so an entry added since is invisible here until it is restarted",
+			r.Account, m.appConfig.ClaudeAccountPinProblem(r.Account)))
+	}
+	return &overlay.AccountSelection{Pool: acct.Pool, Member: &acct}, createVerdict{}
+}
+
 // executeCreateRequest runs every gate the create form runs and, if they all
 // pass, starts the session. It returns the boot command, or a reason the request
 // was refused — a reason written for the person who ran `atrium new`, because it
@@ -1228,6 +1279,21 @@ func (m *home) executeCreateRequest(r outbox.Request, adding int) (*session.Inst
 		programs: []string{program}, branch: r.Branch, prompt: r.Prompt,
 	}
 
+	// --account, resolved here and nowhere else (#854). The pin is a fact about the
+	// request rather than a gate that asks anybody a question, so it is settled ahead of
+	// the caps: a name this config does not have can never be met by freeing a session,
+	// and reporting it first is the reason the caller can act on.
+	//
+	// It goes onto the plan and not only into sel, because allExhausted reads
+	// plan.account: a deliberate pin bypasses rate-limit availability, the same escape
+	// hatch the picker's own member pin is, so it must be visible to that gate before it
+	// runs rather than added after it.
+	sel, refused := m.pinRequestedAccount(r, program)
+	if refused.reason != "" {
+		return nil, nil, refused
+	}
+	plan.account = sel
+
 	sc := m.sessionCap()
 	count := m.capCount(sc)
 	verdict := capVerdict(sc, count, adding)
@@ -1246,7 +1312,6 @@ func (m *home) executeCreateRequest(r outbox.Request, adding int) (*session.Inst
 	// reset member. Without the pin, startNewSession fails closed on an unpinned
 	// all-limited pool and answers "pick a member explicitly", a flag `atrium new`
 	// does not have: --force would be documented as an accept and refused every time.
-	var sel *overlay.AccountSelection
 	if pool, members, exhausted := m.allExhausted(plan); exhausted {
 		if !r.Force {
 			return nil, nil, createRefusal(fmt.Sprintf(
@@ -1260,8 +1325,9 @@ func (m *home) executeCreateRequest(r outbox.Request, adding int) (*session.Inst
 	}
 
 	// Never dependency-isolating: that is a form choice, and shared is the default the
-	// form itself starts from. sel is nil unless --force just accepted an exhausted
-	// pool, which is the only account choice this path can make.
+	// form itself starts from. sel is nil unless --account pinned a member or --force
+	// just accepted an exhausted pool; the two cannot both have set it, because a pin
+	// makes allExhausted report nothing to accept.
 	inst, cmd, err := m.startNewSession(r.Title, path, direct, false, program, r.Branch, r.Prompt, sel, spawnBackground, nil)
 	if err != nil {
 		// Never an empty reason. "" is this function's success sentinel, so an error
