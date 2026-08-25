@@ -119,11 +119,10 @@ func runTrustAllow(ctx context.Context, w io.Writer, path string, updateBase boo
 			a.Root, repocfg.RepoLocalFileName, a.Ref)
 	}
 	if len(repocfg.RepoLocalSurfaces(a.Local)) == 0 {
-		msg := fmt.Sprintf("%s's %s declares nothing usable, so there is nothing to trust", a.Root, repocfg.RepoLocalFileName)
-		for _, p := range a.Local.Problems {
-			msg += "\n  " + p.Error()
-		}
-		return errors.New(msg)
+		// No Problems to enumerate here: a refused entry makes the file unusable, and
+		// AssessRepo reports that as FileErr — caught above, with the problem named.
+		// This case is a file that declares nothing at all.
+		return fmt.Errorf("%s's %s declares nothing usable, so there is nothing to trust", a.Root, repocfg.RepoLocalFileName)
 	}
 	if a.Granted {
 		trustf(w, "%s is already trusted for its current %s (%s)\n", a.Root, repocfg.RepoLocalFileName, shortHash(a.Hash))

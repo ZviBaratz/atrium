@@ -28,8 +28,8 @@ func TestSettingsFrameFitsWithARepoLayer(t *testing.T) {
 	layer := &overlay.RepoLayer{
 		Repo: "/home/dev/src/a-project-with-a-long-path",
 		Lists: map[string][]string{
-			"carry_files": []string{".dev.vars", ".claude/settings.local.json"},
-			"link_paths":  []string{"node_modules", "container/agent-runner/node_modules", ".venv"},
+			"carry_files": {".dev.vars", ".claude/settings.local.json"},
+			"link_paths":  {"node_modules", "container/agent-runner/node_modules", ".venv"},
 		},
 	}
 	fs := frameState{name: "settings-repolayer", st: stateSettings, wire: func(h *home, _ *session.Instance) {

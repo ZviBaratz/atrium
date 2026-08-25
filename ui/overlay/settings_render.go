@@ -621,7 +621,7 @@ func (s *SettingsOverlay) rowValueAndBadge(i, width, labelW int, inert string) (
 		// an empty row range or a filter with no hits — and a long list is both the
 		// reason the value truncates and the reason the layer is interesting, so the two
 		// compete exactly when it matters. repoLayerContext's own clause says this.
-		candidates := repoLayerBadgeCandidates(len(s.repoLayerEntries(i)))
+		candidates := repoLayerBadgeCandidates(len(s.repoLayerEntries(i)), s.repoLayerSuppressed(i))
 		shortest := candidates[len(candidates)-1]
 		value = fitValue(s.valueCell(i, width, labelW, shortest), avail, ansi.StringWidth(shortest))
 		return value, fitBadge(candidates, width, labelW, value)
@@ -642,7 +642,14 @@ func (s *SettingsOverlay) rowValueAndBadge(i, width, labelW int, inert string) (
 // is the one thing this chip exists to say. Which repo, and which entries, is the
 // help pane's job (contextLine) — that is the surface a narrow pane cannot take
 // away.
-func repoLayerBadgeCandidates(n int) []string {
+// suppressed inverts the payload: a "+N" for a dependency-isolated session's
+// link_paths would be a plain lie — the repo declared N and this session received
+// none — so the chip says the state instead of the count. The count is still in the
+// help line, which names what was declared.
+func repoLayerBadgeCandidates(n int, suppressed bool) []string {
+	if suppressed {
+		return []string{"declared, not linked", "not linked", "no link"}
+	}
 	return []string{
 		fmt.Sprintf("+%d from %s", n, repocfg.RepoLocalFileName),
 		fmt.Sprintf("+%d from repo", n),
@@ -1027,20 +1034,33 @@ func (s *SettingsOverlay) repoLayerFor(i int) string {
 	// parse cannot supply, because it deliberately admits combining marks so macOS's
 	// decomposed filenames work, and three hundred of them measure one cell in every
 	// library while rendering as a smear across the row.
-	verb := "also adds"
-	if s.repoLayer.DepsIsolated && s.rows[i].key == "link_paths" {
-		// Declared, but not applied: this session is dependency-isolated, so it got
-		// none of them. Advertising them as added would tell the user either that the
-		// repo overrode their isolation choice or that the tree is shared — and the
-		// second reading invites a destructive dependency upgrade in what they believe
-		// is a private tree.
-		verb = "declares, but this session is dependency-isolated so they are not linked"
+	repo := theme.SanitizeUntrusted(where, repoLayerPathWidth)
+	list := theme.SanitizeUntrusted(strings.Join(entries, ", "), repoLayerEntriesWidth)
+	if s.repoLayerSuppressed(i) {
+		// Declared, but NOT applied: this session is dependency-isolated, so it
+		// received none of them. Advertising them as added would tell the user either
+		// that the repo overrode their isolation choice or that the tree is shared —
+		// and the second reading invites a destructive dependency upgrade in what they
+		// believe is a private tree.
+		//
+		// The fact leads, against this function's usual order. contextLine truncates
+		// from the right, and with the phrasing trailing ("…declares, but this session
+		// is dependency-isol…") every width from 80 down cut the line before the word
+		// "linked" — so the reader learned there was a caveat and never what it was.
+		// Which repo it is matters less here than that nothing arrived.
+		return fmt.Sprintf("not linked here — this session is dependency-isolated; %s in %s declares: %s",
+			repocfg.RepoLocalFileName, repo, list)
 	}
-	return fmt.Sprintf("%s in %s %s: %s",
-		repocfg.RepoLocalFileName,
-		theme.SanitizeUntrusted(where, repoLayerPathWidth),
-		verb,
-		theme.SanitizeUntrusted(strings.Join(entries, ", "), repoLayerEntriesWidth))
+	return fmt.Sprintf("%s in %s also adds: %s", repocfg.RepoLocalFileName, repo, list)
+}
+
+// repoLayerSuppressed reports whether row i's repo layer was DECLARED but not
+// applied to the selected session. Only link_paths can be: a dependency-isolated
+// session takes none of them (session/git's seedLocalPaths returns before linking),
+// while carried files are copies and arrive regardless.
+func (s *SettingsOverlay) repoLayerSuppressed(i int) bool {
+	return s.repoLayer != nil && s.repoLayer.DepsIsolated &&
+		i >= 0 && i < len(s.rows) && s.rows[i].key == "link_paths"
 }
 
 // repoLayerPathWidth and repoLayerEntriesWidth bound the two untrusted spans in the

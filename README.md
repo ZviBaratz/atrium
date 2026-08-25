@@ -1183,8 +1183,13 @@ already per-repo — there is no per-repo section in `config.json` and no enviro
 escape hatch.
 
 Each list carries at most 64 entries. That bound is on work rather than size: every
-entry costs a `git check-ignore` probe inside each worktree of that repo, on every
-start and resume, and a file past the cap is refused whole rather than truncated.
+entry that actually exists costs a `git check-ignore` probe inside each worktree of
+that repo, every time one is materialized, and a file past the cap is refused whole
+rather than truncated. Entries are slash-separated on every platform and must stay
+inside the repo: a backslash, an unprintable character, or a path that escapes is
+refused — and the whole file with it, so a granted file never seeds a set the prompt
+did not describe. Duplicate spellings of one path (`node_modules`,
+`./node_modules/`) count once.
 
 **Nothing in this file applies until you trust the repo.** Repo config is
 repo-authored content: `setup_script` is arbitrary code running as you, and the two
@@ -1207,6 +1212,13 @@ The grant is direnv-shaped, and its edges are deliberate:
   until you re-allow, and the next create re-prompts. Sessions check the bytes in
   their *own worktree* at the moment of use, so nothing that happens between the
   prompt and the run can smuggle different content past it.
+- **It names one set of powers.** A grant covers what its prompt described, so a
+  grant made before Atrium read `carry_files` / `link_paths` does not silently start
+  applying them when you upgrade — even though the bytes are unchanged. Such a repo
+  asks once more, saying that the file is the one you trusted and what it also
+  declares, and re-allowing settles it. This is why the file's two halves ride one
+  grant rather than two: the grant is one hash over the whole file, so gating them
+  separately would apply a half no prompt ever described.
 - **Only committed content counts — at the ref your session will start from.**
   A worktree checks out the session's *base*: with `update_base_on_create` (the
   default) that is origin's tip whenever it is ahead of your local branch, and
@@ -1220,9 +1232,19 @@ unusable — the session still starts; its row says so, a one-time modal explain
 names the remedy, and `atrium doctor` reports every grant against the repo's
 current state. `atrium trust status` lists them — its `COVERS` column names what
 each grant would actually put into a session — and `atrium trust revoke [path|--all]`
-withdraws them. In the Settings panel, `Carry files` and `Link paths` show what the
-selected session's repo adds to them, so a list that is not the whole story in that
-repo says so. Direct (non-git) sessions ignore repo-local config entirely: they run
+withdraws them. A repo's entries are confined to the repo even through symlinks: a gitignored
+symlink in your checkout that points elsewhere (a shared package store, a `deps` you
+keep pointing at something convenient) cannot be used by a repo's list to reach out
+of it. Your *own* entries still may — pointing `link_paths` at a shared store
+outside the repo is a supported setup, and trusting a repo does not extend it that
+reach. And where a repo's `carry_files` entry sits inside a path your `link_paths`
+symlinks, your link wins and the carry is refused: carrying it would create a real
+directory there and silently cost you the link.
+
+In the Settings panel, `Carry files` and `Link paths` show what the selected
+session's repo adds to them, so a list that is not the whole story in that repo says
+so. A dependency-isolated session gets none of the repo's `link_paths`, and the row
+says that rather than advertising paths it never received. Direct (non-git) sessions ignore repo-local config entirely: they run
 in your own checkout, where no worktree materializes anything.
 
 #### Managed ports
@@ -1814,8 +1836,8 @@ Advanced — shown in the Category column below. A key with no panel row carries
 | `max_sessions` | Sessions | int | auto (½ CPU threads) | session cap. Unset = host-aware soft cap on *live* sessions: a create or a resume that crosses it warns once, and a startup that would relaunch past it leaves the overflow paused instead (`r` / `ctrl+r` brings them back); `N` = hard cap on *every* session, paused included, refused when creating; `0` = unlimited (no warning) |
 | `agent_oom_margin` | Advanced | int | `on (300)` | Linux only: raise each agent's `oom_score_adj` this far above the shared tmux server's so a kernel OOM kill sheds one recoverable session, not the server (every session). Unset = on (default margin); `N` = margin; `0` = off |
 | `trust_worktrees_root` | Automation | bool | `false` | pre-accept Claude's workspace-trust for the worktrees root |
-| `carry_files` | Worktrees & git | array | `[".claude/settings.local.json"]` | gitignored files copied into each worktree ([Carried files](#carried-files)). A trusted repo's own `.atrium.json` adds to this list for its sessions ([Repo-local config](#repo-local-config-and-trust)) |
-| `link_paths` | Worktrees & git | array | `[]` | gitignored paths symlinked into each worktree, e.g. `node_modules` ([Linked paths](#linked-paths)). A trusted repo's own `.atrium.json` adds to this list for its sessions ([Repo-local config](#repo-local-config-and-trust)) |
+| `carry_files` | Worktrees & git | array | `[".claude/settings.local.json"]` | gitignored files copied into each worktree ([Carried files](#carried-files)). A trusted repo's own `.atrium.json` adds to this list for its sessions; your entries are never replaced, and revoking the grant stops the repo's from being seeded into new worktrees ([Repo-local config](#repo-local-config-and-trust)) |
+| `link_paths` | Worktrees & git | array | `[]` | gitignored paths symlinked into each worktree, e.g. `node_modules` ([Linked paths](#linked-paths)). A trusted repo's own `.atrium.json` adds to this list for its sessions; your entries are never replaced, and revoking the grant stops the repo's from being seeded into new worktrees ([Repo-local config](#repo-local-config-and-trust)) |
 | `repo_scripts` | — | array | `[]` | per-repository setup script, run command, port range and session environment, routed by remote/path ([Setup scripts](#setup-scripts)) |
 | `pr_create_draft` | Worktrees & git | bool | `true` | `c` opens a draft PR |
 | `update_base_on_create` | Worktrees & git | bool | `true` | branch off the freshest remote base tip |

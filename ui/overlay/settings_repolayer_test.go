@@ -53,7 +53,7 @@ func TestRepoLayerBadgeOnlyWhenInjected(t *testing.T) {
 	}
 
 	// A layer that contributes to one row must not annotate the other.
-	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", Lists: map[string][]string{"link_paths": []string{"node_modules", ".venv"}}})
+	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", Lists: map[string][]string{"link_paths": {"node_modules", ".venv"}}})
 	assert.Contains(t, badgeFor(t, o, "link_paths"), "+2")
 	assert.NotContains(t, badgeFor(t, o, "carry_files"), "+",
 		"a row this repo adds nothing to must not claim it does")
@@ -74,7 +74,7 @@ func TestRepoLayerBadgeOutranksTheTimingBadge(t *testing.T) {
 	require.NotEmpty(t, o.rows[rowIndexOf(t, o, "link_paths")].timing.badge(),
 		"the row must HAVE a timing badge, or this test proves nothing about precedence")
 
-	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", Lists: map[string][]string{"link_paths": []string{"node_modules"}}})
+	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", Lists: map[string][]string{"link_paths": {"node_modules"}}})
 	assert.Contains(t, badgeFor(t, o, "link_paths"), "+1")
 }
 
@@ -89,7 +89,7 @@ func TestRepoLayerBadgeOutranksTheTimingBadge(t *testing.T) {
 // chip at all. Only the rendered line can tell the two apart.
 func TestRepoLayerBadgeDegradesButKeepsTheCount(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
-	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", Lists: map[string][]string{"link_paths": []string{"node_modules", ".venv"}}})
+	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", Lists: map[string][]string{"link_paths": {"node_modules", ".venv"}}})
 	i := rowIndexOf(t, o, "link_paths")
 
 	// 80 and below is the band that matters: the widest rung (20 cells) no longer
@@ -110,10 +110,22 @@ func TestRepoLayerBadgeDegradesButKeepsTheCount(t *testing.T) {
 
 	// Every rung the ladder can produce keeps the count, so the sweep above cannot
 	// pass by way of a one-rung ladder that happens to be short.
-	rungs := repoLayerBadgeCandidates(2)
+	rungs := repoLayerBadgeCandidates(2, false)
 	assert.Greater(t, len(rungs), 1, "a one-rung ladder does not degrade")
 	for _, c := range rungs {
 		assert.Contains(t, c, "+2")
+	}
+
+	// The suppressed ladder carries the STATE rather than the count, and must degrade
+	// the same way: a "+N" there would claim an addition the session never received.
+	sup := repoLayerBadgeCandidates(2, true)
+	assert.Greater(t, len(sup), 1, "a one-rung ladder does not degrade")
+	for _, c := range sup {
+		assert.NotContains(t, c, "+2", "a suppressed layer added nothing")
+	}
+	for i := 1; i < len(sup); i++ {
+		assert.LessOrEqualf(t, ansi.StringWidth(sup[i]), ansi.StringWidth(sup[i-1]),
+			"suppressed rung %d (%q) is wider than the rung before it (%q)", i, sup[i], sup[i-1])
 	}
 
 	// And they must be ordered widest first, because fitBadge returns the FIRST rung
@@ -130,7 +142,7 @@ func TestRepoLayerBadgeDegradesButKeepsTheCount(t *testing.T) {
 // a narrow pane cannot take away, which is what makes the badge safe to degrade.
 func TestRepoLayerContextLineNamesTheRepo(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
-	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", Lists: map[string][]string{"link_paths": []string{"node_modules"}}})
+	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", Lists: map[string][]string{"link_paths": {"node_modules"}}})
 
 	for _, w := range []int{96, 80, 56} {
 		o.SetSize(w, 24)
@@ -159,8 +171,8 @@ func TestRepoLayerRowsRenderInTheFrame(t *testing.T) {
 	o.SetRepoLayer(&RepoLayer{
 		Repo: "/src/web",
 		Lists: map[string][]string{
-			"carry_files": []string{".dev.vars", ".other"},
-			"link_paths":  []string{"node_modules"},
+			"carry_files": {".dev.vars", ".other"},
+			"link_paths":  {"node_modules"},
 		},
 	})
 	for _, size := range []struct{ w, h int }{{120, 40}, {96, 32}, {80, 24}, {56, 24}, {40, 24}} {
@@ -187,8 +199,8 @@ func TestRepoLayerIsReachableOnEveryLayeredRow(t *testing.T) {
 	o.SetRepoLayer(&RepoLayer{
 		Repo: "/home/dev/src/a-project-with-a-long-path",
 		Lists: map[string][]string{
-			"carry_files": []string{".dev.vars", ".claude/settings.local.json"},
-			"link_paths":  []string{"node_modules"},
+			"carry_files": {".dev.vars", ".claude/settings.local.json"},
+			"link_paths":  {"node_modules"},
 		},
 	})
 
@@ -291,6 +303,15 @@ func TestRepoLayerSaysWhenLinksWereNotLinked(t *testing.T) {
 	require.NotEmpty(t, link)
 	assert.Contains(t, link, "dependency-isolated", "the row must say the paths were not linked")
 	assert.NotContains(t, link, "also adds", "a path that was never linked was not added")
+	// The fact must survive truncation from the right, which is how contextLine cuts:
+	// at 80 columns and below, a trailing "…not linked" was cut off every time, so the
+	// reader learned there was a caveat and never what it was.
+	assert.Truef(t, strings.HasPrefix(link, "not linked here"),
+		"the headline must lead, not trail: %q", link)
+	// And the badge must not claim an addition this session never received.
+	assert.NotContains(t, badgeFor(t, o, "link_paths"), "+1",
+		"a dependency-isolated session got none of them, so +N is a lie")
+	assert.Contains(t, badgeFor(t, o, "link_paths"), "not linked")
 
 	carry := o.repoLayerFor(rowIndexOf(t, o, "carry_files"))
 	assert.Contains(t, carry, "also adds", "isolation does not withhold carried files")
