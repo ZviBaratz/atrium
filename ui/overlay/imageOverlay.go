@@ -117,6 +117,16 @@ func NewImageOverlay(src Image, mode imageview.Mode) *ImageOverlay {
 // Path returns the file being shown.
 func (o *ImageOverlay) Path() string { return o.src.Path }
 
+// ImageSize takes the most generous share of the overlays, because resolution
+// is the whole point: every cell the box gives up is two pixels of the
+// picture. The caps are the picture's own bounds plus the box's chrome —
+// asking for more would only pad the box around a picture that cannot grow.
+// The share is of the box, border and padding included.
+var ImageSize = SizeSpec{
+	WFrac: 0.85, WMax: imageMaxCols + 6, // border (2) + padding (4)
+	HFrac: 0.85, HMax: imageMaxRows + imageChrome,
+}
+
 // SetSize records the room the overlay may take, borders included.
 func (o *ImageOverlay) SetSize(width, height int) {
 	o.width, o.height = width, height

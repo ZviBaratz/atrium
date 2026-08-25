@@ -77,7 +77,7 @@ func TestLayoutPresetAppliesRatioLive(t *testing.T) {
 func TestLayoutFocusHidesListAndFillsWidth(t *testing.T) {
 	h := newPresetHome(t)
 	require.False(t, h.listHidden())
-	listCol := int(float32(h.windowWidth) * float32(h.listRatio)) // 120*0.30 = 36
+	listCol := h.listCols(h.windowWidth) // 120*0.30 = 36
 	require.Greater(t, listCol, 0)
 	defW, _ := h.tabbedWindow.GetPreviewSize()
 	require.Contains(t, xansi.Strip(h.View().Content), "Sessions", "the list panel renders outside focus")
@@ -215,8 +215,9 @@ func TestFocusModeSeamIsInert(t *testing.T) {
 	h := newPresetHome(t)
 	cycleTo(t, h, "focus")
 	require.True(t, h.listHidden())
-	// The grab is computed from the live listRatio, not the hidden-adjusted 0.
-	seam := int(float32(h.windowWidth) * float32(h.listRatio))
+	// The grab is computed from the live listRatio (listCols), not the
+	// hidden-zeroed region.
+	seam := h.listCols(h.windowWidth)
 	_, _ = h.Update(pressAt(seam, 5))
 	require.False(t, h.draggingDivider, "focus mode must not grab an invisible seam")
 }

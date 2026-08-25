@@ -34,14 +34,15 @@ const welcomeIntro = "Run multiple coding agents in parallel — each in its own
 // NewWelcomeOverlay creates the overlay in its "detecting" state; the caller
 // fills it in with SetDetected once agent detection resolves.
 func NewWelcomeOverlay() *WelcomeOverlay {
-	return &WelcomeOverlay{detecting: true, width: 54}
+	return &WelcomeOverlay{detecting: true, width: 56}
 }
 
-// contentWidth is the usable text width inside the modal's border and horizontal
-// padding (Padding(1, 2) eats two columns per side). The intro paragraph and the
-// picker are both sized to it so nothing spills past the box.
+// contentWidth is the usable text width inside the modal's border (one column
+// per side) and horizontal padding (Padding(1, 2) eats two columns per side).
+// The intro paragraph and the picker are both sized to it so nothing spills
+// past the box.
 func (w *WelcomeOverlay) contentWidth() int {
-	if cw := w.width - 4; cw > 0 {
+	if cw := w.width - 6; cw > 0 {
 		return cw
 	}
 	return 1
@@ -59,8 +60,16 @@ func (w *WelcomeOverlay) SetDetected(detected []config.Profile) {
 	}
 }
 
-// SetWidth sets the modal's box width.
-func (w *WelcomeOverlay) SetWidth(width int) {
+// WelcomeSize is the confirmation dialog's idiom with a little more room for
+// the welcome's copy: keep the authored width on normal terminals, shrink so
+// the box never spills off a narrow one.
+var WelcomeSize = SizeSpec{WFrac: 1, WExtra: -2, WMax: 56, WMin: 22}
+
+// SetSize sets the modal's TOTAL width, border and padding included — outer
+// cells, which is what lipgloss v2's Width means (see theme.Panel). The
+// height is accepted and ignored so the resize walk can hand every overlay
+// the same call: the modal hugs its copy.
+func (w *WelcomeOverlay) SetSize(width, _ int) {
 	w.width = width
 	if w.picker != nil {
 		w.picker.SetWidth(w.contentWidth())
@@ -145,7 +154,6 @@ func (w *WelcomeOverlay) Render() string {
 		Border(theme.Current().Borders.Style).
 		BorderForeground(theme.Current().Palette.Accent).
 		Padding(1, 2).
-		// +2 for the left/right border — v2 counts it inside Width. See theme.Panel.
-		Width(w.width + 2)
+		Width(w.width)
 	return style.Render(b.String())
 }

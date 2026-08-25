@@ -102,7 +102,7 @@ func (m *home) handlePromptState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "up" && m.textInputOverlay.PromptFocusedAndEmpty() {
 		if texts := promptHistoryTexts(m.appState.GetPromptHistory()); len(texts) > 0 {
 			m.promptHistoryOverlay = overlay.NewPromptHistoryOverlay(texts)
-			m.promptHistoryOverlay.SetWidth(historyOverlayWidth(m.windowWidth))
+			m.promptHistoryOverlay.SetSize(overlay.HistoryPickerSize.Fit(m.windowWidth, m.windowHeight))
 			m.state = stateHistory
 			return m, nil
 		}
@@ -1158,18 +1158,6 @@ func promptHistoryTexts(entries []config.PromptHistoryEntry) []string {
 		texts[i] = e.Text
 	}
 	return texts
-}
-
-// historyOverlayWidth sizes the prompt-history picker — and the queue overlay,
-// whose size closure in surfaceSpecs shares the box — to ~60% of the terminal,
-// capped at 80. The picker's opener and both resize closures all call it, so
-// the widths cannot drift apart.
-func historyOverlayWidth(termWidth int) int {
-	w := int(float32(termWidth) * 0.6)
-	if w > 80 {
-		w = 80
-	}
-	return w
 }
 
 // recordPrompt appends a submitted prompt to the reuse history when recording is

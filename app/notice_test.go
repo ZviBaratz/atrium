@@ -188,7 +188,8 @@ func TestHandleInfoNotice_HintBarOffNoLayoutShift(t *testing.T) {
 }
 
 // paneContentHeight must count the errBox row for ANY notice level, matching the
-// real widget-sizing budget in updateHandleWindowSizeEvent (both use HasContent).
+// real widget-sizing budget (computeBudget charges the row off HasContent, and
+// both the resize path and paneContentHeight read that one partition).
 // It previously used HasError, so an info-level notice riding the errBox silently
 // did not shrink the divider Y-bound — a one-row hit-testing drift (#438 review).
 // Driven from an overlay state so menuVisible() is false and only the errBox row

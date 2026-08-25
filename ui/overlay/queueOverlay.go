@@ -32,9 +32,9 @@ type QueueOverlay struct {
 const queueInFlightMark = "⟳"
 
 // NewQueueOverlay builds the overlay for a session with the given display name.
-// Width defaults to a sensible box; the app widens it responsively via SetWidth.
+// Width defaults to a sensible box; the app widens it responsively via SetSize.
 func NewQueueOverlay(name string) *QueueOverlay {
-	return &QueueOverlay{title: name, width: 60}
+	return &QueueOverlay{title: name, width: 62}
 }
 
 // SetQueue replaces the displayed queue, clamps the cursor into range, and clears
@@ -107,10 +107,13 @@ func (q *QueueOverlay) SelectedText() string {
 // app reads this to tell an in-flight-head cancel refusal apart from a stale one.
 func (q *QueueOverlay) HeadInFlight() bool { return q.headInFlight }
 
-// SetWidth sets the box width, flooring it so the box never collapses.
-func (q *QueueOverlay) SetWidth(width int) {
-	if width < 20 {
-		width = 20
+// SetSize sets the box's TOTAL width, border and padding included — outer
+// cells, which is what lipgloss v2's Width means (see theme.Panel) — flooring
+// it so the box never collapses. The height is accepted and ignored so the
+// resize walk can hand every overlay the same call: the box hugs its rows.
+func (q *QueueOverlay) SetSize(width, _ int) {
+	if width < 22 {
+		width = 22
 	}
 	q.width = width
 }
@@ -131,8 +134,7 @@ func (q *QueueOverlay) Render() string {
 		Border(th.Borders.Style).
 		BorderForeground(th.Palette.Accent).
 		Padding(1, 2).
-		// +2 for the left/right border — v2 counts it inside Width. See theme.Panel.
-		Width(q.width + 2)
+		Width(q.width)
 
 	inner := q.width - 6 // borders (2) + horizontal padding (2*2)
 	if inner < 10 {

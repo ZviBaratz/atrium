@@ -143,9 +143,11 @@ func scrollHint(through, total int) string {
 }
 
 // boxWidth returns the lipgloss style width (padding-inclusive, border-exclusive):
-// the natural width of the content and its footer hint, capped so the box plus
-// its border keeps a one-column margin inside the terminal. Zero (natural size)
-// when never sized.
+// the natural width of the content and its footer hint, capped inside the
+// terminal and snapped to the full terminal width when the cap would leave
+// only the illegible sliver of a gap (SnapFullBleed — this overlay's old
+// one-column margin was #695's doubled border). Zero (natural size) when
+// never sized.
 func (t *TextOverlay) boxWidth() int {
 	lines, natural := getLines(t.content)
 	natural = max(natural, xansi.StringWidth(t.hint))
@@ -156,7 +158,8 @@ func (t *TextOverlay) boxWidth() int {
 	}
 	w := natural + 4 // Padding(1, 2): two columns each side
 	if t.width > 0 {
-		w = min(w, t.width-4) // border (2) + margin (1) per side
+		w = min(w, t.width-4)
+		w = SnapFullBleed(w+2, t.width) - 2 // the shared inset rule, in outer cells
 	}
 	return max(w, 0)
 }

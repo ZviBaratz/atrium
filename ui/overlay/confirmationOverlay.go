@@ -49,7 +49,7 @@ func NewConfirmationOverlay(message string) *ConfirmationOverlay {
 	return &ConfirmationOverlay{
 		Dismissed:  false,
 		message:    message,
-		width:      50, // Default width
+		width:      52, // Default width (outer cells; the classic 50 of v1 plus the border)
 		ConfirmKey: "y",
 		CancelKey:  "n",
 	}
@@ -99,10 +99,7 @@ func (c *ConfirmationOverlay) Render() string {
 		Border(theme.Current().Borders.Style).
 		BorderForeground(c.BorderColor()).
 		Padding(1, 2).
-		// +2 for the left/right border: Lip Gloss v2 counts the border inside
-		// Width, where v1 added it outside. Same silent semantic change as in
-		// theme.Panel — see the note there.
-		Width(c.width + 2)
+		Width(c.width)
 
 	// Add the confirmation instructions. When an alt confirm key is set (e.g. the
 	// kill chord for double-tap), surface it alongside the primary confirm key.
@@ -131,8 +128,18 @@ func (c *ConfirmationOverlay) Render() string {
 	return style.Render(content)
 }
 
-// SetWidth sets the width of the confirmation overlay
-func (c *ConfirmationOverlay) SetWidth(width int) {
+// ConfirmSize keeps the dialog's classic width on normal terminals — 52
+// outer cells, the classic 50 plus its border — and shrinks with narrow ones,
+// holding a one-column margin outside the border and a readable floor below
+// that. It was the one overlay excluded from resize handling before the
+// resize walk. An unsized terminal gets the classic width.
+var ConfirmSize = SizeSpec{WFrac: 1, WExtra: -2, WMax: 52, WMin: 22}
+
+// SetSize sets the dialog's TOTAL width, border and padding included — outer
+// cells, which is what lipgloss v2's Width means (see theme.Panel). The
+// height is accepted and ignored so the resize walk can hand every overlay
+// the same call: the dialog hugs its message.
+func (c *ConfirmationOverlay) SetSize(width, _ int) {
 	c.width = width
 }
 
