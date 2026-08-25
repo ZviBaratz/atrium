@@ -99,13 +99,17 @@ func TestEverySizedOverlayFieldHasOneOwner(t *testing.T) {
 	// resize walk's nil guard, and panics inside SetSize on the first
 	// WindowSizeMsg with its overlay unopened — the armed fixture above cannot
 	// see that, because it never hands a target a nil field.
+	// The comparison must be the walk's own (r != nil on the interface), not
+	// assert.Nil: testify unwraps a typed nil by reflection and calls it nil —
+	// exactly the value this pass exists to reject.
 	unarmed := &home{}
 	for st := stateDefault; st < numStates; st++ {
 		entry := surfaceSpecs[st].size
 		if entry.target == nil {
 			continue
 		}
-		assert.Nilf(t, entry.target(unarmed),
-			"state %d: the size target returned a typed nil in a non-nil interface — route it through sizeTarget", st)
+		if r := entry.target(unarmed); r != nil {
+			t.Errorf("state %d: the size target returned a typed nil in a non-nil interface — route it through sizeTarget", st)
+		}
 	}
 }
