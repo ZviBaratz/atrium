@@ -441,11 +441,28 @@ func (i *Instance) resolveRepoLocal(dir, repoPath string) repoLocalResolution {
 	hash := repotrust.HashBytes(data)
 	key := i.ledgerKey(repoPath)
 	ledger, ledgerErr := repotrust.Load()
-	if !ledger.Granted(key, hash) {
+	// The scope is asked for explicitly. This is the AUTHORITATIVE check — the
+	// create-time prompt is advisory and this runs on paths with no UI at all — so a
+	// grant that predates the seed lists must be refused HERE, not merely re-prompted
+	// there. It was the reverse for one commit: the prompt withdrew the verdict and
+	// enforcement kept asking the hash-only question, so the lists applied to every
+	// existing session on upgrade and declining the prompt changed nothing.
+	need := repotrust.GrantScope{Seeds: len(parsed.CarryFiles) > 0 || len(parsed.LinkPaths) > 0}
+	if !ledger.GrantedFor(key, hash, need) {
+		rec, has := ledger.Lookup(key)
 		state, report := RepoConfigUntrusted, fmt.Sprintf(
 			"Repo config ignored: %s carries a %s that is not trusted, so nothing from it was applied and the session runs on your own config only.\n\nTo allow it: atrium trust allow %s — or re-create the session to be asked.",
 			repoPath, repocfg.RepoLocalFileName, repoPath)
-		if _, has := ledger.Lookup(key); has {
+		switch {
+		case has && rec.Hash == hash && need.Seeds && !rec.CoversSeeds():
+			// The file has NOT changed — this atrium reads more of it than the one that
+			// granted it did. Saying "CHANGED" here would send the user to git log for an
+			// edit nobody made. Untrusted is the honest state: it is not trusted for what
+			// it declares.
+			report = fmt.Sprintf(
+				"Repo config ignored: %s's %s is the file you trusted, but it also declares files to copy into every worktree — which the atrium you trusted it on ignored. Nothing from it was applied.\n\nTo allow it: atrium trust allow %s — or re-create the session to be asked.",
+				repoPath, repocfg.RepoLocalFileName, repoPath)
+		case has:
 			state = RepoConfigChanged
 			report = fmt.Sprintf(
 				"Repo config ignored: %s's %s has CHANGED since you trusted it, so nothing from it was applied and the session runs on your own config only.\n\nTo allow the new version: atrium trust allow %s — or re-create the session to be asked.",

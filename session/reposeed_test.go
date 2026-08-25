@@ -10,12 +10,14 @@ package session
 
 import (
 	"context"
-	"github.com/ZviBaratz/atrium/repocfg"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/internal/repotrust"
+	"github.com/ZviBaratz/atrium/repocfg"
 	"github.com/ZviBaratz/atrium/session/git"
 
 	"github.com/stretchr/testify/assert"
@@ -262,4 +264,61 @@ func mapKeys(m map[string][]string) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// TestRepoSeeds_PreSeedGrantSeedsNothing is the enforcement-seam guard for the
+// grant-version gate, and it is the test whose absence let that gate ship as
+// advisory-only.
+//
+// The gate was asserted in exactly one place — against AssessRepo, the function
+// that computes it — so a prompt that correctly said "re-allow this" passed while
+// routeRepoLocal kept asking the old hash-only question and the worktree seeded
+// the lists anyway. Every existing session's next resume, every poll sweep and the
+// autoyes daemon reach that funnel with NO UI, so the powers turned on across the
+// fleet on upgrade with no prompt at all — and declining the prompt, which writes
+// nothing to the ledger, changed nothing.
+//
+// The seam is therefore the FILESYSTEM, per this file's own header: a pre-#815
+// record must leave no copied file in the worktree, whatever any surface says.
+func TestRepoSeeds_PreSeedGrantSeedsNothing(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	f := newSeedFixture(t, seedConfig, ".dev.vars", "node_modules")
+
+	// Grant normally, then strip grant_version from the ledger ON DISK. That is
+	// exactly what every ledger written before this release looks like, and going
+	// through the file rather than through an in-memory Record also proves the
+	// omitted field decodes as "does not cover seeds" rather than as some default.
+	grantRepo(t, f.repoPath)
+	ledgerPath, err := repotrust.Path()
+	require.NoError(t, err)
+	raw, err := os.ReadFile(ledgerPath)
+	require.NoError(t, err)
+	require.Contains(t, string(raw), "grant_version", "the fixture must start from a versioned grant, or it proves nothing")
+	var ledger map[string]any
+	require.NoError(t, json.Unmarshal(raw, &ledger))
+	for _, rec := range ledger["repos"].(map[string]any) {
+		delete(rec.(map[string]any), "grant_version")
+	}
+	stripped, err := json.Marshal(ledger)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(ledgerPath, stripped, 0o600))
+
+	dir := f.materialize(t, "upgraded")
+
+	// Nothing seeded. This is the assertion the gate's own package could not make.
+	assert.NoFileExists(t, filepath.Join(dir, ".dev.vars"),
+		"a grant made before atrium read carry_files must not copy them in — the funnel is authoritative, the prompt is advisory")
+	assert.Equal(t, RepoConfigUntrusted, f.inst.RepoConfigStatus(),
+		"and the session must say so rather than reading as Active")
+	// The report must not claim the file changed: it did not, this atrium reads more
+	// of it than the one that granted it did.
+	assert.NotContains(t, f.inst.repoConfigReportSnapshot(), "CHANGED")
+	assert.Contains(t, f.inst.repoConfigReportSnapshot(), "the file you trusted")
+
+	// Positive control: re-granting at the current version seeds it. Without this a
+	// gate that refused EVERYTHING would pass the assertions above.
+	grantRepo(t, f.repoPath)
+	dir2 := f.materialize(t, "reallowed")
+	assert.FileExists(t, filepath.Join(dir2, ".dev.vars"),
+		"a current grant must still apply the lists it described")
 }

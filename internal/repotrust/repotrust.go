@@ -143,15 +143,40 @@ type Ledger struct {
 	Repos   map[string]Record `json:"repos"`
 }
 
-// Granted reports whether key's repo is trusted for exactly this content hash.
-// Empty inputs are never granted: a caller that failed to derive a key or a
-// hash must land on the refusing side.
-func (l Ledger) Granted(key, hash string) bool {
+// GrantScope is what a caller needs a grant to COVER — the question a bare
+// "is this trusted?" cannot ask.
+//
+// It exists because there is no longer an unqualified Granted to reach for, and
+// that is deliberate. A hash-only comparison was the whole of the check, so when
+// GrantVersionSeeds added a second dimension the enforcement funnel kept asking
+// the old question and silently answered yes: the version gate ended up consulted
+// only by the create-time prompt, `trust status` and doctor — every advisory
+// surface, and no authoritative one. The prompt correctly said "re-allow this",
+// the worktree seeded the lists anyway, and declining changed nothing. Making the
+// scope a required argument means a caller that has not thought about it cannot
+// compile.
+type GrantScope struct {
+	// Seeds is set by a caller that is about to apply the file's carry_files /
+	// link_paths (#815). A record written before GrantVersionSeeds does not cover
+	// them however well its hash matches.
+	Seeds bool
+}
+
+// GrantedFor reports whether key's repo is trusted for exactly this content hash
+// AND for everything need names. Empty inputs are never granted: a caller that
+// failed to derive a key or a hash must land on the refusing side.
+func (l Ledger) GrantedFor(key, hash string, need GrantScope) bool {
 	if key == "" || hash == "" {
 		return false
 	}
 	rec, ok := l.Repos[key]
-	return ok && rec.Hash == hash
+	if !ok || rec.Hash != hash {
+		return false
+	}
+	if need.Seeds && !rec.CoversSeeds() {
+		return false
+	}
+	return true
 }
 
 // Lookup returns key's record, and whether one exists — for the surfaces that

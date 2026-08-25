@@ -209,16 +209,16 @@ func AssessRepo(ctx context.Context, path, ref string) (Assessment, error) {
 	ledger, err := Load()
 	a.LedgerErr = err
 	a.Record, a.HasGrant = ledger.Lookup(key)
-	a.Granted = ledger.Granted(key, a.Hash)
-	// A pre-#815 record cannot cover seed lists its prompt never described, even
-	// though the bytes match: repoLocalWire tolerated both keys before it read
-	// them, so a granted file may already carry them. Withdraw the verdict rather
-	// than the record — WantsPrompt then re-asks with the full description, and
-	// confirming re-stamps at the current version.
-	if a.Granted && declaresSeeds(a.Local) && !a.Record.CoversSeeds() {
-		a.Granted = false
-		a.ScopeUpgrade = true
-	}
+	// The SAME scoped question the enforcement funnel asks (session/repoconfig.go's
+	// routeRepoLocal), so the prompt cannot offer to grant something the gate would
+	// refuse, or stay silent about something it would apply. Asking a different
+	// question here is precisely how the version gate came to be advisory-only.
+	need := GrantScope{Seeds: declaresSeeds(a.Local)}
+	a.Granted = ledger.GrantedFor(key, a.Hash, need)
+	// Distinguish "the file changed" from "this atrium reads more of it than the one
+	// that granted it did" — the bytes match in the second case, so prompt copy must
+	// not claim an edit nobody made.
+	a.ScopeUpgrade = !a.Granted && a.HasGrant && a.Record.Hash == a.Hash && need.Seeds && !a.Record.CoversSeeds()
 	return a, nil
 }
 
