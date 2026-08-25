@@ -2,9 +2,10 @@ package app
 
 // Per-state overlay key handlers and per-action key handlers extracted from
 // handleKeyPress (app_update.go). handleKeyPress stays a thin dispatcher: the
-// overlay-state prelude delegates to the handleXState methods here, and the
-// substantial key-action cases delegate to the verb-named methods here. Trivial
-// one-line cases (navigation, tab switching) remain inline in the switch.
+// surfaceSpecs keys entries route each overlay state to its handleXState
+// method here, and the substantial key-action cases delegate to the verb-named
+// methods here. Trivial one-line cases (navigation, tab switching) remain
+// inline in the switch.
 
 import (
 	"fmt"
@@ -78,7 +79,7 @@ func (m *home) selectedActionable() (*session.Instance, tea.Cmd, bool) {
 	return selected, nil, true
 }
 
-// --- Overlay-state key handlers (delegated from handleKeyPress's prelude) ------
+// --- Overlay-state key handlers (routed from surfaceSpecs' keys entries) ------
 
 // handlePromptState routes a key to the text-input overlay (new-session form or
 // quick-send compose box) and handles submit/cancel/retarget/debounce.
@@ -251,6 +252,7 @@ func (m *home) handleConfirmState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.pendingConfirmAction = nil
 		m.pendingConfirmBusyLabel = ""
 		m.pendingConfirmArm = nil
+		m.pendingConfirmDecline = nil
 		m.confirmationOverlay = nil
 		return m, m.openSettingsAt(key)
 	}
@@ -260,16 +262,19 @@ func (m *home) handleConfirmState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		action := m.pendingConfirmAction
 		busyLabel := m.pendingConfirmBusyLabel
 		arm := m.pendingConfirmArm
+		decline := m.pendingConfirmDecline
 		m.state = stateDefault
 		m.confirmationOverlay = nil
 		m.pendingConfirmAction = nil
 		m.pendingConfirmBusyLabel = ""
 		m.pendingConfirmArm = nil
+		m.pendingConfirmDecline = nil
 		m.pendingConfirmSettingKey = ""
 		if confirmed && action != nil {
 			// Here, on the update thread, is the only place a staged action's
 			// bookkeeping may be applied: a declined dialog returns below having
-			// touched nothing, which is what keeps a cancel free of side effects.
+			// touched nothing — unless it armed a decline action of its own
+			// (armOnDecline), which for every ordinary dialog is nil.
 			if arm != nil {
 				arm()
 			}
@@ -277,6 +282,10 @@ func (m *home) handleConfirmState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, m.beginAsyncAction(busyLabel, action)
 			}
 			resultMsg := action()
+			return m, func() tea.Msg { return resultMsg }
+		}
+		if !confirmed && decline != nil {
+			resultMsg := decline()
 			return m, func() tea.Msg { return resultMsg }
 		}
 		return m, nil
@@ -1151,8 +1160,10 @@ func promptHistoryTexts(entries []config.PromptHistoryEntry) []string {
 	return texts
 }
 
-// historyOverlayWidth sizes the prompt-history picker to ~60% of the terminal,
-// capped at 80 — the same responsive box the queue overlay uses.
+// historyOverlayWidth sizes the prompt-history picker — and the queue overlay,
+// whose size closure in surfaceSpecs shares the box — to ~60% of the terminal,
+// capped at 80. The picker's opener and both resize closures all call it, so
+// the widths cannot drift apart.
 func historyOverlayWidth(termWidth int) int {
 	w := int(float32(termWidth) * 0.6)
 	if w > 80 {

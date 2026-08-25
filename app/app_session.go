@@ -407,7 +407,7 @@ func (m *home) autoDispatch(res PrefillResult) (tea.Cmd, bool) {
 	count := m.capCount(sc)
 	plan := spawnPlan{
 		titles: []string{res.Title}, path: res.Path, direct: direct,
-		programs: []string{m.program}, prompt: res.Prompt,
+		programs: []string{m.program}, prompt: res.Prompt, dispatch: true,
 	}
 	verdict := capVerdict(sc, count, 1)
 	if verdict == capBlock {
@@ -415,11 +415,16 @@ func (m *home) autoDispatch(res PrefillResult) (tea.Cmd, bool) {
 	}
 
 	// Gate order mirrors createSessionFromForm, and is load-bearing for the same
-	// reason: neither accept path re-checks the other gate, so whichever confirm is
-	// staged first is the only one that ever runs. Hard cap first (already refused
-	// above), then all-exhausted, then the soft cap — staging the soft-cap confirm
-	// ahead of this would let accepting it spawn on a fully rate-limited pool without
-	// ever asking.
+	// reason: neither cap-gate accept path re-checks the other gate, so whichever
+	// confirm is staged first is the only one that ever runs. Hard cap first
+	// (already refused above), then the repo-trust prompt (#814 — BOTH of its
+	// answers re-enter finishSpawnGates, so the gates below still run after it),
+	// then all-exhausted, then the soft cap — staging the soft-cap confirm ahead
+	// of the exhausted one would let accepting it spawn on a fully rate-limited
+	// pool without ever asking.
+	if a, ok := m.repoTrustAssessment(res.Path, direct, ""); ok {
+		return m.confirmRepoTrust(plan, a), true
+	}
 	if cmd, gated := m.gateAllExhausted(plan); gated {
 		return cmd, true
 	}
@@ -1842,19 +1847,20 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 		return nil
 	}
 
-	// All-members-rate-limited gate (once per batch). When both a soft cap (capConfirm)
-	// and all-exhausted apply, the exhausted confirm is the one shown (accepting it then
-	// spawns — an accepted v1 simplification for the soft cap only; the hard cap is
-	// already ruled out above).
-	if cmd, gated := m.gateAllExhausted(plan); gated {
-		return cmd
+	// Repo-trust gate (#814), after the hard cap and before the gates whose accept
+	// paths jump straight to spawnVariants: its own proceed re-enters
+	// finishSpawnGates, which re-runs those, so trust must stage first or accepting
+	// it would bypass them. Both of ITS answers proceed — declining creates the
+	// session with the repo's config inert — so nothing about the cap ordering
+	// above is weakened by it.
+	if a, ok := m.repoTrustAssessment(path, direct, branch); ok {
+		return m.confirmRepoTrust(plan, a)
 	}
 
-	if verdict == capConfirm {
-		return m.confirmOverCap(plan, sc.Limit, count)
-	}
-
-	return m.spawnVariants(plan)
+	// The remaining gates — all-exhausted, then the soft cap (when both apply the
+	// exhausted confirm is the one shown; the hard cap is already ruled out above)
+	// — and the spawn, shared with the trust prompt's proceed path.
+	return m.finishSpawnGates(plan)
 }
 
 // startNewSession builds, registers, and starts a new session from already-validated
@@ -2506,9 +2512,11 @@ func (m *home) confirmAction(message string, label busyLabel, action tea.Cmd) te
 	m.state = stateConfirm
 	m.pendingConfirmAction = action
 	m.pendingConfirmBusyLabel = string(label)
-	// Clear any hook the previous dialog staged. A caller that needs one sets it
-	// AFTER this returns (armOnConfirm), so ordering cannot silently drop it.
+	// Clear any hooks the previous dialog staged. A caller that needs one sets it
+	// AFTER this returns (armOnConfirm / armOnDecline), so ordering cannot silently
+	// drop it.
 	m.pendingConfirmArm = nil
+	m.pendingConfirmDecline = nil
 
 	// Create and show the confirmation overlay using ConfirmationOverlay
 	m.confirmationOverlay = overlay.NewConfirmationOverlay(message)
@@ -2527,6 +2535,19 @@ func (m *home) confirmAction(message string, label busyLabel, action tea.Cmd) te
 // beside the dispatch, rather than where the dialog is built.
 func (m *home) armOnConfirm(arm func()) {
 	m.pendingConfirmArm = arm
+}
+
+// armOnDecline stages an action to run inline when the pending confirmation is
+// DECLINED. Call it after confirmAction, which resets the slot.
+//
+// Almost no dialog wants one: declining is a pure cancel everywhere else, and
+// TestDeclineRunsNothingForOrdinaryDialogs holds that line. The repo-trust
+// prompt (#814) is the exception it exists for — declining trust still creates
+// the session, just with the repo's config inert — and any dialog that arms
+// this must also relabel the cancel hint (SetCancelLabel), or "esc to cancel"
+// promises an abort the dialog does not perform.
+func (m *home) armOnDecline(action tea.Cmd) {
+	m.pendingConfirmDecline = action
 }
 
 // armDoubleTap lets a second press of key — the key that OPENED the confirmation —

@@ -433,6 +433,28 @@ type Instance struct {
 	setupErr    error
 	setupOutput string
 
+	// repoConfigState / repoConfigReport are where this session stands with its
+	// repository's own .atrium.json (#814): none, active, or one of the inert
+	// shapes (untrusted / changed / absent-though-granted / invalid), plus the
+	// user-facing explanation. Display state ONLY — the run/don't-run decision is
+	// the ledger check inside routeRepoLocal, never these fields. Refreshed by
+	// every resolution (create, resume, the run-state sweep), in-memory only,
+	// guarded by mu: the Start goroutine and the poll goroutine write them while
+	// the renderer reads.
+	repoConfigState  RepoConfigState
+	repoConfigReport string
+	// repoConfigProblem is the one-shot copy of that report, armed only on the
+	// applying paths and held until the app has a frame to show it on — cleared
+	// as it is shown, exactly portProblem's contract. Guarded by mu.
+	repoConfigProblem string
+	// repoKey memoizes the repo's canonical trust-ledger identity (its resolved
+	// toplevel), with repoKeyKnown marking that derivation ran at all — the same
+	// shape as originURL below, and for the same reason: the path is fixed at
+	// creation and the derivation is a git fork. The trust VERDICT is never
+	// memoized with it. Guarded by mu.
+	repoKey      string
+	repoKeyKnown bool
+
 	// port is the session's managed dev-server port (#389), or 0 when its repo declares
 	// no port_range — or declares one that had nothing free. Unlike the setup fields
 	// above it IS persisted (InstanceData.Port): a running session's server is bound to

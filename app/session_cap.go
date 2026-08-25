@@ -297,6 +297,14 @@ type spawnPlan struct {
 	// another conversation (#644). A plan carrying it always has exactly one
 	// program: createSessionFromForm refuses a fan-out that is also a fork.
 	fork *session.ForkSeed
+	// dispatch marks a plan from the formless smart-dispatch path (autoDispatch).
+	// The staged confirms (repo-trust, over-cap, exhausted) funnel every plan into
+	// spawnVariants, whose commit tail belongs to the FORM: recording the prompt
+	// into the create form's history and closing the form via closeCreateForm —
+	// which also destroys a PARKED draft (an earlier Escape's), state belonging to
+	// a different, unfinished create that a dispatch must not consume. A dispatch
+	// plan takes autoDispatch's own lighter tail instead.
+	dispatch bool
 }
 
 // proceedOverCapMsg is emitted when the user confirms the host-capacity prompt; its
@@ -358,15 +366,32 @@ func (m *home) spawnVariants(plan spawnPlan) tea.Cmd {
 				return m.handleError(err)
 			}
 			// Some variants are already live; a resubmit would double-spawn them.
-			m.recordPrompt(plan.prompt)
-			m.closeCreateForm()
+			m.finalizeSpawn(plan)
 			return tea.Batch(append(cmds, m.handleError(err))...)
 		}
 		cmds = append(cmds, created)
 	}
+	m.finalizeSpawn(plan)
+	return tea.Batch(cmds...)
+}
+
+// finalizeSpawn commits the UI side of a spawned plan. A form-submitted plan
+// records its prompt into the form's history and tears the form down
+// (closeCreateForm — which is also what clears the trust/over-cap stash, the
+// reason those stashes cannot double-create). A dispatch plan mirrors
+// autoDispatch's own inline tail: no form was involved, so there is no prompt
+// history to write and no draft state to consume — closeCreateForm here would
+// silently destroy a parked draft belonging to a different create.
+func (m *home) finalizeSpawn(plan spawnPlan) {
+	if plan.dispatch {
+		m.textInputOverlay = nil
+		m.state = stateDefault
+		m.menu.SetState(ui.StateDefault)
+		m.resetTitleCheck()
+		return
+	}
 	m.recordPrompt(plan.prompt)
 	m.closeCreateForm()
-	return tea.Batch(cmds...)
 }
 
 // closeCreateForm tears down the create form after a committed submit: it drops the

@@ -170,8 +170,11 @@ func TestHandleCheckpointsState_EscDismisses(t *testing.T) {
 	assert.Nil(t, h.checkpointTarget)
 }
 
-// r re-reads rather than resuming a paused session, which is what `r` does in the
-// default state — the prelude branch ordering is what makes that true.
+// r re-reads rather than resuming a paused session, which is what `r` does in
+// the default state — stateCheckpoints' keys entry in surfaceSpecs routing the
+// press here before the global dispatch is what makes that true.
+// TestCheckpointsKeyRoutesThroughUpdate below is the test that proves the
+// routing; this one pins the handler's own behavior.
 func TestHandleCheckpointsState_RReloads(t *testing.T) {
 	h, inst := checkpointHome(t)
 	h.openCheckpoints()
@@ -180,6 +183,41 @@ func TestHandleCheckpointsState_RReloads(t *testing.T) {
 	}})
 
 	_, cmd := h.handleCheckpointsState(keyMsg("r"))
+
+	assert.Equal(t, stateCheckpoints, h.state, "r must not leave the timeline")
+	require.NotNil(t, cmd, "r must start another read")
+	assert.Contains(t, xansi.Strip(h.checkpointOverlay.Render()), "reading transcript",
+		"and put the box back into its loading state")
+}
+
+// TestCheckpointsKeyRoutesThroughUpdate presses r through home.Update where the
+// sibling tests above call handleCheckpointsState directly. The direct calls
+// cannot see the routing: stateCheckpoints' keys entry in surfaceSpecs is the
+// only thing sending a keypress to this surface, and a re-route can survive
+// every other suite — a cross-wire to a handler that dereferences its own
+// overlay on entry panics in the frame-restore walk, but
+// handleImagePreviewState touches no overlay and its one gesture closes
+// nil-tolerantly, so wiring the timeline's keys to it keeps that walk green
+// with the timeline dead. That reasoning is not checkpoints-specific:
+// checkpoints is merely the only state with a routed guard, and #856 tracks
+// covering the other keys entries.
+//
+// The state assertion discriminates neither mutation — r leaves the state in
+// stateCheckpoints under both, since a swallow changes nothing and the global
+// dispatch's resume refuses a running session with a notice. Mutation-verified,
+// one killing assertion each: with keys pointed at handleImagePreviewState, r
+// returns no cmd and the require below aborts there; with keys nil, the
+// dispatch's notice is a cmd, so what fails is the render assertion — the box
+// never re-enters its loading state (the frame-restore walk fails that mutant
+// independently, on esc no longer closing the timeline).
+func TestCheckpointsKeyRoutesThroughUpdate(t *testing.T) {
+	h, inst := checkpointHome(t)
+	h.openCheckpoints()
+	h.handleCheckpointsLoaded(checkpointsLoadedMsg{target: inst, result: transcript.Checkpoints{
+		Blobs: true, List: []transcript.Checkpoint{{MessageID: "a", Label: "a prompt"}},
+	}})
+
+	_, cmd := h.Update(keyMsg("r"))
 
 	assert.Equal(t, stateCheckpoints, h.state, "r must not leave the timeline")
 	require.NotNil(t, cmd, "r must start another read")
