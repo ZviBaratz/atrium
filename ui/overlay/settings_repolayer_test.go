@@ -170,3 +170,50 @@ func TestRepoLayerRowsRenderInTheFrame(t *testing.T) {
 		}
 	}
 }
+
+// TestRepoLayerIsReachableOnEveryLayeredRow closes the hole every other test in this
+// file had: they park on link_paths, whose default value is "(none)" and never
+// truncates — so contextLine's truncated-value clause, which outranks the provenance
+// clause, was never reached. carry_files has a long default list and truncates at
+// every width the panel supports, which is the correlated case: a long list is both
+// why the value truncates and why the layer is worth saying.
+//
+// The invariant asserted is therefore the honest one — the fact is reachable in the
+// panel, not that any one line carries it.
+func TestRepoLayerIsReachableOnEveryLayeredRow(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetRepoLayer(&RepoLayer{
+		Repo:       "/home/dev/src/a-project-with-a-long-path",
+		CarryFiles: []string{".dev.vars", ".claude/settings.local.json"},
+		LinkPaths:  []string{"node_modules"},
+	})
+
+	for _, key := range repocfg.RepoLocalLayerKeys() {
+		for _, w := range []int{120, 96, 80, 72, 56, 40} {
+			o.SetSize(w, 24)
+			settingsAt(t, o, key)
+			help := stripANSI(o.expandedHelpContent(o.cursor))
+			assert.Containsf(t, help, repocfg.RepoLocalFileName,
+				"row %q at %d cols: the `?` view is the guaranteed surface and lost the layer", key, w)
+			assert.Containsf(t, help, "/home/dev/src/a-project-with-a-long-path",
+				"row %q at %d cols: the `?` view must name the repo", key, w)
+		}
+	}
+
+	// And the row whose value truncates really does reach that clause, or the sweep
+	// above proves nothing about the correlated case.
+	o.SetSize(80, 24)
+	settingsAt(t, o, "carry_files")
+	require.True(t, o.valueWasTruncated(),
+		"carry_files' default must truncate at 80 columns, or this test is about the wrong row")
+	assert.NotContains(t, stripANSI(o.contextLine(o.innerWidth())), repocfg.RepoLocalFileName,
+		"the truncated value outranks the provenance line here (spec §10) — which is why "+
+			"the `?` view carries it and this assertion pins that it is the yielding side")
+
+	// An unlayered panel says nothing anywhere, so the assertions above are about the
+	// layer and not about text every panel happens to carry.
+	plain := NewSettingsOverlay(config.DefaultConfig())
+	plain.SetSize(80, 24)
+	settingsAt(t, plain, "carry_files")
+	assert.NotContains(t, stripANSI(plain.expandedHelpContent(plain.cursor)), "also adds")
+}

@@ -584,8 +584,10 @@ func (s *SettingsOverlay) renderRowLine(i, width, labelW int) string {
 //   - a repo-layered row's contribution count (#815), which degrades to a bare "+N": it is
 //     not a refusal to explain like the first, nor the only thing telling two results apart
 //     like the second, but "the value shown is not the value in force here" outranks
-//     reference information. It is the one claim with a second surface — contextLine always
-//     renders — which is what makes it safe to drop below the narrowest rung;
+//     reference information. What makes it safe to drop below the narrowest rung is the `?`
+//     view, which carries the whole sentence unconditionally — NOT the help line, which
+//     yields to a truncated value and so is absent in exactly the correlated case (a long
+//     list is both why the value truncates and why the layer is worth saying);
 //   - the apply timing, which is reference information and is dropped outright (spec §10).
 //
 // For every claim but the last the value is sized against the SHORTEST form the badge can
@@ -959,9 +961,10 @@ func (s *SettingsOverlay) contextLine(width int) string {
 		body = "No effect right now — " + chip + "."
 	case s.repoLayerContext() != "":
 		// A repo-layered row the selected repo contributes to (#815). Ranked over the
-		// gloss/detail fallback because the badge is a bare count and this is the only
-		// place the repo and its entries are named — and this line always renders,
-		// which is what keeps the fact reachable on a pane too narrow for a chip.
+		// gloss/detail fallback because the badge is a bare count and this names the
+		// repo and its entries — but BELOW the truncated value above it, which spec §10
+		// requires, and which means this line is not the guaranteed surface. That is
+		// expandedHelpContent's job.
 		body = s.repoLayerContext()
 	default:
 		// The current option's gloss, which is what makes cycling an enum teach rather than
@@ -995,16 +998,19 @@ func (s *SettingsOverlay) contextLine(width int) string {
 	return rightAligned(body, pos, width)
 }
 
-// repoLayerContext names the repository adding to the selected row and the entries
-// it adds, or "" when the row is not repo-layerable, no layer was injected, or this
-// repo adds nothing to it.
+// repoLayerFor names the repository adding to row i and the entries it adds, or ""
+// when the row is not repo-layerable, no layer was injected, or this repo adds
+// nothing to it. One sentence, read by both the help line and the `?` view, so the
+// two cannot describe the same layer differently.
 //
 // It leads with the file and the repo and trails with the entries, because
 // contextLine truncates from the right: the entries are recoverable (they are in
 // that file, and the row's own value is not what changed), while "which repo" is
-// the part that makes the badge's count mean anything.
-func (s *SettingsOverlay) repoLayerContext() string {
-	entries := s.repoLayer.forKey(s.selectedRow().key)
+// the part that makes the badge's count mean anything. Below roughly sixty columns
+// even the repo path is cut, which is the reason expandedHelpContent carries this
+// too rather than relying on the one line.
+func (s *SettingsOverlay) repoLayerFor(i int) string {
+	entries := s.repoLayer.forKey(s.rows[i].key)
 	if len(entries) == 0 {
 		return ""
 	}
@@ -1014,6 +1020,9 @@ func (s *SettingsOverlay) repoLayerContext() string {
 	}
 	return fmt.Sprintf("%s in %s also adds: %s", repocfg.RepoLocalFileName, where, strings.Join(entries, ", "))
 }
+
+// repoLayerContext is repoLayerFor for the selected row — contextLine's caller.
+func (s *SettingsOverlay) repoLayerContext() string { return s.repoLayerFor(s.cursor) }
 
 // rightAligned lays a body string and a right-aligned position readout into exactly width
 // cells, truncating the body to make room. The counter is five cells and the body is
@@ -1293,6 +1302,14 @@ func (s *SettingsOverlay) expandedHelpContent(i int) string {
 				b.WriteString("  " + o + "\n")
 			}
 		}
+	}
+	if prov := s.repoLayerFor(i); prov != "" {
+		// The `?` view is where the provenance is GUARANTEED to be readable. The chip
+		// carries a bare count and drops on a narrow pane, and contextLine yields to a
+		// truncated value — which is the correlated case, since a long list is both the
+		// reason the value truncates and the reason the layer is interesting. Only this
+		// surface has room unconditionally.
+		b.WriteString("\n" + prov + "\n")
 	}
 	b.WriteString("\nCurrent value: " + row.get(s.cfg) + "\n")
 	return b.String()

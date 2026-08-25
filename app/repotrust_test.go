@@ -381,10 +381,12 @@ func TestRepoTrustDialogBoundsWideSeedLists(t *testing.T) {
 	require.Equal(t, stateConfirm, h.state)
 
 	view := xansi.Strip(h.View().Content)
-	assert.Contains(t, view, "trust and run setup",
+	// "trust this repo", not "trust and run setup": this fixture declares no
+	// repo_scripts, so nothing executes — see TestRepoTrustCopyOnlyPromisesWhatRuns.
+	assert.Contains(t, view, "trust this repo",
 		"a confirmation the user cannot answer is worse than none")
-	assert.Contains(t, view, "all of them in "+repocfg.RepoLocalFileName,
-		"a truncated sample must point at the file, never read as the whole list")
+	assert.Contains(t, view, "more",
+		"a truncated sample must say it is a sample, never read as the whole list")
 	lines := strings.Split(view, "\n")
 	assert.LessOrEqual(t, len(lines), 24)
 	for i, l := range lines {
@@ -409,4 +411,129 @@ func TestRepoTrustNeverPromptsForAnUnprintableSeedEntry(t *testing.T) {
 	_ = submitCreateForm(t, h, repo, "feature")
 	assert.NotEqual(t, stateConfirm, h.state,
 		"a refused file has nothing grantable, so it must never stage a trust prompt")
+}
+
+// TestRepoTrustSeedLineFitsItsBudget is the assertion repoTrustSeedWidth's comment
+// used to be. Prose there has been wrong twice — once bounding each entry (n entries
+// at n times the cap) and once bounding only the joined sample while the verb and
+// the overflow marker were appended outside it, 91 cells against a 46-cell column —
+// so the number is measured here instead of described there.
+func TestRepoTrustSeedLineFitsItsBudget(t *testing.T) {
+	for name, entries := range map[string][]string{
+		"one short":     {".env"},
+		"three short":   {".env", ".env.local", ".dev.vars"},
+		"over the cap":  longSeedList(repocfg.MaxRepoLocalSeedEntries, "dep"),
+		"one very long": {strings.Repeat("verylongsegment/", 40)},
+		"wide runes":    longSeedList(repocfg.MaxRepoLocalSeedEntries, strings.Repeat("日本語", 30)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, verb := range []string{"copies in", "links in"} {
+				line := strings.TrimPrefix(repoTrustSeedLine(verb, entries), "\n")
+				require.NotEmpty(t, line)
+				assert.LessOrEqualf(t, ansi.PrintableRuneWidth(line), repoTrustSeedWidth,
+					"%q: %q is %d cells", verb, line, ansi.PrintableRuneWidth(line))
+				assert.NotContainsf(t, line, "… …", "%q: doubled ellipsis reads as a typo: %q", verb, line)
+			}
+		})
+	}
+	assert.Empty(t, repoTrustSeedLine("copies in", nil), "an empty list contributes no line")
+}
+
+// longSeedList builds n entries whose stem repeats, for width fixtures.
+func longSeedList(n int, stem string) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = fmt.Sprintf("%s%d", stem, i)
+	}
+	return out
+}
+
+// TestRepoTrustDialogHoldsTheFloorWithEverything is the margin guard, and the margin
+// is now zero: #815's two seed lines cost the box two rows, so at the 80×24 floor a
+// file declaring a script AND both lists puts the dialog's top border on the tab-bar
+// row. That is what a modal does, and everything the user needs is still there — but
+// the next line added to this dialog is the one that pushes an answer off the frame,
+// and nothing else would say so. Overlay geometry at tight heights is F2's (#802);
+// this only refuses to lose ground silently.
+func TestRepoTrustDialogHoldsTheFloorWithEverything(t *testing.T) {
+	repo := gitInitRepo(t)
+	commitRepoLocal(t, repo, `{
+		"repo_scripts":[{"name":"web","setup_script":"npm ci && npm run db:migrate"}],
+		"carry_files":[".dev.vars",".claude/settings.local.json",".env.local",".x"],
+		"link_paths":["node_modules",".venv","vendor/bundle","x"]
+	}`)
+	h := newCreateFormHome(t)
+	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 80, Height: 24})
+	_ = submitCreateForm(t, h, repo, "feature")
+	require.Equal(t, stateConfirm, h.state)
+
+	view := xansi.Strip(h.View().Content)
+	lines := strings.Split(view, "\n")
+	assert.LessOrEqual(t, len(lines), 24)
+
+	// Both answers, and the box's own bottom edge: a clipped box means the content
+	// below the clip is gone, and the decline is the answer that must never vanish.
+	assert.Contains(t, view, "trust and run setup")
+	assert.Contains(t, view, "create without it")
+	assert.Regexp(t, `╰─{10,}╯`, view, "the dialog's bottom border must be on screen")
+
+	// Neither seed line may wrap: a wrapped line is a row the height budget never
+	// counted, which is the mechanism that spent the margin in the first place.
+	for _, verb := range []string{"copies in:", "links in:"} {
+		var found string
+		for _, l := range lines {
+			if strings.Contains(l, verb) {
+				found = l
+			}
+		}
+		require.NotEmptyf(t, found, "the dialog must carry a %q line", verb)
+		assert.Containsf(t, found, "more", "%q wrapped: its overflow marker is on another row (%q)", verb, found)
+	}
+}
+
+// TestRepoTrustCopyOnlyPromisesWhatRuns: the dialog asks for consent, so it has to
+// name the thing being consented to. A seed-only file executes NOTHING — describing
+// it as setup the user is about to run misstates the decision in both directions
+// (declining "a stranger's script" actually declines a file copy they would have
+// allowed; accepting it approves the repo choosing which of their gitignored files
+// an agent reads, believing they approved one script).
+func TestRepoTrustCopyOnlyPromisesWhatRuns(t *testing.T) {
+	t.Run("a seed-only file never says run", func(t *testing.T) {
+		repo := gitInitRepo(t)
+		commitRepoLocal(t, repo, `{"carry_files":[".dev.vars"],"link_paths":["node_modules"]}`)
+		h := newCreateFormHome(t)
+		h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 80, Height: 30})
+		_ = submitCreateForm(t, h, repo, "feature")
+		require.Equal(t, stateConfirm, h.state)
+
+		view := xansi.Strip(h.View().Content)
+		assert.NotContains(t, view, "run setup", "the key hint must not offer to run what cannot run")
+		assert.NotContains(t, view, "runs it, as you", "the body must not promise execution")
+		assert.NotContains(t, view, "its own setup")
+		assert.Contains(t, view, "trust this repo")
+		assert.Contains(t, view, "copy and link", "it must name what a grant actually does here")
+
+		// And the entry-name slot is absent rather than filled with the filename the
+		// sentence above already named, or with "unnamed entry" — either sends the
+		// reader hunting for an entry that does not exist.
+		assert.NotContains(t, view, "unnamed entry")
+		assert.NotContains(t, view, ".atrium.json ·")
+	})
+
+	t.Run("an executable file still says run", func(t *testing.T) {
+		// The positive control. Without it, a change that dropped the execution
+		// wording everywhere would pass the subtest above.
+		repo := gitInitRepo(t)
+		commitRepoLocal(t, repo, `{"repo_scripts":[{"name":"web","setup_script":"npm ci"}],"carry_files":[".dev.vars"]}`)
+		h := newCreateFormHome(t)
+		h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 80, Height: 30})
+		_ = submitCreateForm(t, h, repo, "feature")
+		require.Equal(t, stateConfirm, h.state)
+
+		view := xansi.Strip(h.View().Content)
+		assert.Contains(t, view, "trust and run setup")
+		assert.Contains(t, view, "runs it, as you")
+		// The seed half is still described — one grant, both halves named.
+		assert.Contains(t, view, "1 carried file")
+	})
 }

@@ -54,13 +54,20 @@ const repoTrustPreviewWidth = 120
 // in the user's own checkout and is the thing being granted.
 const repoTrustSeedPreview = 3
 
-// repoTrustSeedWidth bounds a whole seed line — the joined sample, not one entry.
-// Per-entry bounding is not enough, and TestRepoTrustDialogBoundsWideSeedLists is
-// what says so rather than this comment: n entries each inside their own cap are n
-// times the cap, so an earlier draft that capped each one wrapped both lists far
-// enough to push the answer hints off the 80×24 floor. A confirmation the user
-// cannot answer is worse than none, so the budget is the LINE's.
-const repoTrustSeedWidth = 48
+// repoTrustSeedWidth is the cell budget for one whole rendered seed line, verb and
+// overflow marker included. TestRepoTrustSeedLineFitsItsBudget measures the returned
+// string against it, because prose here has now been wrong twice: a draft that capped
+// each entry bounded n entries at n times the cap, and its replacement capped the
+// joined sample while the verb and the overflow marker were appended outside the cap
+// — 91 cells against a 48-cell box. Both wrapped, and two wrapped lists walked the
+// centred dialog up until its top border cut the tab bar and, further down, until
+// the decline hint left the frame. A confirmation the user cannot answer is worse
+// than none, so the number is asserted rather than described.
+// 46 is the dialog's usable text column at the 80-column floor, measured: the
+// confirmation box renders 50 cells of inner width there, two of which are padding
+// on each side. A wider budget wraps, and a wrapped seed line is a row the dialog's
+// height budget never counted.
+const repoTrustSeedWidth = 46
 
 // repoTrustAssessment is the pure half, shared by the form and autoDispatch
 // (the allExhausted split's pattern, #703: a headless create must not stage a
@@ -118,7 +125,7 @@ func (m *home) confirmRepoTrust(plan spawnPlan, a repotrust.Assessment) tea.Cmd 
 		}
 	})
 	m.armOnDecline(proceed)
-	m.confirmationOverlay.SetConfirmLabel("trust and run setup")
+	m.confirmationOverlay.SetConfirmLabel(repoTrustConfirmLabel(a))
 	// Decline proceeds, so the stock "cancel" would promise an abort this dialog
 	// does not perform.
 	m.confirmationOverlay.SetCancelLabel("create without it")
@@ -131,17 +138,52 @@ func (m *home) confirmRepoTrust(plan spawnPlan, a repotrust.Assessment) tea.Cmd 
 
 // repoTrustMessage is the dialog body: whose config, what it declares (bounded
 // — repo-authored text never reaches the frame unsanitized or unmeasured), and
-// what a grant means. The verbs live in the key hint (trust and run setup /
-// create without it), per the voice rule in app_feedback.go.
+// what a grant means. The verbs live in the key hint (see repoTrustConfirmLabel),
+// per the voice rule in app_feedback.go.
+//
+// It says "runs" only when something runs. A file declaring nothing but
+// carry_files/link_paths (#815) executes no command, and describing it as setup the
+// user is about to run misstates the decision in BOTH directions: someone who
+// declines because they will not run a stranger's script has actually declined a
+// file copy they would have allowed, and someone who accepts thinks they approved
+// one script when they approved the repo choosing which of their own gitignored
+// files an agent reads and which of their trees it may write through. Those are
+// different grants and the sentence has to be the one the file earns.
 func repoTrustMessage(a repotrust.Assessment) string {
+	what, consequence := "its own setup", "Trusting runs it, as you, in"
+	if !repoTrustRuns(a) {
+		what = "what its worktrees start with"
+		consequence = "Trusting lets it copy and link those paths into"
+	}
 	if a.HasGrant {
 		return fmt.Sprintf(
-			"%s's %s has CHANGED since you trusted it:\n\n%s\n\nTrusting runs the new version in every new worktree of this repo until it changes again.",
-			a.Root, repocfg.RepoLocalFileName, repoTrustSummary(a))
+			"%s's %s has CHANGED since you trusted it:\n\n%s\n\n%s every new worktree of this repo until it changes again.",
+			a.Root, repocfg.RepoLocalFileName, repoTrustSummary(a), consequence)
 	}
 	return fmt.Sprintf(
-		"%s declares its own setup in %s:\n\n%s\n\nTrusting runs it, as you, in every new worktree of this repo until the file changes.",
-		a.Root, repocfg.RepoLocalFileName, repoTrustSummary(a))
+		"%s declares %s in %s:\n\n%s\n\n%s every new worktree of this repo until the file changes.",
+		a.Root, what, repocfg.RepoLocalFileName, repoTrustSummary(a), consequence)
+}
+
+// repoTrustRuns reports whether granting this file would let a command execute.
+// It is the entry's presence and nothing else: repocfg refuses an entry that
+// configures nothing, so an entry that survived the parse declares at least one of
+// setup_script / run_command / session_env / port_range — and the first two run
+// while the other two are execution-adjacent enough that #814 withholds them
+// together. The seed lists move files and make symlinks; no command comes from them.
+func repoTrustRuns(a repotrust.Assessment) bool {
+	return len(a.Local.Entries) > 0
+}
+
+// repoTrustConfirmLabel is the confirm key's hint, and it carries the same
+// distinction the body does: offering to "run setup" for a file that runs nothing
+// asks for consent to the wrong thing, and it is the half a user who reads only the
+// key hints will act on.
+func repoTrustConfirmLabel(a repotrust.Assessment) string {
+	if repoTrustRuns(a) {
+		return "trust and run setup"
+	}
+	return "trust this repo"
 }
 
 // repoTrustSummary renders what the file declares: the entry's name and the
@@ -160,15 +202,19 @@ func repoTrustSummary(a repotrust.Assessment) string {
 	if len(surfaces) == 0 {
 		return ""
 	}
-	// A seed-only file has no entry to name, and calling it "unnamed" would invite
-	// a hunt for one that is not there.
-	name := repocfg.RepoLocalFileName
+	// A seed-only file has no entry, so there is no name slot to fill and leading
+	// with the surfaces is the honest shape. "unnamed entry" would send the reader
+	// hunting for an entry that is not there, and echoing the filename — which the
+	// sentence two lines above already names — reads both as a stutter and as an
+	// entry CALLED .atrium.json.
+	line := strings.Join(surfaces, " + ")
 	if len(a.Local.Entries) > 0 {
-		if name = sanitizeRepoText(a.Local.Entries[0].Name, 24); name == "" {
+		name := sanitizeRepoText(a.Local.Entries[0].Name, 24)
+		if name == "" {
 			name = "unnamed entry"
 		}
+		line = name + " · " + line
 	}
-	line := name + " · " + strings.Join(surfaces, " + ")
 	if len(a.Local.Entries) > 0 {
 		if script := strings.TrimSpace(a.Local.Entries[0].SetupScript); script != "" {
 			first := script
@@ -193,19 +239,24 @@ func repoTrustSeedLine(verb string, entries []string) string {
 		return ""
 	}
 	shown := entries
+	suffix := ""
 	if len(shown) > repoTrustSeedPreview {
 		shown = shown[:repoTrustSeedPreview]
+		// Short on purpose: the exact total is already in the surfaces line above and
+		// the file is named twice in the body, so this only has to say the sample is a
+		// sample. A longer marker buys nothing and costs the sample its room.
+		suffix = fmt.Sprintf(" +%d more", len(entries)-len(shown))
 	}
-	// Sanitize the JOIN, so the cell budget bounds the whole line. Sanitizing each
-	// entry and then joining would bound each and none: n entries at the cap are n
+	prefix := verb + ": "
+	// The sample gets what is left after the fixed parts, so the WHOLE line is what
+	// repoTrustSeedWidth bounds. The floor keeps a degenerate budget from producing a
+	// line that is all marker and no content; it can exceed the width only if the verb
+	// and marker alone already do, which no caller here comes close to and
+	// TestRepoTrustSeedLineFitsItsBudget would catch.
+	budget := max(repoTrustSeedWidth-runewidth.StringWidth(prefix)-runewidth.StringWidth(suffix), 8)
+	// Sanitize the JOIN, not each entry: n entries each inside their own cap are n
 	// times the cap.
-	out := "\n" + verb + ": " + sanitizeRepoText(strings.Join(shown, ", "), repoTrustSeedWidth)
-	if len(entries) > len(shown) {
-		// The exact count is already in the surfaces line above; this says where to
-		// read the rest, which is the file the grant is over.
-		out += " … (all of them in " + repocfg.RepoLocalFileName + ")"
-	}
-	return out
+	return "\n" + prefix + sanitizeRepoText(strings.Join(shown, ", "), budget) + suffix
 }
 
 // sanitizeRepoText makes repo-authored text safe to interpolate into a frame:
