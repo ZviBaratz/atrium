@@ -14,6 +14,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	xansi "github.com/charmbracelet/x/ansi"
 	zone "github.com/lrstanley/bubblezone/v2"
 )
 
@@ -82,15 +83,18 @@ const (
 )
 
 // Tab pairs a tab's display name with the function that renders its content.
+// Render takes no arguments because every pane is sized separately via SetSize
+// and renders from its own state; String() invokes the active tab's Render
+// before building the memo key, so its output enters the cache as bytes.
 type Tab struct {
 	Name   string
-	Render func(width int, height int) string
+	Render func() string
 }
 
 // TabbedWindow has tabs at the top of a pane which can be selected. The tabs
 // take up one rune of height.
 type TabbedWindow struct {
-	tabs []string
+	tabs []Tab
 
 	activeTab int
 	height    int
@@ -140,12 +144,14 @@ type tabbedKey struct {
 }
 
 // NewTabbedWindow assembles the right pane from its three tab panes.
+// The slice order is the display order and must match the tab index
+// constants above (SetActiveTab and the direct-jump keys address by index).
 func NewTabbedWindow(preview *PreviewPane, diff *DiffPane, terminal *TerminalPane) *TabbedWindow {
 	return &TabbedWindow{
-		tabs: []string{
-			"Preview",
-			"Diff",
-			"Terminal",
+		tabs: []Tab{
+			{Name: "Preview", Render: preview.String},
+			{Name: "Diff", Render: diff.String},
+			{Name: "Terminal", Render: terminal.String},
 		},
 		preview:  preview,
 		diff:     diff,
@@ -587,19 +593,15 @@ func (w *TabbedWindow) String() string {
 	return w.memo.Get(k, func() string { return w.compose(k) })
 }
 
-// activePaneContent renders whichever tab is showing. An index outside the three
-// tabs yields "", exactly as the switch this was lifted from did; Toggle wraps and
-// SetActiveTab range-checks, so that arm is unreachable rather than a fallback.
+// activePaneContent renders whichever tab is showing. An index outside the tab
+// list yields "", exactly as the switch this was lifted from did; Toggle wraps
+// and SetActiveTab range-checks, so the guard is unreachable rather than a
+// fallback.
 func (w *TabbedWindow) activePaneContent() string {
-	switch w.activeTab {
-	case PreviewTab:
-		return w.preview.String()
-	case DiffTab:
-		return w.diff.String()
-	case TerminalTab:
-		return w.terminal.String()
+	if w.activeTab < 0 || w.activeTab >= len(w.tabs) {
+		return ""
 	}
-	return ""
+	return w.tabs[w.activeTab].Render()
 }
 
 // ComposeRuns reports how many times the window has actually been composed, and
@@ -659,7 +661,20 @@ func (w *TabbedWindow) compose(k tabbedKey) string {
 		// v2's Width is the total including the frame, so the frame size is no
 		// longer subtracted here — see the note in theme.Panel.
 		style = style.Width(width)
-		renderedTabs = append(renderedTabs, zone.Mark(tabZoneID(i), style.Render(t)))
+		// Truncate rather than overflow: lipgloss wraps a label wider than the
+		// tab's inner cells, growing the strip a second row, and the MaxHeight
+		// clamp below then eats the window's bottom border. Narrow strips are
+		// reachable — the monitor preset pins the list at its widest, and what
+		// remains at the 80-column floor is asserted by the truncation tests.
+		name := t.Name
+		if inner := width - style.GetHorizontalFrameSize(); lipgloss.Width(name) > inner {
+			if inner <= 0 {
+				name = ""
+			} else {
+				name = xansi.Truncate(name, inner, "…")
+			}
+		}
+		renderedTabs = append(renderedTabs, zone.Mark(tabZoneID(i), style.Render(name)))
 	}
 
 	row := lipgloss.JoinHorizontal(lipgloss.Top, renderedTabs...)
