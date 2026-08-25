@@ -210,9 +210,13 @@ func overlayCenter(bg, fg string) string {
 // opened a margin of quiet *around* the text. That margin was charm on a field
 // that faded into it and a defect on one that didn't — a band of missing streams
 // with nothing drawn to account for them — and V5 retired the fields it flattered.
-// If overlayAt ever became a fading or transparent composite, the field would
-// start showing through the message's spaces and this policy would need
-// revisiting.
+// The one-cell clearanceRing (#689) is not that clearing come back: the old bands
+// were per-variant margins of arbitrary depth; the ring is exactly one cell,
+// carried by the block itself, and exists because this opacity stops at the glyph
+// edge — the property asserted here says nothing about the cell BESIDE the text,
+// which is TestClearanceRingBlanksTheNeighbours' job. If overlayAt ever became a
+// fading or transparent composite, the field would start showing through the
+// message's spaces and this policy would need revisiting.
 func TestOverlayIsOpaque(t *testing.T) {
 	bg := strings.Join([]string{
 		strings.Repeat("#", 20),
@@ -224,6 +228,82 @@ func TestOverlayIsOpaque(t *testing.T) {
 	first := strings.Split(got, "\n")[0]
 	require.Equal(t, "#####A B############", first,
 		"overlayAt must write the overlaid line's spaces over the background, not through it")
+}
+
+// TestClearanceRingBlanksTheNeighbours makes the assertion TestOverlayIsOpaque
+// never did: opacity covers the glyph extent, and the ring covers the cells
+// BESIDE it — the cells #689's frames showed the field abutting ("started!==+").
+// A ringed block composited over a solid field must read blank one cell out on
+// every side, every line must be padded to the block's widest (overlayAt is
+// opaque per line, so a short line would otherwise leave the field flush
+// against the row above), and the glyphs must sit on the same cells the
+// unringed block occupied — the ring is anchored up-left, it does not move the
+// art. Dropping the ring, either blank row, or the short-line padding fails
+// its own assertion here.
+func TestClearanceRingBlanksTheNeighbours(t *testing.T) {
+	row := strings.Repeat("#", 40)
+	bg := strings.Join([]string{row, row, row, row, row, row, row, row, row, row, row, row}, "\n")
+	const x, y = 10, 5
+	got := strings.Split(ansi.Strip(overlayAt(bg, clearanceRing("ABC\nDE", true), x-1, y-1)), "\n")
+
+	require.Equal(t, "ABC", got[y][x:x+3], "the art must stay on its unringed cells")
+	require.Equal(t, "     ", got[y-1][x-1:x+4], "the row above the block must be blank across the ring")
+	require.Equal(t, "     ", got[y+2][x-1:x+4], "the row below the block must be blank across the ring")
+	require.Equal(t, " ABC ", got[y][x-1:x+4], "one blank cell each side of the widest line")
+	require.Equal(t, " DE  ", got[y+1][x-1:x+4], "the short line is padded to the block's widest plus the ring")
+	require.Equal(t, byte('#'), got[y][x-2], "the field must survive immediately outside the ring")
+	require.Equal(t, byte('#'), got[y-2][x], "the field must survive above the ring")
+}
+
+// TestSplashSceneWearsTheClearanceRing holds the real scene to #689's ring:
+// across a sweep of frames, every cell one out from the wordmark block and
+// beside the message is blank — and the field must be visibly alive right
+// outside the ring in at least one swept frame, or a sparse variant would pass
+// the blank assertions vacuously and the test would prove nothing.
+func TestSplashSceneWearsTheClearanceRing(t *testing.T) {
+	const w, h = 100, 30
+	msg := "No agents running yet. Spin up a new session with 'n' to get started!"
+
+	// Mirror splashScene's placement so the assertions can name absolute cells.
+	word := trimBlankLines(FallbackBanner())
+	wordW, wordH := lipgloss.Width(word), lipgloss.Height(word)
+	wordX := (w - wordW) / 2
+	wordY := max(0, (h-1)/2-wordH/2)
+	msgW := lipgloss.Width(msg)
+	msgX := (w - msgW) / 2
+	msgY := wordY + wordH + 2
+
+	fieldAlive := false
+	for frame := 0; frame < 40; frame++ {
+		var rows [][]rune
+		for _, l := range strings.Split(ansi.Strip(splashScene(w, h, frame, msg)), "\n") {
+			rows = append(rows, []rune(l))
+		}
+		cell := func(y, x int) rune {
+			if y < 0 || y >= len(rows) || x < 0 || x >= len(rows[y]) {
+				return ' '
+			}
+			return rows[y][x]
+		}
+		for x := wordX - 1; x <= wordX+wordW; x++ {
+			require.Equalf(t, ' ', cell(wordY-1, x), "frame %d: ring row above the wordmark, col %d", frame, x)
+			require.Equalf(t, ' ', cell(wordY+wordH, x), "frame %d: ring row below the wordmark, col %d", frame, x)
+		}
+		for y := wordY; y < wordY+wordH; y++ {
+			require.Equalf(t, ' ', cell(y, wordX-1), "frame %d: ring col left of the wordmark, row %d", frame, y)
+			require.Equalf(t, ' ', cell(y, wordX+wordW), "frame %d: ring col right of the wordmark, row %d", frame, y)
+		}
+		require.Equalf(t, ' ', cell(msgY, msgX-1), "frame %d: ring cell left of the message", frame)
+		require.Equalf(t, ' ', cell(msgY, msgX+msgW), "frame %d: ring cell right of the message", frame)
+
+		for y := wordY - 1; y <= wordY+wordH; y++ {
+			if cell(y, wordX-2) != ' ' || cell(y, wordX+wordW+1) != ' ' {
+				fieldAlive = true
+			}
+		}
+	}
+	require.True(t, fieldAlive,
+		"no swept frame drew the field beside the ring — the blank assertions above were vacuous; widen the sweep or the variant is broken")
 }
 
 // TestBannerIsSolid pins the other half of that fact. The banner fills with ░

@@ -6,14 +6,14 @@
   ;+=*ooOOOO0OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO000OOOOO00000000000000OOOo*=+  
   ;+=**ooOOOOOOOOOOOOOOOOOOOOOOOOOOOoooooooOOOOOOOO00OOOO00000000000000OOoo*=+  
   ;+==**oooOOOOOOOOOOOOOOOOOOOOOOOOooooooooooOOOOOOO0OO0000000000000000OOoo*=+  
-  ;+==**oooOOOOOOOOOOOOOOOOOOOOOOooooooooooooOOOOOOOOO00000O00000000000OOoo*=+  
-  ;+=**ooooOOOOO░█████╗░████████╗██████╗░██╗██╗░░░██╗███╗░░░███╗000000OOOoo*=+  
-  ;+=*ooooOOOOOO██╔══██╗╚══██╔══╝██╔══██╗██║██║░░░██║████╗░████║000000OOOoo*=+  
-  +==*ooooOOOOOO███████║░░░██║░░░██████╔╝██║██║░░░██║██╔████╔██║000000OOOoo*=+  
-  +=**ooOOOOOOOO██╔══██║░░░██║░░░██╔══██╗██║██║░░░██║██║╚██╔╝██║000000OOOoo*=+  
-  +=**ooOOOOOOOO██║░░██║░░░██║░░░██║░░██║██║╚██████╔╝██║░╚═╝░██║0000000OOoo*=+  
-  +=**ooOOO000OO╚═╝░░╚═╝░░░╚═╝░░░╚═╝░░╚═╝╚═╝░╚═════╝░╚═╝░░░░░╚═╝0000000OOoo*=+  
-  +=**oOOO00000OOOO000000OOOoo*oooo***********ooooOOOOOOOO0000000000000OOoo*=+  
+  ;+==**oooOOOO                                                  000000OOoo*=+  
+  ;+=**ooooOOOO ░█████╗░████████╗██████╗░██╗██╗░░░██╗███╗░░░███╗ 00000OOOoo*=+  
+  ;+=*ooooOOOOO ██╔══██╗╚══██╔══╝██╔══██╗██║██║░░░██║████╗░████║ 00000OOOoo*=+  
+  +==*ooooOOOOO ███████║░░░██║░░░██████╔╝██║██║░░░██║██╔████╔██║ 00000OOOoo*=+  
+  +=**ooOOOOOOO ██╔══██║░░░██║░░░██╔══██╗██║██║░░░██║██║╚██╔╝██║ 00000OOOoo*=+  
+  +=**ooOOOOOOO ██║░░██║░░░██║░░░██║░░██║██║╚██████╔╝██║░╚═╝░██║ 000000OOoo*=+  
+  +=**ooOOO000O ╚═╝░░╚═╝░░░╚═╝░░░╚═╝░░╚═╝╚═╝░╚═════╝░╚═╝░░░░░╚═╝ 000000OOoo*=+  
+  +=**oOOO00000                                                  000000OOoo*=+  
   +=**ooOO00000000000000OOOOOooooooooo***ooooooooOOOOOOOO00000000000000OOoo*=+  
   +=**ooOO000000000000000OOOOOOooooooooooooooooOOOOOOOOO000000000000000OOoo*=+  
   +=**ooOO000000000000000OOOOOOOOOoooooooooooooOOOOOOOOOOO0000000000000OOoo*=+  
@@ -39,14 +39,14 @@
    ;++==****ooooOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOooooooooooooooooOOOOOOOOOOOOO000000000000000000000000000OOOoo**==+;  
    ;++==****ooooOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOooooooooooooooooooOOOOOOOOOOOOO000000000O000000000000000OOOOoo**==+   
    ;+===***ooooOOOOOOO0OOOOOO0000000OOOOOOOOOOOOoooooo**********ooooooOOOOOOOOOOOO00000000000000000000000OOOOOoo**==+;  
-   ;+==****ooooOOOOOOOOOOO0000000000OOOOOOOOOOooooo********===*****ooooOOOOOOOOOOOO000000OOOOOOO0000000000OOOOoo**==+;  
-   ;+==***oooooOOOOOOOOOOO0000000000░█████╗░████████╗██████╗░██╗██╗░░░██╗███╗░░░███╗00000OOOOOO00000000000OOOOoo**==+;  
-   ++==***ooooOOOOOOOOOOO00000000000██╔══██╗╚══██╔══╝██╔══██╗██║██║░░░██║████╗░████║00000OOO0000000000000OOOOOoo**==+;  
-   ++==**ooooOOOOOOOOOOOO00000000000███████║░░░██║░░░██████╔╝██║██║░░░██║██╔████╔██║000000000000000000000OOOOOoo**==+;  
-   ++=***oooOOOOOOOOOOO00000OO000000██╔══██║░░░██║░░░██╔══██╗██║██║░░░██║██║╚██╔╝██║0000000000000000000000OOOOoo**==+;  
-   +==**ooooOOOOOOOOOOOOOOOOOO000000██║░░██║░░░██║░░░██║░░██║██║╚██████╔╝██║░╚═╝░██║OOO00000000000000000000OOOooo*==+;  
-   ++=***oooOOOOOOO0OOOOOOOOO0000000╚═╝░░╚═╝░░░╚═╝░░░╚═╝░░╚═╝╚═╝░╚═════╝░╚═╝░░░░░╚═╝OOO00000000000000000000OOOooo*==+;  
-   ++=***ooOOOOOO000OOOOOOOOOO0000000OOOoooooooo*o*****=========****oooooooooOOooOOOOOOO0000000000000000000OOOooo*==+;  
+   ;+==****ooooOOOOOOOOOOO000000000                                                  0000OOOOOOO0000000000OOOOoo**==+;  
+   ;+==***oooooOOOOOOOOOOO000000000 ░█████╗░████████╗██████╗░██╗██╗░░░██╗███╗░░░███╗ 0000OOOOOO00000000000OOOOoo**==+;  
+   ++==***ooooOOOOOOOOOOO0000000000 ██╔══██╗╚══██╔══╝██╔══██╗██║██║░░░██║████╗░████║ 0000OOO0000000000000OOOOOoo**==+;  
+   ++==**ooooOOOOOOOOOOOO0000000000 ███████║░░░██║░░░██████╔╝██║██║░░░██║██╔████╔██║ 00000000000000000000OOOOOoo**==+;  
+   ++=***oooOOOOOOOOOOO00000OO00000 ██╔══██║░░░██║░░░██╔══██╗██║██║░░░██║██║╚██╔╝██║ 000000000000000000000OOOOoo**==+;  
+   +==**ooooOOOOOOOOOOOOOOOOOO00000 ██║░░██║░░░██║░░░██║░░██║██║╚██████╔╝██║░╚═╝░██║ OO00000000000000000000OOOooo*==+;  
+   ++=***oooOOOOOOO0OOOOOOOOO000000 ╚═╝░░╚═╝░░░╚═╝░░░╚═╝░░╚═╝╚═╝░╚═════╝░╚═╝░░░░░╚═╝ OO00000000000000000000OOOooo*==+;  
+   ++=***ooOOOOOO000OOOOOOOOOO00000                                                  OOO0000000000000000000OOOooo*==+;  
    ++=**oooOOOOOO000OOOOO0OOO00000000OOOOooo*oooooo***************ooo***oooooOOoOOOOOOOO000000000000000000OOOOoo**==+;  
    ++=**oooOOOO000000000000000000000OOOOOOooo*ooooooo*****************ooooooOOOOOOOOOO00O000000000000000000OOOoo**==+;  
    ++=**oooOOOO00000000000000000000OOOOOOOOooooooooooooo*********oooooooooOOOOOOOOOOOO0O0000000000000000000OOOoo**==+;  
