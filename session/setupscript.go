@@ -202,6 +202,12 @@ func (i *Instance) runResolvedSetupScript(run setupRun) {
 // launched and an edit would never reach a resumed session.
 func (i *Instance) resolveSetupRun(dir string) (setupRun, bool) {
 	compiled, repoPath, ok := i.routeRepoScript(dir)
+	// The one-shot inert-repo-config report arms HERE — the applying path (a
+	// worktree materialization, or an environment about to be injected) — and
+	// never in routeRepoScript itself, which the read-only run-state sweep also
+	// calls: a sweep re-arming it would reopen the modal forever after the
+	// flush clears it.
+	i.armRepoConfigProblem()
 	if !ok {
 		// Nothing routes here any more, so a port this session was holding under an
 		// older config goes back to whoever asks next.
@@ -309,14 +315,26 @@ func (i *Instance) routeRepoScript(dir string) (repocfg.Script, string, bool) {
 	if dir == "" {
 		return repocfg.Script{}, "", false
 	}
-	cfg := config.LoadConfig()
-	if len(cfg.RepoScripts) == 0 {
-		return repocfg.Script{}, "", false
-	}
-
 	repoPath := i.GetRepoPath()
 	if repoPath == "" {
 		repoPath = i.Path
+	}
+
+	// Repo-local first (#814): a trusted .atrium.json beats a global entry that
+	// also matches this repo, and it must resolve INDEPENDENT of the global list
+	// — a fresh install's config.json has no repo_scripts at all, and those are
+	// exactly the users a repo-declared environment serves. Direct sessions are
+	// out of scope by decision: they run in the user's own checkout, which no
+	// worktree materializes, so there is no checked-out file to gate.
+	if !i.IsDirect() {
+		if script, ok := i.routeRepoLocal(dir, repoPath); ok {
+			return script, repoPath, true
+		}
+	}
+
+	cfg := config.LoadConfig()
+	if len(cfg.RepoScripts) == 0 {
+		return repocfg.Script{}, "", false
 	}
 	entry, index, ok := cfg.ResolveRepoScript(i.originRemote(repoPath), repoPath)
 	if !ok {

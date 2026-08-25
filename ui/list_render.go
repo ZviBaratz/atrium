@@ -483,6 +483,15 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 		// alone doesn't distinguish a setup gate from an ordinary prompt.
 		left2 := []rowSeg{p.flexSeg("waiting on setup screen · attach to continue", th.Palette.FgDim, false)}
 		line2 = p.composeLine(W, left2, nil)
+	} else if hint, inert := repoConfigLine(i.RepoConfigStatus()); inert {
+		// The repo's own config was withheld (#814): untrusted, changed since its
+		// grant, absent though granted, or unusable. A whole dim line, NOT a chip:
+		// chips are dropped by line2Fits on a narrow pane, and a security refusal
+		// must not be the thing that silently vanishes there. The full report is in
+		// the flush-once modal and `atrium trust status`; this keeps the state
+		// legible on the row for as long as it holds.
+		left2 := []rowSeg{p.flexSeg(hint, th.Palette.FgDim, false)}
+		line2 = p.composeLine(W, left2, nil)
 	} else if i.IsDirect() {
 		// Direct (non-git) session: no branch/ahead/behind/diff. Show a dim marker
 		// (consistent with the diff pane and picker hint) as the flex field, with

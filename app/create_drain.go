@@ -898,7 +898,7 @@ func (m *home) quitPending() bool { return m.quitRequested }
 // state gate was not: a staged plan means a human is looking at a dialog right now, so
 // the wait is seconds, and the request is retried on the next tick either way.
 func (m *home) stagedSpawnPlan() bool {
-	return m.pendingOverCap != nil || m.pendingExhausted != nil
+	return m.pendingOverCap != nil || m.pendingExhausted != nil || m.pendingTrust != nil
 }
 
 // pendingBatchMembers returns the entries of this tick's listing that belong to batch id

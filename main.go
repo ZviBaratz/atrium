@@ -508,6 +508,15 @@ var (
 				fmt.Print(scripts)
 			}
 
+			// Repo trust (#814): which repos may run their own .atrium.json, and
+			// whether each grant still matches the repo's committed config. A grant
+			// that has drifted (or a ledger that cannot be read) leaves sessions
+			// silently cold, so this is where that state gets a line.
+			if trust := doctor.RenderRepoTrust(doctor.CheckRepoTrust(cmd.Context())); trust != "" {
+				fmt.Println()
+				fmt.Print(trust)
+			}
+
 			// Keybindings: same silence again. A refused override leaves the action on
 			// its default key, which looks exactly like the config not having been read.
 			if kb := doctor.RenderKeybindings(
@@ -720,6 +729,7 @@ func init() {
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(resetCmd)
 	rootCmd.AddCommand(profilesCmd)
+	rootCmd.AddCommand(trustCmd)
 	rootCmd.AddCommand(doctorCmd)
 	rootCmd.AddCommand(reapCmd)
 	rootCmd.AddCommand(hookEventCmd)

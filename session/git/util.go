@@ -112,6 +112,20 @@ func localGit(ctx context.Context, dir string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
+// localGitBytes is localGit without the TrimSpace: the raw stdout, byte for
+// byte. It exists for content reads — the repo-trust ledger hashes what a
+// command returns, and a trimmed trailing newline would make the blob's hash
+// disagree forever with the hash of the same file read off disk.
+func localGitBytes(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, gitLocalTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	start := time.Now()
+	out, err := cmd.Output()
+	recordCmd(cmd, "", start, nil, err)
+	return out, err
+}
+
 // IsGitRepo checks if the given path is within a git repository
 func IsGitRepo(ctx context.Context, path string) bool {
 	isRepo, _ := ProbeGitRepo(ctx, path)

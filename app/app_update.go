@@ -231,6 +231,18 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		plan := *m.pendingExhausted
 		m.pendingExhausted = nil
 		return m, m.spawnVariants(plan)
+	case proceedRepoTrustMsg:
+		// The repo-trust prompt was answered — either way (#814): a grant was
+		// written on confirm, nothing on decline, and the create continues through
+		// the remaining gates. Unlike the two cases above this one re-enters the
+		// gate tail rather than spawning directly, because trust stages BEFORE the
+		// exhausted/soft-cap gates, which have not run yet for this plan.
+		if m.pendingTrust == nil {
+			return m, nil
+		}
+		plan := *m.pendingTrust
+		m.pendingTrust = nil
+		return m, m.finishSpawnGates(plan)
 	case metadataUpdateDoneMsg:
 		// Drop results captured before a terminal attach ran (see home.attachGen):
 		// the keeper may have advanced those panes mid-attach, so replaying a stale

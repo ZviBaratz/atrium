@@ -247,6 +247,25 @@ func (p rowPaint) noteSeg(i *session.Instance) rowSeg {
 	return p.flexSeg(text, p.th.Palette.Purple, false)
 }
 
+// repoConfigLine is line 2's copy for a session whose repo-local config was
+// withheld (#814), and false for every state with nothing to flag (unset, none,
+// active). Fixed strings on purpose: nothing repo-authored — no path, no entry
+// name — reaches the row, so the line has a knowable worst-case width and the
+// flex segment's truncation is a formality.
+func repoConfigLine(s session.RepoConfigState) (string, bool) {
+	switch s {
+	case session.RepoConfigUntrusted:
+		return "repo config ignored · untrusted", true
+	case session.RepoConfigChanged:
+		return "repo config ignored · changed since granted", true
+	case session.RepoConfigAbsentGranted:
+		return "repo config absent on this branch", true
+	case session.RepoConfigInvalid:
+		return "repo config ignored · invalid", true
+	}
+	return "", false
+}
+
 // gitChips returns the behind/ahead cluster as space-separated segments (behind
 // in Attention — it implies a rebase — ahead dim). Empty when neither applies.
 // The dirty glyph is intentionally not here: it describes *what changed* rather

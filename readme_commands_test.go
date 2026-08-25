@@ -193,6 +193,13 @@ func TestHeadlessCommandsRunWhileTheTUIHoldsItsLock(t *testing.T) {
 	stubReapCheck(t, doctor.OrphanResult{Supported: true})
 	require.NoError(t, runReap(context.Background(), io.Discard, strings.NewReader(""), reapOpts{}),
 		"reap must work while a TUI holds the lock")
+
+	// trust reads and writes only the atomically-replaced ledger, which the running
+	// TUI re-reads at every resolution — so, like the rest, it must never take the
+	// lock: `atrium trust allow` exists precisely for the moments a TUI is busy
+	// elsewhere (#814).
+	require.NoError(t, runTrustStatus(context.Background(), io.Discard, t.TempDir()),
+		"trust status must work while a TUI holds the lock")
 }
 
 // hasCommandRow reports whether the section contains a markdown table row whose
