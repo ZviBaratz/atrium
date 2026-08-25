@@ -86,13 +86,18 @@ const (
 	InspectorTab
 )
 
-// Tab pairs a tab's display name with the function that renders its content.
-// Render takes no arguments because every pane is sized separately via SetSize
-// and renders from its own state; String() invokes the active tab's Render
-// before building the memo key, so its output enters the cache as bytes.
+// Tab pairs a tab's display name with the functions that render and size its
+// content. Render takes no arguments because every pane is sized separately
+// via SetSize and renders from its own state; String() invokes the active
+// tab's Render before building the memo key, so its output enters the cache
+// as bytes. SetSize lives on the entry so the slice is the pane's whole
+// registration: a pane sized by hand outside it could be forgotten, and the
+// omission is silent — a 0×0 pane renders "" behind a working label, zone and
+// jump key. A nil SetSize panics on the first resize instead.
 type Tab struct {
-	Name   string
-	Render func() string
+	Name    string
+	Render  func() string
+	SetSize func(width, height int)
 }
 
 // TabbedWindow has tabs at the top of a pane which can be selected. The tabs
@@ -104,11 +109,13 @@ type TabbedWindow struct {
 	height    int
 	width     int
 
-	preview   *PreviewPane
-	diff      *DiffPane
-	terminal  *TerminalPane
-	inspector *InspectorPane
-	instance  *session.Instance
+	// The panes with per-tab behaviour arms (copy, scroll, update proxies).
+	// The inspector pane has none yet, so only the tabs slice holds it; #805
+	// gives it a field back along with its update proxy.
+	preview  *PreviewPane
+	diff     *DiffPane
+	terminal *TerminalPane
+	instance *session.Instance
 
 	// memo skips compose for a window whose inputs have not moved. This pane is the
 	// single most expensive thing Atrium builds: 40% of a cold 14-session frame
@@ -158,15 +165,14 @@ func NewTabbedWindow(preview *PreviewPane, diff *DiffPane, terminal *TerminalPan
 	inspector := NewInspectorPane()
 	return &TabbedWindow{
 		tabs: []Tab{
-			{Name: "Preview", Render: preview.String},
-			{Name: "Diff", Render: diff.String},
-			{Name: "Terminal", Render: terminal.String},
-			{Name: "Inspector", Render: inspector.String},
+			{Name: "Preview", Render: preview.String, SetSize: preview.SetSize},
+			{Name: "Diff", Render: diff.String, SetSize: diff.SetSize},
+			{Name: "Terminal", Render: terminal.String, SetSize: terminal.SetSize},
+			{Name: "Inspector", Render: inspector.String, SetSize: inspector.SetSize},
 		},
-		preview:   preview,
-		diff:      diff,
-		terminal:  terminal,
-		inspector: inspector,
+		preview:  preview,
+		diff:     diff,
+		terminal: terminal,
 	}
 }
 
@@ -195,10 +201,11 @@ func (w *TabbedWindow) SetSize(width, height int) {
 	contentHeight := height - tabHeight - windowStyle(th, false).GetVerticalFrameSize()
 	contentWidth := w.width - windowStyle(th, false).GetHorizontalFrameSize()
 
-	w.preview.SetSize(contentWidth, contentHeight)
-	w.diff.SetSize(contentWidth, contentHeight)
-	w.terminal.SetSize(contentWidth, contentHeight)
-	w.inspector.SetSize(contentWidth, contentHeight)
+	// Sized through the slice, so the Tab entry is the pane's whole
+	// registration — see the Tab doc for what a hand-kept list here misses.
+	for _, t := range w.tabs {
+		t.SetSize(contentWidth, contentHeight)
+	}
 }
 
 // SetSplashFrame advances the empty-state splash animation clock on the panes
@@ -300,10 +307,12 @@ func (w *TabbedWindow) ResetPreviewToNormalMode(instance *session.Instance) erro
 // captured, a fallback state), so the caller can say so rather than copying "".
 func (w *TabbedWindow) CopyableContent(instance *session.Instance) (text, what string, ok bool) {
 	switch w.activeTab {
-	case InspectorTab:
-		// Explicit, not left to default: the default arm copies the preview
-		// capture, which is not what an inspector-tab user is looking at.
-		return "", "", false
+	case PreviewTab:
+		content, live := w.preview.LiveContent()
+		if !live {
+			return "", "", false
+		}
+		return hints.StripANSI(content), "pane", true
 	case DiffTab:
 		if sel := w.diff.SelectedText(); sel != "" {
 			return sel, "selected diff lines", true
@@ -323,11 +332,11 @@ func (w *TabbedWindow) CopyableContent(instance *session.Instance) (text, what s
 		}
 		return hints.StripANSI(content), "terminal", true
 	default:
-		content, live := w.preview.LiveContent()
-		if !live {
-			return "", "", false
-		}
-		return hints.StripANSI(content), "pane", true
+		// Fail closed: a tab with no case of its own — the inspector skeleton,
+		// and any future tab whose author forgets one — copies nothing, and the
+		// caller says so. When the preview pane held this arm, that omission
+		// silently copied the preview capture instead.
+		return "", "", false
 	}
 }
 
@@ -683,14 +692,9 @@ func (w *TabbedWindow) compose(k tabbedKey) string {
 		// clamp below then eats the window's bottom border. Narrow strips are
 		// reachable — the monitor preset pins the list at its widest, and what
 		// remains at the 80-column floor is asserted by the truncation tests.
-		name := t.Name
-		if inner := width - style.GetHorizontalFrameSize(); lipgloss.Width(name) > inner {
-			if inner <= 0 {
-				name = ""
-			} else {
-				name = xansi.Truncate(name, inner, "…")
-			}
-		}
+		// Truncate carries the edge cases itself: a label that fits passes
+		// through unchanged, and a tab with no inner cells yields "".
+		name := xansi.Truncate(t.Name, width-style.GetHorizontalFrameSize(), "…")
 		renderedTabs = append(renderedTabs, zone.Mark(tabZoneID(i), style.Render(name)))
 	}
 

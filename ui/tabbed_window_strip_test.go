@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
 	"charm.land/lipgloss/v2"
@@ -35,19 +36,22 @@ func TestTabStripTruncatesOverlongLabels(t *testing.T) {
 }
 
 // The narrowest strip a preset can produce: the monitor preset pins the list at
-// config.MaxListRatio (0.60), leaving 32 columns for this pane at the 80-column
-// floor. Every label overflows its 6 inner cells there; the strip must hold its
-// three rows and exact width regardless.
+// config.MaxListRatio, and this pane gets what remains of the 80-column floor —
+// the same split updateHandleWindowSizeEvent computes, so a ratio change moves
+// this fixture with it. Narrow enough that labels truncate (which ones is the
+// truncation guard's business); the strip must hold its three rows and exact
+// width regardless.
 func TestTabStripHoldsTheMonitorPresetFloor(t *testing.T) {
 	t.Cleanup(theme.Set("unicode"))
 	w := NewTabbedWindow(NewPreviewPane(), NewDiffPane(), NewTerminalPane(context.Background()))
-	w.SetSize(32, 20)
+	paneWidth := 80 - int(float32(80)*float32(config.MaxListRatio))
+	w.SetSize(paneWidth, 20)
 
 	frame := xansi.Strip(w.String())
 	lines := strings.Split(frame, "\n")
 	require.Len(t, lines, 20, "the pane must hold its height budget at the floor")
 	for i, line := range lines {
-		require.Equalf(t, 32, lipgloss.Width(line), "line %d must fill the pane width exactly", i)
+		require.Equalf(t, paneWidth, lipgloss.Width(line), "line %d must fill the pane width exactly", i)
 	}
 	require.NotRegexp(t, "[A-Za-z]", lines[2], "row 2 is the strip's bottom border, not wrapped label text")
 }
@@ -62,7 +66,7 @@ func TestTabStripHoldsTheMonitorPresetFloor(t *testing.T) {
 func TestTabStripRemainderKeepsTheRightEdgeFlush(t *testing.T) {
 	t.Cleanup(theme.Set("unicode"))
 	w := NewTabbedWindow(NewPreviewPane(), NewDiffPane(), NewTerminalPane(context.Background()))
-	w.SetSize(21, 12) // strip width 21 = 4×5 + 1: one remainder cell
+	w.SetSize(5*len(w.tabs)+1, 12) // one remainder cell at any tab count
 
 	lines := strings.Split(xansi.Strip(w.String()), "\n")
 	require.GreaterOrEqual(t, len(lines), 3, "the frame must at least hold the strip")
@@ -72,14 +76,15 @@ func TestTabStripRemainderKeepsTheRightEdgeFlush(t *testing.T) {
 	}
 }
 
-// At the 80-column default split this pane gets 56 columns — 14 per tab, 12
-// inner — and every label must appear in full. This is the assertion behind
-// any claim that the current tab set fits the default floor: a label longer
-// than 12 cells fails here and forces a naming decision.
+// At the 80-column floor with the default split (config.DefaultListRatio to
+// the list, the remainder here — the same arithmetic as the monitor-floor test
+// above), every label must appear in full. This is the assertion behind any
+// claim that the current tab set fits the default floor: a label too long for
+// its share fails here and forces a naming decision.
 func TestTabStripFitsEveryLabelAtTheDefaultFloor(t *testing.T) {
 	t.Cleanup(theme.Set("unicode"))
 	w := NewTabbedWindow(NewPreviewPane(), NewDiffPane(), NewTerminalPane(context.Background()))
-	w.SetSize(56, 20)
+	w.SetSize(80-int(float32(80)*float32(config.DefaultListRatio)), 20)
 
 	strip := xansi.Strip(w.String())
 	for _, tab := range w.tabs {

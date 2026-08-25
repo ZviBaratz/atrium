@@ -2,7 +2,6 @@ package ui
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/ui/theme"
@@ -13,8 +12,11 @@ import (
 )
 
 // The skeleton's empty state is a designed placeholder, not a bare blank: the
-// copy is present, dim, centered, and the pane fills its box exactly so the
-// tabbed window's height budget holds.
+// copy is present and styled, and the frame carries the stored size — which is
+// what pins String feeding SetSize's dimensions into centerInBox, unswapped.
+// (Exact box geometry is TestCenterInBox's job, and the window's height budget
+// is protected by compose's Place either way, so neither needs re-proving
+// line by line here.)
 func TestInspectorPaneEmptyState(t *testing.T) {
 	t.Cleanup(theme.Set("unicode"))
 	p := NewInspectorPane()
@@ -23,12 +25,8 @@ func TestInspectorPaneEmptyState(t *testing.T) {
 	frame := p.String()
 	require.Contains(t, xansi.Strip(frame), inspectorEmptyState, "the empty state carries its copy")
 	require.NotEqual(t, frame, xansi.Strip(frame), "the copy is styled, not default text")
-
-	lines := strings.Split(frame, "\n")
-	require.Len(t, lines, 20, "the pane fills its height exactly")
-	for i, line := range lines {
-		require.Equalf(t, 54, lipgloss.Width(line), "line %d must fill the pane width", i)
-	}
+	require.Equal(t, 54, lipgloss.Width(frame), "the frame must carry the stored width")
+	require.Equal(t, 20, lipgloss.Height(frame), "the frame must carry the stored height")
 }
 
 // Before the first SetSize the pane renders nothing, matching
@@ -48,9 +46,10 @@ func TestInspectorTabShowsEmptyState(t *testing.T) {
 		"the inspector tab must render the pane's empty state")
 }
 
-// Copying on the inspector tab reports nothing to copy. The preview pane is
-// seeded with live text so the arm is falsifiable: without its own case the
-// switch's default arm would copy that capture instead.
+// Copying on the inspector tab reports nothing to copy. The inspector rides
+// CopyableContent's fail-closed default arm; the preview pane is seeded with
+// live text so that arm is falsifiable — a default that copied the preview
+// capture (the switch's original shape) would return the seeded text here.
 func TestInspectorTabCopyableContentIsEmpty(t *testing.T) {
 	w := NewTabbedWindow(NewPreviewPane(), NewDiffPane(), NewTerminalPane(context.Background()))
 	w.preview.previewState = previewState{text: "live capture"}
