@@ -2470,18 +2470,6 @@ func (m *home) offerCleanupAfterMerge(inst *session.Instance, number int) bool {
 	return true
 }
 
-// confirmWidth is the confirmation dialog's width for the given terminal
-// width: the classic 50 columns when they fit, shrinking with the terminal
-// (border + a margin) on narrow ones so the box never spills off-screen. A
-// zero terminal width (startup, tests) keeps the default.
-func confirmWidth(termWidth int) int {
-	const preferred = 50
-	if termWidth <= 0 {
-		return preferred
-	}
-	return max(20, min(preferred, termWidth-4))
-}
-
 // busyLabel is a progress-row label: the specific, named promise an operation
 // makes before it starts working. Its own type so a caller cannot forget it —
 // see instantAction for the one legal way to pass nothing.
@@ -2520,7 +2508,7 @@ func (m *home) confirmAction(message string, label busyLabel, action tea.Cmd) te
 
 	// Create and show the confirmation overlay using ConfirmationOverlay
 	m.confirmationOverlay = overlay.NewConfirmationOverlay(message)
-	m.confirmationOverlay.SetSize(confirmWidth(m.windowWidth)+2, 0)
+	m.confirmationOverlay.SetSize(overlay.ConfirmSize.Fit(m.windowWidth, m.windowHeight))
 
 	return nil
 }

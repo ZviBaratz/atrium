@@ -59,15 +59,14 @@ type surfaceSpec struct {
 	// contract).
 	barVisible bool
 
-	// size applies one overlay field's resize policy, replacing one of
-	// updateHandleWindowSizeEvent's nil-guarded blocks. Owned by the overlay
-	// FIELD, not the state: exactly one entry carries each field's block
-	// (stateInfo's textOverlay is sized by stateHelp's entry), each closure
-	// nil-checks its own pointer, and the resize walk runs every entry's size —
-	// preserving the old semantics, where a still-armed overlay is resized
-	// whatever the current state is. Until #802's data-shaped SizeSpec replaces
-	// these closures, the one-block-per-field rule is held by prose alone — no
-	// guard counts a field's owners (#856).
+	// size is one overlay field's resize policy, as data: the geometry is the
+	// overlay's own SizeSpec (declared beside the overlay, in outer cells) and
+	// target returns the field's live pointer for the walk to size. Owned by
+	// the overlay FIELD, not the state: exactly one entry carries each field's
+	// target (stateInfo's textOverlay is sized by stateHelp's entry), and the
+	// resize walk runs every entry — preserving the old semantics, where a
+	// still-armed overlay is resized whatever the current state is.
+	// TestEverySizedOverlayFieldHasOneOwner counts each field's owners (#856).
 	size sizeSpec
 
 	// paste handles a paste landing in this state. nil: the paste is inert.
@@ -79,9 +78,37 @@ type surfaceSpec struct {
 	paste func(m *home, msg tea.PasteMsg) (tea.Model, tea.Cmd)
 }
 
-// sizeSpec is one overlay's resize policy. A named type so the layout-budget
-// work (#802) can evolve sizing into data without re-shaping the table.
-type sizeSpec func(m *home, msg tea.WindowSizeMsg)
+// sizeSpec is one overlay field's resize policy: spec is the geometry, target
+// the field it applies to. The walk calls target(m).SetSize(spec.Fit(...))
+// whenever the pointer is armed, so the target is the only mechanism by which
+// a field gets sized — which is what makes the one-owner-per-field rule
+// checkable by pointer identity rather than held by prose (#856).
+type sizeSpec struct {
+	spec   overlay.SizeSpec
+	target func(m *home) resizer
+}
+
+// resizer is the one call the resize walk makes on an armed overlay.
+type resizer interface {
+	SetSize(width, height int)
+}
+
+// sizeTarget adapts one overlay field accessor into the nil-safe accessor a
+// sizeSpec carries. The typed pointer parameter matters for the same reason
+// as renderOverlay's: boxed straight into the interface, a nil field would
+// pass the walk's nil check and panic inside SetSize, so the nil is caught
+// here while the pointer is still typed.
+func sizeTarget[T any, P interface {
+	*T
+	SetSize(width, height int)
+}](field func(m *home) P) func(m *home) resizer {
+	return func(m *home) resizer {
+		if o := field(m); o != nil {
+			return o
+		}
+		return nil
+	}
+}
 
 // renderOverlay builds one overlay field's render closure: log a nil pointer,
 // then render it anyway — a state and its overlay are set together, so the log
@@ -162,15 +189,8 @@ func init() {
 			render: renderOverlay("text input overlay",
 				func(m *home) *overlay.TextInputOverlay { return m.textInputOverlay }),
 			keys: (*home).handlePromptState,
-			size: func(m *home, msg tea.WindowSizeMsg) {
-				if m.textInputOverlay != nil {
-					// Pass the full terminal height: the create form sizes its own
-					// sections to fit (and the plain prompt overlay applies its own
-					// fraction), so it needs to know the real height rather than a
-					// pre-scaled slice of it.
-					m.textInputOverlay.SetSize(int(float32(msg.Width)*0.6), msg.Height)
-				}
-			},
+			size: sizeSpec{spec: overlay.TextInputSize,
+				target: sizeTarget(func(m *home) *overlay.TextInputOverlay { return m.textInputOverlay })},
 			paste: func(m *home, msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 				if m.textInputOverlay == nil {
 					return m, nil
@@ -182,27 +202,16 @@ func init() {
 			st: stateHelp, fixture: "help",
 			render: renderTextOverlay,
 			keys:   (*home).handleHelpState,
-			size: func(m *home, msg tea.WindowSizeMsg) {
-				if m.textOverlay != nil {
-					// Pass the full terminal size: the overlay hugs its content width
-					// and windows its lines to fit short terminals.
-					m.textOverlay.SetSize(msg.Width, msg.Height)
-				}
-			},
+			size: sizeSpec{spec: overlay.Fullscreen,
+				target: sizeTarget(func(m *home) *overlay.TextOverlay { return m.textOverlay })},
 		},
 		stateConfirm: {
 			st: stateConfirm, fixture: "confirm",
 			render: renderOverlay("confirmation overlay",
 				func(m *home) *overlay.ConfirmationOverlay { return m.confirmationOverlay }),
 			keys: (*home).handleConfirmState,
-			size: func(m *home, msg tea.WindowSizeMsg) {
-				if m.confirmationOverlay != nil {
-					// The dialog keeps its classic width on normal terminals and
-					// shrinks with narrow ones; it was the one overlay excluded from
-					// resize handling.
-					m.confirmationOverlay.SetSize(confirmWidth(msg.Width)+2, 0)
-				}
-			},
+			size: sizeSpec{spec: overlay.ConfirmSize,
+				target: sizeTarget(func(m *home) *overlay.ConfirmationOverlay { return m.confirmationOverlay })},
 		},
 		stateRename: {
 			st: stateRename, fixture: "rename",
@@ -211,8 +220,8 @@ func init() {
 			// Rename runs before the global q/ctrl+c quit handling so those keys
 			// edit (or cancel) the label instead of quitting the app.
 			keys: (*home).handleRenameState,
-			// No size: the rename box is sized once, at open — deliberately
-			// outside the resize walk.
+			// No size target: the rename box is sized once, at open —
+			// deliberately outside the resize walk.
 			paste: pasteOverlay(func(m *home) *overlay.RenameOverlay { return m.renameOverlay }),
 		},
 		stateQueue: {
@@ -222,37 +231,19 @@ func init() {
 			// q is swallowed by the queue overlay rather than quitting; esc is
 			// what closes it.
 			keys: (*home).handleQueueState,
-			size: func(m *home, msg tea.WindowSizeMsg) {
-				if m.queueOverlay != nil {
-					// The queue box shares the history picker's responsive width,
-					// and historyOverlayWidth owns the one expression of it — the
-					// opener sends tea.RequestWindowSize, so this closure is the
-					// queue's only sizing site.
-					m.queueOverlay.SetSize(historyOverlayWidth(msg.Width)+2, 0)
-				}
-			},
+			// The queue box shares HistoryPickerSize with the picker; the opener
+			// sends tea.RequestWindowSize, so this entry is the queue's only
+			// sizing site.
+			size: sizeSpec{spec: overlay.HistoryPickerSize,
+				target: sizeTarget(func(m *home) *overlay.QueueOverlay { return m.queueOverlay })},
 		},
 		stateCmdLog: {
 			st: stateCmdLog, fixture: "cmdlog",
 			render: renderOverlay("command-log overlay",
 				func(m *home) *overlay.CmdLogOverlay { return m.cmdLogOverlay }),
 			keys: (*home).handleCmdLogState,
-			size: func(m *home, msg tea.WindowSizeMsg) {
-				if m.cmdLogOverlay != nil {
-					// The command log benefits from width (argv) and height (many
-					// rows), so it takes a larger share than the queue overlay, capped
-					// for very wide terminals.
-					w := int(float32(msg.Width) * 0.85)
-					if w > 120 {
-						w = 120
-					}
-					h := int(float32(msg.Height) * 0.85)
-					if h > 44 {
-						h = 44
-					}
-					m.cmdLogOverlay.SetSize(w, h)
-				}
-			},
+			size: sizeSpec{spec: overlay.CmdLogSize,
+				target: sizeTarget(func(m *home) *overlay.CmdLogOverlay { return m.cmdLogOverlay })},
 		},
 		stateFilter: {
 			st: stateFilter, fixture: "filter",
@@ -271,7 +262,7 @@ func init() {
 		stateInfo: {
 			st: stateInfo, fixture: "info",
 			// Shares textOverlay with stateHelp: same render, and the field's one
-			// size block lives on stateHelp's entry (a second one here would
+			// size entry lives on stateHelp's (a second target here would
 			// double-apply the same SetSize on every resize).
 			render: renderTextOverlay,
 			keys:   (*home).handleInfoState,
@@ -283,13 +274,8 @@ func init() {
 			// Settings, like the other overlay states, runs before the global quit
 			// handling so q/esc and printable keys reach the panel.
 			keys: (*home).handleSettingsState,
-			size: func(m *home, msg tea.WindowSizeMsg) {
-				if m.settingsOverlay != nil {
-					// Pass the full terminal size: the panel caps its own width and
-					// windows its rows to fit short terminals.
-					m.settingsOverlay.SetSize(msg.Width, msg.Height)
-				}
-			},
+			size: sizeSpec{spec: overlay.Fullscreen,
+				target: sizeTarget(func(m *home) *overlay.SettingsOverlay { return m.settingsOverlay })},
 			paste: pasteOverlay(func(m *home) *overlay.SettingsOverlay { return m.settingsOverlay }),
 		},
 		stateHints: {
@@ -326,14 +312,8 @@ func init() {
 			render: renderOverlay("welcome overlay",
 				func(m *home) *overlay.WelcomeOverlay { return m.welcomeOverlay }),
 			keys: (*home).handleWelcomeState,
-			size: func(m *home, msg tea.WindowSizeMsg) {
-				if m.welcomeOverlay != nil {
-					// Same idiom as the confirmation dialog: keep the authored width
-					// on normal terminals, shrink so the box never spills off a
-					// narrow one.
-					m.welcomeOverlay.SetSize(welcomeWidth(msg.Width)+2, 0)
-				}
-			},
+			size: sizeSpec{spec: overlay.WelcomeSize,
+				target: sizeTarget(func(m *home) *overlay.WelcomeOverlay { return m.welcomeOverlay })},
 		},
 		stateAccounts: {
 			st: stateAccounts, fixture: "accounts",
@@ -342,13 +322,8 @@ func init() {
 			// Accounts, like the other overlay states, runs before the global quit
 			// handling so q/esc and printable keys reach the panel.
 			keys: (*home).handleAccountsState,
-			size: func(m *home, msg tea.WindowSizeMsg) {
-				if m.accountsOverlay != nil {
-					// Pass the full terminal size: the panel caps its own width and
-					// windows its rows to fit short terminals.
-					m.accountsOverlay.SetSize(msg.Width, msg.Height)
-				}
-			},
+			size: sizeSpec{spec: overlay.Fullscreen,
+				target: sizeTarget(func(m *home) *overlay.AccountsOverlay { return m.accountsOverlay })},
 			paste: pasteOverlay(func(m *home) *overlay.AccountsOverlay { return m.accountsOverlay }),
 		},
 		stateScreensaver: {
@@ -368,13 +343,10 @@ func init() {
 			render: renderOverlay("prompt history overlay",
 				func(m *home) *overlay.PromptHistoryOverlay { return m.promptHistoryOverlay }),
 			keys: (*home).handleHistoryState,
-			size: func(m *home, msg tea.WindowSizeMsg) {
-				if m.promptHistoryOverlay != nil {
-					// The same width the picker opened with: historyOverlayWidth
-					// owns the expression, so open and resize cannot drift apart.
-					m.promptHistoryOverlay.SetSize(historyOverlayWidth(msg.Width)+2, 0)
-				}
-			},
+			// The same spec the picker opened with (HistoryPickerSize), so open
+			// and resize cannot drift apart.
+			size: sizeSpec{spec: overlay.HistoryPickerSize,
+				target: sizeTarget(func(m *home) *overlay.PromptHistoryOverlay { return m.promptHistoryOverlay })},
 		},
 		stateCommandPalette: {
 			st: stateCommandPalette, fixture: "commandPalette",
@@ -384,31 +356,8 @@ func init() {
 			// every other printable key narrows the filter instead of quitting
 			// the app mid-query.
 			keys: (*home).handleCommandPaletteState,
-			size: func(m *home, msg tea.WindowSizeMsg) {
-				if m.commandPaletteOverlay != nil {
-					// Three columns wide (key, verb, prose) and as many rows as it
-					// can get: the palette's whole value is seeing a lot of the
-					// keymap at once. Capped like the command log so a very wide
-					// terminal doesn't stretch the prose column past comfortable
-					// reading.
-					w := int(float32(msg.Width) * 0.85)
-					if w > 100 {
-						w = 100
-					}
-					// The share is of the *box*, border and padding included, so it
-					// is the room the palette may occupy rather than the room it
-					// fills and then overruns. The +3 keeps the rendered size where
-					// it was before that was true.
-					h := int(float32(msg.Height)*0.85) + 3
-					if h > 43 {
-						h = 43
-					}
-					if h > msg.Height {
-						h = msg.Height
-					}
-					m.commandPaletteOverlay.SetSize(w, h)
-				}
-			},
+			size: sizeSpec{spec: overlay.CommandPaletteSize,
+				target: sizeTarget(func(m *home) *overlay.CommandPaletteOverlay { return m.commandPaletteOverlay })},
 			paste: func(m *home, msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 				if m.commandPaletteOverlay != nil {
 					m.commandPaletteOverlay.HandlePaste(msg.Content)
@@ -425,29 +374,8 @@ func init() {
 			// by whatever the user configured, so q really can be a command key
 			// here.
 			keys: (*home).handleCustomCommandsState,
-			size: func(m *home, msg tea.WindowSizeMsg) {
-				if m.customCommandsOverlay != nil {
-					// Narrower than the palette: two columns (key, description) of
-					// user-authored prose, where the palette has three of generated
-					// text. Capped for the same reason — a very wide terminal should
-					// not stretch a one-line description across the screen. The
-					// share is of the box, border and padding included.
-					w := int(float32(msg.Width) * 0.7)
-					if w > 80 {
-						w = 80
-					}
-					// No `h > msg.Height` clamp, unlike the palette: a 0.7 share
-					// capped at 30 cannot exceed the height it was taken from. That
-					// guard is necessary there because of the palette's `+3`, and
-					// copying it here would read as load-bearing while doing
-					// nothing.
-					h := int(float32(msg.Height) * 0.7)
-					if h > 30 {
-						h = 30
-					}
-					m.customCommandsOverlay.SetSize(w, h)
-				}
-			},
+			size: sizeSpec{spec: overlay.CustomCommandsSize,
+				target: sizeTarget(func(m *home) *overlay.CustomCommandsOverlay { return m.customCommandsOverlay })},
 		},
 		stateCheckpoints: {
 			st: stateCheckpoints, fixture: "checkpoints",
@@ -458,24 +386,8 @@ func init() {
 			// swallowed rather than quit the app out from under an open box (as in
 			// the queue overlay, esc is what closes).
 			keys: (*home).handleCheckpointsState,
-			size: func(m *home, msg tea.WindowSizeMsg) {
-				if m.checkpointOverlay != nil {
-					// One row per checkpoint: a time column, the prompt line, and
-					// what the checkpoint covers. Wants height more than width — a
-					// long session has dozens of checkpoints — so it takes the
-					// command log's height share and a narrower width, capped so the
-					// prompt column stays readable.
-					w := int(float32(msg.Width) * 0.7)
-					if w > 96 {
-						w = 96
-					}
-					h := int(float32(msg.Height) * 0.85)
-					if h > 40 {
-						h = 40
-					}
-					m.checkpointOverlay.SetSize(w, h)
-				}
-			},
+			size: sizeSpec{spec: overlay.CheckpointSize,
+				target: sizeTarget(func(m *home) *overlay.CheckpointOverlay { return m.checkpointOverlay })},
 		},
 		stateImagePreview: {
 			st: stateImagePreview, fixture: "imagePreview",
@@ -486,25 +398,8 @@ func init() {
 			// every other key — q included — is swallowed rather than acted on
 			// behind it.
 			keys: (*home).handleImagePreviewState,
-			size: func(m *home, msg tea.WindowSizeMsg) {
-				if m.imageOverlay != nil {
-					// The most generous share here, because resolution is the whole
-					// point: every cell the box gives up is two pixels of the
-					// picture. The caps are the same ones ImageOverlay enforces on
-					// the picture itself, plus its chrome — asking for more would
-					// only pad the box around a picture that cannot grow. The share
-					// is of the box, border and padding included.
-					w := int(float32(msg.Width) * 0.85)
-					if w > imagePreviewMaxWidth {
-						w = imagePreviewMaxWidth
-					}
-					h := int(float32(msg.Height) * 0.85)
-					if h > imagePreviewMaxHeight {
-						h = imagePreviewMaxHeight
-					}
-					m.imageOverlay.SetSize(w, h)
-				}
-			},
+			size: sizeSpec{spec: overlay.ImageSize,
+				target: sizeTarget(func(m *home) *overlay.ImageOverlay { return m.imageOverlay })},
 		},
 	}
 }

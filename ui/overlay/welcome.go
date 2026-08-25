@@ -60,6 +60,11 @@ func (w *WelcomeOverlay) SetDetected(detected []config.Profile) {
 	}
 }
 
+// WelcomeSize is the confirmation dialog's idiom with a little more room for
+// the welcome's copy: keep the authored width on normal terminals, shrink so
+// the box never spills off a narrow one.
+var WelcomeSize = SizeSpec{WFrac: 1, WExtra: -2, WMax: 56, WMin: 22}
+
 // SetSize sets the modal's TOTAL width, border and padding included — outer
 // cells, which is what lipgloss v2's Width means (see theme.Panel). The
 // height is accepted and ignored so the resize walk can hand every overlay

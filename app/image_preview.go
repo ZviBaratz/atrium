@@ -12,14 +12,6 @@ import (
 	"github.com/charmbracelet/colorprofile"
 )
 
-// imagePreviewMaxWidth and imagePreviewMaxHeight cap the box. They are the
-// picture's own caps plus its chrome, so a larger box would only pad a picture
-// that cannot grow — see ui/overlay's imageMaxCols/imageMaxRows/imageChrome.
-const (
-	imagePreviewMaxWidth  = 126 // imageMaxCols + border (2) + padding (4)
-	imagePreviewMaxHeight = 48  // imageMaxRows + imageChrome
-)
-
 // imageRenderMode picks the glyph rung for a picture.
 //
 // Half blocks are the default and carry twice the vertical resolution. Three
@@ -100,10 +92,7 @@ func (m *home) handleImageLoaded(msg imageLoadedMsg) (tea.Model, tea.Cmd) {
 // upgrades it later. See image_kitty.go.
 func (m *home) openImagePreview(src overlay.Image) tea.Cmd {
 	m.imageOverlay = overlay.NewImageOverlay(src, m.currentImageRenderMode())
-	m.imageOverlay.SetSize(
-		min(int(float32(m.windowWidth)*0.85), imagePreviewMaxWidth),
-		min(int(float32(m.windowHeight)*0.85), imagePreviewMaxHeight),
-	)
+	m.imageOverlay.SetSize(overlay.ImageSize.Fit(m.windowWidth, m.windowHeight))
 	m.state = stateImagePreview
 	m.recomputeLayout() // the hint bar gives up its row while the box is open
 

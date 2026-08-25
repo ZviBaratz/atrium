@@ -85,6 +85,12 @@ const (
 // constant height so the centered overlay does not jump as focus moves, but it sizes those
 // sections to fit the terminal (shrinking the pickers and prompt on short screens). The plain
 // prompt overlay keeps its original behavior of a textarea ~40% of the screen tall.
+// TextInputSize gives the prompt/create box 60% of the terminal's width and
+// the full terminal height: the create form sizes its own sections to fit
+// (and the plain prompt overlay applies its own fraction), so it needs the
+// real height rather than a pre-scaled slice of it.
+var TextInputSize = SizeSpec{WFrac: 0.6, HFrac: 1}
+
 func (t *TextInputOverlay) SetSize(width, height int) {
 	t.width = width
 	t.height = height

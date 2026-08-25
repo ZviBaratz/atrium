@@ -36,6 +36,39 @@ func TestSizeSpecFit(t *testing.T) {
 	}
 }
 
+// TestEverySpecVarFitsItsTable pins every exported spec's resolution at the
+// two golden sizes, a wide size that reaches the caps the golden sizes never
+// bind, and the zero (unsized) case — so a mistyped fraction, extra, cap or
+// floor in any declaration fails on its own row rather than surfacing as a
+// moved box at some terminal size no test renders.
+func TestEverySpecVarFitsItsTable(t *testing.T) {
+	sizes := [4][2]int{{80, 24}, {120, 40}, {200, 50}, {0, 0}}
+	cases := []struct {
+		name string
+		spec SizeSpec
+		want [4][2]int
+	}{
+		{"TextInput", TextInputSize, [4][2]int{{48, 24}, {72, 40}, {120, 50}, {0, 0}}},
+		{"Fullscreen", Fullscreen, [4][2]int{{80, 24}, {120, 40}, {200, 50}, {0, 0}}},
+		{"Confirm", ConfirmSize, [4][2]int{{52, 0}, {52, 0}, {52, 0}, {52, 0}}},
+		{"Welcome", WelcomeSize, [4][2]int{{56, 0}, {56, 0}, {56, 0}, {56, 0}}},
+		{"HistoryPicker", HistoryPickerSize, [4][2]int{{50, 0}, {74, 0}, {82, 0}, {82, 0}}},
+		{"CmdLog", CmdLogSize, [4][2]int{{68, 20}, {102, 34}, {120, 42}, {120, 44}}},
+		{"CommandPalette", CommandPaletteSize, [4][2]int{{68, 23}, {100, 37}, {100, 43}, {100, 43}}},
+		{"CustomCommands", CustomCommandsSize, [4][2]int{{56, 16}, {80, 28}, {80, 30}, {80, 30}}},
+		{"Checkpoint", CheckpointSize, [4][2]int{{56, 20}, {84, 34}, {96, 40}, {96, 40}}},
+		{"Image", ImageSize, [4][2]int{{68, 20}, {102, 34}, {126, 42}, {126, 48}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for i, sz := range sizes {
+				w, h := tc.spec.Fit(sz[0], sz[1])
+				assert.Equal(t, tc.want[i], [2]int{w, h}, "Fit(%d, %d)", sz[0], sz[1])
+			}
+		})
+	}
+}
+
 // TestSizeSpecFitIsFloat32 pins the scaling to float32 arithmetic at the one
 // terminal width where it matters: 0.7 of 90 columns is 63 under float32 and
 // 62 under float64, so a reimplementation of fitAxis in float64 — which

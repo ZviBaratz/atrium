@@ -213,7 +213,7 @@ func TestOverCapMessage(t *testing.T) {
 // Teaching the key costs less than pointing at config.json did: the old tail wrapped onto a
 // second line and the new one does not.
 func TestOverCapMessageIsShorterThanThePathItReplaced(t *testing.T) {
-	// confirmWidth's preferred 50 less Padding(1,2)'s four cells. Stated as a literal because
+	// ConfirmSize's preferred 52 outer less the border and Padding(1,2) — six cells. Stated as a literal because
 	// the dialog is only this wide on a terminal that can afford it; a narrower terminal wraps
 	// harder, and this is the case the wording was chosen against.
 	const wrap = 46

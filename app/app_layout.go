@@ -40,15 +40,19 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 	m.tabbedWindow.SetSize(regions.tabs, budget.body)
 	m.list.SetSize(regions.list, budget.body)
 
-	// Each overlay's resize policy is its surfaceSpecs entry's size closure. The
-	// walk runs every entry, not just the current state's: the closures nil-check
-	// their own overlay pointer, so a still-armed overlay from another state is
-	// resized exactly as the old per-pointer blocks resized it — sizing follows
-	// the FIELD, not the state (which is also why one closure covers the shared
-	// textOverlay).
+	// Each overlay's resize policy is its surfaceSpecs entry's size: the
+	// overlay's own SizeSpec resolved against the terminal, applied to the
+	// entry's target field. The walk runs every entry, not just the current
+	// state's: a still-armed overlay from another state is resized exactly as
+	// the old per-pointer blocks resized it — sizing follows the FIELD, not the
+	// state (which is also why one entry covers the shared textOverlay).
 	for st := stateDefault; st < numStates; st++ {
-		if size := surfaceSpecs[st].size; size != nil {
-			size(m, msg)
+		entry := surfaceSpecs[st].size
+		if entry.target == nil {
+			continue
+		}
+		if r := entry.target(m); r != nil {
+			r.SetSize(entry.spec.Fit(msg.Width, msg.Height))
 		}
 	}
 
@@ -70,17 +74,6 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 // each surfaceSpecs entry's barVisible bit, with its reason beside it.
 func (m *home) menuVisible() bool {
 	return surfaceSpecs[m.state].barVisible
-}
-
-// welcomeWidth clamps the first-run welcome modal's box width so it never spills
-// off a narrow terminal, keeping its authored width on normal ones. Mirrors
-// confirmWidth; the welcome's copy is written a little wider than the dialog.
-func welcomeWidth(termWidth int) int {
-	const preferred = 54
-	if termWidth <= 0 {
-		return preferred
-	}
-	return max(20, min(preferred, termWidth-4))
 }
 
 // paneContentHeight is how many rows the list/preview panes occupy: the body

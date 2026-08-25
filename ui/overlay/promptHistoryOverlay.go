@@ -23,9 +23,9 @@ type PromptHistoryOverlay struct {
 }
 
 // NewPromptHistoryOverlay builds the picker over the given most-recent-first
-// prompt texts. The app widens it responsively via SetWidth.
+// prompt texts. The app widens it responsively via SetSize.
 func NewPromptHistoryOverlay(items []string) *PromptHistoryOverlay {
-	return &PromptHistoryOverlay{items: items, width: 60}
+	return &PromptHistoryOverlay{items: items, width: 62}
 }
 
 // SetItems replaces the displayed history (e.g. after a clear) and clamps the
@@ -93,6 +93,13 @@ func (p *PromptHistoryOverlay) ClearRequested() bool {
 	p.clearReq = false
 	return r
 }
+
+// HistoryPickerSize is the responsive width the prompt-history picker and
+// the queue overlay share — one declaration so the two boxes cannot drift
+// apart, and so the picker's open-time sizing and the resize walk agree. The
+// share is deliberately narrower than the command log's: these boxes list
+// one-line prompts, not argv dumps.
+var HistoryPickerSize = SizeSpec{WFrac: 0.6, WExtra: 2, WMax: 82}
 
 // SetSize sets the box's TOTAL width, border and padding included — outer
 // cells, which is what lipgloss v2's Width means (see theme.Panel) — flooring

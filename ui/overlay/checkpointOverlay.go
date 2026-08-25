@@ -77,6 +77,12 @@ func NewCheckpointOverlay(name string) *CheckpointOverlay {
 // padding), so the two cannot be reasoned about apart.
 const checkpointMinWidth = 40
 
+// CheckpointSize: one row per checkpoint — a time column, the prompt line,
+// and what the checkpoint covers. Wants height more than width (a long
+// session has dozens of checkpoints), so it takes the command log's height
+// share and a narrower width, capped so the prompt column stays readable.
+var CheckpointSize = SizeSpec{WFrac: 0.7, WMax: 96, HFrac: 0.85, HMax: 40}
+
 // SetSize sets the box dimensions; the list windows to the available height.
 //
 // The height floor is checkpointChrome + 2: the box's own furniture costs

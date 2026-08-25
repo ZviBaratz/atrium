@@ -38,6 +38,12 @@ type SizeSpec struct {
 	WMin, HMin int
 }
 
+// Fullscreen hands an overlay the whole terminal, for boxes that size
+// themselves: the cheatsheet hugs its content width and windows its lines to
+// fit short terminals; the settings and accounts panels cap their own width
+// and window their rows.
+var Fullscreen = SizeSpec{WFrac: 1, HFrac: 1}
+
 // Fit resolves the spec against a terminal size: scale, add the extra, cap,
 // floor — per axis — then clamp the height to the terminal. The height clamp
 // is shared data-path rather than per-overlay policy because exactly one spec

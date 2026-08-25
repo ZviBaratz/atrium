@@ -49,7 +49,7 @@ func NewConfirmationOverlay(message string) *ConfirmationOverlay {
 	return &ConfirmationOverlay{
 		Dismissed:  false,
 		message:    message,
-		width:      50, // Default width
+		width:      52, // Default width (outer cells; the classic 50 of v1 plus the border)
 		ConfirmKey: "y",
 		CancelKey:  "n",
 	}
@@ -127,6 +127,13 @@ func (c *ConfirmationOverlay) Render() string {
 	// Apply the border style and return
 	return style.Render(content)
 }
+
+// ConfirmSize keeps the dialog's classic width on normal terminals — 52
+// outer cells, the classic 50 plus its border — and shrinks with narrow ones,
+// holding a one-column margin outside the border and a readable floor below
+// that. It was the one overlay excluded from resize handling before the
+// resize walk. An unsized terminal gets the classic width.
+var ConfirmSize = SizeSpec{WFrac: 1, WExtra: -2, WMax: 52, WMin: 22}
 
 // SetSize sets the dialog's TOTAL width, border and padding included — outer
 // cells, which is what lipgloss v2's Width means (see theme.Panel). The

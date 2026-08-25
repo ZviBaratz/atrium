@@ -32,9 +32,9 @@ type QueueOverlay struct {
 const queueInFlightMark = "⟳"
 
 // NewQueueOverlay builds the overlay for a session with the given display name.
-// Width defaults to a sensible box; the app widens it responsively via SetWidth.
+// Width defaults to a sensible box; the app widens it responsively via SetSize.
 func NewQueueOverlay(name string) *QueueOverlay {
-	return &QueueOverlay{title: name, width: 60}
+	return &QueueOverlay{title: name, width: 62}
 }
 
 // SetQueue replaces the displayed queue, clamps the cursor into range, and clears
