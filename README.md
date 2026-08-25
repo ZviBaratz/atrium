@@ -1155,12 +1155,11 @@ root, so a fresh clone already knows how to install and run itself:
     "run_command": "npm run dev -- --port {{.Session.Port}}",
     "port_range": "3000-3099"
   }],
-  "carry_files": [".dev.vars"],
-  "link_paths": ["node_modules", "container/agent-runner/node_modules"]
+  "carry_files": [".dev.vars"]
 }
 ```
 
-Three keys, and they layer over your `config.json` differently because they are
+Two keys, and they layer over your `config.json` differently because they are
 different shapes.
 
 **`repo_scripts`** is the same shape as above, minus the routing: the file already
@@ -1171,10 +1170,10 @@ the trust prompt showed you; a file declaring more than one is refused whole. On
 trusted, the entry **wins over** any `config.json` entry that also matches the
 repo: the repo knows its own environment, and your global entry stays the fallback.
 
-**[`carry_files`](#carried-files) and [`link_paths`](#linked-paths) are ADDED to
-yours, never substituted for them.** These are sets of independent paths, not single
-values, so replacement would silently drop your own entries — the default
-`.claude/settings.local.json` carry included — in whichever repo declared a list.
+**[`carry_files`](#carried-files) is ADDED to yours, never substituted for it.**
+This is a set of independent paths, not a single value, so replacement would silently
+drop your own entries — the default `.claude/settings.local.json` carry included —
+in whichever repo declared a list.
 The repo's entries go first, and a path both sides name is seeded once. This is what
 lets the lists stop being a dump: an entry that belongs to one project *moves* out of
 your `config.json` into that project's file, and your global list keeps only what is
@@ -1213,12 +1212,12 @@ The grant is direnv-shaped, and its edges are deliberate:
   their *own worktree* at the moment of use, so nothing that happens between the
   prompt and the run can smuggle different content past it.
 - **It names one set of powers.** A grant covers what its prompt described, so a
-  grant made before Atrium read `carry_files` / `link_paths` does not silently start
-  applying them when you upgrade — even though the bytes are unchanged. Such a repo
-  asks once more, saying that the file is the one you trusted and what it also
-  declares, and re-allowing settles it. This is why the file's two halves ride one
-  grant rather than two: the grant is one hash over the whole file, so gating them
-  separately would apply a half no prompt ever described.
+  grant made before Atrium read `carry_files` does not silently start applying it
+  when you upgrade — even though the bytes are unchanged. Such a repo asks once more,
+  saying that the file is the one you trusted and what it also declares, and
+  re-allowing settles it. The check is made where it counts: a worktree is seeded
+  only if the ledger covers what the file declares, so an unanswered prompt, a
+  declined one, or a resume that never prompts all leave the lists inert.
 - **Only committed content counts — at the ref your session will start from.**
   A worktree checks out the session's *base*: with `update_base_on_create` (the
   default) that is origin's tip whenever it is ahead of your local branch, and
@@ -1241,10 +1240,15 @@ reach. And where a repo's `carry_files` entry sits inside a path your `link_path
 symlinks, your link wins and the carry is refused: carrying it would create a real
 directory there and silently cost you the link.
 
-In the Settings panel, `Carry files` and `Link paths` show what the selected
-session's repo adds to them, so a list that is not the whole story in that repo says
-so. A dependency-isolated session gets none of the repo's `link_paths`, and the row
-says that rather than advertising paths it never received. Direct (non-git) sessions ignore repo-local config entirely: they run
+**`link_paths` is not a repo-layerable key yet.** A repo may commit one and this
+release ignores it, the way it ignores any key it does not read. A linked path is
+your own tree under another name — writable by the agent, shared with every sibling
+session at once — and that write direction needs its own design pass rather than
+riding along with the copy half. A copy has none of it: private to the session, no
+symlink target to resolve.
+
+In the Settings panel, `Carry files` shows what the selected session's repo adds to
+it, so a list that is not the whole story in that repo says so. Direct (non-git) sessions ignore repo-local config entirely: they run
 in your own checkout, where no worktree materializes anything.
 
 #### Managed ports
@@ -1837,7 +1841,7 @@ Advanced — shown in the Category column below. A key with no panel row carries
 | `agent_oom_margin` | Advanced | int | `on (300)` | Linux only: raise each agent's `oom_score_adj` this far above the shared tmux server's so a kernel OOM kill sheds one recoverable session, not the server (every session). Unset = on (default margin); `N` = margin; `0` = off |
 | `trust_worktrees_root` | Automation | bool | `false` | pre-accept Claude's workspace-trust for the worktrees root |
 | `carry_files` | Worktrees & git | array | `[".claude/settings.local.json"]` | gitignored files copied into each worktree ([Carried files](#carried-files)). A trusted repo's own `.atrium.json` adds to this list for its sessions; your entries are never replaced, and revoking the grant stops the repo's from being seeded into new worktrees ([Repo-local config](#repo-local-config-and-trust)) |
-| `link_paths` | Worktrees & git | array | `[]` | gitignored paths symlinked into each worktree, e.g. `node_modules` ([Linked paths](#linked-paths)). A trusted repo's own `.atrium.json` adds to this list for its sessions; your entries are never replaced, and revoking the grant stops the repo's from being seeded into new worktrees ([Repo-local config](#repo-local-config-and-trust)) |
+| `link_paths` | Worktrees & git | array | `[]` | gitignored paths symlinked into each worktree, e.g. `node_modules` ([Linked paths](#linked-paths)) |
 | `repo_scripts` | — | array | `[]` | per-repository setup script, run command, port range and session environment, routed by remote/path ([Setup scripts](#setup-scripts)) |
 | `pr_create_draft` | Worktrees & git | bool | `true` | `c` opens a draft PR |
 | `update_base_on_create` | Worktrees & git | bool | `true` | branch off the freshest remote base tip |

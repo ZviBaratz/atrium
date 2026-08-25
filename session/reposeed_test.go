@@ -2,7 +2,7 @@ package session
 
 // reposeed_test.go — #815's gate proof. The seam that makes these tests
 // load-bearing is the FILESYSTEM: an untrusted repo's carry_files must leave no
-// copy and its link_paths no symlink in the worktree, which no amount of correct
+// copy in the worktree, which no amount of correct
 // reporting can fake. Every positive control grants through
 // repotrust.AssessCreateDefault, the same derivation the create-time prompt and
 // `atrium trust allow` use, so a systematic disagreement between the granting
@@ -90,7 +90,7 @@ func (f *seedFixture) materialize(t *testing.T, name string) string {
 	return wt.GetWorktreePath()
 }
 
-const seedConfig = `{"carry_files":[".dev.vars"],"link_paths":["node_modules"]}`
+const seedConfig = `{"carry_files":[".dev.vars",".env.local"]}`
 
 // TestRepoSeeds_UntrustedNeverMaterialize is the issue's "done means" for the seed
 // half: the negative (no grant → nothing on disk) and its positive control (grant →
@@ -105,13 +105,13 @@ func TestRepoSeeds_UntrustedNeverMaterialize(t *testing.T) {
 		return c
 	}()))
 
-	f := newSeedFixture(t, seedConfig, ".dev.vars", "node_modules")
+	f := newSeedFixture(t, seedConfig, ".dev.vars", ".env.local")
 
 	untrusted := f.materialize(t, "cold")
 	_, err := os.Lstat(filepath.Join(untrusted, ".dev.vars"))
 	assert.True(t, os.IsNotExist(err), "an untrusted repo's carry_files must copy nothing, lstat err = %v", err)
-	_, err = os.Lstat(filepath.Join(untrusted, "node_modules"))
-	assert.True(t, os.IsNotExist(err), "an untrusted repo's link_paths must link nothing, lstat err = %v", err)
+	assert.NoFileExists(t, filepath.Join(untrusted, ".env.local"),
+		"an untrusted repo's carry_files must copy nothing")
 	assert.Equal(t, RepoConfigUntrusted, f.inst.RepoConfigStatus())
 
 	// Positive control: the same file, the same fixture, one grant apart.
@@ -120,9 +120,8 @@ func TestRepoSeeds_UntrustedNeverMaterialize(t *testing.T) {
 	body, err := os.ReadFile(filepath.Join(trusted, ".dev.vars"))
 	require.NoError(t, err, "a trusted repo's carry_files must copy")
 	assert.Contains(t, string(body), "origin content of .dev.vars")
-	info, err := os.Lstat(filepath.Join(trusted, "node_modules"))
-	require.NoError(t, err, "a trusted repo's link_paths must link")
-	assert.NotZero(t, info.Mode()&os.ModeSymlink, "link_paths makes a symlink, not a copy")
+	assert.FileExists(t, filepath.Join(trusted, ".env.local"),
+		"a trusted repo's carry_files must copy every entry, not just the first")
 	assert.Equal(t, RepoConfigActive, f.inst.RepoConfigStatus())
 }
 
@@ -131,14 +130,14 @@ func TestRepoSeeds_UntrustedNeverMaterialize(t *testing.T) {
 // makes the whole file inert at the next materialization.
 func TestRepoSeeds_EditedFileGoesInert(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	f := newSeedFixture(t, seedConfig, ".dev.vars", "node_modules")
+	f := newSeedFixture(t, seedConfig, ".dev.vars", ".env.local")
 	grantRepo(t, f.repoPath)
 
 	// Positive control first: the grant works before the edit.
 	require.FileExists(t, filepath.Join(f.materialize(t, "before"), ".dev.vars"))
 
 	require.NoError(t, os.WriteFile(filepath.Join(f.repoPath, ".atrium.json"),
-		[]byte(`{"carry_files":[".dev.vars"],"link_paths":["node_modules"],"repo_scripts":[]}`), 0o644))
+		[]byte(`{"carry_files":[".dev.vars",".env.local"],"repo_scripts":[]}`), 0o644))
 	runGit(t, f.repoPath, "commit", "-am", "tweak")
 
 	after := f.materialize(t, "after")
@@ -204,7 +203,7 @@ func TestRepoSeeds_TwoReposDoNotCrossContaminate(t *testing.T) {
 // resolution has run.
 func TestRepoSeeds_PublishedForThePanel(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	f := newSeedFixture(t, seedConfig, ".dev.vars", "node_modules")
+	f := newSeedFixture(t, seedConfig, ".dev.vars", ".env.local")
 
 	fresh := &Instance{ident: identity{title: "unstarted"}, Path: f.repoPath}
 	_, resolved := fresh.RepoLocalSeeds()
@@ -214,7 +213,6 @@ func TestRepoSeeds_PublishedForThePanel(t *testing.T) {
 	seeds, resolved := f.inst.RepoLocalSeeds()
 	assert.True(t, resolved)
 	assert.Empty(t, seeds[repocfg.KeyCarryFiles], "an untrusted repo must not be advertised as contributing")
-	assert.Empty(t, seeds[repocfg.KeyLinkPaths])
 	// Every layer key is PRESENT even after a refusal, so the panel's producer can
 	// forward this map whole instead of naming the keys itself.
 	assert.ElementsMatch(t, repocfg.RepoLocalLayerKeys(), mapKeys(seeds),
@@ -224,8 +222,7 @@ func TestRepoSeeds_PublishedForThePanel(t *testing.T) {
 	f.materialize(t, "warm")
 	seeds, resolved = f.inst.RepoLocalSeeds()
 	assert.True(t, resolved)
-	assert.Equal(t, []string{".dev.vars"}, seeds[repocfg.KeyCarryFiles])
-	assert.Equal(t, []string{"node_modules"}, seeds[repocfg.KeyLinkPaths])
+	assert.Equal(t, []string{".dev.vars", ".env.local"}, seeds[repocfg.KeyCarryFiles])
 	assert.ElementsMatch(t, repocfg.RepoLocalLayerKeys(), mapKeys(seeds))
 }
 
@@ -238,15 +235,11 @@ func TestRepoSeeds_PublishedForThePanel(t *testing.T) {
 // revoke took effect.
 func TestRepoSeeds_PausedSessionReadsAsUnknown(t *testing.T) {
 	inst := &Instance{ident: identity{title: "parked"}}
-	inst.setRepoSeeds(map[string][]string{
-		repocfg.KeyCarryFiles: {".dev.vars"},
-		repocfg.KeyLinkPaths:  {"node_modules"},
-	})
+	inst.setRepoSeeds(map[string][]string{repocfg.KeyCarryFiles: {".dev.vars"}})
 
 	seeds, resolved := inst.RepoLocalSeeds()
 	require.True(t, resolved, "the fixture must start resolved, or this tests nothing")
 	require.Equal(t, []string{".dev.vars"}, seeds[repocfg.KeyCarryFiles])
-	require.Equal(t, []string{"node_modules"}, seeds[repocfg.KeyLinkPaths])
 
 	inst.mu.Lock()
 	inst.status = Paused
@@ -282,7 +275,7 @@ func mapKeys(m map[string][]string) []string {
 // record must leave no copied file in the worktree, whatever any surface says.
 func TestRepoSeeds_PreSeedGrantSeedsNothing(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	f := newSeedFixture(t, seedConfig, ".dev.vars", "node_modules")
+	f := newSeedFixture(t, seedConfig, ".dev.vars", ".env.local")
 
 	// Grant normally, then strip grant_version from the ledger ON DISK. That is
 	// exactly what every ledger written before this release looks like, and going

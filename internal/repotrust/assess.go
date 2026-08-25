@@ -225,5 +225,5 @@ func AssessRepo(ctx context.Context, path, ref string) (Assessment, error) {
 // declaresSeeds reports whether a parsed file layers anything over the user's own
 // seed lists — the half of a grant that GrantVersionSeeds gates.
 func declaresSeeds(rl repocfg.RepoLocal) bool {
-	return len(rl.CarryFiles) > 0 || len(rl.LinkPaths) > 0
+	return len(rl.CarryFiles) > 0
 }

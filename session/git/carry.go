@@ -129,16 +129,31 @@ type seedEntry struct {
 func unionSeedEntries(repo, global []string, key string) []seedEntry {
 	out := make([]seedEntry, 0, len(repo)+len(global))
 	seen := make(map[string]bool, len(repo)+len(global))
-	add := func(rel, kind string, fromRepo bool) {
-		dedupe := rel
-		if canon, err := repocfg.CanonicalSeedPath(rel); err == nil {
-			dedupe = canon
+	canon := func(rel string) string {
+		if c, err := repocfg.CanonicalSeedPath(rel); err == nil {
+			return c
 		}
+		return rel
+	}
+	// The user's own set, by canonical spelling. A path the user ALSO declares is
+	// not repo-authored for the purpose of the containment guard, however the dedupe
+	// orders it: the user asked for that path independently, so the repo is not the
+	// reason it is being seeded. Without this, a repo naming a path the user already
+	// names — the likely overlap, since a repo names the same local-config paths its
+	// developers do — silently transferred repo provenance onto the user's entry, and
+	// seedSourceEscapes then refused the user's own documented setup and blamed the
+	// repo for it.
+	userSet := make(map[string]bool, len(global))
+	for _, rel := range global {
+		userSet[canon(rel)] = true
+	}
+	add := func(rel, kind string, fromRepo bool) {
+		dedupe := canon(rel)
 		if seen[dedupe] {
 			return
 		}
 		seen[dedupe] = true
-		out = append(out, seedEntry{kind: kind, rel: rel, repo: fromRepo})
+		out = append(out, seedEntry{kind: kind, rel: rel, repo: fromRepo && !userSet[dedupe]})
 	}
 	for _, rel := range repo {
 		add(rel, key+" ("+repocfg.RepoLocalFileName+")", true)

@@ -209,12 +209,6 @@ type RepoLayer struct {
 	// key, which is the producer half. Both were needed: closing only the renderer
 	// left the producer omitting the key instead, one layer down.
 	Lists map[string][]string
-
-	// DepsIsolated says the session these lists were resolved for is
-	// dependency-isolated, which means it received NONE of the link_paths (session/git's
-	// seedLocalPaths returns before linking). The row must say so rather than
-	// advertising paths that were never linked.
-	DepsIsolated bool
 }
 
 // forKey is the repo's contribution to one row.

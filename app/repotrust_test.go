@@ -336,7 +336,7 @@ func TestAutoDispatchTrustPathLeavesParkedDraftAlone(t *testing.T) {
 // never mentioned.
 func TestRepoTrustDialogNamesTheSeedLists(t *testing.T) {
 	repo := gitInitRepo(t)
-	commitRepoLocal(t, repo, `{"carry_files":[".dev.vars",".other.env"],"link_paths":["node_modules"]}`)
+	commitRepoLocal(t, repo, `{"carry_files":[".dev.vars",".other.env"]}`)
 	h := newCreateFormHome(t)
 	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 80, Height: 24})
 
@@ -345,9 +345,9 @@ func TestRepoTrustDialogNamesTheSeedLists(t *testing.T) {
 
 	view := xansi.Strip(h.View().Content)
 	assert.Contains(t, view, "2 carried files")
-	assert.Contains(t, view, "1 linked path")
+
 	assert.Contains(t, view, ".dev.vars", "the entries themselves, not just a count")
-	assert.Contains(t, view, "node_modules")
+
 }
 
 // TestRepoTrustDialogBoundsWideSeedLists: the entry cap
@@ -374,7 +374,7 @@ func TestRepoTrustDialogBoundsWideSeedLists(t *testing.T) {
 	require.NoError(t, err)
 
 	repo := gitInitRepo(t)
-	commitRepoLocal(t, repo, `{"carry_files":`+string(raw)+`,"link_paths":`+string(raw)+`}`)
+	commitRepoLocal(t, repo, `{"carry_files":`+string(raw)+`}`)
 	h := newCreateFormHome(t)
 	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 80, Height: 24})
 
@@ -405,7 +405,7 @@ func TestRepoTrustNeverPromptsForAnUnprintableSeedEntry(t *testing.T) {
 	require.NoError(t, err)
 
 	repo := gitInitRepo(t)
-	commitRepoLocal(t, repo, `{"link_paths":`+string(raw)+`}`)
+	commitRepoLocal(t, repo, `{"carry_files":`+string(raw)+`}`)
 	h := newCreateFormHome(t)
 	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 80, Height: 24})
 
@@ -428,7 +428,7 @@ func TestRepoTrustSeedLineFitsItsBudget(t *testing.T) {
 		"wide runes":    longSeedList(repocfg.MaxRepoLocalSeedEntries, strings.Repeat("日本語", 30)),
 	} {
 		t.Run(name, func(t *testing.T) {
-			for _, verb := range []string{"copies in", "links in"} {
+			for _, verb := range []string{"copies in"} {
 				line := strings.TrimPrefix(repoTrustSeedLine(verb, entries), "\n")
 				require.NotEmpty(t, line)
 				assert.LessOrEqualf(t, ansi.PrintableRuneWidth(line), repoTrustSeedWidth,
@@ -460,8 +460,7 @@ func TestRepoTrustDialogHoldsTheFloorWithEverything(t *testing.T) {
 	repo := gitInitRepo(t)
 	commitRepoLocal(t, repo, `{
 		"repo_scripts":[{"name":"web","setup_script":"npm ci && npm run db:migrate"}],
-		"carry_files":[".dev.vars",".claude/settings.local.json",".env.local",".x"],
-		"link_paths":["node_modules",".venv","vendor/bundle","x"]
+		"carry_files":[".dev.vars",".claude/settings.local.json",".env.local",".x"]
 	}`)
 	h := newCreateFormHome(t)
 	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 80, Height: 24})
@@ -480,7 +479,7 @@ func TestRepoTrustDialogHoldsTheFloorWithEverything(t *testing.T) {
 
 	// Neither seed line may wrap: a wrapped line is a row the height budget never
 	// counted, which is the mechanism that spent the margin in the first place.
-	for _, verb := range []string{"copies in:", "links in:"} {
+	for _, verb := range []string{"copies in:"} {
 		var found string
 		for _, l := range lines {
 			if strings.Contains(l, verb) {
@@ -501,7 +500,7 @@ func TestRepoTrustDialogHoldsTheFloorWithEverything(t *testing.T) {
 func TestRepoTrustCopyOnlyPromisesWhatRuns(t *testing.T) {
 	t.Run("a seed-only file never says run", func(t *testing.T) {
 		repo := gitInitRepo(t)
-		commitRepoLocal(t, repo, `{"carry_files":[".dev.vars"],"link_paths":["node_modules"]}`)
+		commitRepoLocal(t, repo, `{"carry_files":[".dev.vars"]}`)
 		h := newCreateFormHome(t)
 		h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 80, Height: 30})
 		_ = submitCreateForm(t, h, repo, "feature")
@@ -514,8 +513,8 @@ func TestRepoTrustCopyOnlyPromisesWhatRuns(t *testing.T) {
 		assert.Contains(t, view, "trust and seed files")
 		consequence := trustConsequenceSentence(t, view)
 		assert.Contains(t, consequence, "copy those files in", "it must name what a grant actually does here")
-		assert.Contains(t, consequence, "link those paths through to your checkout",
-			"a link is the user's own tree, writable by the agent — the sentence must say so")
+		assert.Contains(t, consequence, "copy those files into",
+			"the sentence must name the power the grant actually confers")
 
 		// And the entry-name slot is absent rather than filled with the filename the
 		// sentence above already named, or with "unnamed entry" — either sends the
@@ -597,8 +596,7 @@ func TestRepoTrustDialogHoldsTheFloorWithALongRepoPath(t *testing.T) {
 	repo := gitInitRepo(t)
 	commitRepoLocal(t, repo, `{
 		"repo_scripts":[{"name":"web-frontend-and-backend","setup_script":"npm ci && npm run db:migrate && npm run build && npm run seed && echo done"}],
-		"carry_files":[".dev.vars",".claude/settings.local.json",".env.local",".x"],
-		"link_paths":["node_modules",".venv","vendor/bundle","x"]
+		"carry_files":[".dev.vars",".claude/settings.local.json",".env.local",".x"]
 	}`)
 
 	h := newCreateFormHome(t)
@@ -618,7 +616,6 @@ func TestRepoTrustDialogHoldsTheFloorWithALongRepoPath(t *testing.T) {
 		Local: repocfg.RepoLocal{
 			Entries:    []repocfg.RepoLocalEntry{{Index: 0, RepoScript: config.RepoScript{Name: "web-frontend-and-backend", SetupScript: strings.Repeat("npm run build && ", 12) + "done"}}},
 			CarryFiles: longSeedList(4, "carry/entry-with-a-long-name-"),
-			LinkPaths:  longSeedList(4, "link/entry-with-a-long-name-"),
 		},
 	})
 	// The PROSE is meant to wrap — the confirm overlay wraps it. What must be bounded
@@ -630,7 +627,6 @@ func TestRepoTrustDialogHoldsTheFloorWithALongRepoPath(t *testing.T) {
 		Local: repocfg.RepoLocal{
 			Entries:    []repocfg.RepoLocalEntry{{Index: 0, RepoScript: config.RepoScript{Name: strings.Repeat("n", 80), SetupScript: strings.Repeat("s", 400)}}},
 			CarryFiles: longSeedList(40, "carry/very-long-entry-name-"),
-			LinkPaths:  longSeedList(40, "link/very-long-entry-name-"),
 		},
 	}), "\n") {
 		assert.LessOrEqualf(t, ansi.PrintableRuneWidth(line), repoTrustPreviewWidth,

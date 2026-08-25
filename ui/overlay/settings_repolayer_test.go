@@ -52,10 +52,24 @@ func TestRepoLayerBadgeOnlyWhenInjected(t *testing.T) {
 			"row %q must keep its timing badge while no layer is known", key)
 	}
 
-	// A layer that contributes to one row must not annotate the other.
-	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", Lists: map[string][]string{"link_paths": {"node_modules", ".venv"}}})
-	assert.Contains(t, badgeFor(t, o, "link_paths"), "+2")
-	assert.NotContains(t, badgeFor(t, o, "carry_files"), "+",
+	// A layer that contributes annotates its row.
+	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", Lists: map[string][]string{"carry_files": {".dev.vars", ".other"}}})
+	assert.Contains(t, badgeFor(t, o, "carry_files"), "+2")
+
+	// And a row the layer does NOT carry must not claim one. With a single layerable
+	// key today the negative has to be an UNLAYERED row: a caller naming its key is
+	// exactly the case scope routing exists to refuse, and it is the only form of
+	// this negative that keeps working when a second layerable key returns.
+	var unlayered string
+	for _, r := range o.rows {
+		if r.scope != scopeRepoLayered {
+			unlayered = r.key
+			break
+		}
+	}
+	require.NotEmpty(t, unlayered)
+	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", Lists: map[string][]string{unlayered: {"a", "b"}}})
+	assert.NotContains(t, badgeFor(t, o, unlayered), "+2",
 		"a row this repo adds nothing to must not claim it does")
 
 	// An empty layer is the same as none.
@@ -71,11 +85,11 @@ func TestRepoLayerBadgeOnlyWhenInjected(t *testing.T) {
 func TestRepoLayerBadgeOutranksTheTimingBadge(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
 	o.SetSize(96, 32)
-	require.NotEmpty(t, o.rows[rowIndexOf(t, o, "link_paths")].timing.badge(),
+	require.NotEmpty(t, o.rows[rowIndexOf(t, o, "carry_files")].timing.badge(),
 		"the row must HAVE a timing badge, or this test proves nothing about precedence")
 
-	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", Lists: map[string][]string{"link_paths": {"node_modules"}}})
-	assert.Contains(t, badgeFor(t, o, "link_paths"), "+1")
+	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", Lists: map[string][]string{"carry_files": {".dev.vars"}}})
+	assert.Contains(t, badgeFor(t, o, "carry_files"), "+1")
 }
 
 // TestRepoLayerBadgeDegradesButKeepsTheCount: the count is the whole payload, so
@@ -89,8 +103,8 @@ func TestRepoLayerBadgeOutranksTheTimingBadge(t *testing.T) {
 // chip at all. Only the rendered line can tell the two apart.
 func TestRepoLayerBadgeDegradesButKeepsTheCount(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
-	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", Lists: map[string][]string{"link_paths": {"node_modules", ".venv"}}})
-	i := rowIndexOf(t, o, "link_paths")
+	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", Lists: map[string][]string{"carry_files": {".dev.vars", ".other"}}})
+	i := rowIndexOf(t, o, "carry_files")
 
 	// 80 and below is the band that matters: the widest rung (20 cells) no longer
 	// fits beside the value there, so the row keeps its chip only because a shorter
@@ -110,22 +124,10 @@ func TestRepoLayerBadgeDegradesButKeepsTheCount(t *testing.T) {
 
 	// Every rung the ladder can produce keeps the count, so the sweep above cannot
 	// pass by way of a one-rung ladder that happens to be short.
-	rungs := repoLayerBadgeCandidates(2, false)
+	rungs := repoLayerBadgeCandidates(2)
 	assert.Greater(t, len(rungs), 1, "a one-rung ladder does not degrade")
 	for _, c := range rungs {
 		assert.Contains(t, c, "+2")
-	}
-
-	// The suppressed ladder carries the STATE rather than the count, and must degrade
-	// the same way: a "+N" there would claim an addition the session never received.
-	sup := repoLayerBadgeCandidates(2, true)
-	assert.Greater(t, len(sup), 1, "a one-rung ladder does not degrade")
-	for _, c := range sup {
-		assert.NotContains(t, c, "+2", "a suppressed layer added nothing")
-	}
-	for i := 1; i < len(sup); i++ {
-		assert.LessOrEqualf(t, ansi.StringWidth(sup[i]), ansi.StringWidth(sup[i-1]),
-			"suppressed rung %d (%q) is wider than the rung before it (%q)", i, sup[i], sup[i-1])
 	}
 
 	// And they must be ordered widest first, because fitBadge returns the FIRST rung
@@ -137,28 +139,57 @@ func TestRepoLayerBadgeDegradesButKeepsTheCount(t *testing.T) {
 	}
 }
 
-// TestRepoLayerContextLineNamesTheRepo: the badge is a bare count, so the help pane
-// is the only place the repository and its entries are named — and it is the surface
-// a narrow pane cannot take away, which is what makes the badge safe to degrade.
+// TestRepoLayerContextLineNamesTheRepo: the badge is a bare count, so the repository
+// and its entries are named only in the help pane.
+//
+// contextLine is NOT the guaranteed surface, and this test says which is. Spec §10
+// ranks a truncated value above the provenance line, and carry_files has a non-empty
+// default (.claude/settings.local.json) that truncates on a narrow pane — so at 56
+// the value legitimately wins and the layer is named by expandedHelpContent instead.
+// An earlier version of this test swept 56 too and passed only because it was
+// pointed at a row whose default value is empty; the claim it made about narrow
+// panes was false for the row it now covers.
 func TestRepoLayerContextLineNamesTheRepo(t *testing.T) {
-	o := NewSettingsOverlay(config.DefaultConfig())
-	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", Lists: map[string][]string{"link_paths": {"node_modules"}}})
+	// A SHORT carry value on purpose. The shipped default
+	// (.claude/settings.local.json) truncates in the value column at every width
+	// below ~96, and spec §10 ranks a truncated value above the provenance line — so
+	// a fixture using the default measures the default's length rather than this
+	// row's provenance, and the widths at which it "passed" were an accident of it.
+	cfg := config.DefaultConfig()
+	cfg.CarryFiles = []string{".env"}
+	o := NewSettingsOverlay(cfg)
+	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", Lists: map[string][]string{"carry_files": {".dev.vars"}}})
 
-	for _, w := range []int{96, 80, 56} {
+	for _, w := range []int{96, 80} {
 		o.SetSize(w, 24)
-		settingsAt(t, o, "link_paths")
+		settingsAt(t, o, "carry_files")
 		line := stripANSI(o.contextLine(o.innerWidth()))
 		assert.Containsf(t, line, repocfg.RepoLocalFileName, "width %d: %q", w, line)
 		assert.Containsf(t, line, "/src/web", "width %d: the repo must be named: %q", w, line)
 	}
 
+	// The surface that cannot be taken away, at a width where contextLine yields to a
+	// truncated value. Restore the long default to produce that case.
+	long := config.DefaultConfig()
+	o = NewSettingsOverlay(long)
+	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", Lists: map[string][]string{"carry_files": {".dev.vars"}}})
+	o.SetSize(56, 24)
+	settingsAt(t, o, "carry_files")
+	require.NotContains(t, stripANSI(o.contextLine(o.innerWidth())), "/src/web",
+		"the fixture must actually produce the yielding case, or the next assertion proves nothing")
+	help := stripANSI(o.expandedHelpContent(o.cursor))
+	assert.Contains(t, help, repocfg.RepoLocalFileName, "the ? view is the guaranteed surface")
+	assert.Contains(t, help, "/src/web")
+
 	// And it says nothing at all when there is nothing to say — otherwise the row's
 	// own detail would be evicted for a sentence about a layer that does not exist.
+	o = NewSettingsOverlay(cfg)
 	o.SetSize(96, 24)
+	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", Lists: map[string][]string{"carry_files": nil}})
 	settingsAt(t, o, "carry_files")
 	assert.Empty(t, o.repoLayerContext(), "a row this repo adds nothing to has no provenance line")
 	o.SetRepoLayer(nil)
-	settingsAt(t, o, "link_paths")
+	settingsAt(t, o, "carry_files")
 	assert.Empty(t, o.repoLayerContext(), "an uninjected panel has no provenance line")
 }
 
@@ -172,12 +203,11 @@ func TestRepoLayerRowsRenderInTheFrame(t *testing.T) {
 		Repo: "/src/web",
 		Lists: map[string][]string{
 			"carry_files": {".dev.vars", ".other"},
-			"link_paths":  {"node_modules"},
 		},
 	})
 	for _, size := range []struct{ w, h int }{{120, 40}, {96, 32}, {80, 24}, {56, 24}, {40, 24}} {
 		o.SetSize(size.w, size.h)
-		settingsAt(t, o, "link_paths")
+		settingsAt(t, o, "carry_files")
 		for _, line := range strings.Split(stripANSI(o.Render()), "\n") {
 			assert.LessOrEqualf(t, len([]rune(line)), size.w,
 				"%dx%d: a line overran the frame: %q", size.w, size.h, line)
@@ -279,42 +309,6 @@ func TestRepoLayerRoutesThroughTheRowScope(t *testing.T) {
 	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", Lists: map[string][]string{unlayered: {"x", "y"}}})
 	assert.NotContains(t, badgeFor(t, o, unlayered), "+2",
 		"a row whose scope is not repo-layered must not grow a provenance badge because a caller named its key")
-}
-
-// TestRepoLayerSaysWhenLinksWereNotLinked: a dependency-isolated session receives
-// NONE of the link_paths — session/git's seedLocalPaths returns before linking — so
-// advertising them as added is false in a way that invites damage. The user either
-// reads the panel as evidence the repo overrode their isolation choice, or believes
-// the tree is shared and runs a destructive dependency upgrade expecting it to be
-// private. carry_files is unaffected: isolation is about the linked trees.
-func TestRepoLayerSaysWhenLinksWereNotLinked(t *testing.T) {
-	o := NewSettingsOverlay(config.DefaultConfig())
-	o.SetSize(120, 40)
-	o.SetRepoLayer(&RepoLayer{
-		Repo: "/src/web",
-		Lists: map[string][]string{
-			"carry_files": {".dev.vars"},
-			"link_paths":  {"node_modules"},
-		},
-		DepsIsolated: true,
-	})
-
-	link := o.repoLayerFor(rowIndexOf(t, o, "link_paths"))
-	require.NotEmpty(t, link)
-	assert.Contains(t, link, "dependency-isolated", "the row must say the paths were not linked")
-	assert.NotContains(t, link, "also adds", "a path that was never linked was not added")
-	// The fact must survive truncation from the right, which is how contextLine cuts:
-	// at 80 columns and below, a trailing "…not linked" was cut off every time, so the
-	// reader learned there was a caveat and never what it was.
-	assert.Truef(t, strings.HasPrefix(link, "not linked here"),
-		"the headline must lead, not trail: %q", link)
-	// And the badge must not claim an addition this session never received.
-	assert.NotContains(t, badgeFor(t, o, "link_paths"), "+1",
-		"a dependency-isolated session got none of them, so +N is a lie")
-	assert.Contains(t, badgeFor(t, o, "link_paths"), "not linked")
-
-	carry := o.repoLayerFor(rowIndexOf(t, o, "carry_files"))
-	assert.Contains(t, carry, "also adds", "isolation does not withhold carried files")
 }
 
 // TestRepoLayerSanitizesRepoAuthoredText: the provenance line interpolates strings a

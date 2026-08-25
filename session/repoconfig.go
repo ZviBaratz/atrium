@@ -2,8 +2,8 @@ package session
 
 // repoconfig.go — repo-local config enforcement (#814, #815): the one place
 // repo-authored .atrium.json bytes are allowed to become anything a session
-// acts on — a repocfg.Script, or the carry_files/link_paths a worktree is
-// seeded from — gated by the per-repo trust ledger.
+// acts on — a repocfg.Script, or the carry_files a worktree is seeded from —
+// gated by the per-repo trust ledger.
 //
 // One funnel for both because the grant is one hash over the whole file: two
 // resolution sites could reach different verdicts about the same bytes, and the
@@ -171,11 +171,10 @@ type repoLocalResolution struct {
 	Seeds map[string][]string
 }
 
-// carry and link are the two lists the SEEDING site treats differently — one copies,
-// one symlinks — so it names them rather than iterating. Reading them off Seeds keeps
-// the keyed map the only container.
+// carry is the list the SEEDING site consumes. It is named rather than iterated
+// because seeding is not generic over the keys — a copy and a symlink are different
+// operations — and reading it off Seeds keeps the keyed map the only container.
 func (r repoLocalResolution) carry() []string { return r.Seeds[repocfg.KeyCarryFiles] }
-func (r repoLocalResolution) link() []string  { return r.Seeds[repocfg.KeyLinkPaths] }
 
 // RepoLocalSeeds is the last resolution's trusted repo-local seed lists, and
 // whether one can be trusted to be current. Display API: the settings panel names
@@ -269,7 +268,7 @@ func (i *Instance) ledgerKey(repoPath string) string {
 }
 
 // repoLocalSeedResolver is what a worktree calls at every Setup to learn which
-// carry_files and link_paths entries this repository's own trusted .atrium.json
+// carry_files entries this repository's own trusted .atrium.json
 // contributes (#815). It is handed to git.Worktree.SetRepoLocalSeeds as a method
 // value, which is what lets the gate stay in this package: internal/repotrust
 // imports session/git, so session/git cannot import the ledger and the dependency
@@ -285,7 +284,7 @@ func (i *Instance) repoLocalSeedResolver(worktreeDir string) (carry, link []stri
 		return nil, nil
 	}
 	res := i.routeRepoLocal(worktreeDir, i.configRepoPath())
-	return res.carry(), res.link()
+	return res.carry(), nil
 }
 
 // configRepoPath is the repository the session's configuration is resolved
@@ -447,7 +446,7 @@ func (i *Instance) resolveRepoLocal(dir, repoPath string) repoLocalResolution {
 	// there. It was the reverse for one commit: the prompt withdrew the verdict and
 	// enforcement kept asking the hash-only question, so the lists applied to every
 	// existing session on upgrade and declining the prompt changed nothing.
-	need := repotrust.GrantScope{Seeds: len(parsed.CarryFiles) > 0 || len(parsed.LinkPaths) > 0}
+	need := repotrust.GrantScope{Seeds: len(parsed.CarryFiles) > 0}
 	if !ledger.GrantedFor(key, hash, need) {
 		rec, has := ledger.Lookup(key)
 		state, report := RepoConfigUntrusted, fmt.Sprintf(

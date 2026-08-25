@@ -130,10 +130,9 @@ func TestParseRepoLocal(t *testing.T) {
 // and every shape that refuses the file whole rather than seeding a set the trust
 // prompt never described.
 func TestParseRepoLocal_SeedLists(t *testing.T) {
-	t.Run("both lists parse and canonicalize", func(t *testing.T) {
+	t.Run("the carry list parses and canonicalizes", func(t *testing.T) {
 		got, err := ParseRepoLocal([]byte(`{
-			"carry_files": [".dev.vars", "./config/local.yml"],
-			"link_paths": ["node_modules/", "container/agent-runner/node_modules"]
+			"carry_files": [".dev.vars", "./config/local.yml"]
 		}`))
 		require.NoError(t, err)
 		assert.Empty(t, got.Entries, "a seed-only file declares no repo_scripts entry")
@@ -141,25 +140,24 @@ func TestParseRepoLocal_SeedLists(t *testing.T) {
 		// Canonical, not verbatim: the pathspec git is asked about and the path the
 		// filesystem join derives from must be the same spelling.
 		assert.Equal(t, []string{".dev.vars", "config/local.yml"}, got.CarryFiles)
-		assert.Equal(t, []string{"node_modules", "container/agent-runner/node_modules"}, got.LinkPaths)
 	})
 
 	t.Run("a seed-only file declares something", func(t *testing.T) {
 		// The property the gate leans on: a file with no repo_scripts still has
 		// content to trust, so it must not read as "declares nothing" (which is
 		// silent, ungrantable, and would make the whole feature dead).
-		got, err := ParseRepoLocal([]byte(`{"link_paths": ["node_modules"]}`))
+		got, err := ParseRepoLocal([]byte(`{"carry_files": [".dev.vars"]}`))
 		require.NoError(t, err)
 		require.NotEmpty(t, RepoLocalSurfaces(got))
-		assert.Equal(t, []string{"1 linked path"}, RepoLocalSurfaces(got))
+		assert.Equal(t, []string{"1 carried file"}, RepoLocalSurfaces(got))
 	})
 
 	t.Run("an unusable entry refuses the whole file, naming it", func(t *testing.T) {
 		for _, tc := range []struct{ name, body, want string }{
 			{"parent escape", `{"carry_files": ["../../.ssh/id_rsa"]}`, `carry_files[0] ("../../.ssh/id_rsa")`},
-			{"absolute", `{"link_paths": ["/etc"]}`, `link_paths[0] ("/etc")`},
+			{"absolute", `{"carry_files": ["/etc"]}`, `carry_files[0] ("/etc")`},
 			{"empty", `{"carry_files": [".env", ""]}`, `carry_files[1]`},
-			{"repo root", `{"link_paths": ["."]}`, `link_paths[0] (".")`},
+			{"repo root", `{"carry_files": ["."]}`, `carry_files[0] (".")`},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				_, err := ParseRepoLocal([]byte(tc.body))
@@ -190,7 +188,7 @@ func TestParseRepoLocal_SeedLists(t *testing.T) {
 		for i := range entries {
 			entries[i] = fmt.Sprintf("%q", fmt.Sprintf("dep%d", i))
 		}
-		raw := fmt.Sprintf(`{"link_paths": [%s]}`, strings.Join(entries, ","))
+		raw := fmt.Sprintf(`{"carry_files": [%s]}`, strings.Join(entries, ","))
 		require.Less(t, len(raw), MaxRepoLocalBytes, "the fixture must prove the byte cap is not what refuses it")
 
 		_, err := ParseRepoLocal([]byte(raw))
@@ -198,9 +196,9 @@ func TestParseRepoLocal_SeedLists(t *testing.T) {
 		assert.Contains(t, err.Error(), "at most")
 
 		// The boundary itself is allowed.
-		ok, err := ParseRepoLocal([]byte(fmt.Sprintf(`{"link_paths": [%s]}`, strings.Join(entries[:MaxRepoLocalSeedEntries], ","))))
+		ok, err := ParseRepoLocal([]byte(fmt.Sprintf(`{"carry_files": [%s]}`, strings.Join(entries[:MaxRepoLocalSeedEntries], ","))))
 		require.NoError(t, err)
-		assert.Len(t, ok.LinkPaths, MaxRepoLocalSeedEntries)
+		assert.Len(t, ok.CarryFiles, MaxRepoLocalSeedEntries)
 	})
 }
 
@@ -251,11 +249,11 @@ func TestRepoLocalRefusesUnprintableSeedEntries(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			body, jerr := json.Marshal([]string{entry})
 			require.NoError(t, jerr)
-			_, err := ParseRepoLocal([]byte(`{"link_paths":` + string(body) + `}`))
+			_, err := ParseRepoLocal([]byte(`{"carry_files":` + string(body) + `}`))
 			require.Error(t, err, "the file must be refused whole, not laundered into a frame")
 			// Refused whole: a Problem beside a surviving list would advertise a count
 			// the seeding never applies.
-			assert.Contains(t, err.Error(), "link_paths[0]")
+			assert.Contains(t, err.Error(), "carry_files[0]")
 		})
 	}
 }
@@ -364,7 +362,7 @@ func TestParseSeedListDedupes(t *testing.T) {
 // nothing.
 func TestRepoLocalLayersCoversEveryLayerKey(t *testing.T) {
 	for name, rl := range map[string]RepoLocal{
-		"populated": {CarryFiles: []string{".dev.vars"}, LinkPaths: []string{"node_modules"}},
+		"populated": {CarryFiles: []string{".dev.vars"}},
 		"empty":     {},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -378,10 +376,21 @@ func TestRepoLocalLayersCoversEveryLayerKey(t *testing.T) {
 		})
 	}
 
-	// And the values are the file's, not swapped: the map is the one mapping from key
-	// to list, so a transposition here would mislabel both rows at once with nothing
-	// else to contradict it.
-	layers := RepoLocalLayers(RepoLocal{CarryFiles: []string{"c"}, LinkPaths: []string{"l"}})
+	// And the value is the file's, under the key the panel matches on.
+	layers := RepoLocalLayers(RepoLocal{CarryFiles: []string{"c"}})
 	assert.Equal(t, []string{"c"}, layers[KeyCarryFiles])
-	assert.Equal(t, []string{"l"}, layers[KeyLinkPaths])
+}
+
+// TestLinkPathsIsNotReadYet pins the split. `link_paths` is a tolerated unknown key
+// in this release — the write direction ships separately, see RepoLocal.CarryFiles —
+// and the danger is a fixture or a repo that assumes otherwise: an ignored key
+// declares nothing, so a file carrying only link_paths is SILENT, not grantable.
+// Several tests in this file used it as their fixture key and silently stopped
+// asserting anything when it stopped being read.
+func TestLinkPathsIsNotReadYet(t *testing.T) {
+	got, err := ParseRepoLocal([]byte(`{"link_paths": ["node_modules", "../escape"]}`))
+	require.NoError(t, err, "an unread key cannot refuse the file, not even for a bad entry")
+	assert.Empty(t, RepoLocalSurfaces(got), "a file declaring only link_paths declares nothing yet")
+	assert.NotContains(t, RepoLocalLayerKeys(), "link_paths",
+		"and it must not be advertised to the settings panel as a layer")
 }

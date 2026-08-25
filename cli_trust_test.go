@@ -195,21 +195,24 @@ func TestTrustStatusOnACorruptLedgerWarnsWithoutTheFreshInstallLine(t *testing.T
 // grantable — it runs nothing and still decides which of the user's gitignored files
 // reach an agent — and `trust allow`'s old "declares nothing usable" refusal was
 // written when repo_scripts was the only readable key.
+//
+// link_paths is deliberately absent from the fixture: it is not a key this release
+// reads (see repocfg.RepoLocal.CarryFiles), so a receipt naming it would be a
+// receipt for something no grant confers.
 func TestTrustReceiptsNameTheSeedLists(t *testing.T) {
 	sandboxDataDir(t)
-	repo := trustRepo(t, `{"carry_files":[".dev.vars"],"link_paths":["node_modules",".venv"]}`)
+	repo := trustRepo(t, `{"carry_files":[".dev.vars",".env.local"]}`)
 	ctx := context.Background()
 
 	var out strings.Builder
 	require.NoError(t, runTrustAllow(ctx, &out, repo, true))
 	assert.Contains(t, out.String(), "trusted")
-	assert.Contains(t, out.String(), "1 carried file")
-	assert.Contains(t, out.String(), "2 linked paths")
+	assert.Contains(t, out.String(), "2 carried files")
 
 	out.Reset()
 	require.NoError(t, runTrustStatus(ctx, &out, repo, true))
 	assert.Contains(t, out.String(), "COVERS", "the column has to exist to carry the answer")
-	assert.Contains(t, out.String(), "1 carried file")
+	assert.Contains(t, out.String(), "2 carried files")
 }
 
 // TestTrustAllowStillRefusesAFileThatDeclaresNothing: the counter-case to the test

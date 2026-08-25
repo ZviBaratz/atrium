@@ -198,18 +198,29 @@ func repoTrustMessage(a repotrust.Assessment) string {
 		repoTrustConsequence(a, untilFile))
 }
 
-// repoTrustRuns reports whether granting this file would let a COMMAND execute.
-// It is not the entry's presence: repocfg admits an entry declaring only
-// port_range or session_env (DeclaredSurfaces accepts four surfaces and #814
-// withholds all of them together), and describing such a file as setup the user is
-// about to run asks for consent to something that never happens. Only
-// setup_script and run_command run.
+// repoTrustRuns reports whether granting this file would let repo-authored content
+// EXECUTE. It is not the entry's mere presence — an entry declaring only port_range
+// runs nothing, and calling that "setup you are about to run" asks for consent to
+// something that never happens.
+//
+// session_env counts, and that correction is the point. An earlier version of this
+// function excluded it on the reasoning that "only setup_script and run_command
+// run", which is false: session_env is rendered into `tmux new-session -e`
+// (session/setupscript.go, applied by applySessionEnv independently of any script),
+// and repocfg.reservedEnvName blocks only ATRIUM_*, CLAUDE_CONFIG_DIR and
+// GH_CONFIG_DIR — so NODE_OPTIONS, GIT_SSH_COMMAND, LD_PRELOAD and BASH_ENV all
+// reach the agent's environment. Setting any of those is arbitrary code execution
+// as the user, with no script in the file at all. Excluding it replaced an
+// overstatement with an understatement on the one shape where understating is
+// dangerous.
 func repoTrustRuns(a repotrust.Assessment) bool {
 	if len(a.Local.Entries) == 0 {
 		return false
 	}
 	e := a.Local.Entries[0].RepoScript
-	return strings.TrimSpace(e.SetupScript) != "" || strings.TrimSpace(e.RunCommand) != ""
+	return strings.TrimSpace(e.SetupScript) != "" ||
+		strings.TrimSpace(e.RunCommand) != "" ||
+		len(e.SessionEnv) > 0
 }
 
 // repoTrustSeeds reports whether granting this file would let the repo decide which
@@ -218,7 +229,7 @@ func repoTrustRuns(a repotrust.Assessment) bool {
 // both, and the mixed case is the one a binary got wrong — it named the script and
 // left the seeding unmentioned.
 func repoTrustSeeds(a repotrust.Assessment) bool {
-	return len(a.Local.CarryFiles) > 0 || len(a.Local.LinkPaths) > 0
+	return len(a.Local.CarryFiles) > 0
 }
 
 // repoTrustDeclares names what the file declares, for the "declares X in
@@ -254,9 +265,6 @@ func repoTrustSeedClause(a repotrust.Assessment) string {
 	if len(a.Local.CarryFiles) > 0 {
 		parts = append(parts, "copy those files in")
 	}
-	if len(a.Local.LinkPaths) > 0 {
-		parts = append(parts, "link those paths through to your checkout")
-	}
 	return strings.Join(parts, " and ")
 }
 
@@ -274,7 +282,6 @@ func repoTrustSeedClause(a repotrust.Assessment) string {
 // first grant and a re-grant, so each case reads its own grammar onto the same
 // noun phrase instead of every case sharing one preposition.
 func repoTrustConsequence(a repotrust.Assessment, tail string) string {
-	carry, link := len(a.Local.CarryFiles) > 0, len(a.Local.LinkPaths) > 0
 	seeds := repoTrustSeedClause(a)
 	hasEntry := len(a.Local.Entries) > 0
 	switch {
@@ -284,12 +291,8 @@ func repoTrustConsequence(a repotrust.Assessment, tail string) string {
 		return "Trusting runs it, as you, in " + tail
 	case seeds != "" && hasEntry:
 		return "Trusting applies it, and lets it " + seeds + ", in " + tail
-	case carry && link:
-		return "Trusting lets it " + seeds + ", in " + tail
-	case carry:
+	case seeds != "":
 		return "Trusting lets it copy those files into " + tail
-	case link:
-		return "Trusting lets it link those paths through to your checkout in " + tail
 	}
 	// An entry declaring only port_range/session_env: withheld with the rest (#814),
 	// but nothing executes, so neither "runs" nor "copies" is the true verb.
@@ -304,9 +307,6 @@ func repoTrustNewPowers(a repotrust.Assessment) []string {
 	var out []string
 	if len(a.Local.CarryFiles) > 0 {
 		out = append(out, "files to copy into every worktree")
-	}
-	if len(a.Local.LinkPaths) > 0 {
-		out = append(out, "paths to link through to your checkout")
 	}
 	if len(out) == 0 {
 		out = append(out, "settings")
@@ -360,12 +360,13 @@ func repoTrustSummary(a repotrust.Assessment) string {
 		}
 		line = name + " · " + line
 	}
-	// Bound the WHOLE surfaces line, not just the repo-authored name inside it.
-	// #815 lengthened it — a maximal entry contributes four surfaces and the two
-	// seed counts add two more — and at the 80-column floor an unbounded ~117-cell
-	// line is three rows the dialog's height budget never counted. It is the same
-	// argument as repoTrustSeedWidth's, applied to the line that grew.
-	line = sanitizeRepoText(line, repoTrustSeedWidth)
+	// NOT truncated to one row. The surfaces are a bounded vocabulary — at most
+	// "setup script + run command + session env + port range" plus one carry count —
+	// and `port range` and `session env` appear NOWHERE else in this dialog, so a
+	// 46-cell cap here deleted the only mention of two things a grant confers. It is
+	// allowed to wrap; what pays for the row is link_paths not being in this dialog
+	// yet. The repo-authored part inside it (the entry name) is still capped above,
+	// which is the part that has no bound of its own.
 	if len(a.Local.Entries) > 0 {
 		if script := strings.TrimSpace(a.Local.Entries[0].SetupScript); script != "" {
 			first := script
@@ -376,7 +377,6 @@ func repoTrustSummary(a repotrust.Assessment) string {
 		}
 	}
 	line += repoTrustSeedLine("copies in", a.Local.CarryFiles)
-	line += repoTrustSeedLine("links in", a.Local.LinkPaths)
 	return line
 }
 

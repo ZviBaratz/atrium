@@ -230,13 +230,12 @@ func TestAssessRepo(t *testing.T) {
 func TestAssessRepo_SeedLists(t *testing.T) {
 	t.Run("a seed-only file wants a prompt", func(t *testing.T) {
 		repo := gitRepo(t)
-		commitRepoConfig(t, repo, `{"carry_files":[".dev.vars"],"link_paths":["node_modules"]}`)
+		commitRepoConfig(t, repo, `{"carry_files":[".dev.vars"]}`)
 
 		a, err := AssessRepo(context.Background(), repo, "HEAD")
 		require.NoError(t, err)
 		require.True(t, a.Present)
 		assert.Equal(t, []string{".dev.vars"}, a.Local.CarryFiles)
-		assert.Equal(t, []string{"node_modules"}, a.Local.LinkPaths)
 		assert.True(t, a.WantsPrompt(), "a file that seeds paths must be grantable")
 
 		// And the grant satisfies it, so the prompt is asked once rather than forever.
@@ -251,7 +250,7 @@ func TestAssessRepo_SeedLists(t *testing.T) {
 		// like no file, or every repo with a stub .atrium.json carries a standing nag
 		// whose named remedies both refuse.
 		repo := gitRepo(t)
-		commitRepoConfig(t, repo, `{"carry_files":[],"link_paths":[]}`)
+		commitRepoConfig(t, repo, `{"carry_files":[]}`)
 
 		a, err := AssessRepo(context.Background(), repo, "HEAD")
 		require.NoError(t, err)

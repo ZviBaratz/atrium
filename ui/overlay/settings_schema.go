@@ -610,7 +610,7 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		},
 		{
 			key: "link_paths", category: catWorktrees, label: "Link paths", kind: kindText,
-			scope:          scopeRepoLayered,
+			scope:          scopeGlobal,
 			timing:         timingNewSessions,
 			defaultDisplay: func() string { return displayList((&config.Config{}).GetLinkPaths()) },
 			reset:          func(c *config.Config) { c.LinkPaths = nil },
@@ -619,10 +619,7 @@ func newSettingRows(cfg *config.Config) []settingRow {
 				"session shares one directory — unless the session was created with " +
 				"Dependencies set to isolated, which gives it none of them. Ignore the path " +
 				"with a pattern that has no trailing slash — with one, git does not treat the " +
-				"symlink as ignored and it lands in pause commits. A repository you have " +
-				"trusted can ADD to this list for its own sessions by committing a " +
-				"`.atrium.json`; your entries are never replaced, and `atrium trust revoke` " +
-				"stops the repo's from being seeded into new worktrees.",
+				"symlink as ignored and it lands in pause commits.",
 			get: func(c *config.Config) string { return displayList(c.GetLinkPaths()) },
 			editGet: func(c *config.Config) string {
 				return strings.Join(c.GetLinkPaths(), ", ")

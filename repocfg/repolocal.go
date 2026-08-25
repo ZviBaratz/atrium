@@ -27,8 +27,8 @@ const RepoLocalFileName = ".atrium.json"
 // entries, and a truncated hash would grant different bytes than were shown.
 const MaxRepoLocalBytes = 1 << 20
 
-// MaxRepoLocalSeedEntries caps how many entries a repo-local carry_files or
-// link_paths may declare. It bounds work, not bytes, and that is why the byte
+// MaxRepoLocalSeedEntries caps how many entries a repo-local carry_files may
+// declare. It bounds work, not bytes, and that is why the byte
 // cap above does not subsume it: every entry that is actually PRESENT in the
 // origin checkout costs a `git check-ignore` fork inside the session's worktree
 // (session/git's carryLocalFile and linkLocalPath each run one, after their own
@@ -51,15 +51,24 @@ type RepoLocal struct {
 	Entries  []RepoLocalEntry
 	Problems []Problem
 
-	// CarryFiles and LinkPaths are the repo's own seed lists, canonicalized and
-	// proven repo-relative by ParseRepoLocal. They are UNIONED with the user's
-	// global lists rather than replacing them (#815): the values are sets of
-	// independent facts, so a repo declaring its dependency tree must not also
-	// drop the user's personal carry (.claude/settings.local.json) in that repo.
-	// Union is also what makes #477's fix a MOVE — project entries leave the
-	// global list for the project's file, and global keeps the universal ones.
+	// CarryFiles is the repo's own carry list, canonicalized and proven
+	// repo-relative by ParseRepoLocal. It is UNIONED with the user's global list
+	// rather than replacing it (#815): the values are sets of independent facts, so
+	// a repo declaring its own local config must not also drop the user's personal
+	// carry (.claude/settings.local.json) in that repo. Union is also what makes
+	// #477's fix a MOVE — project entries leave the global list for the project's
+	// file, and global keeps the universal ones.
+	//
+	// link_paths is deliberately NOT read here yet. A linked path is the user's own
+	// tree under another name, writable by the agent and shared with every sibling
+	// session at once, and every serious defect review found in the seeding half was
+	// specific to that write direction — a repo link suppressing the user's carry, a
+	// dangling symlink defeating the containment guard, provenance transfer through
+	// the dedupe. A copy has none of those: it is private to the session, has no
+	// target to resolve, and os.Stat refuses a dangling link. So the copy half ships
+	// first and `link_paths` stays a tolerated unknown key until it can be designed
+	// against a foundation that is already correct.
 	CarryFiles []string
-	LinkPaths  []string
 }
 
 // RepoLocalEntry is one surviving entry plus its position in the FILE's list.
@@ -80,7 +89,6 @@ type RepoLocalEntry struct {
 type repoLocalWire struct {
 	RepoScripts []config.RepoScript `json:"repo_scripts"`
 	CarryFiles  []string            `json:"carry_files"`
-	LinkPaths   []string            `json:"link_paths"`
 }
 
 // RepoLocalLayerKeys names the config.json keys a repo-local file may layer
@@ -95,18 +103,14 @@ type repoLocalWire struct {
 // map handed to the panel was built from hardcoded keys by its producer.
 // RepoLocalLayers is the other half — see its doc.
 func RepoLocalLayerKeys() []string {
-	return []string{KeyCarryFiles, KeyLinkPaths}
+	return []string{KeyCarryFiles}
 }
 
-// KeyCarryFiles and KeyLinkPaths are the two layerable keys by name. They exist as
-// constants because the name is a VOCABULARY shared across four packages — the wire
-// tag, RepoLocalLayerKeys, RepoLocalLayers' map, and the settings row keys the panel
-// matches against — and a literal in any one of them is a copy that can drift
-// silently.
-const (
-	KeyCarryFiles = "carry_files"
-	KeyLinkPaths  = "link_paths"
-)
+// KeyCarryFiles is the layerable key by name. It is a constant because the name is a
+// VOCABULARY shared across four packages — the wire tag, RepoLocalLayerKeys,
+// RepoLocalLayers' map, and the settings row key the panel matches against — and a
+// literal in any one of them is a copy that can drift silently.
+const KeyCarryFiles = "carry_files"
 
 // RepoLocalLayers is a parsed file's seed lists KEYED BY the settings-row key each
 // one layers over. It is the single mapping from key name to list, and it exists
@@ -128,7 +132,6 @@ const (
 func RepoLocalLayers(rl RepoLocal) map[string][]string {
 	return map[string][]string{
 		KeyCarryFiles: rl.CarryFiles,
-		KeyLinkPaths:  rl.LinkPaths,
 	}
 }
 
@@ -147,6 +150,10 @@ func RepoLocalLayers(rl RepoLocal) map[string][]string {
 var repoLocalNonLayeringKeys = map[string]string{
 	"repo_scripts": "a repo-local entry REPLACES the user's matching entry rather than adding to it, and it has no single panel row to annotate",
 }
+
+// Note: link_paths is not in either map because it is not in repoLocalWire at all
+// yet — an unread key needs no verdict. See RepoLocal.CarryFiles for why the write
+// direction ships separately.
 
 // CanonicalSeedPath is the one lexical rule for a carry_files / link_paths
 // entry: the slash-separated spelling git pathspecs and filesystem joins must
@@ -214,9 +221,6 @@ func RepoLocalSurfaces(rl RepoLocal) []string {
 	}
 	if n := len(rl.CarryFiles); n > 0 {
 		out = append(out, fmt.Sprintf("%d carried file%s", n, plural(n)))
-	}
-	if n := len(rl.LinkPaths); n > 0 {
-		out = append(out, fmt.Sprintf("%d linked path%s", n, plural(n)))
 	}
 	return out
 }
@@ -297,11 +301,7 @@ func ParseRepoLocal(raw []byte) (RepoLocal, error) {
 	if err != nil {
 		return RepoLocal{}, err
 	}
-	link, err := parseSeedList("link_paths", wire.LinkPaths)
-	if err != nil {
-		return RepoLocal{}, err
-	}
-	out.CarryFiles, out.LinkPaths = carry, link
+	out.CarryFiles = carry
 	return out, nil
 }
 

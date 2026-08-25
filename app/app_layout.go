@@ -155,12 +155,6 @@ func (m *home) refreshSettingsRepoLayer() {
 		// the map handed over here never carried it. The keys come from
 		// repocfg.RepoLocalLayers now, which is guarded against that vocabulary.
 		Lists: seeds,
-		// A dependency-isolated session receives NONE of the link_paths — session/git's
-		// seedLocalPaths returns before linking — so the row must say that rather than
-		// advertising paths that were never linked. Isolation is a choice about this
-		// session and it outranks the repo's list; the README says so, and the panel
-		// said the opposite.
-		DepsIsolated: inst.IsolateDeps(),
 	})
 }
 
