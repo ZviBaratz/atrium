@@ -53,7 +53,7 @@ func TestRepoLayerBadgeOnlyWhenInjected(t *testing.T) {
 	}
 
 	// A layer that contributes to one row must not annotate the other.
-	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", LinkPaths: []string{"node_modules", ".venv"}})
+	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", Lists: map[string][]string{"link_paths": []string{"node_modules", ".venv"}}})
 	assert.Contains(t, badgeFor(t, o, "link_paths"), "+2")
 	assert.NotContains(t, badgeFor(t, o, "carry_files"), "+",
 		"a row this repo adds nothing to must not claim it does")
@@ -74,7 +74,7 @@ func TestRepoLayerBadgeOutranksTheTimingBadge(t *testing.T) {
 	require.NotEmpty(t, o.rows[rowIndexOf(t, o, "link_paths")].timing.badge(),
 		"the row must HAVE a timing badge, or this test proves nothing about precedence")
 
-	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", LinkPaths: []string{"node_modules"}})
+	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", Lists: map[string][]string{"link_paths": []string{"node_modules"}}})
 	assert.Contains(t, badgeFor(t, o, "link_paths"), "+1")
 }
 
@@ -89,7 +89,7 @@ func TestRepoLayerBadgeOutranksTheTimingBadge(t *testing.T) {
 // chip at all. Only the rendered line can tell the two apart.
 func TestRepoLayerBadgeDegradesButKeepsTheCount(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
-	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", LinkPaths: []string{"node_modules", ".venv"}})
+	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", Lists: map[string][]string{"link_paths": []string{"node_modules", ".venv"}}})
 	i := rowIndexOf(t, o, "link_paths")
 
 	// 80 and below is the band that matters: the widest rung (20 cells) no longer
@@ -130,7 +130,7 @@ func TestRepoLayerBadgeDegradesButKeepsTheCount(t *testing.T) {
 // a narrow pane cannot take away, which is what makes the badge safe to degrade.
 func TestRepoLayerContextLineNamesTheRepo(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
-	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", LinkPaths: []string{"node_modules"}})
+	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", Lists: map[string][]string{"link_paths": []string{"node_modules"}}})
 
 	for _, w := range []int{96, 80, 56} {
 		o.SetSize(w, 24)
@@ -157,9 +157,11 @@ func TestRepoLayerContextLineNamesTheRepo(t *testing.T) {
 func TestRepoLayerRowsRenderInTheFrame(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
 	o.SetRepoLayer(&RepoLayer{
-		Repo:       "/src/web",
-		CarryFiles: []string{".dev.vars", ".other"},
-		LinkPaths:  []string{"node_modules"},
+		Repo: "/src/web",
+		Lists: map[string][]string{
+			"carry_files": []string{".dev.vars", ".other"},
+			"link_paths":  []string{"node_modules"},
+		},
 	})
 	for _, size := range []struct{ w, h int }{{120, 40}, {96, 32}, {80, 24}, {56, 24}, {40, 24}} {
 		o.SetSize(size.w, size.h)
@@ -183,9 +185,11 @@ func TestRepoLayerRowsRenderInTheFrame(t *testing.T) {
 func TestRepoLayerIsReachableOnEveryLayeredRow(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
 	o.SetRepoLayer(&RepoLayer{
-		Repo:       "/home/dev/src/a-project-with-a-long-path",
-		CarryFiles: []string{".dev.vars", ".claude/settings.local.json"},
-		LinkPaths:  []string{"node_modules"},
+		Repo: "/home/dev/src/a-project-with-a-long-path",
+		Lists: map[string][]string{
+			"carry_files": []string{".dev.vars", ".claude/settings.local.json"},
+			"link_paths":  []string{"node_modules"},
+		},
 	})
 
 	for _, key := range repocfg.RepoLocalLayerKeys() {

@@ -76,11 +76,15 @@ func (g *Worktree) seedLocalPaths() {
 	cfg := config.LoadConfig()
 	repoCarry, repoLink := g.resolveRepoLocalSeeds()
 
-	for _, e := range unionSeedEntries(repoCarry, cfg.GetCarryFiles(), "carry_files") {
-		g.carryLocalFile(e.kind, e.rel)
+	carries := unionSeedEntries(repoCarry, cfg.GetCarryFiles(), "carry_files")
+	links := unionSeedEntries(repoLink, cfg.GetLinkPaths(), "link_paths")
+	if !g.isolateDeps {
+		carries = dropCarriesUnderLinks(carries, links)
+	}
+	for _, e := range carries {
+		g.carryLocalFile(e)
 	}
 
-	links := unionSeedEntries(repoLink, cfg.GetLinkPaths(), "link_paths")
 	if g.isolateDeps {
 		if len(links) > 0 {
 			log.InfoLog.Printf("link_paths: session is dependency-isolated, so %v are not linked — this worktree starts without them and whatever installs into it stays private to it", seedEntryPaths(links))
@@ -91,7 +95,7 @@ func (g *Worktree) seedLocalPaths() {
 		return
 	}
 	for _, e := range links {
-		g.linkLocalPath(e.kind, e.rel)
+		g.linkLocalPath(e)
 	}
 }
 
@@ -99,9 +103,16 @@ func (g *Worktree) seedLocalPaths() {
 // it. kind carries the entry's PROVENANCE, not just its key name, which is #477's
 // third complaint answered: a refusal caused by a project's own committed entry
 // used to read as a problem with the global list the user maintains by hand.
+//
+// repo says the same thing in a form code can branch on, and one guard does: a
+// repo-authored entry is confined to the repo through resolved symlinks
+// (seedSourceEscapes), where the user's own entry is deliberately allowed to point
+// at a shared store outside it. The string is for humans, this is for the gate —
+// deriving the gate from the string would make a copy-edit a security change.
 type seedEntry struct {
 	kind string
 	rel  string
+	repo bool
 }
 
 // unionSeedEntries lays the repo's entries ahead of the user's and drops the
@@ -118,7 +129,7 @@ type seedEntry struct {
 func unionSeedEntries(repo, global []string, key string) []seedEntry {
 	out := make([]seedEntry, 0, len(repo)+len(global))
 	seen := make(map[string]bool, len(repo)+len(global))
-	add := func(rel, kind string) {
+	add := func(rel, kind string, fromRepo bool) {
 		dedupe := rel
 		if canon, err := repocfg.CanonicalSeedPath(rel); err == nil {
 			dedupe = canon
@@ -127,13 +138,64 @@ func unionSeedEntries(repo, global []string, key string) []seedEntry {
 			return
 		}
 		seen[dedupe] = true
-		out = append(out, seedEntry{kind: kind, rel: rel})
+		out = append(out, seedEntry{kind: kind, rel: rel, repo: fromRepo})
 	}
 	for _, rel := range repo {
-		add(rel, key+" ("+repocfg.RepoLocalFileName+")")
+		add(rel, key+" ("+repocfg.RepoLocalFileName+")", true)
 	}
 	for _, rel := range global {
-		add(rel, key)
+		add(rel, key, false)
+	}
+	return out
+}
+
+// dropCarriesUnderLinks removes any carry entry that lands INSIDE a path the link
+// list will symlink, and says so. Ordering alone cannot resolve this collision, in
+// either direction: carrying first has os.MkdirAll create a real directory at the
+// link's path, so linkLocalPath's never-clobber guard finds something there and
+// skips the link with only a log line — a repo's `carry_files: ["node_modules/.x"]`
+// silently costs the user their whole linked node_modules, in every session in that
+// repo, which is exactly the suppression union semantics exist to prevent ("your
+// entries are never replaced", in the README and both settings rows). Linking first
+// is worse: the carry would then write THROUGH the symlink into the user's own
+// checkout.
+//
+// So the link wins and the carry is refused. That is the conservative side — the
+// file is reachable through the link anyway, where a lost dependency tree has to be
+// reinstalled — and it is the side that keeps the never-replaced promise, since a
+// link entry is the larger artifact and the likelier one to be the user's.
+//
+// Not applied to a dependency-isolated session: no link is created there, so
+// nothing collides and the carry is the only way that file arrives.
+func dropCarriesUnderLinks(carries, links []seedEntry) []seedEntry {
+	if len(links) == 0 {
+		return carries
+	}
+	linkCanon := make([]string, 0, len(links))
+	for _, l := range links {
+		if canon, err := repocfg.CanonicalSeedPath(l.rel); err == nil {
+			linkCanon = append(linkCanon, canon)
+		}
+	}
+	out := make([]seedEntry, 0, len(carries))
+	for _, c := range carries {
+		canon, err := repocfg.CanonicalSeedPath(c.rel)
+		if err != nil {
+			out = append(out, c) // unusable: let its own leaf function say why
+			continue
+		}
+		under := ""
+		for _, l := range linkCanon {
+			if canon == l || strings.HasPrefix(canon, l+"/") {
+				under = l
+				break
+			}
+		}
+		if under == "" {
+			out = append(out, c)
+			continue
+		}
+		log.WarningLog.Printf("%s: skipping %q: it is inside %q, which link_paths symlinks — carrying it would create a real directory there and silently cost you the link. It is already reachable through the link", c.kind, c.rel, under)
 	}
 	return out
 }
@@ -224,19 +286,59 @@ func (g *Worktree) resolveSeedPaths(kind, rel string) (canon, src, dst string, o
 	// A seed list is no longer necessarily the user's own content: since #815 a
 	// repository's own trusted .atrium.json contributes entries, so the lexical rule
 	// above is what confines a repo-authored entry to the repo, and this is its
-	// second opinion. Both checks are still lexical, and that limit is now load
-	// bearing rather than moot: a symlinked path component inside the repo can point
-	// anywhere, and neither check follows one. What stands behind them is the trust
-	// grant — a repo's entries reach this function only for content the user allowed
-	// (session/repoconfig.go) — plus the guards each caller adds, of which the
-	// worktree-side check-ignore probe is the sharpest: only a gitignored path is
-	// ever seeded, so a repo cannot name a tracked symlink and have it followed.
+	// second opinion. Both checks here are purely LEXICAL, and that is not
+	// sufficient on its own for a repo-authored entry: a symlinked path component
+	// inside the origin checkout can point anywhere, and neither check follows one.
+	// seedSourceEscapes is the half that does, and the callers apply it — this
+	// function cannot, because it is also the isolated session's probe path, where
+	// no source is read.
 	if !strings.HasPrefix(src, g.repoPath+string(filepath.Separator)) ||
 		!strings.HasPrefix(dst, g.worktreePath+string(filepath.Separator)) {
 		log.WarningLog.Printf("%s: skipping %q: resolves outside the repo or worktree", kind, rel)
 		return "", "", "", false
 	}
 	return canon, src, dst, true
+}
+
+// seedSourceEscapes reports whether src leaves the repository once symlinks are
+// followed, and is the guard that makes a repo-authored entry's confinement real
+// rather than lexical.
+//
+// The lexical checks above cannot see this, and neither can the worktree-side
+// check-ignore probe that a comment here used to name as the guard for it. That
+// reasoning was circular twice over: the paths a repo may seed are exactly the
+// gitignored ones, which are exactly the untracked ones that CAN be a symlink to
+// anywhere — and the repo authors the ignore rule too. Worse, the probe runs in the
+// WORKTREE, where the symlink does not exist: with `deps/` committed in .gitignore,
+// `git check-ignore -q -- deps/id_rsa` exits 0 there even though `deps` is absent,
+// while os.Stat in the ORIGIN follows a user's convenience symlink (deps → ~/.ssh,
+// .venv → /opt/..., a pnpm store) and reports a regular file. A trusted repo could
+// then name any file the user can read and have it copied in front of the agent, or
+// handed over as a writable symlink — powers no trust dialog describes.
+//
+// Applied to repo-authored entries only, and that asymmetry is deliberate: the
+// user's own link_paths entry pointing at a shared package store outside the repo
+// is a documented, working configuration (linkLocalPath Lstats rather than Stats
+// for exactly that reason), and narrowing it would break setups that predate #815.
+// The repo side has no such history and no such claim.
+//
+// A source that does not exist is not an escape — EvalSymlinks fails on it and the
+// callers' own absence checks handle it, which keeps "the file simply is not there"
+// the silent common case it has always been.
+func (g *Worktree) seedSourceEscapes(kind, rel, src string) bool {
+	resolved, err := filepath.EvalSymlinks(src)
+	if err != nil {
+		return false
+	}
+	root, err := filepath.EvalSymlinks(g.repoPath)
+	if err != nil {
+		root = g.repoPath
+	}
+	if resolved == root || strings.HasPrefix(resolved, root+string(filepath.Separator)) {
+		return false
+	}
+	log.WarningLog.Printf("%s: refusing %q: it resolves through a symlink to %q, outside this repository. A repository's own seed list may only name paths inside it — the trust grant covers the repo's files, not everything you can read", kind, rel, resolved)
+	return true
 }
 
 // carryLocalFile copies one repo-relative file from repoPath into the
@@ -267,9 +369,13 @@ func (g *Worktree) resolveSeedPaths(kind, rel string) (canon, src, dst string, o
 // is therefore shared by every linked worktree, and core.excludesFile is global —
 // a rule in either reaches the worktree without being committed anywhere. The
 // warning below must not promise otherwise.
-func (g *Worktree) carryLocalFile(kind, rel string) {
+func (g *Worktree) carryLocalFile(e seedEntry) {
+	kind, rel := e.kind, e.rel
 	canon, src, dst, ok := g.resolveSeedPaths(kind, rel)
 	if !ok {
+		return
+	}
+	if e.repo && g.seedSourceEscapes(kind, rel, src) {
 		return
 	}
 
@@ -330,9 +436,13 @@ func (g *Worktree) carryLocalFile(kind, rel string) {
 // diff stages every poll tick. Checking the not-yet-created path in the worktree is
 // conservative in exactly the right direction: git cannot match a dir-only pattern
 // there either, so only a slash-less pattern is accepted.
-func (g *Worktree) linkLocalPath(kind, rel string) {
+func (g *Worktree) linkLocalPath(e seedEntry) {
+	kind, rel := e.kind, e.rel
 	canon, src, dst, ok := g.resolveSeedPaths(kind, rel)
 	if !ok {
+		return
+	}
+	if e.repo && g.seedSourceEscapes(kind, rel, src) {
 		return
 	}
 

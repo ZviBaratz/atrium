@@ -381,9 +381,9 @@ func TestRepoTrustDialogBoundsWideSeedLists(t *testing.T) {
 	require.Equal(t, stateConfirm, h.state)
 
 	view := xansi.Strip(h.View().Content)
-	// "trust this repo", not "trust and run setup": this fixture declares no
+	// "trust and seed files", not "trust and run setup": this fixture declares no
 	// repo_scripts, so nothing executes — see TestRepoTrustCopyOnlyPromisesWhatRuns.
-	assert.Contains(t, view, "trust this repo",
+	assert.Contains(t, view, "trust and seed files",
 		"a confirmation the user cannot answer is worse than none")
 	assert.Contains(t, view, "more",
 		"a truncated sample must say it is a sample, never read as the whole list")
@@ -473,7 +473,7 @@ func TestRepoTrustDialogHoldsTheFloorWithEverything(t *testing.T) {
 
 	// Both answers, and the box's own bottom edge: a clipped box means the content
 	// below the clip is gone, and the decline is the answer that must never vanish.
-	assert.Contains(t, view, "trust and run setup")
+	assert.Contains(t, view, "trust: run setup, seed files")
 	assert.Contains(t, view, "create without it")
 	assert.Regexp(t, `╰─{10,}╯`, view, "the dialog's bottom border must be on screen")
 
@@ -510,8 +510,11 @@ func TestRepoTrustCopyOnlyPromisesWhatRuns(t *testing.T) {
 		assert.NotContains(t, view, "run setup", "the key hint must not offer to run what cannot run")
 		assert.NotContains(t, view, "runs it, as you", "the body must not promise execution")
 		assert.NotContains(t, view, "its own setup")
-		assert.Contains(t, view, "trust this repo")
-		assert.Contains(t, view, "copy and link", "it must name what a grant actually does here")
+		assert.Contains(t, view, "trust and seed files")
+		consequence := trustConsequenceSentence(t, view)
+		assert.Contains(t, consequence, "copy those files in", "it must name what a grant actually does here")
+		assert.Contains(t, consequence, "link those paths through to your checkout",
+			"a link is the user's own tree, writable by the agent — the sentence must say so")
 
 		// And the entry-name slot is absent rather than filled with the filename the
 		// sentence above already named, or with "unnamed entry" — either sends the
@@ -531,9 +534,42 @@ func TestRepoTrustCopyOnlyPromisesWhatRuns(t *testing.T) {
 		require.Equal(t, stateConfirm, h.state)
 
 		view := xansi.Strip(h.View().Content)
-		assert.Contains(t, view, "trust and run setup")
-		assert.Contains(t, view, "runs it, as you")
-		// The seed half is still described — one grant, both halves named.
-		assert.Contains(t, view, "1 carried file")
+		assert.Contains(t, view, "trust: run setup, seed files")
+		// One grant, both halves named IN THE SENTENCE THE USER ANSWERS. Asserting
+		// "1 carried file" instead is what let the incomplete wording ship: that string
+		// is in the summary block, which lists what the file declares, and it appears
+		// whether or not the consequence sentence admits the grant covers it. The
+		// mixed shape is the README's own example, and it is the case a binary got
+		// wrong — it named the script and left the seeding unmentioned.
+		consequence := trustConsequenceSentence(t, view)
+		assert.Contains(t, consequence, "runs it as you", "the script half must be named")
+		assert.Contains(t, consequence, "copy those files in", "the seeding half must be named too")
 	})
+}
+
+// trustConsequenceSentence pulls the dialog's "Trusting …" sentence out of a
+// RENDERED frame, reflowed onto one line. It reads the frame rather than calling
+// repoTrustMessage so the assertion covers what a user can actually see — but the
+// sentence is wrapped across rows there, so a bare strings.Contains on the view
+// silently fails for any phrase that straddles a row boundary. Normalizing first is
+// what makes the assertion able to fail for the right reason instead of always.
+func trustConsequenceSentence(t *testing.T, view string) string {
+	t.Helper()
+	var b strings.Builder
+	for _, r := range view {
+		switch {
+		case r == '\n' || strings.ContainsRune("│─╭╮╰╯├┤┬┴┼└┘┌┐", r):
+			b.WriteByte(' ')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	flat := strings.Join(strings.Fields(b.String()), " ")
+	i := strings.Index(flat, "Trusting")
+	require.GreaterOrEqual(t, i, 0, "the dialog must carry a consequence sentence")
+	rest := flat[i:]
+	if end := strings.Index(rest, "."); end >= 0 {
+		rest = rest[:end+1]
+	}
+	return rest
 }

@@ -26,9 +26,11 @@ func TestSettingsFrameFitsWithARepoLayer(t *testing.T) {
 	// Entries long enough that the badge, the value and the help line all compete
 	// for the same slack at the narrow end of the ladder.
 	layer := &overlay.RepoLayer{
-		Repo:       "/home/dev/src/a-project-with-a-long-path",
-		CarryFiles: []string{".dev.vars", ".claude/settings.local.json"},
-		LinkPaths:  []string{"node_modules", "container/agent-runner/node_modules", ".venv"},
+		Repo: "/home/dev/src/a-project-with-a-long-path",
+		Lists: map[string][]string{
+			"carry_files": []string{".dev.vars", ".claude/settings.local.json"},
+			"link_paths":  []string{"node_modules", "container/agent-runner/node_modules", ".venv"},
+		},
 	}
 	fs := frameState{name: "settings-repolayer", st: stateSettings, wire: func(h *home, _ *session.Instance) {
 		h.settingsOverlay = overlay.NewSettingsOverlay(h.appConfig)

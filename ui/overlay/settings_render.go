@@ -609,7 +609,7 @@ func (s *SettingsOverlay) rowValueAndBadge(i, width, labelW int, inert string) (
 			s.valueCell(i, width, labelW, strings.Repeat("x", searchBadgeMinCells)),
 			avail, searchBadgeMinCells)
 		return value, searchBadge(s.rows[i].category.label(), badgeAvail(width, labelW, value))
-	case len(s.repoLayer.forKey(s.rows[i].key)) > 0:
+	case len(s.repoLayerEntries(i)) > 0:
 		// A repo-layered row whose selected repo actually contributes (#815). Ranked
 		// under the two above and over the timing badge: it is not a refusal to
 		// explain like an inert reason, nor the only thing telling two search results
@@ -617,7 +617,7 @@ func (s *SettingsOverlay) rowValueAndBadge(i, width, labelW int, inert string) (
 		// — which outranks reference information. Like the inert chip it degrades
 		// rather than being dropped, and unlike it there is a second surface if the
 		// pane is too narrow even for that: contextLine always renders.
-		candidates := repoLayerBadgeCandidates(len(s.repoLayer.forKey(s.rows[i].key)))
+		candidates := repoLayerBadgeCandidates(len(s.repoLayerEntries(i)))
 		shortest := candidates[len(candidates)-1]
 		value = fitValue(s.valueCell(i, width, labelW, shortest), avail, ansi.StringWidth(shortest))
 		return value, fitBadge(candidates, width, labelW, value)
@@ -1010,7 +1010,7 @@ func (s *SettingsOverlay) contextLine(width int) string {
 // even the repo path is cut, which is the reason expandedHelpContent carries this
 // too rather than relying on the one line.
 func (s *SettingsOverlay) repoLayerFor(i int) string {
-	entries := s.repoLayer.forKey(s.rows[i].key)
+	entries := s.repoLayerEntries(i)
 	if len(entries) == 0 {
 		return ""
 	}
@@ -1018,7 +1018,53 @@ func (s *SettingsOverlay) repoLayerFor(i int) string {
 	if where == "" {
 		where = "this repo"
 	}
-	return fmt.Sprintf("%s in %s also adds: %s", repocfg.RepoLocalFileName, where, strings.Join(entries, ", "))
+	// Sanitize BOTH interpolations. These are the repo's own committed strings and
+	// the repo path, and this line is measured and truncated downstream — a rule the
+	// parse cannot supply, because it deliberately admits combining marks so macOS's
+	// decomposed filenames work, and three hundred of them measure one cell in every
+	// library while rendering as a smear across the row.
+	verb := "also adds"
+	if s.repoLayer.DepsIsolated && s.rows[i].key == "link_paths" {
+		// Declared, but not applied: this session is dependency-isolated, so it got
+		// none of them. Advertising them as added would tell the user either that the
+		// repo overrode their isolation choice or that the tree is shared — and the
+		// second reading invites a destructive dependency upgrade in what they believe
+		// is a private tree.
+		verb = "declares, but this session is dependency-isolated so they are not linked"
+	}
+	return fmt.Sprintf("%s in %s %s: %s",
+		repocfg.RepoLocalFileName,
+		theme.SanitizeUntrusted(where, repoLayerPathWidth),
+		verb,
+		theme.SanitizeUntrusted(strings.Join(entries, ", "), repoLayerEntriesWidth))
+}
+
+// repoLayerPathWidth and repoLayerEntriesWidth bound the two untrusted spans in the
+// provenance line. The line as a whole is truncated by contextLine and wrapped by
+// the `?` view, so these are not the only bound — they are the bound that holds when
+// the measurer downstream is handed a string whose cell count does not match what a
+// terminal draws, which is the whole failure mode a per-rune parse rule cannot close.
+const (
+	repoLayerPathWidth    = 48
+	repoLayerEntriesWidth = 120
+)
+
+// repoLayerEntries is what the selected repo adds to row i, and it is gated on the
+// row's SCOPE rather than on its key.
+//
+// That routing is the point. The key-keyed switch this replaced was a third,
+// unguarded copy of the layerable-key list: both bridge guards (a row's scope ↔
+// repocfg.RepoLocalLayerKeys ↔ repoLocalWire's json tags) passed while a third
+// layered key rendered no badge, no provenance line and no `?` entry, because the
+// switch returned nil for anything outside its two cases — the silent "the value
+// shown is not the effective value and never admits it" failure the scope seam
+// exists to prevent. Reading r.scope here is also what makes that field load-bearing
+// in production instead of test-only.
+func (s *SettingsOverlay) repoLayerEntries(i int) []string {
+	if i < 0 || i >= len(s.rows) || s.rows[i].scope != scopeRepoLayered {
+		return nil
+	}
+	return s.repoLayer.forKey(s.rows[i].key)
 }
 
 // repoLayerContext is repoLayerFor for the selected row — contextLine's caller.

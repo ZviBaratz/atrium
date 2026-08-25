@@ -196,25 +196,31 @@ func (s *SettingsOverlay) SetAccountClusteringVisible(visible bool) {
 type RepoLayer struct {
 	// Repo is the repository the lists came from, for the help line. Displayed, so
 	// callers pass something a user recognizes (the repo path).
-	Repo       string
-	CarryFiles []string
-	LinkPaths  []string
+	Repo string
+
+	// Lists is what the repo adds, keyed by the settingRow key it layers over —
+	// repocfg.RepoLocalLayerKeys' vocabulary. A map rather than one field per key
+	// because a hardcoded switch here was a THIRD unguarded copy of that list: the
+	// two bridge guards (schema row scopes ↔ RepoLocalLayerKeys ↔ repoLocalWire)
+	// both passed while a third layered key rendered no badge, no provenance line
+	// and no help entry, because the switch returned nil for anything outside its
+	// two cases. The render path now asks the row's scope whether to look here, so a
+	// key that reaches the schema reaches the panel.
+	Lists map[string][]string
+
+	// DepsIsolated says the session these lists were resolved for is
+	// dependency-isolated, which means it received NONE of the link_paths (session/git's
+	// seedLocalPaths returns before linking). The row must say so rather than
+	// advertising paths that were never linked.
+	DepsIsolated bool
 }
 
-// forKey is the repo's contribution to one row, or nil when this row is not one a
-// repo can layer over. Keyed off the row key rather than the scope so the mapping
-// from key to list lives in exactly one place, next to the type that holds them.
+// forKey is the repo's contribution to one row.
 func (l *RepoLayer) forKey(key string) []string {
 	if l == nil {
 		return nil
 	}
-	switch key {
-	case "carry_files":
-		return l.CarryFiles
-	case "link_paths":
-		return l.LinkPaths
-	}
-	return nil
+	return l.Lists[key]
 }
 
 // SetRepoLayer records what the selected session's repository adds to the

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path"
 	"path/filepath"
+	"strings"
 	"unicode"
 
 	"github.com/ZviBaratz/atrium/config"
@@ -28,11 +29,13 @@ const MaxRepoLocalBytes = 1 << 20
 
 // MaxRepoLocalSeedEntries caps how many entries a repo-local carry_files or
 // link_paths may declare. It bounds work, not bytes, and that is why the byte
-// cap above does not subsume it: every seeded entry costs a `git check-ignore`
-// fork inside the session's worktree (session/git's carryLocalFile and
-// linkLocalPath each run one), on every worktree materialization — create and
-// every resume. A few thousand entries fit comfortably under a megabyte and
-// would fork git a few thousand times per session start. Sixty-four is
+// cap above does not subsume it: every entry that is actually PRESENT in the
+// origin checkout costs a `git check-ignore` fork inside the session's worktree
+// (session/git's carryLocalFile and linkLocalPath each run one, after their own
+// absence check, so an entry naming nothing costs none), each time a worktree is
+// materialized — a create, and a resume that has to recreate one. A few thousand
+// entries fit comfortably under a megabyte and would fork git a few thousand
+// times for such a session. Sixty-four is
 // far past the handful a real project declares, and past it the file is refused
 // WHOLE like every other structural refusal here: a truncated list would seed a
 // set the trust prompt never described.
@@ -104,34 +107,29 @@ func RepoLocalLayerKeys() []string {
 // then refused at seed time (a grant for something that never runs) or the
 // reverse.
 //
+// It is the PATH rule only. A display rule lived here briefly — refusing every
+// rune unicode.IsPrint rejects, because a repo-authored entry is interpolated into
+// a frame — and it was in the wrong place: this same function judges the USER's own
+// global carry_files/link_paths, where IsPrint refuses legal filenames (every Zs
+// but U+0020, so U+00A0 from a pasted path and U+3000 in a CJK one; all of Cf, so a
+// soft hyphen; all of Co, so a Nerd-Font private-use rune). A user whose linked
+// directory contains one had it working for months and would have lost it with a
+// warning naming the wrong reason. Display safety belongs at the display boundary
+// (app/repotrust.go's sanitizeRepoText, and the panel's) plus a repo-only refusal
+// in parseSeedList — see repoLocalSeedEntryRefusal.
+//
 // path.Clean, not filepath.Clean: git pathspecs are always slash-separated,
-// including on Windows, and ToSlash first folds an entry a Windows user spelled
-// with backslashes into that same form. The repo-root refusal is explicit
-// because filepath.IsLocal accepts ".": only the join in resolveSeedPaths
-// collapses it to a root that is not strictly inside itself, and a rule that
-// relied on that would not exist here at all.
+// including on Windows. ToSlash is a deliberate no-op on POSIX (Separator is
+// already '/'), so it does NOT fold a backslash-spelled entry there — a backslash
+// is a legal filename character on Linux and macOS, and this function cannot know
+// whether one was meant. parseSeedList refuses it for a repo-local list, which is
+// the file that gets committed on one platform and read on another. The repo-root
+// refusal is explicit because filepath.IsLocal accepts ".": only the join in
+// resolveSeedPaths collapses it to a root that is not strictly inside itself, and a
+// rule that relied on that would not exist here at all.
 func CanonicalSeedPath(rel string) (string, error) {
 	if rel == "" {
 		return "", errors.New("empty entry")
-	}
-	// Refuse anything unprintable before the path rules, because the failure it
-	// prevents is not about paths: a seed entry is repo-authored text that surfaces
-	// interpolate into a frame (the trust dialog, the settings panel's provenance
-	// line), and unicode.IsPrint excludes exactly the classes that defeat a width
-	// bound — C0/C1 and ESC write straight through a renderer, and the Cf format
-	// runes (U+200B zero-width space, U+200D joiner, U+202E right-to-left override)
-	// measure ZERO cells, so a truncation budget bounds nothing on a string made of
-	// them. Refusing here rather than sanitizing at each surface is what keeps a
-	// hostile entry from reaching one that forgot to.
-	//
-	// Combining marks (Mn) are printable and stay ALLOWED on purpose: macOS stores
-	// filenames decomposed, so a legitimate "café" is "cafe" plus U+0301, and
-	// go-runewidth scores it the width a terminal renders it at. The dangerous
-	// property is measuring differently than it renders, which Mn does not have.
-	for _, r := range rel {
-		if !unicode.IsPrint(r) {
-			return "", fmt.Errorf("contains the unprintable character U+%04X", r)
-		}
 	}
 	canon := path.Clean(filepath.ToSlash(rel))
 	if !filepath.IsLocal(canon) {
@@ -260,16 +258,68 @@ func ParseRepoLocal(raw []byte) (RepoLocal, error) {
 func parseSeedList(section string, raw []string) ([]string, error) {
 	if len(raw) > MaxRepoLocalSeedEntries {
 		return nil, fmt.Errorf(
-			"%s declares %d %s entries — a repo-local list carries at most %d (each one costs a git probe in every worktree of this repo, on every start and resume)",
+			"%s declares %d %s entries — a repo-local list carries at most %d (each one costs a git probe every time a worktree of this repo is materialized)",
 			RepoLocalFileName, len(raw), section, MaxRepoLocalSeedEntries)
 	}
 	var out []string
+	seen := make(map[string]bool, len(raw))
 	for i, rel := range raw {
+		if err := repoLocalSeedEntryRefusal(rel); err != nil {
+			return nil, fmt.Errorf("%s: %s: %w", RepoLocalFileName, Problem{Section: section, Index: i, Name: rel}.where(), err)
+		}
 		canon, err := CanonicalSeedPath(rel)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %s: %w", RepoLocalFileName, Problem{Section: section, Index: i, Name: rel}.where(), err)
 		}
+		// Dedupe on the canonical spelling. Without this, "node_modules",
+		// "./node_modules/" and "node_modules/." are three entries that seed one path:
+		// the count in every consent surface (the dialog, `trust allow`'s receipt,
+		// trust status, doctor, the settings badge) said three where one applies, and
+		// one path could eat 64 slots of a cap whose whole justification is bounding
+		// the git probes the union then dedupes away.
+		if seen[canon] {
+			continue
+		}
+		seen[canon] = true
 		out = append(out, canon)
 	}
 	return out, nil
+}
+
+// repoLocalSeedEntryRefusal is the extra bar a REPO-authored seed entry must clear,
+// beyond being a valid repo-relative path. Both halves exist because this entry is
+// committed by one person and read by another, on another machine, and is then
+// interpolated into a frame:
+//
+//   - Unprintable runes. A seed entry reaches the trust dialog and the settings
+//     panel's provenance line, and the classes unicode.IsPrint rejects are the ones
+//     that defeat a width bound: C0/C1 and ESC write straight through a renderer,
+//     and Cf (U+200B zero-width space, U+200D joiner, U+202E right-to-left
+//     override) measures ZERO cells, so a truncation budget bounds nothing. The
+//     display surfaces sanitize as well — this is not their only guard — but a repo
+//     has no legitimate reason to commit one, so refusing the file is the honest
+//     answer and it keeps the count the dialog shows equal to what applies.
+//   - A backslash. filepath.ToSlash is the identity on POSIX, so a Windows-authored
+//     "node_modules\\.bin" parses as one legal segment on Linux and macOS: every
+//     surface then advertises it, and at seed time os.Lstat simply misses and
+//     linkLocalPath returns on its silent absence path. Nothing ever says the entry
+//     did not apply. Refusing it names the real problem to the person who can fix
+//     it, in the file they can fix.
+//
+// Combining marks stay ALLOWED, here and in CanonicalSeedPath: macOS stores
+// filenames decomposed, so a legitimate "café" is "cafe" plus U+0301. They measure
+// as they render, so they defeat no width bound of their own — but a long run of
+// them is still repo-authored text with a surprising cell count, which is why the
+// display surfaces map Mn/Me to a 1-cell glyph rather than trusting this rule to
+// have removed them.
+func repoLocalSeedEntryRefusal(rel string) error {
+	for _, r := range rel {
+		if !unicode.IsPrint(r) {
+			return fmt.Errorf("contains the unprintable character U+%04X", r)
+		}
+	}
+	if strings.ContainsRune(rel, '\\') {
+		return errors.New(`contains a backslash — repo-local entries are slash-separated on every platform, and a backslash would silently never match here`)
+	}
+	return nil
 }

@@ -225,14 +225,20 @@ func TestCanonicalSeedPath(t *testing.T) {
 	}
 }
 
-// TestCanonicalSeedPathRefusesUnprintableRunes is a display guard living in a
-// validator, and that placement is the point: these entries are interpolated into a
-// confirm dialog and into the settings panel's provenance line, and the classes
-// below are exactly the ones that defeat a width bound \u2014 a zero-cell rune makes a
-// truncation budget bound nothing, and an escape writes through the renderer. A
-// surface that forgot to sanitize would ship the hole; refusing at the parse means
-// there is nothing left to sanitize.
-func TestCanonicalSeedPathRefusesUnprintableRunes(t *testing.T) {
+// TestRepoLocalRefusesUnprintableSeedEntries is a display guard enforced at the
+// REPO-LOCAL parse, and where it sits is the point. These entries are interpolated
+// into a confirm dialog and into the settings panel's provenance line, and the
+// classes below are exactly the ones that defeat a width bound — a zero-cell rune
+// makes a truncation budget bound nothing, and an escape writes through the
+// renderer.
+//
+// It is enforced here rather than in CanonicalSeedPath because that function also
+// judges the USER's own global lists, where the same rule silently narrowed an
+// accepted set that had worked for months — see
+// TestCanonicalSeedPathKeepsLegalFilenames. A repo has no legitimate reason to
+// commit one of these, so its file is refused whole; the display surfaces sanitize
+// as well, which is what covers the classes a per-rune parse rule cannot judge.
+func TestRepoLocalRefusesUnprintableSeedEntries(t *testing.T) {
 	for name, entry := range map[string]string{
 		"bidi override":     "node_modules/\u202egnp.exe",
 		"zero-width space":  "node_\u200bmodules",
@@ -240,27 +246,43 @@ func TestCanonicalSeedPathRefusesUnprintableRunes(t *testing.T) {
 		"escape":            "deps/\x1b[31m",
 		"c1 control":        "deps/\u009b31m",
 		"newline":           "deps\nmore",
+		"backslash":         "node_modules\\.bin",
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := CanonicalSeedPath(entry)
-			require.Error(t, err, "entry must be refused, not laundered into a frame")
-
-			// And the refusal reaches the file, so nothing from it applies.
 			body, jerr := json.Marshal([]string{entry})
 			require.NoError(t, jerr)
-			_, err = ParseRepoLocal([]byte(`{"link_paths":` + string(body) + `}`))
-			assert.Error(t, err)
+			_, err := ParseRepoLocal([]byte(`{"link_paths":` + string(body) + `}`))
+			require.Error(t, err, "the file must be refused whole, not laundered into a frame")
+			// Refused whole: a Problem beside a surviving list would advertise a count
+			// the seeding never applies.
+			assert.Contains(t, err.Error(), "link_paths[0]")
 		})
 	}
+}
 
-	// The counter-case, and the reason the rule is IsPrint rather than "ASCII only":
-	// macOS stores filenames decomposed, so a legitimate accented path arrives as a
-	// base letter plus a combining mark. Refusing every mark would break real repos,
-	// and a mark is measured at the width a terminal renders it \u2014 which is the
-	// property that actually matters here.
-	got, err := CanonicalSeedPath("cafe\u0301/node_modules")
-	require.NoError(t, err, "a decomposed accent is a real filename, not an attack")
-	assert.Equal(t, "cafe\u0301/node_modules", got)
+// TestCanonicalSeedPathKeepsLegalFilenames is the other half, and it is a
+// regression guard with a name: the display rule above briefly lived in
+// CanonicalSeedPath, which is also the rule applied to the user's own global
+// carry_files / link_paths. unicode.IsPrint rejects every Zs but U+0020, all of Cf
+// and all of Co — so a pasted no-break space, an ideographic space in a CJK path, a
+// soft hyphen and a Nerd-Font private-use rune are all legal filenames on Linux and
+// macOS that it refused. A user with such a directory in link_paths would have had
+// it silently stop being linked, under a warning naming the wrong reason.
+func TestCanonicalSeedPathKeepsLegalFilenames(t *testing.T) {
+	for name, entry := range map[string]string{
+		"no-break space":       "deps/a\u00a0b",
+		"ideographic space":    "\u4f9d\u5b58\u3000modules",
+		"soft hyphen":          "deps/co\u00adop",
+		"private use":          "\uf0a0icon/x",
+		"decomposed accent":    "cafe\u0301/node_modules",
+		"backslash on this OS": "weird\\name",
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := CanonicalSeedPath(entry)
+			require.NoError(t, err, "a legal filename is not an attack")
+			assert.Equal(t, entry, got)
+		})
+	}
 }
 
 // TestRepoLocalLayerKeysMatchTheWireSchema is the bridge guard: the settings panel

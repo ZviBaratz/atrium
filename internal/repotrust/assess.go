@@ -54,17 +54,25 @@ type Assessment struct {
 	// untrusted at assessment time.
 	Local repocfg.RepoLocal
 
-	// Granted is the verdict for exactly (Key, Hash). HasGrant reports whether
-	// the ledger holds ANY record for Key — what separates "never asked" from
-	// "granted for different content" in prompt copy. Record is that record.
+	// Granted is the verdict for exactly (Key, Hash) AND for everything this file
+	// declares — see ScopeUpgrade. HasGrant reports whether the ledger holds ANY
+	// record for Key — what separates "never asked" from "granted for different
+	// content" in prompt copy. Record is that record.
 	Granted  bool
 	HasGrant bool
 	Record   Record
 
+	// ScopeUpgrade is the one case where the bytes match a grant and Granted is
+	// still false: the record predates GrantVersionSeeds and this file declares
+	// seed lists, so the prompt that wrote it could not have described them. The
+	// file has not changed, so prompt copy must not say it has.
+	ScopeUpgrade bool
+
 	// FileErr is a present-but-unusable file: over the size cap, unreadable,
-	// undecodable JSON, or more than one entry. Nothing from such a file executes
-	// (there are no Entries), and surfaces report it rather than dropping it
-	// silently.
+	// undecodable JSON, more than one entry, or a repo_scripts entry the parse
+	// refused (a Problem). Nothing from such a file applies — enforcement refuses
+	// it whole, so nothing here may describe it as grantable — and surfaces report
+	// it rather than dropping it silently.
 	FileErr error
 	// LedgerErr is a ledger that could not be read (corrupt, future version).
 	// Grants read as zero while it stands — fail closed — and surfaces say so.
@@ -73,9 +81,12 @@ type Assessment struct {
 
 // WantsPrompt reports whether creating a session from this repo should ask the
 // user: the create ref declares something the grant would put into the session,
-// and the ledger does not grant these bytes. A file that declares nothing usable
-// never prompts — there is nothing to apply, so there is nothing to ask about
-// (its Problems still surface at enforcement).
+// and the ledger does not grant these bytes (or grants them at a version that
+// predates half of what they now confer — see ScopeUpgrade). A file that declares
+// nothing usable never prompts — there is nothing to apply, so there is nothing
+// to ask about — and neither does an unusable one: AssessRepo turns a refused
+// entry into FileErr precisely so Local is empty here, because enforcement
+// refuses such a file whole and a prompt for it would grant nothing, forever.
 //
 // "Declares something" is repocfg.RepoLocalSurfaces, which is also what
 // enforcement calls to decide the same question and what the dialog and `trust
@@ -119,6 +130,12 @@ func LiveState(ctx context.Context, key string, rec Record, updateBase bool) (st
 	switch {
 	case !a.Present:
 		return "absent at " + a.Ref, ""
+	case a.ScopeUpgrade:
+		// The bytes match, so this is not "changed" — but the grant predates the
+		// prompt that describes the file's seed lists, so nothing applies until the
+		// user re-allows. Saying "current" here would report a session that would
+		// run untrusted as trusted.
+		return "needs re-allow (new keys)", ""
 	case a.Hash == rec.Hash:
 		return "current", strings.Join(repocfg.RepoLocalSurfaces(a.Local), " + ")
 	default:
@@ -169,9 +186,20 @@ func AssessRepo(ctx context.Context, path, ref string) (Assessment, error) {
 
 	a.Hash = HashBytes(data)
 	parsed, err := repocfg.ParseRepoLocal(data)
-	if err != nil {
+	switch {
+	case err != nil:
 		a.FileErr = err
-	} else {
+	case len(parsed.Problems) > 0:
+		// A refused entry makes the file unusable, not partly usable. Enforcement
+		// refuses it whole (routeRepoLocal's Problems check runs before its
+		// surfaces check), so leaving the seed lists in Local here would let the
+		// dialog offer — and `trust allow` write — a grant for a file that then
+		// applies nothing, permanently: re-creating re-prompts and re-granting
+		// re-succeeds. Reporting it as unusable is what keeps the asking surfaces
+		// and the gate on one answer, and it is what main did before the seed
+		// lists gave a Problems-only file something to describe.
+		a.FileErr = fmt.Errorf("%s: %w", repocfg.RepoLocalFileName, parsed.Problems[0])
+	default:
 		a.Local = parsed
 	}
 	if len(repocfg.RepoLocalSurfaces(a.Local)) > 0 {
@@ -180,7 +208,22 @@ func AssessRepo(ctx context.Context, path, ref string) (Assessment, error) {
 
 	ledger, err := Load()
 	a.LedgerErr = err
-	a.Granted = ledger.Granted(key, a.Hash)
 	a.Record, a.HasGrant = ledger.Lookup(key)
+	a.Granted = ledger.Granted(key, a.Hash)
+	// A pre-#815 record cannot cover seed lists its prompt never described, even
+	// though the bytes match: repoLocalWire tolerated both keys before it read
+	// them, so a granted file may already carry them. Withdraw the verdict rather
+	// than the record — WantsPrompt then re-asks with the full description, and
+	// confirming re-stamps at the current version.
+	if a.Granted && declaresSeeds(a.Local) && !a.Record.CoversSeeds() {
+		a.Granted = false
+		a.ScopeUpgrade = true
+	}
 	return a, nil
+}
+
+// declaresSeeds reports whether a parsed file layers anything over the user's own
+// seed lists — the half of a grant that GrantVersionSeeds gates.
+func declaresSeeds(rl repocfg.RepoLocal) bool {
+	return len(rl.CarryFiles) > 0 || len(rl.LinkPaths) > 0
 }

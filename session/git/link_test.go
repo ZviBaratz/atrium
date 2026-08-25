@@ -249,7 +249,7 @@ func TestLinkLocalPath_NeverClobbersExistingDestination(t *testing.T) {
 		t.Fatalf("write precious file: %v", err)
 	}
 
-	wt.linkLocalPath("link_paths", rel)
+	wt.linkLocalPath(seedEntry{kind: "link_paths", rel: rel})
 
 	info, err := os.Lstat(dst)
 	if err != nil {

@@ -30,16 +30,22 @@
 //     ask — `atrium new`'s spool, the autoyes daemon — never prompt: the
 //     session starts untrusted and says so, and `atrium trust allow` is the
 //     headless grant.
-//   - WHAT UNTRUSTED DOES: nothing, visibly. The whole repo-local entry is
-//     inert — script, run command and environment together — and resolution
+//   - WHAT UNTRUSTED DOES: nothing, visibly. The whole FILE is inert — the
+//     entry's script, run command and environment, and the carry_files /
+//     link_paths it layers over the user's own lists (#815) — and resolution
 //     falls back to the user's own config.json. The refusal is surfaced, never
 //     silent. Enforcement lives in session/repoconfig.go's routeRepoLocal, the
 //     front door of the single resolution funnel (routeRepoScript), below the
 //     TUI, because the daemon reaches it with no UI in the process at all;
 //     this package only keeps the records.
-//   - PRECEDENCE: a trusted repo-local entry beats the user's global
-//     config.json entry for the same repo (the repo knows its own
-//     environment); the resolution site records that choice.
+//   - PRECEDENCE: it depends on the shape of the value, and the two answers are
+//     deliberate. A trusted repo-local repo_scripts entry REPLACES the user's
+//     global entry for that repo (there is one script to run, and the repo knows
+//     its own environment). The seed lists are sets, so they UNION instead, the
+//     repo's entries first — a repo declaring its dependency tree must not
+//     silently drop the user's personal carry in that one repo, which is why
+//     what overrides a repo's additions is revoking its grant rather than a
+//     per-repo suppression list (#815). The resolution site records both choices.
 //
 // The grant is advisory, the check is authoritative: whoever consults the
 // ledger must hash the bytes it is about to use, at the moment of use. That is
@@ -98,6 +104,20 @@ var ErrFutureVersion = errors.New("repo-trust ledger was written by a newer atri
 // than leaving the feature bricked until someone hand-deletes the file.
 var ErrCorrupt = errors.New("repo-trust ledger is not decodable")
 
+// GrantVersionSeeds is the first grant version whose prompt described the seed
+// lists. It exists because the hash alone cannot answer "was this allowed?" once
+// the set of things a grant CONFERS has grown: repoLocalWire tolerated
+// carry_files/link_paths as unknown keys before #815 read them, and invited repos
+// to ship them early, so a repo's file could carry both lists while the dialog
+// that granted it described only the setup script. The bytes are identical
+// afterwards, so a hash comparison would silently extend that grant to two powers
+// nobody was asked about. A record below this version covers the entry alone; a
+// file declaring seed lists re-prompts, saying that is why.
+const GrantVersionSeeds = 2
+
+// currentGrantVersion is stamped on every grant written now.
+const currentGrantVersion = GrantVersionSeeds
+
 // Record is one repo's grant: the hash of the .atrium.json content the user
 // allowed, when, and the origin remote at that moment (display metadata only —
 // never part of the key, see the package doc).
@@ -105,7 +125,17 @@ type Record struct {
 	Hash      string    `json:"hash"`
 	GrantedAt time.Time `json:"granted_at"`
 	Remote    string    `json:"remote,omitempty"`
+	// GrantVersion is what the prompt that wrote this record was able to describe.
+	// Absent (0) in every record written before #815 — omitempty keeps it out of a
+	// ledger that has nothing to say, so an untouched file is not rewritten by a
+	// reader. See GrantVersionSeeds and CoversSeeds.
+	GrantVersion int `json:"grant_version,omitempty"`
 }
+
+// CoversSeeds reports whether this grant was made by a prompt that described the
+// repo's carry_files/link_paths. False for every pre-#815 record, which is what
+// makes a repo's seed lists re-prompt on upgrade instead of activating silently.
+func (r Record) CoversSeeds() bool { return r.GrantVersion >= GrantVersionSeeds }
 
 // Ledger is the on-disk artifact: every granted repo, keyed by canonical root.
 type Ledger struct {
@@ -211,7 +241,7 @@ func Grant(key, hash, remote string, now time.Time) error {
 	if err != nil {
 		return err
 	}
-	l.Repos[key] = Record{Hash: hash, GrantedAt: now, Remote: remote}
+	l.Repos[key] = Record{Hash: hash, GrantedAt: now, Remote: remote, GrantVersion: currentGrantVersion}
 	return save(l)
 }
 

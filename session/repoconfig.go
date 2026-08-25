@@ -167,13 +167,28 @@ type repoLocalResolution struct {
 }
 
 // RepoLocalSeeds is the last resolution's trusted repo-local seed lists, and
-// whether a resolution has run for this session at all. Display API: the settings
-// panel names the rows the selected session's repo contributes to, and it must
-// fork nothing and touch no filesystem to do it — the poll sweep already resolved
-// this. resolved is false before the first resolution (a paused session, a direct
-// session, one restored before its first sweep), which callers must render as
-// "unknown", never as "the repo adds nothing".
+// whether one can be trusted to be current. Display API: the settings panel names
+// the rows the selected session's repo contributes to, and it must fork nothing and
+// touch no filesystem to do it — the poll sweep already resolved this.
+//
+// resolved is false before the first resolution (a direct session, one restored
+// before its first sweep) and — the case the field alone gets wrong — for a PAUSED
+// session. ComputeRunState is the only thing that re-resolves for a live session and
+// it early-returns on a paused instance, so a session paused after a positive
+// resolution keeps advertising it for as long as it stays parked. The moment that
+// matters is the moment a user runs `atrium trust revoke` and opens the panel to
+// check it took effect. Callers render false as "unknown", never as "the repo adds
+// nothing".
+//
+// Paused only, deliberately, not the whole of ComputeRunState's guard: an unstarted
+// instance has published nothing to be stale, so adding !Started() here would hide a
+// legitimate resolution from a session still mid-Start rather than fixing anything.
 func (i *Instance) RepoLocalSeeds() (carry, link []string, resolved bool) {
+	// Read BEFORE this instance's lock is acquired: Paused takes it itself, and a
+	// nested RLock deadlocks once a writer is queued between the two.
+	if i.Paused() {
+		return nil, nil, false
+	}
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	if !i.repoSeedsKnown {
@@ -183,9 +198,10 @@ func (i *Instance) RepoLocalSeeds() (carry, link []string, resolved bool) {
 }
 
 // setRepoSeeds publishes the resolution's seed lists. Called on every resolution,
-// including the refusing ones (which publish empty lists) — so a revoked grant
-// stops being advertised on the next sweep rather than lingering as the last
-// answer that happened to be positive.
+// including the refusing ones (which publish empty lists) — so for a session that
+// is still being swept, a revoked grant stops being advertised on the next tick
+// rather than lingering as the last answer that happened to be positive. A session
+// that is no longer swept at all is RepoLocalSeeds' problem, not this one's.
 func (i *Instance) setRepoSeeds(carry, link []string) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
