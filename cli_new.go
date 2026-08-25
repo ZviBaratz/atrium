@@ -89,19 +89,24 @@ var (
 			"from the stored config, where an unpinned request leaves that choice to the\n" +
 			"draining TUI.\n\n" +
 			"--account pins which claude_accounts entry the session runs on, by the name it\n" +
-			"is configured under — the create form's Account picker, as a flag. Without it\n" +
-			"the account is routed from the repository, which for two accounts sharing a\n" +
-			"pool and a rule is a choice the caller does not control. The name is resolved\n" +
-			"by the atrium that creates the session, and its CLAUDE_CONFIG_DIR and the\n" +
-			"account name recorded for the session come off that one entry, so the label the\n" +
-			"session carries and the login it runs under cannot disagree. Like a pick at the\n" +
-			"keyboard it overrides pool rotation and creates even on a rate-limited account.\n\n" +
-			"Setting CLAUDE_CONFIG_DIR inside --program is the older way to force an account\n" +
-			"and it still works, but it is invisible to Atrium: the env the program sets is\n" +
-			"closer to the process than the one Atrium injects, so the session runs on that\n" +
-			"directory while the account recorded for it is the routed one. It warns on\n" +
-			"stderr, and combining it with --account is refused rather than resolved in the\n" +
-			"pin's favour, because the program string is the half that would win.\n\n" +
+			"is configured under — what a pick on the create form's Account picker does for\n" +
+			"an entry row. A pool name is not an entry name and is refused, saying so: the\n" +
+			"picker's pool rows leave the member to rotation, which is what an unpinned\n" +
+			"request already gets for the pool the repository routes to. Without the flag\n" +
+			"the account is routed, and for two accounts sharing a pool and a rule that is\n" +
+			"a choice the caller does not control. The name is resolved by the atrium that\n" +
+			"creates the session, and its CLAUDE_CONFIG_DIR and the account name recorded\n" +
+			"for the session come off that one entry, so the label the session carries and\n" +
+			"the login it runs under cannot disagree. Like a pick at the keyboard it\n" +
+			"overrides pool rotation and creates even on a rate-limited account.\n\n" +
+			"Setting CLAUDE_CONFIG_DIR inside the program is the older way to force an\n" +
+			"account and it still works, but it is invisible to Atrium: the env the program\n" +
+			"sets is closer to the process than the one Atrium injects, so the session runs\n" +
+			"on that directory while the account recorded for it is the routed one. It warns\n" +
+			"on stderr — including when the program carrying it is the one in your\n" +
+			"config.json, which is where this is usually written — and combining it with\n" +
+			"--account is refused rather than resolved in the pin's favour, because the\n" +
+			"program string is the half that would win.\n\n" +
 			"The first prompt is optional, as it is in the create form. Pass \"-\" to read it\n" +
 			"from stdin, which is what makes a multi-line prompt practical to pipe in; omit\n" +
 			"the argument entirely and the session starts with no prompt at all.",
@@ -257,13 +262,14 @@ func runNew(out, errOut io.Writer, r newRequest) error {
 	}
 	// The account belongs to the same round as the programs: it is part of what the
 	// session will run, so a name that is not in claude_accounts is answered before a
-	// bad --path, and before anything is spooled. The name it returns is canonical —
-	// what the drain will resolve again against its own config.
+	// bad --path, and before anything is spooled. The name is spooled verbatim, not
+	// normalised: matching is exact, so there is nothing to canonicalise, and the drain
+	// resolves the same string again against its own config.
 	account, err := resolveCreateAccount(cfg, r, programs)
 	if err != nil {
 		return err
 	}
-	warnProgramSetsAccount(errOut, r, programs)
+	warnProgramSetsAccount(errOut, cfg, r, programs)
 
 	instances, err := loadStoredInstances()
 	if err != nil {
@@ -375,35 +381,36 @@ func applyProgramPins(cfg *config.Config, r newRequest, programs []string) ([]st
 }
 
 // resolveCreateAccount settles which claude_accounts entry --account named, returning
-// the canonical name to spool ("" when the flag was not passed, which leaves the choice
-// to routing exactly as it was before the flag existed).
+// the name to spool ("" when the flag was not passed, which leaves the choice to routing
+// exactly as it was before the flag existed).
 //
 // A courtesy check, like every other check this command makes: the drain resolves the
 // name again against its own config, which is the copy that will be honoured. What it
 // buys is the error a caller can act on — a typo answered at the terminal that made it,
 // naming the accounts that exist, rather than minutes later in a rejection receipt.
 //
-// The contradiction is not a courtesy. A --program that sets CLAUDE_CONFIG_DIR itself
-// wins over the dir Atrium injects — the program's env is closer to the process — so a
-// pin combined with one would stamp the pinned name onto a session running somewhere
-// else, which is the exact divergence #854 is about. Refused rather than resolved in
-// either direction: honouring the pin means silently rewriting the caller's own program
-// string, and honouring the program means accepting the flag and ignoring it.
+// The contradiction is not a courtesy. A program that sets CLAUDE_CONFIG_DIR itself wins
+// over the dir Atrium injects (agent.ProgramSetsClaudeConfigDir says why), so a pin
+// combined with one would stamp the pinned name onto a session running somewhere else,
+// which is the exact divergence #854 is about. Refused rather than resolved in either
+// direction: honouring the pin means silently rewriting the caller's own program string,
+// and honouring the program means accepting the flag and ignoring it. The drain refuses
+// the same combination independently, because a program string it substitutes itself is
+// one this command never sees.
 func resolveCreateAccount(cfg *config.Config, r newRequest, programs []string) (string, error) {
 	if r.account == "" {
 		return "", nil
 	}
-	if overriding := programsSettingConfigDir(programs); len(overriding) > 0 {
+	if overriding := programsSettingConfigDir(cfg, programs); len(overriding) > 0 {
 		return "", fmt.Errorf("--account %q cannot hold: %s sets CLAUDE_CONFIG_DIR itself, "+
-			"which the agent reads in preference to the directory Atrium injects; drop one of the two",
-			r.account, quoteProgram(overriding))
+			"which the agent reads in preference to the directory Atrium injects; drop "+
+			"--account, or run a program that leaves the account to Atrium",
+			r.account, describeConfigDirProgram(r, programs, overriding))
 	}
-	acct, ok := cfg.ClaudeAccountNamed(r.account)
-	if !ok {
-		return "", fmt.Errorf("--account %q names no configured claude account; config.json has %s",
-			r.account, cfg.ClaudeAccountVocabulary())
+	if problem := cfg.ClaudeAccountPinProblem(r.account); problem != "" {
+		return "", fmt.Errorf("--account %q %s", r.account, problem)
 	}
-	return acct.Name, nil
+	return r.account, nil
 }
 
 // warnProgramSetsAccount says on stderr that a program string is choosing the Claude
@@ -414,48 +421,70 @@ func resolveCreateAccount(cfg *config.Config, r newRequest, programs []string) (
 // Never reached alongside a pin — resolveCreateAccount refuses that combination first —
 // so this speaks only to a caller who has not been told about the flag yet, which is why
 // it names it.
-func warnProgramSetsAccount(errOut io.Writer, r newRequest, programs []string) {
-	if r.account != "" {
+//
+// Silent when claude_accounts is empty, which is not a courtesy either: with no accounts
+// configured Config.ResolveClaudeAccount stamps nothing, so there is no recorded account
+// for the program's directory to disagree with, and the sentence below would describe a
+// divergence that cannot happen while recommending a flag that would be refused.
+func warnProgramSetsAccount(errOut io.Writer, cfg *config.Config, r newRequest, programs []string) {
+	if r.account != "" || len(cfg.ClaudeAccounts) == 0 {
 		return
 	}
-	overriding := programsSettingConfigDir(programs)
+	overriding := programsSettingConfigDir(cfg, programs)
 	if len(overriding) == 0 {
 		return
 	}
-	_, _ = fmt.Fprintf(errOut, "warning: %s sets CLAUDE_CONFIG_DIR, so the session will run on that "+
-		"directory while Atrium records the account its routing chose — the two can name "+
+	_, _ = fmt.Fprintf(errOut, "warning: %s sets CLAUDE_CONFIG_DIR, so that is the directory the "+
+		"agent reads while Atrium records the account its routing chose — the two can name "+
 		"different logins. Pass --account <name> to pin one Atrium also records.\n",
-		quoteProgram(overriding))
+		describeConfigDirProgram(r, programs, overriding))
 }
 
-// programsSettingConfigDir returns the resolved programs that set CLAUDE_CONFIG_DIR in
-// their own command line, in the order they were resolved.
+// programsSettingConfigDir returns the programs that set CLAUDE_CONFIG_DIR in their own
+// command line, in the order they were resolved. What counts as setting it is
+// agent.ProgramSetsClaudeConfigDir, shared with the drain's own guard so the two cannot
+// disagree about the shape.
 //
-// A substring test on the variable name, which is what the shape being detected reduces
-// to: `env CLAUDE_CONFIG_DIR=<dir> claude …`, or the bare `CLAUDE_CONFIG_DIR=<dir>
-// claude …` a shell would accept. Case-sensitive because environment variable names are.
-// It over-reports a program that merely mentions the name — one that unsets it, or passes
-// it as text — and that is the direction to be wrong in: the outcome of a false positive
-// is a warning about a real ambiguity, or a refusal telling a caller to drop one of two
-// flags. Under-reporting is the outcome this exists to prevent.
-func programsSettingConfigDir(programs []string) []string {
+// The "" a program list carries when no --program, --profile or --variants was passed is
+// resolved to the configured default first, because that is the string the draining TUI
+// will run. An atrium whose config.json sets the account this way sets it for every
+// session, which is where the workaround #854 describes actually lives — so a check that
+// read only what the flags named would pass exactly the command line this flag was added
+// for. Resolved for the check alone: the "" is still what gets spooled, so the drain keeps
+// choosing its own default, as it does for a request from any other atrium.
+func programsSettingConfigDir(cfg *config.Config, programs []string) []string {
 	var hits []string
 	for _, program := range programs {
-		if strings.Contains(program, "CLAUDE_CONFIG_DIR") {
+		if program == "" {
+			program = cfg.GetProgram()
+		}
+		if agent.ProgramSetsClaudeConfigDir(program) {
 			hits = append(hits, program)
 		}
 	}
 	return hits
 }
 
-// quoteProgram names the offending program(s) for the two messages above: the string
-// itself when there is one to quote, and a count when a fan-out has several, because
-// quoting three command lines into one sentence is not readable.
-func quoteProgram(programs []string) string {
-	if len(programs) == 1 {
-		return fmt.Sprintf("--program %q", programs[0])
+// describeConfigDirProgram is the subject of the two messages above: which program is
+// setting the variable, in a spelling that does not tell the caller to look at a flag
+// they may not have passed.
+//
+// Three shapes, because the sentence has to be true for a caller who wrote the program
+// string, one who named a profile or a variant spec, and one who passed neither and is
+// about to be shown a string out of their config.json for the first time. A fan-out is
+// counted rather than quoted — three command lines in one sentence is not readable — and
+// counted against the whole batch, so "1 of 2" says the other member is fine. The count
+// is phrased as the program OF n sessions rather than as n programs so that the verb
+// following it is singular whatever the count is.
+func describeConfigDirProgram(r newRequest, programs, overriding []string) string {
+	if len(programs) != 1 {
+		return fmt.Sprintf("the program of %d of the %d requested sessions",
+			len(overriding), len(programs))
 	}
-	return fmt.Sprintf("%d of the requested sessions' programs", len(programs))
+	if r.program == "" && r.profile == "" && !r.variantsSet {
+		return fmt.Sprintf("the configured default program %q", overriding[0])
+	}
+	return fmt.Sprintf("the program %q", overriding[0])
 }
 
 // pinFlagNames names the pin flags this command line actually passed, so a refusal

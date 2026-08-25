@@ -5,7 +5,7 @@ package main
 // The flag's whole purpose is that ONE thing decides the account, so what is asserted
 // here is deliberately thin: the CLI resolves the name against claude_accounts as a
 // courtesy — a typo answered at the terminal that made it rather than in a receipt
-// minutes later — and spools the canonical NAME. It spools no directory, because the
+// minutes later — and spools the NAME verbatim. It spools no directory, because the
 // draining atrium resolves the name against its own config and takes both the injected
 // CLAUDE_CONFIG_DIR and the stamped account off that one entry
 // (app.TestCreateDrainPinnedAccountStampsTheAccountItRuns is where the two are held
@@ -119,7 +119,11 @@ func TestNewAccountRejectsAnAmbiguousName(t *testing.T) {
 
 	_, _, err := newSession(t, newRequest{title: "fix-auth", path: tempRepo(t), account: "work"})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "work")
+	// The diagnosis, not just the name: "work" is in the message either way, because the
+	// message quotes the flag's own value, so asserting it would pass for a refusal that
+	// called this a misspelling — and the remedy for a clash is to rename an entry.
+	assert.Contains(t, err.Error(), "names 2 entries")
+	assert.Contains(t, err.Error(), "distinct names")
 	assert.Empty(t, spooledCreates(t))
 }
 
@@ -176,4 +180,119 @@ func TestNewProgramSettingTheConfigDirWarnsAndProceeds(t *testing.T) {
 	assert.Empty(t, entries[0].Request.Account, "and no account is invented for it")
 	assert.Contains(t, stderr, "CLAUDE_CONFIG_DIR")
 	assert.Contains(t, stderr, "--account", "the warning names the supported way to pin one")
+}
+
+// TestNewAccountRejectsAPoolName is the near miss the flag invites: the config below
+// declares a pool called quantivly, so "no such account" would be a sentence the caller
+// can see is false, and the picker they are copying does have a row for it. --account
+// pins one login; the pool row's behaviour is what an unpinned request already gets.
+func TestNewAccountRejectsAPoolName(t *testing.T) {
+	sandboxDataDir(t)
+	accountsConfig(t)
+
+	_, _, err := newSession(t, newRequest{title: "fix-auth", path: tempRepo(t), account: "quantivly"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "names a pool, not an entry")
+	assert.Contains(t, err.Error(), "zvi.baratz, zvi.baratz2", "and the entries in it")
+	assert.Empty(t, spooledCreates(t))
+}
+
+// TestNewAccountRefusesADefaultProgramThatSetsTheConfigDir is the contradiction where it
+// actually lives. The workaround #854 describes is written into config.json's `program`,
+// not typed on the command line, so a caller who adopts --account has one there already —
+// and a check that read only the flags would let exactly that command line through, pin
+// and all, to the divergence the flag exists to remove.
+func TestNewAccountRefusesADefaultProgramThatSetsTheConfigDir(t *testing.T) {
+	sandboxDataDir(t)
+	cfg := accountsConfig(t)
+	cfg.DefaultProgram = "env CLAUDE_CONFIG_DIR=/home/zvi/.claude-work claude"
+	require.NoError(t, config.SaveConfig(cfg))
+
+	_, _, err := newSession(t, newRequest{title: "fix-auth", path: tempRepo(t), account: "zvi.baratz2"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "configured default program",
+		"and it says the string came from the config, not from a flag they did not pass")
+	assert.Contains(t, err.Error(), "zvi.baratz2")
+	assert.Empty(t, spooledCreates(t))
+}
+
+// TestNewDefaultProgramSettingTheConfigDirWarns: the same config, without the pin, is the
+// workaround in the state it is actually deployed in — so it warns for the same reason a
+// --program spelling of it does. What the record carries is unchanged: "" defers the
+// program to the draining TUI, which resolves its own default, and this command resolves
+// the config's copy only to decide whether to say anything.
+func TestNewDefaultProgramSettingTheConfigDirWarns(t *testing.T) {
+	sandboxDataDir(t)
+	cfg := accountsConfig(t)
+	cfg.DefaultProgram = "env CLAUDE_CONFIG_DIR=/home/zvi/.claude-work claude"
+	require.NoError(t, config.SaveConfig(cfg))
+
+	_, stderr, err := newSession(t, newRequest{title: "fix-auth", path: tempRepo(t)})
+	require.NoError(t, err, "the workaround must keep working")
+
+	entries := spooledCreates(t)
+	require.Len(t, entries, 1)
+	assert.Empty(t, entries[0].Request.Program, "the program is still the drain's choice to make")
+	assert.Contains(t, stderr, "CLAUDE_CONFIG_DIR")
+	assert.Contains(t, stderr, "--account")
+}
+
+// TestNewProgramSettingTheConfigDirIsSilentWithNoAccounts: with no claude_accounts
+// nothing routes and nothing is stamped, so there is no recorded account for the
+// program's directory to disagree with. Warning here would describe a divergence that
+// cannot happen and recommend a flag that is guaranteed to be refused.
+func TestNewProgramSettingTheConfigDirIsSilentWithNoAccounts(t *testing.T) {
+	sandboxDataDir(t)
+	fanOutConfig(t)
+
+	_, stderr, err := newSession(t, newRequest{
+		title: "fix-auth", path: tempRepo(t),
+		program: "env CLAUDE_CONFIG_DIR=/home/zvi/.claude-work claude",
+	})
+	require.NoError(t, err)
+	require.Len(t, spooledCreates(t), 1)
+	assert.NotContains(t, stderr, "CLAUDE_CONFIG_DIR",
+		"nothing to warn about: no account is recorded to diverge from")
+}
+
+// TestNewAccountAcceptsAProgramThatOnlyNamesTheVariable: the detector tests for an
+// ASSIGNMENT, so a program that merely mentions CLAUDE_CONFIG_DIR — in a system prompt,
+// an --add-dir, a grep — sets nothing and contradicts nothing. Refusing it would leave a
+// legitimate command line with no way to pass --account at all, since the refusal offers
+// no override.
+func TestNewAccountAcceptsAProgramThatOnlyNamesTheVariable(t *testing.T) {
+	sandboxDataDir(t)
+	accountsConfig(t)
+
+	_, stderr, err := newSession(t, newRequest{
+		title: "fix-auth", path: tempRepo(t), account: "zvi.baratz2",
+		program: `claude --append-system-prompt "never read CLAUDE_CONFIG_DIR"`,
+	})
+	require.NoError(t, err)
+
+	entries := spooledCreates(t)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "zvi.baratz2", entries[0].Request.Account)
+	assert.NotContains(t, stderr, "CLAUDE_CONFIG_DIR", "and nothing is warned about either")
+}
+
+// TestNewAccountRefusalNamesTheFanOutCount: a fan-out is counted rather than quoted, and
+// against the whole batch, so "1 of 2" says which part of the request is the problem.
+func TestNewAccountRefusalNamesTheFanOutCount(t *testing.T) {
+	sandboxDataDir(t)
+	cfg := accountsConfig(t)
+	cfg.Profiles = append(cfg.Profiles, config.Profile{
+		Name: "pinned", Program: "env CLAUDE_CONFIG_DIR=/home/zvi/.claude-work claude",
+	})
+	require.NoError(t, config.SaveConfig(cfg))
+
+	_, _, err := newSession(t, newRequest{
+		title: "bake", path: gitRepoWithBranches(t),
+		variants: "claude:1,pinned:1", variantsSet: true,
+		account: "zvi.baratz2",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "the program of 1 of the 2 requested sessions",
+		"counted against the batch, so the caller is told the other member is fine")
+	assert.Empty(t, spooledCreates(t))
 }

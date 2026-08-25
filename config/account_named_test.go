@@ -36,6 +36,15 @@ func TestClaudeAccountNamed(t *testing.T) {
 	t.Run("an account with no config_dir still resolves", func(t *testing.T) {
 		// It is a legal entry — "inherit the ambient env" — so pinning it is legal too,
 		// and the empty dir it carries is the answer rather than a miss.
+		//
+		// Note what pinning it can and cannot promise. Nothing is injected, so the session
+		// runs on whatever CLAUDE_CONFIG_DIR the tmux server's environment already holds:
+		// the pin fixes the recorded name, not the login. That is the same deal routing
+		// gives such an entry (ResolveClaudeAccount returns its empty dir too), and
+		// FindClaudeAccount will not re-anchor it — an empty dir never matches — so the
+		// dir-anchored guarantee the flag buys for a config_dir account is not available
+		// for this one. Refusing the pin here would only take away the picker's own
+		// behaviour without putting the guarantee in its place.
 		got, ok := cfg.ClaudeAccountNamed("ambient")
 		require.True(t, ok)
 		assert.Equal(t, "ambient", got.Name)
@@ -73,13 +82,63 @@ func TestClaudeAccountNamed(t *testing.T) {
 	})
 }
 
-// The refusal vocabulary is one function because both the CLI's courtesy refusal and the
-// drain's authoritative one quote it, and it has to name the dormant case rather than
-// render an empty list: with no claude_accounts no name would have worked, which is a
-// different mistake from a misspelling.
-func TestClaudeAccountVocabulary(t *testing.T) {
-	cfg := &Config{ClaudeAccounts: []ClaudeAccount{{Name: "work-1"}, {Name: "work-2"}}}
-	assert.Equal(t, "work-1, work-2", cfg.ClaudeAccountVocabulary())
+// ClaudeAccountPinProblem is the diagnosis behind every --account refusal, and it is one
+// function because two processes refuse the same name: `atrium new` as a courtesy at the
+// terminal, the create drain authoritatively against the config it will honour. What is
+// asserted here is that the four cases stay APART — each has a different remedy, and
+// collapsing them is how a config error gets reported as a typo.
+func TestClaudeAccountPinProblem(t *testing.T) {
+	cfg := &Config{ClaudeAccounts: []ClaudeAccount{
+		{Name: "work-1", Pool: "quantivly"},
+		{Name: "work-2", Pool: "quantivly"},
+		{Name: "solo"},
+	}}
 
-	assert.Contains(t, (&Config{}).ClaudeAccountVocabulary(), "no claude_accounts")
+	t.Run("a resolvable name is no problem", func(t *testing.T) {
+		assert.Empty(t, cfg.ClaudeAccountPinProblem("work-2"))
+		assert.Empty(t, cfg.ClaudeAccountPinProblem("solo"))
+	})
+
+	t.Run("a misspelling names what it could have said", func(t *testing.T) {
+		problem := cfg.ClaudeAccountPinProblem("work-3")
+		assert.Contains(t, problem, "names no configured claude account")
+		assert.Contains(t, problem, "work-1, work-2, solo")
+	})
+
+	t.Run("a pool name is not a misspelling", func(t *testing.T) {
+		// The near miss the flag invites: the config does declare quantivly, so telling
+		// the caller it has no such account is a sentence they can see is false. --account
+		// pins one login; the pool's own behaviour is what an unpinned request gets.
+		problem := cfg.ClaudeAccountPinProblem("quantivly")
+		assert.Contains(t, problem, "names a pool, not an entry")
+		assert.Contains(t, problem, "work-1, work-2", "and the entries to choose between")
+		assert.NotContains(t, problem, "solo", "which is in no pool")
+	})
+
+	t.Run("an ungrouped account is not reported as its own pool", func(t *testing.T) {
+		// PoolMembers answers for a singleton — an ungrouped account matched by its own
+		// name — and that is the wrong table here: "solox" is a misspelling of an entry,
+		// and there is no pool row for the caller to be pointed at.
+		problem := cfg.ClaudeAccountPinProblem("solox")
+		assert.Contains(t, problem, "names no configured claude account")
+	})
+
+	t.Run("a shared name is a config to repair", func(t *testing.T) {
+		dup := &Config{ClaudeAccounts: []ClaudeAccount{
+			{Name: "work", ConfigDir: "~/.claude-a"},
+			{Name: "work", ConfigDir: "~/.claude-b"},
+		}}
+		problem := dup.ClaudeAccountPinProblem("work")
+		assert.Contains(t, problem, "names 2 entries")
+		assert.Contains(t, problem, "distinct names", "the remedy, which is not retyping the name")
+		assert.NotContains(t, problem, "names no configured claude account",
+			"a message that listed the name twice while denying it exists argues with itself")
+	})
+
+	t.Run("a dormant config is named as itself", func(t *testing.T) {
+		// No name would have worked, which is a different mistake from a misspelling and
+		// must not be rendered as an empty list of alternatives.
+		problem := (&Config{}).ClaudeAccountPinProblem("work")
+		assert.Contains(t, problem, "no claude_accounts")
+	})
 }

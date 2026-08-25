@@ -14,6 +14,7 @@ package app
 // by luck and every assertion below passes against a drain that ignores Account entirely.
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
@@ -31,11 +32,26 @@ import (
 func sharedPoolDrainHome(t *testing.T) *home {
 	t.Helper()
 	h := drainHome(t)
+	// Under the test's own temp root, not a fixed /tmp path: creating a session runs the
+	// identity check, which READS <config_dir>/.claude.json before it looks at whether
+	// anything is expected of it (config.CheckIdentity), so a hardcoded dir would have
+	// these tests opening files outside the sandbox.
+	root := t.TempDir()
 	h.appConfig.ClaudeAccounts = []config.ClaudeAccount{
-		{Name: "work-1", ConfigDir: "/tmp/claude-work-1", Pool: "quantivly", PathMatches: []string{"/"}},
-		{Name: "work-2", ConfigDir: "/tmp/claude-work-2", Pool: "quantivly", PathMatches: []string{"/"}},
+		{Name: "work-1", ConfigDir: filepath.Join(root, "claude-work-1"), Pool: "quantivly", PathMatches: []string{"/"}},
+		{Name: "work-2", ConfigDir: filepath.Join(root, "claude-work-2"), Pool: "quantivly", PathMatches: []string{"/"}},
 	}
 	return h
+}
+
+// accountDir is the directory the named fixture account declares — which is what the
+// assertions below compare an instance's injected dir against, because "the pin's own
+// entry decided it" is the invariant, not any particular path.
+func accountDir(t *testing.T, h *home, name string) string {
+	t.Helper()
+	acct, ok := h.appConfig.ClaudeAccountNamed(name)
+	require.True(t, ok, "fixture account %q", name)
+	return acct.ResolvedConfigDir()
 }
 
 // drainOneCreate spools a request, drains it, and returns the instance it created.
@@ -59,7 +75,7 @@ func TestCreateDrainRoutesWhenNoAccountIsPinned(t *testing.T) {
 
 	assert.Equal(t, "work-1", inst.ClaudeAccountName(),
 		"unpinned, the first account whose rules match is the one routing stamps")
-	assert.Equal(t, "/tmp/claude-work-1", inst.ClaudeConfigDir())
+	assert.Equal(t, accountDir(t, h, "work-1"), inst.ClaudeConfigDir())
 }
 
 // TestCreateDrainPinnedAccountStampsTheAccountItRuns is the invariant #854 asks for: for
@@ -84,7 +100,7 @@ func TestCreateDrainPinnedAccountStampsTheAccountItRuns(t *testing.T) {
 	inst := drainOneCreate(t, h, outbox.Request{Account: "work-2"})
 
 	assert.Equal(t, "work-2", inst.ClaudeAccountName(), "the pin, not the routed member")
-	assert.Equal(t, "/tmp/claude-work-2", inst.ClaudeConfigDir(),
+	assert.Equal(t, accountDir(t, h, "work-2"), inst.ClaudeConfigDir(),
 		"and the dir injected at launch is that same account's")
 	assert.Equal(t, "quantivly", inst.ClaudeAccountPool(),
 		"a pinned session still clusters under its own declared pool")
@@ -110,7 +126,7 @@ func TestCreateDrainPinnedAccountCreatesOnALimitedOne(t *testing.T) {
 	inst := drainOneCreate(t, h, outbox.Request{Account: "work-2"})
 
 	assert.Equal(t, "work-2", inst.ClaudeAccountName())
-	assert.Equal(t, "/tmp/claude-work-2", inst.ClaudeConfigDir())
+	assert.Equal(t, accountDir(t, h, "work-2"), inst.ClaudeConfigDir())
 }
 
 // TestCreateDrainRefusesAnUnknownAccount: an account name this config does not have is
@@ -128,6 +144,9 @@ func TestCreateDrainRefusesAnUnknownAccount(t *testing.T) {
 	require.True(t, ok, "the caller is owed a receipt")
 	assert.Contains(t, reason, "work-3")
 	assert.Contains(t, reason, "work-1, work-2", "and the names it could have said")
+	assert.Contains(t, reason, "restarted",
+		"and why a name the CLI just accepted can still miss here: this process read its "+
+			"config at startup and never re-reads it, so an entry added since is invisible")
 }
 
 // TestCreateDrainRefusesAnAmbiguousAccount: two entries under one name make the pin
@@ -135,9 +154,10 @@ func TestCreateDrainRefusesAnUnknownAccount(t *testing.T) {
 // close it — one dir injected under a name the caller may have meant for the other login.
 func TestCreateDrainRefusesAnAmbiguousAccount(t *testing.T) {
 	h := drainHome(t)
+	root := t.TempDir()
 	h.appConfig.ClaudeAccounts = []config.ClaudeAccount{
-		{Name: "work", ConfigDir: "/tmp/claude-a"},
-		{Name: "work", ConfigDir: "/tmp/claude-b"},
+		{Name: "work", ConfigDir: filepath.Join(root, "claude-a")},
+		{Name: "work", ConfigDir: filepath.Join(root, "claude-b")},
 	}
 	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: t.TempDir(), Account: "work"})
 
@@ -146,5 +166,63 @@ func TestCreateDrainRefusesAnAmbiguousAccount(t *testing.T) {
 	assert.Nil(t, titled(h, "fix-auth"))
 	reason, ok := outbox.Rejection(path)
 	require.True(t, ok)
-	assert.Contains(t, reason, "work")
+	// The diagnosis, not the name: the message quotes the flag's value either way, so
+	// asserting "work" would pass for a receipt that called this a misspelling — and it
+	// would pass for a title conflict or a cap refusal too.
+	assert.Contains(t, reason, "names 2 entries")
+	assert.Contains(t, reason, "distinct names")
+}
+
+// TestCreateDrainRefusesAPinAgainstAProgramThatSetsTheConfigDir: a program that assigns
+// CLAUDE_CONFIG_DIR is a second place deciding the login, and it is the place that wins,
+// so a pin arriving beside one is refused rather than stamped over it. The CLI refuses the
+// same pair, but a refusal there cannot stand in for this one — see the next test.
+func TestCreateDrainRefusesAPinAgainstAProgramThatSetsTheConfigDir(t *testing.T) {
+	h := sharedPoolDrainHome(t)
+	path := spoolCreate(t, outbox.Request{
+		Title: "fix-auth", Path: t.TempDir(), Account: "work-2",
+		Program: "env CLAUDE_CONFIG_DIR=" + accountDir(t, h, "work-1") + " claude",
+	})
+
+	refuseDrain(t, h)
+
+	assert.Nil(t, titled(h, "fix-auth"), "nothing may be stamped work-2 while running work-1")
+	reason, ok := outbox.Rejection(path)
+	require.True(t, ok)
+	assert.Contains(t, reason, "CLAUDE_CONFIG_DIR")
+	assert.Contains(t, reason, "work-2")
+}
+
+// TestCreateDrainRefusesAPinAgainstItsOwnDefaultProgram is why the guard cannot live only
+// in the CLI. A request carrying no program of its own runs the DRAINING atrium's default
+// — a string chosen when this TUI was launched, which the process that spooled the
+// request never saw and could not have checked. That is the exact shape of the workaround
+// #854 is about: the account written into the program, once, for every session.
+func TestCreateDrainRefusesAPinAgainstItsOwnDefaultProgram(t *testing.T) {
+	h := sharedPoolDrainHome(t)
+	h.program = "env CLAUDE_CONFIG_DIR=" + accountDir(t, h, "work-1") + " claude"
+	path := spoolCreate(t, outbox.Request{Title: "fix-auth", Path: t.TempDir(), Account: "work-2"})
+
+	refuseDrain(t, h)
+
+	assert.Nil(t, titled(h, "fix-auth"))
+	reason, ok := outbox.Rejection(path)
+	require.True(t, ok)
+	assert.Contains(t, reason, "CLAUDE_CONFIG_DIR")
+}
+
+// TestCreateDrainPinsBesideAProgramThatOnlyNamesTheVariable: the guard tests for an
+// assignment. A program that merely mentions the variable name sets nothing, contradicts
+// nothing, and must not cost the caller their pin — the refusal offers no override, so
+// over-reading the shape here would mean a legitimate program cannot use --account at all.
+func TestCreateDrainPinsBesideAProgramThatOnlyNamesTheVariable(t *testing.T) {
+	h := sharedPoolDrainHome(t)
+
+	inst := drainOneCreate(t, h, outbox.Request{
+		Account: "work-2",
+		Program: `claude --append-system-prompt "never read CLAUDE_CONFIG_DIR"`,
+	})
+
+	assert.Equal(t, "work-2", inst.ClaudeAccountName())
+	assert.Equal(t, accountDir(t, h, "work-2"), inst.ClaudeConfigDir())
 }
