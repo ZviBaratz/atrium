@@ -388,8 +388,8 @@ func (s *SettingsOverlay) innerWidth() int { return s.boxWidth() - 4 }
 // titleLine is the panel's first row: its name, plus the active filter.
 //
 // The filter rides this row rather than claiming one of its own because the box's height
-// depends only on the terminal size — a taller box on `/` would re-centre the whole panel
-// under the user mid-keystroke (the jump defaultPickerRows' comment warns about). The
+// never changes inside a view (paneHeight) — a taller box on `/` would re-centre the whole
+// panel under the user mid-keystroke (the jump defaultPickerRows' comment warns about). The
 // query is truncated to the inner width for the same reason: an over-wide line soft-wraps,
 // grows the box a row, and clips the pinned hint off the bottom.
 func (s *SettingsOverlay) titleLine() string {
@@ -408,9 +408,12 @@ func (s *SettingsOverlay) titleLine() string {
 // Render draws the panel as a centered bordered box: a title, the rail beside the highlighted
 // category's rows, a separator, the fixed-height help pane, and the key hints.
 //
-// The box's height is a function of the terminal size alone, so it never changes as the rail
-// or row cursor moves — a centered overlay that resizes gets re-centered under the user
-// mid-navigation.
+// The box's height is a function of the terminal size and the selected view's kind
+// (neededPaneLines), so it never changes as the row cursor moves, as the filter narrows,
+// or between category views — a centered overlay that resizes gets re-centered under the
+// user mid-navigation. The one deliberate re-centre is crossing the All-settings
+// boundary, where the pane trades the category views' rail-height box for the audit
+// view's terminal-bounded one (#693).
 func (s *SettingsOverlay) Render() string {
 	t := theme.Current()
 

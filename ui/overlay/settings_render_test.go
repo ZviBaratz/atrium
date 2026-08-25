@@ -387,24 +387,55 @@ func TestCurrentRailEntryIsAlwaysVisible(t *testing.T) {
 	}
 }
 
-// TestBoxHeightDependsOnlyOnTheTerminal pins that the box neither jumps as the rail moves
-// nor changes when the row cursor does. A centered overlay whose height changes gets
-// re-centered under the user's cursor mid-navigation — the jump defaultPickerRows'
-// comment warns about.
-func TestBoxHeightDependsOnlyOnTheTerminal(t *testing.T) {
+// TestBoxHeightIsStableWithinAndAcrossCategoryViews pins #693's height model: the box
+// never jumps as the row cursor moves, as the filter narrows, or between any two non-flat
+// rail entries — a centered overlay whose height changes gets re-centered under the user
+// mid-navigation, the jump defaultPickerRows' comment warns about. The flat All-settings
+// view is the one deliberate exception: on a terminal that affords it, it alone takes a
+// taller box (the audit view fills what the category views no longer pad out to).
+// Mutating neededPaneLines to return maxPaneLines unconditionally (the pre-#693 model)
+// fails the category-height rows; returning the rail length unconditionally fails the
+// flat-view row.
+func TestBoxHeightIsStableWithinAndAcrossCategoryViews(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
 	o.SetSize(100, 32)
+	o.railCursor = railDefaultIndex()
+	o.syncCursorToRail()
 	want := lipgloss.Height(o.Render())
 
-	for i := range railEntries() {
+	flat := 0
+	for i, e := range railEntries() {
 		o.railCursor = i
 		o.syncCursorToRail()
-		assert.Equalf(t, want, lipgloss.Height(o.Render()),
-			"rail entry %q changed the box height", railEntries()[i].label)
+		got := lipgloss.Height(o.Render())
+		if e.kind == railAll {
+			flat = got
+			continue
+		}
+		assert.Equalf(t, want, got, "rail entry %q changed the box height", e.label)
 	}
+	assert.Greater(t, flat, want,
+		"at 100x32 the flat view must take the taller, terminal-bounded box — the audit view is the one deliberate re-centre")
+
+	// The category pane is the rail's own height — the stated, test-readable minimum
+	// (#693: "sizes to its content with a stated minimum").
+	o.railCursor = railDefaultIndex()
+	o.syncCursorToRail()
+	assert.Equal(t, len(railEntries()), o.paneHeight(),
+		"a category view's pane is exactly the rail length once the terminal affords it")
+
 	for _, key := range []string{"max_sessions", "group_mode", "agent_oom_margin", "config_file"} {
 		require.True(t, o.OpenAt(key))
 		assert.Equalf(t, want, lipgloss.Height(o.Render()), "row %q changed the box height", key)
+	}
+
+	// Filtering must not resize the box either: the search view rides the selected
+	// entry's height, so a keystroke in `/` cannot re-centre the panel.
+	require.True(t, o.OpenAt("max_sessions"))
+	o.HandleKeyPress(keyMsg("/"))
+	for _, r := range []string{"s", "e", "s"} {
+		o.HandleKeyPress(textMsg(r))
+		assert.Equalf(t, want, lipgloss.Height(o.Render()), "typing %q in the filter changed the box height", r)
 	}
 }
 
