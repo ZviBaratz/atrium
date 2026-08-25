@@ -63,9 +63,6 @@ func (c *CmdLogOverlay) SetSize(width, height int) {
 	c.height = height
 }
 
-// SetWidth mirrors the other overlays' responsive-width setter.
-func (c *CmdLogOverlay) SetWidth(width int) { c.SetSize(width, c.height) }
-
 // records returns the currently-filtered command records, newest first. Read live
 // so the view is always current.
 func (c *CmdLogOverlay) records() []cmdlog.Record {

@@ -18,7 +18,9 @@ type SizeSpec struct {
 	// int(float32(term) * frac) — float32 on purpose, and load-bearing: the
 	// goldens encode that exact truncation, and a float64 reimplementation
 	// disagrees with it (0.7 of 90 columns is 63 in float32 and 62 in
-	// float64). The width-contract tests pin the discriminating case.
+	// float64). TestSizeSpecFitIsFloat32 pins the discriminating case; the
+	// width-contract tests cannot — they derive the claimed width from the
+	// same Fit they measure.
 	WFrac, HFrac float32
 
 	// WExtra and HExtra are added to the scaled value before the caps: the
@@ -28,13 +30,18 @@ type SizeSpec struct {
 	WExtra, HExtra int
 
 	// WMax and HMax cap the scaled value (zero means uncapped). On an
-	// unsized terminal (a zero or negative axis) Fit returns the cap
-	// directly — the preferred size — which is what the width helpers this
-	// type replaced did for their zero case.
+	// unsized terminal (a zero or negative axis) Fit returns the preferred
+	// size: the larger of the cap and the floor. The confirm and welcome
+	// width helpers this type replaced did the same for their zero case;
+	// the other replaced closures computed a degenerate zero there, so an
+	// overlay sized before the first WindowSizeMsg now gets its preferred
+	// size instead — the conversion's one declared behavioural delta
+	// (PR #866).
 	WMax, HMax int
 
 	// WMin and HMin floor each axis, applied after the caps, so a floor
-	// above a cap wins.
+	// above a cap wins — on the unsized branch too, where the preferred
+	// size is the larger of the two.
 	WMin, HMin int
 }
 
@@ -81,11 +88,12 @@ func (s SizeSpec) Fit(termW, termH int) (w, h int) {
 	return w, h
 }
 
-// fitAxis resolves one axis: the preferred size (the cap) when the terminal
-// axis is unknown, otherwise scale, extra, cap, floor — in that order.
+// fitAxis resolves one axis: the preferred size (the larger of the cap and
+// the floor) when the terminal axis is unknown, otherwise scale, extra, cap,
+// floor — in that order.
 func fitAxis(term int, frac float32, extra, limit, floor int) int {
 	if term <= 0 {
-		return limit
+		return max(limit, floor)
 	}
 	v := int(float32(term)*frac) + extra
 	if limit > 0 && v > limit {

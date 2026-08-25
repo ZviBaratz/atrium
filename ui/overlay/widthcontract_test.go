@@ -26,13 +26,15 @@ type sizedOverlay interface {
 // declares a SizeSpec: built with real content and sized to spec.Fit at the
 // 80x24 floor and at a wide terminal that puts the caps in play, a box-filler
 // renders every line at exactly the claimed outer width, a content-hugger
-// never exceeds it, and no height-aware box renders more lines than the
-// claimed height. Widths are measured with ansi.PrintableRuneWidth, not
-// lipgloss — measuring Lip Gloss's output with its own measurer is a
-// tautology that stays green when the emitter and the measurer move together.
-// This is the assertion that catches the ±2 class: a Width(w+2) regression in
-// any Render, or an inner width re-derived against the wrong chrome, moves a
-// rendered line off the claim and fails its row.
+// never exceeds it, and no box whose spec claims a height renders more lines
+// than it. Widths are measured with ansi.PrintableRuneWidth, not lipgloss —
+// measuring Lip Gloss's output with its own measurer is a tautology that
+// stays green when the emitter and the measurer move together. This is the
+// assertion that catches the ±2 class: a Width(w+2) regression in any
+// Render, or an inner width re-derived against the wrong chrome, moves a
+// rendered line off the claim and fails its row. The #695 snap zones sit at
+// widths neither terminal here reaches;
+// TestHuggersObeyTheInsetRuleAcrossTheSnapZone sweeps those.
 func TestEverySizerHonorsItsSpec(t *testing.T) {
 	cmdlog.Reset()
 	cmdlog.Add(cmdlog.Record{Argv: strings.Repeat("git status --porcelain --ahead-behind origin/main ", 4),
@@ -46,8 +48,6 @@ func TestEverySizerHonorsItsSpec(t *testing.T) {
 		// exact: every rendered line is the claimed width. Content-huggers
 		// (false) size themselves inside the claim instead.
 		exact bool
-		// hAware: the spec claims a height and the box windows to it.
-		hAware bool
 		// reach, when non-nil, is how far (in printable columns) the widest
 		// content row must extend before its right padding and border, given
 		// content long enough to fill the row. A box whose inner arithmetic
@@ -60,58 +60,59 @@ func TestEverySizerHonorsItsSpec(t *testing.T) {
 			q := NewQueueOverlay("parity")
 			q.SetQueue([]string{longPrompt, "short"}, true)
 			return q
-		}, true, false,
+		}, true,
 			// The in-flight head fills its whole row: border+pad (3) + cursor
 			// (2) + numbering (3) + the truncated prompt (inner-7) + the mark
 			// (2), with inner = w-6.
 			func(w int) int { return w - 3 }},
 		{"history", HistoryPickerSize, func() sizedOverlay {
 			return NewPromptHistoryOverlay([]string{longPrompt, "short"})
-		}, true, false,
-			// border+pad (3) + cursor (2) + the truncated prompt (inner-4),
-			// with inner = w-6.
-			func(w int) int { return w - 5 }},
+		}, true,
+			// border+pad (3) + cursor (2) + the truncated prompt (inner-2),
+			// with inner = w-6 — the same w-3 as the queue's rows, whose
+			// extra numbering and trailing mark cancel out.
+			func(w int) int { return w - 3 }},
 		{"confirm", ConfirmSize, func() sizedOverlay {
 			return NewConfirmationOverlay("Push changes from session 'a-rather-long-session-name' to origin?")
-		}, true, false, nil},
+		}, true, nil},
 		{"welcome", WelcomeSize, func() sizedOverlay {
 			w := NewWelcomeOverlay()
 			w.SetDetected(detectedFixture())
 			return w
-		}, true, false, nil},
-		{"cmdlog", CmdLogSize, func() sizedOverlay { return NewCmdLogOverlay("s") }, true, true, nil},
+		}, true, nil},
+		{"cmdlog", CmdLogSize, func() sizedOverlay { return NewCmdLogOverlay("s") }, true, nil},
 		{"commandPalette", CommandPaletteSize, func() sizedOverlay {
 			return NewCommandPaletteOverlay([]PaletteAction{
 				{Key: "m", Label: "merge PR", Detail: strings.Repeat("merge the pull request ", 6)},
 				{Key: "d", Label: "diff", Detail: "open the diff tab"},
 			})
-		}, true, true, nil},
+		}, true, nil},
 		{"customCommands", CustomCommandsSize, func() sizedOverlay {
 			return NewCustomCommandsOverlay([]CustomCommandRow{
 				{Key: "x", Description: strings.Repeat("run the deploy script ", 10)},
 			})
-		}, true, true, nil},
+		}, true, nil},
 		{"checkpoints", CheckpointSize, func() sizedOverlay {
 			c := NewCheckpointOverlay("alpha")
 			c.SetRows(checkpointRows(6))
 			return c
-		}, true, true, nil},
+		}, true, nil},
 		{"image", ImageSize, func() sizedOverlay {
 			return NewImageOverlay(Image{Path: "/tmp/shots/screenshot.png",
 				Pixels: testImage(64, 32), Width: 64, Height: 32}, renderMode())
-		}, true, true, nil},
+		}, true, nil},
 		{"textOverlay", Fullscreen, func() sizedOverlay {
 			return NewTextOverlay(strings.Repeat("the quick brown fox jumps over the lazy dog\n", 40))
-		}, false, true, nil},
+		}, false, nil},
 		{"settings", Fullscreen, func() sizedOverlay {
 			return NewSettingsOverlay(config.DefaultConfig())
-		}, false, true, nil},
+		}, false, nil},
 		{"accounts", Fullscreen, func() sizedOverlay {
 			return NewAccountsOverlay(&config.Config{}, config.DefaultState())
-		}, false, true, nil},
+		}, false, nil},
 		{"textInput", TextInputSize, func() sizedOverlay {
 			return NewTextInputOverlay("New prompt", "")
-		}, false, true, nil},
+		}, false, nil},
 	}
 
 	for _, tc := range cases {
@@ -144,7 +145,12 @@ func TestEverySizerHonorsItsSpec(t *testing.T) {
 						"term %dx%d: a %d-wide box inside a %d-wide terminal reads as a doubled border (#695)",
 						term[0], term[1], widest, w)
 				}
-				if tc.hAware {
+				if h > 0 {
+					// The spec claims a height exactly when Fit returns one,
+					// so deriving this guard from h keeps its coverage in
+					// lockstep with the spec declarations — a hand-maintained
+					// flag could go stale false and silently skip a box that
+					// gained height fields.
 					assert.LessOrEqualf(t, len(lines), h, "term %dx%d: %d lines exceed the claimed height %d",
 						term[0], term[1], len(lines), h)
 				}
@@ -154,6 +160,53 @@ func TestEverySizerHonorsItsSpec(t *testing.T) {
 						term[0], term[1], w)
 				}
 			}
+		})
+	}
+}
+
+// TestHuggersObeyTheInsetRuleAcrossTheSnapZone sweeps the three
+// content-huggers across the terminal widths around their caps, where the
+// #695 snap zones actually sit — the width contract's two terminals land
+// outside all of them, so it alone cannot see a dropped SnapFullBleed call
+// in settings (zone: 99–101 columns) or accounts (87–89). At every width
+// the rendered box is either full-bleed or leaves a legible gap of at least
+// two cells per side; and each hugger must actually full-bleed somewhere in
+// the sweep, so a cap change that moves a snap zone out of range fails
+// loudly instead of leaving this test green and vacuous.
+func TestHuggersObeyTheInsetRuleAcrossTheSnapZone(t *testing.T) {
+	huggers := []struct {
+		name  string
+		build func() sizedOverlay
+	}{
+		{"textOverlay", func() sizedOverlay {
+			return NewTextOverlay(strings.Repeat("x", 200) + "\n" + strings.Repeat("y", 200))
+		}},
+		{"settings", func() sizedOverlay { return NewSettingsOverlay(config.DefaultConfig()) }},
+		{"accounts", func() sizedOverlay {
+			return NewAccountsOverlay(&config.Config{}, config.DefaultState())
+		}},
+	}
+	for _, tc := range huggers {
+		t.Run(tc.name, func(t *testing.T) {
+			fullBleeds := 0
+			for termW := 84; termW <= 104; termW++ {
+				w, h := Fullscreen.Fit(termW, 24)
+				o := tc.build()
+				o.SetSize(w, h)
+				widest := 0
+				for _, l := range strings.Split(o.Render(), "\n") {
+					if got := ansi.PrintableRuneWidth(l); got > widest {
+						widest = got
+					}
+				}
+				assert.Truef(t, widest == termW || widest <= termW-4,
+					"at %d columns a %d-wide box reads as a doubled border (#695)", termW, widest)
+				if widest == termW {
+					fullBleeds++
+				}
+			}
+			assert.Positive(t, fullBleeds,
+				"the hugger never full-bled across [84,104] columns — its snap zone moved outside the sweep; re-aim it at the new cap")
 		})
 	}
 }

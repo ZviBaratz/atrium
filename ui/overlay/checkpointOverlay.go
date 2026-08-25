@@ -100,9 +100,6 @@ func (c *CheckpointOverlay) SetSize(width, height int) {
 	c.height = height
 }
 
-// SetWidth mirrors the other overlays' responsive-width setter.
-func (c *CheckpointOverlay) SetWidth(width int) { c.SetSize(width, c.height) }
-
 // SetRows replaces the list (newest first), leaves the loading state, and clamps
 // the cursor so a reload that returns fewer rows cannot strand it past the end.
 func (c *CheckpointOverlay) SetRows(rows []CheckpointRow) {

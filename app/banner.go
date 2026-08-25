@@ -23,9 +23,9 @@ import (
 func (m *home) autoYesArmed() bool { return m.autoYes }
 
 // topBannerHeight is the number of rows the safety banner claims at the top of the
-// frame: 1 while armed, else 0. The two layout-budget sites subtract it alongside
-// the hint-bar/error rows, and the divider Y-bound is offset by it, so the panes
-// stay exactly as tall as the frame minus its reserved rows.
+// frame: 1 while armed, else 0. computeBudget charges it a row of the frame's
+// partition alongside the hint-bar/error rows, and the divider Y-bound is offset
+// by it, so the panes stay exactly as tall as the frame minus its reserved rows.
 func (m *home) topBannerHeight() int {
 	if m.autoYesArmed() {
 		return 1

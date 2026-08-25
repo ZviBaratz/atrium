@@ -31,7 +31,8 @@ var sizeOwnershipExempt = map[string]string{
 // an exemption kept after its field gained a target (exempt-yet-claimed —
 // reachable today only through stashedDraft: RenameOverlay has no SetSize, so
 // a target claiming it does not compile, which enforces that exemption
-// structurally).
+// structurally), and a hand-written target that boxes a typed nil (the
+// unarmed pass at the bottom).
 func TestEverySizedOverlayFieldHasOneOwner(t *testing.T) {
 	h := &home{
 		textInputOverlay:      &overlay.TextInputOverlay{},
@@ -91,4 +92,20 @@ func TestEverySizedOverlayFieldHasOneOwner(t *testing.T) {
 	}
 	assert.Equal(t, overlayFields-len(sizeOwnershipExempt), len(claimed),
 		"the distinct sized pointers must be exactly the non-exempt overlay fields")
+
+	// Handed an unarmed home, every target must return an untyped nil: that is
+	// sizeTarget's typed nil check working. A hand-written entry that returns a
+	// nil field directly boxes a typed nil into a non-nil interface, passes the
+	// resize walk's nil guard, and panics inside SetSize on the first
+	// WindowSizeMsg with its overlay unopened — the armed fixture above cannot
+	// see that, because it never hands a target a nil field.
+	unarmed := &home{}
+	for st := stateDefault; st < numStates; st++ {
+		entry := surfaceSpecs[st].size
+		if entry.target == nil {
+			continue
+		}
+		assert.Nilf(t, entry.target(unarmed),
+			"state %d: the size target returned a typed nil in a non-nil interface — route it through sizeTarget", st)
+	}
 }

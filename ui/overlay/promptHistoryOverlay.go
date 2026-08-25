@@ -98,8 +98,10 @@ func (p *PromptHistoryOverlay) ClearRequested() bool {
 // the queue overlay share — one declaration so the two boxes cannot drift
 // apart, and so the picker's open-time sizing and the resize walk agree. The
 // share is deliberately narrower than the command log's: these boxes list
-// one-line prompts, not argv dumps.
-var HistoryPickerSize = SizeSpec{WFrac: 0.6, WExtra: 2, WMax: 82}
+// one-line prompts, not argv dumps. The floor matches the collapse guard
+// both SetSizes keep, so Fit's claim and the rendered box agree at every
+// terminal width, not only the ones where no floor binds.
+var HistoryPickerSize = SizeSpec{WFrac: 0.6, WExtra: 2, WMax: 82, WMin: 22}
 
 // SetSize sets the box's TOTAL width, border and padding included — outer
 // cells, which is what lipgloss v2's Width means (see theme.Panel) — flooring
@@ -133,7 +135,9 @@ func (p *PromptHistoryOverlay) Render() string {
 		b.WriteString(overlayDimStyle().Render("no prompts yet") + "\n\n")
 	} else {
 		for idx, text := range p.items {
-			bw := inner - 4 // room for the "▸ " cursor
+			// Room for the two-cell "▸ " cursor; unlike the queue's rows there
+			// is no trailing in-flight mark to reserve for.
+			bw := inner - 2
 			if bw < 1 {
 				bw = 1
 			}

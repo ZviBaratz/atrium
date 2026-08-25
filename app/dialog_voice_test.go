@@ -162,7 +162,7 @@ func runConfirmationHeightCase(t *testing.T, minWidth, minHeight, limit, live, n
 			box := strings.Split(xansi.Strip(h.confirmationOverlay.Render()), "\n")
 			bottom := box[len(box)-1]
 			// Contains("") is true of every string, so a render that came back empty —
-			// a zero width reaching SetWidth, an overlay left unarmed — would satisfy
+			// a zero width reaching SetSize, an overlay left unarmed — would satisfy
 			// both assertions below while measuring nothing at all. Pin the line to the
 			// shape of a real bottom border first, so this subtest cannot pass vacuously.
 			require.NotEmpty(t, strings.TrimSpace(bottom), "the overlay rendered no box to measure")

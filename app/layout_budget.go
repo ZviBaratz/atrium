@@ -11,10 +11,12 @@ package app
 // frameBudget is the one partition of the terminal height: every row belongs
 // to exactly one of the banner (the auto-accept safety strip, at the top when
 // armed), the body (the list/preview panes), the hint-bar row and the error
-// row. Both height consumers — the resize path and the mouse divider's
-// Y-bound (paneContentHeight) — read the partition through computeBudget,
-// which is what keeps them from drifting apart; they were two hand-synced
-// copies of the same subtraction before this type existed.
+// row — except on a terminal shorter than its own chrome, where the one-row
+// body floor deliberately over-commits the height rather than handing a zero
+// body downstream. Both height consumers — the resize path and the mouse
+// divider's Y-bound (paneContentHeight) — read the partition through
+// computeBudget, which is what keeps them from drifting apart; they were two
+// hand-synced copies of the same subtraction before this type existed.
 type frameBudget struct {
 	banner int
 	body   int
