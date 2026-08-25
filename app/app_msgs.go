@@ -521,7 +521,7 @@ func (m *home) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		if idx, ok := m.tabbedWindow.TabAtZone(msg); ok {
 			m.tabbedWindow.SetActiveTab(idx)
-			return m, m.instanceChanged()
+			return m, m.tabChanged()
 		}
 	}
 	return m, nil
