@@ -290,10 +290,11 @@ neither. A theme carries both — `Glyphs` exported, the agent table behind
 
 `app/app.go`'s state enum (which bumps `numStates`), plus a nullable overlay pointer
 field. Then one production-code site, two test-table entries and two fixture steps
-below. The list was longer before #801: the enum was hand-enumerated again in
-`viewContent`, `handleKeyPress`'s prelude, `menuVisible`, the per-overlay `SetSize`
-blocks and the paste switch, and those five readers now select through
-`surfaceSpecs`.
+below. The list was longer before #801: `viewContent`, `handleKeyPress`'s prelude,
+`menuVisible` and the paste switch each hand-enumerated the enum again, the
+per-overlay `SetSize` blocks hand-kept the same fact keyed by overlay *field*
+(nil-guarded blocks that named no state), and those five readers now select
+through `surfaceSpecs`.
 
 That consolidated the five READERS, not every per-state fact. A state that interacts
 with the mouse or with the bar's own content still has hand-kept sites the registry
@@ -303,8 +304,9 @@ its old lists looked like), the `ui.MenuState` writers (a separate enum, set
 imperatively on entry and on every exit path), the help/info mouse arm in
 `handleMouse` (wheel-scroll and click-outside-dismiss name the two `textOverlay`
 states literally), and the per-state resize exits in `Update`'s `WindowSizeMsg` arm
-(hint mode and the screensaver *leave* on resize — state changes, which the `size`
-column cannot express: it resizes overlays). Of those, only the click gate has a
+(hint mode *leaves* on any resize; the screensaver only when the new size drops
+below the splash floor, `ui.SplashFits` — state changes, which the `size` column
+cannot express: it resizes overlays). Of those, only the click gate has a
 guard that forces the decision; the rest are still found by reading.
 
 1. **A `surfaceSpec` entry in `app/surfaces.go`** — the production-code site. The entry is
@@ -369,14 +371,11 @@ unbounded list, user-authored text with no natural width.
   `ui/theme/panel.go`'s comment ("Width and Height are the box's TOTAL size, borders
   included … the upgrade guide does not mention it").
   **Copy `commandPalette.go`** — `Width(p.width)` beside `inner := p.width - 6` is the
-  self-consistent pair. `cmdLogOverlay.go` carries that same comment over
-  `Width(c.width + 2)` *and* the same `inner := c.width - 6`, which cannot both be
-  right: it renders two columns wider than its declared width while truncating content
-  two columns narrow. It does not overflow, so nothing fails — but it is not the form
-  to copy. (`textOverlay.go`'s `+2` is fine: its `boxWidth()` is *defined*
-  border-exclusive and capped against the terminal.) The live defect class is the
-  opposite one: hand-subtracting the frame a second time and rendering every box two
-  columns narrow.
+  self-consistent pair, and `cmdLogOverlay.go` carries the same one since #638
+  corrected its v1-era `+2`. (`textOverlay.go`'s `+2` is fine: its `boxWidth()` is
+  *defined* border-exclusive and capped against the terminal.) The live defect class
+  is hand-subtracting the frame a second time and rendering every box two columns
+  narrow.
 - Charge **every** non-list row to the height budget, including the conditional ones
   (`paletteChrome`'s trailing `+1` for "… N more"). A row that appears only sometimes is
   a row no golden and no bounds sweep renders — `frameStates()`' wire only *opens* an
@@ -390,8 +389,8 @@ unbounded list, user-authored text with no natural width.
   fit its budget reads back as `(repo…`.
 - Add it to `app/frame_restore_test.go` if its `barVisible` is false, or exempt it
   there with a reason — the walk over `numStates` fails otherwise. Its `opens` entry
-  is also the **only** place in the tree that presses an opener key and asserts the
-  state changed, which is what the keybinding table's site 4 cannot prove. Hiding
+  also presses the opener key and asserts the state changed — for every bar-hiding
+  state at once, which is what the keybinding table's site 4 cannot prove. Hiding
   the bar hands its row to the panes; closing without recomputing the layout leaves
   the frame a line taller than the terminal, and the alt-screen renderer never
   erases it. `view_bounds_test` cannot see this: it only measures a *freshly armed*

@@ -326,10 +326,13 @@ const (
 	// esc closes.
 	stateImagePreview
 
-	// numStates counts the states above and must stay last. It exists so a test can
-	// walk the enum rather than hand-listing it: TestEveryBarHidingStateRestoresTheFrame
-	// requires every state that hides the hint bar to be driven or exempted, and a new
-	// state added without one fails there instead of shipping unchecked.
+	// numStates counts the states above and must stay last. Code and tests walk the
+	// enum to it rather than hand-listing states — and since #801 the constant is
+	// production-structural, not a test convenience: surfaceSpecs is an array of this
+	// length and updateHandleWindowSizeEvent's resize walk runs to it.
+	// TestEveryBarHidingStateRestoresTheFrame requires every state that hides the
+	// hint bar to be driven or exempted, and a new state added without one fails
+	// there instead of shipping unchecked.
 	numStates
 )
 

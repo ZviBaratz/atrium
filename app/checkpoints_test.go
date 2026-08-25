@@ -198,7 +198,9 @@ func TestHandleCheckpointsState_RReloads(t *testing.T) {
 // overlay on entry panics in the frame-restore walk, but
 // handleImagePreviewState touches no overlay and its one gesture closes
 // nil-tolerantly, so wiring the timeline's keys to it keeps that walk green
-// with the timeline dead.
+// with the timeline dead. That reasoning is not checkpoints-specific:
+// checkpoints is merely the only state with a routed guard, and #856 tracks
+// covering the other keys entries.
 //
 // The state assertion discriminates neither mutation — r leaves the state in
 // stateCheckpoints under both, since a swallow changes nothing and the global

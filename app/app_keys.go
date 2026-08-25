@@ -2,9 +2,10 @@ package app
 
 // Per-state overlay key handlers and per-action key handlers extracted from
 // handleKeyPress (app_update.go). handleKeyPress stays a thin dispatcher: the
-// overlay-state prelude delegates to the handleXState methods here, and the
-// substantial key-action cases delegate to the verb-named methods here. Trivial
-// one-line cases (navigation, tab switching) remain inline in the switch.
+// surfaceSpecs keys entries route each overlay state to its handleXState
+// method here, and the substantial key-action cases delegate to the verb-named
+// methods here. Trivial one-line cases (navigation, tab switching) remain
+// inline in the switch.
 
 import (
 	"fmt"
@@ -78,7 +79,7 @@ func (m *home) selectedActionable() (*session.Instance, tea.Cmd, bool) {
 	return selected, nil, true
 }
 
-// --- Overlay-state key handlers (delegated from handleKeyPress's prelude) ------
+// --- Overlay-state key handlers (routed from surfaceSpecs' keys entries) ------
 
 // handlePromptState routes a key to the text-input overlay (new-session form or
 // quick-send compose box) and handles submit/cancel/retarget/debounce.

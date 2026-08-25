@@ -63,8 +63,6 @@ func TestHintBarClickState(t *testing.T) {
 		stateCheckpoints:    false,
 		stateImagePreview:   false,
 	}
-	require.Len(t, clickable, int(numStates),
-		"the state enum and this classification disagree in size — a removed state left a stale row")
 	h := &home{}
 	for st := stateDefault; st < numStates; st++ {
 		want, classified := clickable[st]
@@ -74,6 +72,11 @@ func TestHintBarClickState(t *testing.T) {
 		require.Equalf(t, want, h.hintBarClickState(),
 			"state %d: hintBarClickState disagrees with the classification here", int(st))
 	}
+	// The walk runs first so an added state fails on its own message above; once
+	// it passes, every live state has a row, and a size mismatch can only be
+	// surplus rows for states the enum no longer holds.
+	require.Len(t, clickable, int(numStates),
+		"the classification holds rows for states the enum does not — a removed state left a stale row")
 }
 
 // A left-click on a hint-bar entry performs the same action as pressing its

@@ -23,8 +23,9 @@ import (
 // zero-valued and fails here before its false bar bit or nil handler can ship;
 // a whole entry moved under another state's key never reaches this guard,
 // because every index is claimed and the keyed literal makes that a
-// duplicate-index compile error — what compiles and lands here is a swapped
-// pair of keys or a mistyped st), and fixture is non-empty, unique, and names
+// duplicate-index compile error — what compiles and lands here is a pair of
+// bodies swapped between their literal indexes, or a mistyped st), and
+// fixture is non-empty, unique, and names
 // an existing golden under testdata/frames — the same name frameStates hands
 // the parity, fingerprint, bounds and hardtab sweeps. The reverse direction
 // closes the walk: every file under testdata/frames is claimed by some state,
@@ -34,7 +35,8 @@ import (
 // fixture, since its st is the zero value; any other state's fails on st),
 // changing an entry's st to another state's, duplicating a fixture name,
 // pointing a fixture at a missing golden, and dropping a stray file into
-// testdata/frames each fail here.
+// testdata/frames — with a foreign name, or named exactly like a fixture but
+// missing the .txt suffix — each fail here.
 func TestEverySurfaceSpecIsComplete(t *testing.T) {
 	seen := make(map[string]state, len(surfaceSpecs))
 	for st := stateDefault; st < numStates; st++ {
@@ -57,11 +59,18 @@ func TestEverySurfaceSpecIsComplete(t *testing.T) {
 	// not claim. An unclaimed golden is a renamed fixture's abandoned twin (or
 	// a surface that lost its entry), and it would read as current forever —
 	// CS_UPDATE_GOLDEN only ever regenerates the claimed names. A non-.txt
-	// file fails too, on purpose: the directory holds goldens and nothing else.
+	// file fails its own branch, on purpose: the directory holds goldens and
+	// nothing else, and matching the suffix before trimming is what keeps a
+	// stray named exactly like a fixture (a file `default`, no extension) from
+	// hiding in the claimed set.
 	entries, err := os.ReadDir(filepath.Join("testdata", "frames"))
 	require.NoError(t, err)
 	for _, entry := range entries {
-		name := strings.TrimSuffix(entry.Name(), ".txt")
+		name, isGolden := strings.CutSuffix(entry.Name(), ".txt")
+		if !isGolden {
+			t.Errorf("testdata/frames/%s is not a .txt golden — the directory holds goldens and nothing else", entry.Name())
+			continue
+		}
 		if _, claimed := seen[name]; !claimed {
 			t.Errorf("testdata/frames/%s is claimed by no state — delete the orphan or fix the fixture name that abandoned it", entry.Name())
 		}

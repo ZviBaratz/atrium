@@ -456,8 +456,7 @@ func (m *home) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	// A left-click on a hint-bar entry mirrors pressing its key, in the states
-	// hintBarClickState admits. The gate, not KeyAtZone, is what makes the
-	// refused states inert: the diff-comment mode bar registers the same
+	// hintBarClickState admits. The diff-comment mode bar registers the same
 	// zone-marked entries as the three bars the gate accepts, and its clicks
 	// are dead (#852). The resolved key is re-injected through handleKeyPress
 	// so it runs the exact same dispatch (state routing + guards) as the
@@ -528,12 +527,9 @@ func (m *home) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 // hintBarClickState reports whether the hint bar is the live surface a click
 // can act on: the default view and three of the four mode bars (filter / hint /
-// visual). In most refused states an overlay owns the screen (or the bar shows
-// non-key progress), so a click on the bar's last-scanned zones must be ignored
-// — the same reason the row/tab path gates itself to stateDefault. The fourth
-// mode bar is the exception that rationale does not cover: diff-comment renders
-// the same zone-marked entries and is refused anyway, so its clicks are dead —
-// #852 tracks admitting it.
+// visual). The fourth mode bar is the exception: diff-comment renders the same
+// zone-marked entries and is refused anyway, so its clicks are dead — #852
+// tracks admitting it.
 func (m *home) hintBarClickState() bool {
 	switch m.state {
 	case stateDefault, stateFilter, stateHints, stateVisual:

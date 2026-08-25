@@ -65,14 +65,17 @@ type surfaceSpec struct {
 	// (stateInfo's textOverlay is sized by stateHelp's entry), each closure
 	// nil-checks its own pointer, and the resize walk runs every entry's size —
 	// preserving the old semantics, where a still-armed overlay is resized
-	// whatever the current state is. A data-shaped SizeSpec is #802's
-	// deliverable and replaces these closures when the layout budget lands.
+	// whatever the current state is. Until #802's data-shaped SizeSpec replaces
+	// these closures, the one-block-per-field rule is held by prose alone — no
+	// guard counts a field's owners (#856).
 	size sizeSpec
 
 	// paste handles a paste landing in this state. nil: the paste is inert.
 	// The non-nil entries are the enumeration of where pasted text can land;
 	// anywhere else there is nothing for text to mean (handlePaste's doc says
-	// why paste never rides the key dispatch).
+	// why paste never rides the key dispatch). Rename, settings and accounts
+	// share pasteOverlay; prompt, filter and the palette are bespoke (follow-up
+	// cmd, list mutation, string payload).
 	paste func(m *home, msg tea.PasteMsg) (tea.Model, tea.Cmd)
 }
 
@@ -104,19 +107,42 @@ func renderOverlay[T any, P interface {
 var renderTextOverlay = renderOverlay("text overlay",
 	func(m *home) *overlay.TextOverlay { return m.textOverlay })
 
+// pasteOverlay builds one overlay field's paste closure: hand the paste to the
+// overlay when it is armed, stay put either way. Unlike renderOverlay's arms, a
+// nil field here really bails — the old switch dropped a paste with no overlay
+// rather than logging one (TestPasteOnAMissingOverlayIsDropped pins the drop).
+// The typed pointer matters for the same reason as renderOverlay's: boxed
+// through an interface, a nil field would pass the nil check and panic inside
+// HandlePaste.
+func pasteOverlay[T any, P interface {
+	*T
+	HandlePaste(tea.PasteMsg)
+}](field func(m *home) P) func(m *home, msg tea.PasteMsg) (tea.Model, tea.Cmd) {
+	return func(m *home, msg tea.PasteMsg) (tea.Model, tea.Cmd) {
+		if o := field(m); o != nil {
+			o.HandlePaste(msg)
+		}
+		return m, nil
+	}
+}
+
 // surfaceSpecs is the registry, indexed by state. Declared empty and filled in
 // init because a package-level initializer that references the key handlers
 // cannot compile: Go's initialization-dependency analysis is transitive through
 // function bodies, and the handlers reach recomputeLayout, whose
 // updateHandleWindowSizeEvent reads this very table (as does menuVisible) — an
 // initialization cycle. Assigning in init breaks that analysis edge, at a
-// price the compiler no longer polices: an init in a sibling file that sorts
-// before this one would read a zero table — every handler nil, every bar
-// hidden — without a panic to say so, so no other init in the package may
-// reach the readers. The keyed literal makes a whole entry moved under the
-// wrong state a duplicate-index compile error (every index is claimed); what
-// compiles — two entries' keys swapped, an st mistyped — is what
-// TestEverySurfaceSpecIsComplete catches.
+// price the compiler no longer polices: the zero table — every handler nil,
+// every bar hidden — is readable without a panic to say so, by an init in a
+// sibling file that sorts before this one and equally by any package-level var
+// initializer in the package, since var initializers all run before every init
+// and this declaration carries no initializer expression for the dependency
+// analysis to order against. So neither may reach the readers; nothing
+// enforces that rule (#856 tracks the guard). The keyed literal makes a whole
+// entry moved under the wrong state a duplicate-index compile error (every
+// index is claimed); what compiles — two entries' bodies swapped between their
+// literal indexes, an st mistyped — is what TestEverySurfaceSpecIsComplete
+// catches.
 var surfaceSpecs [numStates]surfaceSpec
 
 func init() {
@@ -187,12 +213,7 @@ func init() {
 			keys: (*home).handleRenameState,
 			// No size: the rename box is sized once, at open — deliberately
 			// outside the resize walk.
-			paste: func(m *home, msg tea.PasteMsg) (tea.Model, tea.Cmd) {
-				if m.renameOverlay != nil {
-					m.renameOverlay.HandlePaste(msg)
-				}
-				return m, nil
-			},
+			paste: pasteOverlay(func(m *home) *overlay.RenameOverlay { return m.renameOverlay }),
 		},
 		stateQueue: {
 			st: stateQueue, fixture: "queue",
@@ -269,12 +290,7 @@ func init() {
 					m.settingsOverlay.SetSize(msg.Width, msg.Height)
 				}
 			},
-			paste: func(m *home, msg tea.PasteMsg) (tea.Model, tea.Cmd) {
-				if m.settingsOverlay != nil {
-					m.settingsOverlay.HandlePaste(msg)
-				}
-				return m, nil
-			},
+			paste: pasteOverlay(func(m *home) *overlay.SettingsOverlay { return m.settingsOverlay }),
 		},
 		stateHints: {
 			st: stateHints, fixture: "hints",
@@ -333,12 +349,7 @@ func init() {
 					m.accountsOverlay.SetSize(msg.Width, msg.Height)
 				}
 			},
-			paste: func(m *home, msg tea.PasteMsg) (tea.Model, tea.Cmd) {
-				if m.accountsOverlay != nil {
-					m.accountsOverlay.HandlePaste(msg)
-				}
-				return m, nil
-			},
+			paste: pasteOverlay(func(m *home) *overlay.AccountsOverlay { return m.accountsOverlay }),
 		},
 		stateScreensaver: {
 			st: stateScreensaver, fixture: "screensaver",
