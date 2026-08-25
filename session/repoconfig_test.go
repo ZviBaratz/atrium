@@ -205,7 +205,9 @@ func TestRepoLocal_AbsentWithGrantSaysSo(t *testing.T) {
 // — deliberate, path identity IS the trust boundary.
 func TestRepoLocal_MovedRepoIsUntrusted(t *testing.T) {
 	_, dir, repoPath := repoLocalFixture(t, oneEntry)
-	grantRepo(t, repoPath)
+	granted, err := repotrust.AssessRepo(context.Background(), repoPath)
+	require.NoError(t, err)
+	require.NoError(t, repotrust.Grant(granted.Key, granted.Hash, granted.Remote, time.Now()))
 	rec := &setupRecorder{}
 	defer stubSetupExec(rec.record)()
 
@@ -219,10 +221,17 @@ func TestRepoLocal_MovedRepoIsUntrusted(t *testing.T) {
 
 	assert.Empty(t, rec.scripts(), "a moved repo must not inherit its old path's grant")
 	assert.Equal(t, RepoConfigUntrusted, movedInst.RepoConfigStatus())
-	// The unmoved identity still holds its grant (nothing was revoked).
+	// The old identity still holds its grant (nothing was revoked) — looked up
+	// by its RECORDED key. Re-deriving a key from the now-dead path would be a
+	// different question with a different answer on a platform whose temp root
+	// is a symlink (macOS /var → /private/var): with the path gone there is
+	// nothing to resolve, so the re-derivation keeps the unresolved spelling
+	// while the record holds the resolved one. The recorded spelling IS the
+	// identity — the same reason `atrium trust revoke` tells the user to name
+	// the key `trust status` shows for a deleted repo.
 	l, err := repotrust.Load()
 	require.NoError(t, err)
-	_, has := l.Lookup(mustCanonical(t, repoPath))
+	_, has := l.Lookup(granted.Key)
 	assert.True(t, has)
 }
 
