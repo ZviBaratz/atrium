@@ -46,56 +46,70 @@ func TestEverySizerHonorsItsSpec(t *testing.T) {
 		exact bool
 		// hAware: the spec claims a height and the box windows to it.
 		hAware bool
+		// reach, when non-nil, is how far (in printable columns) the widest
+		// content row must extend before its right padding and border, given
+		// content long enough to fill the row. A box whose inner arithmetic
+		// loses columns still renders at the claimed width — the style pads
+		// the difference — so the exact-width assertion alone cannot see the
+		// other half of the ±2 class; this can.
+		reach func(w int) int
 	}{
 		{"queue", HistoryPickerSize, func() sizedOverlay {
 			q := NewQueueOverlay("parity")
 			q.SetQueue([]string{longPrompt, "short"}, true)
 			return q
-		}, true, false},
+		}, true, false,
+			// The in-flight head fills its whole row: border+pad (3) + cursor
+			// (2) + numbering (3) + the truncated prompt (inner-7) + the mark
+			// (2), with inner = w-6.
+			func(w int) int { return w - 3 }},
 		{"history", HistoryPickerSize, func() sizedOverlay {
 			return NewPromptHistoryOverlay([]string{longPrompt, "short"})
-		}, true, false},
+		}, true, false,
+			// border+pad (3) + cursor (2) + the truncated prompt (inner-4),
+			// with inner = w-6.
+			func(w int) int { return w - 5 }},
 		{"confirm", ConfirmSize, func() sizedOverlay {
 			return NewConfirmationOverlay("Push changes from session 'a-rather-long-session-name' to origin?")
-		}, true, false},
+		}, true, false, nil},
 		{"welcome", WelcomeSize, func() sizedOverlay {
 			w := NewWelcomeOverlay()
 			w.SetDetected(detectedFixture())
 			return w
-		}, true, false},
-		{"cmdlog", CmdLogSize, func() sizedOverlay { return NewCmdLogOverlay("s") }, true, true},
+		}, true, false, nil},
+		{"cmdlog", CmdLogSize, func() sizedOverlay { return NewCmdLogOverlay("s") }, true, true, nil},
 		{"commandPalette", CommandPaletteSize, func() sizedOverlay {
 			return NewCommandPaletteOverlay([]PaletteAction{
 				{Key: "m", Label: "merge PR", Detail: strings.Repeat("merge the pull request ", 6)},
 				{Key: "d", Label: "diff", Detail: "open the diff tab"},
 			})
-		}, true, true},
+		}, true, true, nil},
 		{"customCommands", CustomCommandsSize, func() sizedOverlay {
 			return NewCustomCommandsOverlay([]CustomCommandRow{
 				{Key: "x", Description: strings.Repeat("run the deploy script ", 10)},
 			})
-		}, true, true},
+		}, true, true, nil},
 		{"checkpoints", CheckpointSize, func() sizedOverlay {
 			c := NewCheckpointOverlay("alpha")
 			c.SetRows(checkpointRows(6))
 			return c
-		}, true, true},
+		}, true, true, nil},
 		{"image", ImageSize, func() sizedOverlay {
 			return NewImageOverlay(Image{Path: "/tmp/shots/screenshot.png",
 				Pixels: testImage(64, 32), Width: 64, Height: 32}, renderMode())
-		}, true, true},
+		}, true, true, nil},
 		{"textOverlay", Fullscreen, func() sizedOverlay {
 			return NewTextOverlay(strings.Repeat("the quick brown fox jumps over the lazy dog\n", 40))
-		}, false, true},
+		}, false, true, nil},
 		{"settings", Fullscreen, func() sizedOverlay {
 			return NewSettingsOverlay(config.DefaultConfig())
-		}, false, true},
+		}, false, true, nil},
 		{"accounts", Fullscreen, func() sizedOverlay {
 			return NewAccountsOverlay(&config.Config{}, config.DefaultState())
-		}, false, true},
+		}, false, true, nil},
 		{"textInput", TextInputSize, func() sizedOverlay {
 			return NewTextInputOverlay("New prompt", "")
-		}, false, true},
+		}, false, true, nil},
 	}
 
 	for _, tc := range cases {
@@ -119,7 +133,31 @@ func TestEverySizerHonorsItsSpec(t *testing.T) {
 					assert.LessOrEqualf(t, len(lines), h, "term %dx%d: %d lines exceed the claimed height %d",
 						term[0], term[1], len(lines), h)
 				}
+				if tc.reach != nil {
+					assert.Equalf(t, tc.reach(w), contentReach(lines),
+						"term %dx%d: the widest content row must use the full inner width of the %d-column box",
+						term[0], term[1], w)
+				}
 			}
 		})
 	}
+}
+
+// contentReach is how far the widest content row extends before its right
+// padding and border: each side-bordered line, ANSI-stripped, loses its
+// closing border and trailing spaces, and the widest remainder is the reach.
+// Top and bottom border lines carry no content and are skipped.
+func contentReach(lines []string) int {
+	widest := 0
+	for _, l := range lines {
+		s := stripANSI(l)
+		if !strings.HasSuffix(s, "│") {
+			continue
+		}
+		s = strings.TrimRight(strings.TrimSuffix(s, "│"), " ")
+		if w := ansi.PrintableRuneWidth(s); w > widest {
+			widest = w
+		}
+	}
+	return widest
 }
