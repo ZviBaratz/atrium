@@ -224,6 +224,9 @@ func AssessRepo(ctx context.Context, path, ref string) (Assessment, error) {
 
 // declaresSeeds reports whether a parsed file layers anything over the user's own
 // seed lists — the half of a grant that GrantVersionSeeds gates.
+//
+// It delegates rather than deciding, so this and the enforcement funnel cannot drift:
+// see repocfg.DeclaresLayers for why the predicate is derived from the layer map.
 func declaresSeeds(rl repocfg.RepoLocal) bool {
-	return len(rl.CarryFiles) > 0
+	return repocfg.DeclaresLayers(rl)
 }

@@ -446,7 +446,7 @@ func (i *Instance) resolveRepoLocal(dir, repoPath string) repoLocalResolution {
 	// there. It was the reverse for one commit: the prompt withdrew the verdict and
 	// enforcement kept asking the hash-only question, so the lists applied to every
 	// existing session on upgrade and declining the prompt changed nothing.
-	need := repotrust.GrantScope{Seeds: len(parsed.CarryFiles) > 0}
+	need := repotrust.GrantScope{Seeds: repocfg.DeclaresLayers(parsed)}
 	if !ledger.GrantedFor(key, hash, need) {
 		rec, has := ledger.Lookup(key)
 		state, report := RepoConfigUntrusted, fmt.Sprintf(

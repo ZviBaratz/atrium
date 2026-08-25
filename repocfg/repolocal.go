@@ -135,6 +135,29 @@ func RepoLocalLayers(rl RepoLocal) map[string][]string {
 	}
 }
 
+// DeclaresLayers reports whether a parsed file layers anything over the user's own
+// lists. It is the predicate the trust scope is computed from, at BOTH the advisory
+// prompt (internal/repotrust's AssessRepo) and the authoritative funnel (session's
+// routeRepoLocal).
+//
+// It is derived from RepoLocalLayers rather than written out, because the two are the
+// same question asked at different times — "does this file add to a list?" and "which
+// lists does it add to?" — and a hand-written copy of the first cannot be held to the
+// second by any guard. Both callers spelled it `len(rl.CarryFiles) > 0` for one
+// release, and the commit that deferred link_paths edited that expression by hand in
+// two files. A new layer key added to RepoLocalLayers (whose key set IS guarded, by
+// TestRepoLocalLayersCoversEveryLayerKey) but missed here would be applied to every
+// pre-existing grant with no prompt — which is the bug GrantVersionSeeds exists to
+// prevent, reintroduced by the act of adding the key it was meant to cover.
+func DeclaresLayers(rl RepoLocal) bool {
+	for _, list := range RepoLocalLayers(rl) {
+		if len(list) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // repoLocalNonLayeringKeys names the wire keys that are deliberately NOT panel
 // layers, each with the reason, so the bridge guard can be a completeness sweep
 // instead of a bare equality.

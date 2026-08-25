@@ -394,3 +394,48 @@ func TestLinkPathsIsNotReadYet(t *testing.T) {
 	assert.NotContains(t, RepoLocalLayerKeys(), "link_paths",
 		"and it must not be advertised to the settings panel as a layer")
 }
+
+// TestDeclaresLayersSeesEveryLayerKey is the guard that keeps the trust scope tied to
+// the set of keys it gates.
+//
+// The scope a grant is demanded at (repotrust.GrantScope{Seeds}) is computed from
+// DeclaresLayers at both the prompt and the funnel. If a newly layerable key is wired
+// into RepoLocalLayers but not seen by that predicate, a file declaring ONLY the new
+// key reads as declaring nothing, so a grant made before the key existed keeps
+// applying — and the new list activates on every existing session at upgrade with no
+// prompt. That is exactly the defect GrantVersionSeeds was added to prevent, and
+// adding a key is the act that would reintroduce it.
+//
+// This drives the REAL parser rather than building a RepoLocal by hand: a struct
+// literal here would test the predicate against a shape the wire may no longer
+// produce, and the wire tag is the thing a new key actually arrives through.
+func TestDeclaresLayersSeesEveryLayerKey(t *testing.T) {
+	keys := RepoLocalLayerKeys()
+	require.NotEmpty(t, keys, "the sweep needs at least one layer key")
+
+	for _, key := range keys {
+		body := fmt.Sprintf(`{%q: ["seeded-entry"]}`, key)
+		got, err := ParseRepoLocal([]byte(body))
+		require.NoErrorf(t, err, "key %q: %s must parse", key, body)
+		require.Emptyf(t, got.Problems, "key %q: %s must parse cleanly", key, body)
+
+		require.Truef(t, len(RepoLocalLayers(got)[key]) > 0,
+			"key %q did not reach RepoLocalLayers, so this case proves nothing about the predicate", key)
+		assert.Truef(t, DeclaresLayers(got),
+			"a file declaring only %q layers something, so the trust scope must demand the seed grant "+
+				"for it — otherwise a grant predating the key applies it with no prompt", key)
+	}
+
+	// The negative, so the assertion above cannot pass by way of a predicate that is
+	// simply always true.
+	empty, err := ParseRepoLocal([]byte(`{}`))
+	require.NoError(t, err)
+	assert.False(t, DeclaresLayers(empty), "a file declaring nothing layers nothing")
+
+	// And a key that is deliberately NOT a layer must not widen the scope, or every
+	// repo_scripts-only file would demand a grant version it never needed.
+	scriptOnly, err := ParseRepoLocal([]byte(`{"repo_scripts": [{"name": "setup", "command": "true"}]}`))
+	require.NoError(t, err)
+	assert.False(t, DeclaresLayers(scriptOnly),
+		"repo_scripts is not a layer (repoLocalNonLayeringKeys), so it must not demand the seed scope")
+}
