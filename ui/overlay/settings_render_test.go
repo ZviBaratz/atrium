@@ -1093,11 +1093,20 @@ var helpOverflowAllowed = map[string]string{
 const defaultRegime = "default"
 
 // expandedHelpRegime is one reachable rendering of the same schema: a config, plus the
-// account-clustering answer home injects (nil when it has not answered yet).
+// facts home injects from outside the panel — the account-clustering answer, and the
+// selected session's repo layer (each nil when home has not answered yet).
+//
+// Every home-injected fact belongs here, because none of them is reachable from cfg: a
+// sweep that only varies config measures the panel with home silent, which is the one
+// rendering that cannot show the extra lines such a fact adds. #815's repo layer was the
+// second such fact and shipped without a regime — it puts two lines into carry_files' `?`
+// view and pushed `Current value` off the 17-line budget at 80x24, which every guard here
+// missed for exactly that reason.
 type expandedHelpRegime struct {
 	name    string
 	cfg     *config.Config
 	cluster *bool
+	layer   *RepoLayer
 }
 
 // expandedHelpRegimes are the panel's own renderings of the schema, not a sample of user data.
@@ -1137,6 +1146,23 @@ func expandedHelpRegimes() []expandedHelpRegime {
 		{name: "update_base_on_create off", cfg: updateBaseOff},
 		{name: "clustering on, nothing to cluster", cfg: clustering, cluster: &noClusters},
 		{name: "notifications on", cfg: notificationsOn},
+		// A repo contributing to carry_files, with its path AT the width the panel
+		// promises to render (repoLayerPathWidth) rather than at some convenient short
+		// value — built from the constant so it tracks it.
+		//
+		// Which half of the block is held, and why they differ: the path is bounded by
+		// the panel and is one value per repo, so every path the panel will display has
+		// to fit. The ENTRY LIST is not held here — it is the repo's own data, bounded
+		// only by repoLayerEntriesWidth, and a repo naming a dozen files pushes this row
+		// over exactly as a user's own long notify_command does. That is what ? scrolls
+		// for. An 8-character path fits even the pre-trim detail, so a regime that picked
+		// one would have measured nothing: it passed while `Current value` was falling
+		// off the fold for every repo checked out below ~/src.
+		{name: "repo layers carry_files", cfg: config.DefaultConfig(),
+			layer: &RepoLayer{
+				Repo:  "/src/" + strings.Repeat("a", repoLayerPathWidth-len("/src/")),
+				Lists: map[string][]string{"carry_files": {".dev.vars", ".env.local"}},
+			}},
 	}
 }
 
@@ -1173,6 +1199,7 @@ func TestExpandedHelpFitsTheFloor(t *testing.T) {
 		if reg.cluster != nil {
 			o.SetAccountClusteringVisible(*reg.cluster)
 		}
+		o.SetRepoLayer(reg.layer)
 		budget, inner = o.expandedHelpHeight(), o.innerWidth()
 		require.Positive(t, budget, "the %s rendering affords no ? view at all", reg.name)
 		inert[reg.name] = map[string]bool{}
