@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -29,6 +30,11 @@ import (
 // ext is the extension a user theme file must have. Anything else in the directory is
 // ignored rather than refused: an editor's swap file or a README next to the themes is
 // not a broken theme.
+//
+// Matched case-insensitively, because a file copied off a case-insensitive filesystem
+// arrives as .JSON and silently doing nothing is the worst answer available. The stem
+// is NOT: nameRE demands lowercase, so midnight.json and midnight.JSON resolve to one
+// name, which is why Load refuses the pair rather than letting byte order pick a winner.
 const ext = ".json"
 
 // nameRE is the shape a theme name (the filename stem) must have.
@@ -87,6 +93,7 @@ func Load(dir string) (map[string]*theme.Theme, []error) {
 	sort.Strings(names)
 
 	loaded := make(map[string]*theme.Theme, len(names))
+	claimed := make(map[string]string, len(names))
 	var problems []error
 	for _, base := range names {
 		name, th, err := loadOne(filepath.Join(dir, base))
@@ -94,6 +101,15 @@ func Load(dir string) (map[string]*theme.Theme, []error) {
 			problems = append(problems, err)
 			continue
 		}
+		// Two files can reach one name only through the extension, which is matched
+		// case-insensitively while the stem is not (see ext). Refusing names both files;
+		// keeping the first would make "my edits do nothing" the symptom, decided by
+		// sort order, with nothing said anywhere.
+		if first, dup := claimed[name]; dup {
+			problems = append(problems, fmt.Errorf("%s: theme name %q is already taken by %s", base, name, first))
+			continue
+		}
+		claimed[name] = base
 		loaded[name] = th
 	}
 	return loaded, problems
@@ -120,7 +136,11 @@ func loadOne(path string) (string, *theme.Theme, error) {
 
 	name := strings.TrimSuffix(base, filepath.Ext(base))
 	if !nameRE.MatchString(name) {
-		return fail("theme name %q is not lowercase letters, digits and dashes", name)
+		// The name IS the filename stem, already in this message's prefix, so it is not
+		// repeated here — and the rule is spelled out in full because the near misses are
+		// "-dark" and "Midnight", both of which read as compliant against a shorter
+		// summary like "lowercase letters, digits and dashes".
+		return fail("theme name must be lowercase a-z, 0-9 and dashes, not empty or starting with a dash")
 	}
 	if name == theme.AutoThemeName {
 		return fail("%q is the reserved value that follows the terminal background", name)
@@ -133,11 +153,23 @@ func loadOne(path string) (string, *theme.Theme, error) {
 	if err != nil {
 		return fail("%v", err)
 	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return fail("the file is empty")
+	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	var f file
 	if err := dec.Decode(&f); err != nil {
-		return fail("%v", err)
+		return fail("%w", err)
+	}
+	// A Decoder reads ONE value and stops, so without this a duplicated block or a stray
+	// paste after the closing brace loads the first half and discards the rest in
+	// silence — the same no-op DisallowUnknownFields exists to prevent, arriving through
+	// the door beside it. json.Unmarshal rejects both, and cannot be used here because
+	// it has no way to forbid unknown fields.
+	var rest json.RawMessage
+	if err := dec.Decode(&rest); !errors.Is(err, io.EOF) {
+		return fail("there is content after the theme object; a file holds exactly one")
 	}
 
 	baseName := strings.ToLower(strings.TrimSpace(f.Extends))
@@ -166,7 +198,7 @@ func loadOne(path string) (string, *theme.Theme, error) {
 	}
 
 	if violations := theme.Validate(pal); len(violations) > 0 {
-		return fail("palette is not legible: %s", summarize(violations))
+		return "", nil, &InvalidPaletteError{File: base, Violations: violations}
 	}
 
 	th.Name = name
@@ -174,34 +206,59 @@ func loadOne(path string) (string, *theme.Theme, error) {
 	return name, &th, nil
 }
 
-// violationsShown caps how many misses one refusal spells out.
+// InvalidPaletteError is the refusal for a palette that missed a contrast floor. It
+// carries EVERY violation Validate measured, not just the one its message spells out,
+// so a surface with room for the list can print it: `atrium doctor` does, and that is
+// what keeps tuning a palette to one round rather than one round per token.
 //
-// One, and the number was measured rather than chosen. The refusal is rendered as one
-// line of the startup modal, which app's clipReportLine cuts at 100 runes; at two
-// violations the message reached 143 and the cut landed mid-ratio ("contrast 1.3…"),
-// which is worse than not listing the second at all. One violation plus the count is
-// 97 for the case above, so it survives the clip and wraps cleanly.
+// A typed error rather than a formatted string because the two consumers want different
+// amounts of the same fact. The startup modal has one clipped line per file; doctor has
+// a page. Formatting the long form and re-parsing it would be the other way to do this,
+// and it would be worse in the ordinary way.
+type InvalidPaletteError struct {
+	// File is the base name of the refused file, so the message is self-locating in a
+	// report that lists several.
+	File string
+	// Violations is every floor the resolved palette missed, in Validate's order.
+	Violations []theme.Violation
+}
+
+// violationsShown caps how many misses the one-line form spells out.
+//
+// One. The line is rendered into the startup modal, which clips at app's
+// reportLineBudget, and beyond the first violation the clip lands mid-ratio
+// ("contrast 1.3…") — a second entry that gets cut in half is worse than a count.
 //
 // It costs little, because the misses are rarely independent: a single wrong fg fails
-// its own floor and both pairs it appears in, so the other two were restating one
-// mistake. Validate still reports every one — `atrium doctor` prints the lot, and the
+// its own floor and both pairs it appears in, so the rest were restating one mistake.
+// Nothing is lost either way — Violations carries them all, doctor prints them, and the
 // next load shows whatever the first fix uncovers.
 const violationsShown = 1
 
-// summarize renders a refusal's violations, bounded.
-func summarize(violations []theme.Violation) string {
-	shown := violations
+// Error is the one-line form: the file, how many floors it missed, and the first one.
+//
+// The COUNT comes before the detail, and that ordering is the whole design of this
+// string. The modal that shows it clips to a fixed rune budget, and two of the three
+// parts are lengths this package does not choose — the filename, and a violation name
+// that runs from "fg" to "badge_fg on badge_bg". So the only honest promise is about
+// what sits LEFT of the clip: the file and the count. Putting "and N more" at the end,
+// where an earlier draft had it, meant the longer the filename the more certainly the
+// reader lost the one fact telling them to look further — and that draft's measurement
+// used the shortest filename in the repo, so the bound it claimed held only for it.
+func (e *InvalidPaletteError) Error() string {
+	shown := e.Violations
 	if len(shown) > violationsShown {
 		shown = shown[:violationsShown]
 	}
-	msgs := make([]string, 0, len(shown)+1)
+	msgs := make([]string, 0, len(shown))
 	for _, v := range shown {
 		msgs = append(msgs, v.Error())
 	}
-	if rest := len(violations) - len(shown); rest > 0 {
-		msgs = append(msgs, fmt.Sprintf("and %d more below their floors", rest))
+	count := ""
+	if len(e.Violations) > len(shown) {
+		count = fmt.Sprintf(" (%d misses)", len(e.Violations))
 	}
-	return strings.Join(msgs, "; ")
+	return fmt.Sprintf("%s: palette is not legible%s: %s", e.File, count, strings.Join(msgs, "; "))
 }
 
 // sortedKeys orders a palette map so a file with two bad tokens reports the same one

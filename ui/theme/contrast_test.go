@@ -3,6 +3,8 @@ package theme
 import (
 	"testing"
 
+	"charm.land/lipgloss/v2"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -115,10 +117,6 @@ func TestBarBandColoursAreFloored(t *testing.T) {
 	floored := map[string]bool{}
 	for _, pair := range pairFloors {
 		floored[pair.name] = true
-		// The token that used to be there must not come back: fg_dim's own floor is 2.4
-		// against Bg, which says nothing about the band.
-		assert.NotContainsf(t, pair.name, "fg_dim on bar_bg",
-			"fg_dim is floored against the band, which means barState is painting a receding token there again")
 	}
 	for _, name := range []string{
 		"fg on bar_bg",
@@ -128,6 +126,34 @@ func TestBarBandColoursAreFloored(t *testing.T) {
 	} {
 		assert.Truef(t, floored[name], "barState paints this on the band, unfloored: %s", name)
 	}
+	// The token that used to be there must not come back. Its own floor is 2.4 against
+	// Bg, which says nothing about the band — so a pair under this name would mean
+	// someone had floored the receding value rather than stopped painting it.
+	assert.Falsef(t, floored["fg_dim on bar_bg"],
+		"fg_dim is floored against the band, so barState is painting a receding token there again")
+}
+
+// TestTheAutoChipSurvivesItsOwnBackground covers what the badge pair alone does not: the
+// chip is a FILL, and badge_fg-on-badge_bg stays perfect while badge_bg walks into Bg and
+// the chip stops existing. Palette.BadgeBg is set as a Background by Theme.BadgeStyle,
+// which is why its exemption from tokenFloors is not an exemption from being checked.
+//
+// The fixture is the failure the exemption's old reason ("meets badge_fg, not the void")
+// let through verbatim: badge_bg set to the palette's own bg, with a badge_fg that still
+// clears 4.5 against it.
+func TestTheAutoChipSurvivesItsOwnBackground(t *testing.T) {
+	p := Get(DefaultThemeName).Palette
+	p.BadgeBg, p.BadgeFg = p.Bg, lipgloss.Color("#ffffff")
+
+	require.GreaterOrEqual(t, ContrastRatio(p.BadgeFg, p.BadgeBg), 4.5,
+		"the fixture must clear the badge PAIR, or it proves nothing about the fill")
+
+	names := map[string]bool{}
+	for _, v := range Validate(p) {
+		names[v.Name] = true
+	}
+	assert.Truef(t, names["badge_bg on bg"],
+		"a chip fill equal to the background must be refused; got %v", names)
 }
 
 // TestAgentBrandColoursStayLegible covers the only two colours in the whole app
@@ -140,9 +166,19 @@ func TestBarBandColoursAreFloored(t *testing.T) {
 // the difference between testing a table and testing what renders. The tables are
 // now two — the brand hex and its light-background form — and only AgentGlyph knows
 // which one a given palette gets, so a check that read either map alone would pass
-// while the wrong one shipped. Reading the resolved colour also means the light
-// table is covered here with no second assertion — and, since Names() carries user
-// themes, so is a palette written by someone who never heard of these two colours.
+// while the wrong one shipped. Reading the resolved colour also means the light table
+// is covered here with no second assertion.
+//
+// It iterates Names(), which since #813 CAN carry a user theme — but does not here: no
+// theme file is loaded in a test process, so what this sweep covers is the shipped set.
+// A user palette is checked at LOAD time by theme.Validate, which does not look at these
+// two colours at all, so a user theme whose Bg swallows the Claude accent is not caught
+// anywhere. That is a real hole and it is a pre-existing one: the same colours are
+// unfloored against bar_bg for the shipped palettes too (see pairFloors). Both want the
+// accents changed rather than an assertion added, and both are #855.
+//
+// The floor is against Bg, which is the session LIST's surface. The in-session tmux
+// band paints them on bar_bg, where none of them clears it.
 func TestAgentBrandColoursStayLegible(t *testing.T) {
 	require.NotEmpty(t, agentColors)
 	require.NotEmpty(t, agentColorsLight)

@@ -77,10 +77,17 @@ func TestConstruct_BuffersRefusedThemes(t *testing.T) {
 // TestThemeProblemsReport is the modal's shape, and the consequence line that
 // distinguishes it from the other three startup reports: a refused theme is not in the
 // picker at all, so the only symptom is a palette that never appears.
+//
+// The heading counts PROBLEMS rather than FILES, and that is not a wording preference.
+// ApplyThemeAtLaunch pushes directory-level failures into this same slice — an
+// unreadable themes/, a data dir that would not resolve — where one entry stands for
+// every theme the user owns, none of which was read. "1 theme file was ignored" is a
+// specific claim about a specific file, and it is at its most confident in the one case
+// where no file was opened at all.
 func TestThemeProblemsReport(t *testing.T) {
 	report := themeProblemsReport([]error{errors.New("washed.json: palette is not legible")})
 
-	assert.Contains(t, report, "1 theme file in the themes directory was ignored:")
+	assert.Contains(t, report, "1 problem loading user themes:")
 	assert.Contains(t, report, "washed.json: palette is not legible")
 	assert.Contains(t, report, "not selectable")
 	assert.Contains(t, report, "falls back to the default")
@@ -88,7 +95,13 @@ func TestThemeProblemsReport(t *testing.T) {
 
 	assert.Empty(t, themeProblemsReport(nil))
 	assert.Contains(t, themeProblemsReport([]error{errors.New("a"), errors.New("b")}),
-		"2 theme files in the themes directory were ignored:")
+		"2 problems loading user themes:")
+
+	// The directory-level entry, rendered verbatim: nothing in the heading above it may
+	// promise the reader a file it can name.
+	dirFailure := themeProblemsReport([]error{errors.New("themes directory /home/u/.atrium/themes: permission denied")})
+	assert.NotContains(t, dirFailure, "theme file",
+		"a whole-directory failure must not be reported as one refused file")
 }
 
 // TestThemeProblemsReportFitsANarrowTerminal pins the width the fixed lines were
@@ -171,6 +184,34 @@ func TestSavingTheThemeRowRereadsTheThemesDirectory(t *testing.T) {
 	assert.Contains(t, theme.Names(), "midnight", "saving the row must re-read the directory")
 	assert.Equal(t, "midnight", theme.Current().Name)
 	assert.Equal(t, "#ffb454", theme.Hex(theme.Current().Palette.Attention))
+}
+
+// TestSavingTheThemeRowLeavesTheDetectedSchemeAlone.
+//
+// The save path re-runs the loader and re-applies the palette, and for a while it did
+// that by calling ApplyThemeAtLaunch — whose extra step is SetScheme(initialScheme()).
+// initialScheme() reads COLORFGBG, which is unset on most terminals and resolves to
+// SchemeUnknown; the OSC 11 ladder above it exists for exactly that reason. So on a
+// light terminal under the shipped `theme: auto`, saving any row in this arm threw away
+// the detected polarity and composed the dark default.
+//
+// glyph_set is the case with no way back: applySchemeQueryCmd re-queries for the theme
+// row only, so the flip stood until an unrelated blur and refocus. It is the arm this
+// drives for that reason.
+func TestSavingTheThemeRowLeavesTheDetectedSchemeAlone(t *testing.T) {
+	t.Setenv("COLORFGBG", "") // the ordinary terminal: the lower rung answers nothing
+	h := newHomeWithThemes(t, theme.AutoThemeName, nil)
+	t.Cleanup(theme.SetScheme(theme.SchemeUnknown))
+
+	theme.SetScheme(theme.SchemeLight) // as an OSC 11 answer would
+	require.True(t, theme.IsLight(theme.Current().Palette), "precondition: detection took")
+
+	h.applySettingChange("glyph_set")
+
+	assert.Equal(t, theme.SchemeLight, theme.CurrentScheme(),
+		"a settings save must not overwrite a detected polarity with COLORFGBG's silence")
+	assert.True(t, theme.IsLight(theme.Current().Palette),
+		"and the composed palette must still be the light one the terminal is showing")
 }
 
 // TestSavingTheThemeRowBuffersRefusals: a file edited into an illegible state and saved

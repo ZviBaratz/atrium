@@ -1749,9 +1749,14 @@ The filename stem is the theme's name, so `~/.atrium/themes/midnight.json` is
 
 `extends` names one of the built-in themes — `tokyo-night` (the default if you omit
 it), `catppuccin-mocha`, `tokyo-night-day`, `catppuccin-latte`, `unicode` — and supplies
-every token the file does not, along with the glyph set and the border style. A theme
-file cannot extend another theme file, and cannot change glyphs or borders; the glyph
-set is its own setting (`glyph_set`).
+every token the file does not. A theme file cannot extend another theme file.
+
+Two things beyond colour are worth knowing, because they are opposites. **Glyphs are
+never inherited**: the marks Atrium draws come from `glyph_set`, which is applied to
+whichever palette is active, so extending `unicode` does not get you its glyphs and a
+theme file cannot set them. **The border style is inherited**, and it is the one
+non-colour thing `extends` carries — `unicode` draws square corners, the other four
+rounded — so extend `unicode` if square corners are what you are after.
 
 The eighteen semantic tokens, grouped by role:
 
@@ -1771,13 +1776,19 @@ The eighteen semantic tokens, grouped by role:
 Colours are canonical `#rrggbb`; `#fff` and colour names are refused rather than
 guessed at.
 
-**A palette that is not legible is refused, never adjusted.** Every file is checked
-against the same contrast floors the built-in themes are held to, and a file that misses
-one is dropped with the token and its measured ratio named — Atrium will not quietly
-darken a colour you chose. The report appears as a notice at launch and under
-`atrium doctor`, which also lists the themes that loaded (a file in neither list is in
-the wrong directory). A refused theme is not offered in the settings picker, and a
-`theme` naming one falls back to the default.
+**A palette that is not legible is refused, never adjusted.** Every file is measured
+against the contrast floors in `ui/theme/contrast.go` — the same ones every built-in
+palette has to clear — and a file that misses one is dropped with the token and its
+measured ratio named. Atrium will not quietly darken a colour you chose.
+
+Floors are measured on the **resolved** palette, so a refusal can name a token your file
+never mentioned: override `bg` alone and `bar_bg` — inherited from the base — may no
+longer stand far enough off it. Override that one too.
+
+The report appears as a notice at launch and under `atrium doctor`, which prints every
+miss rather than the first, lists the themes that loaded, and names the directory it
+read (a file in neither list is in the wrong one). A refused theme is not offered in the
+settings picker, and a `theme` naming one falls back to the default.
 
 Changes take effect when you save the theme row in the settings panel (`,`) or on the
 next launch; there is no file watcher.

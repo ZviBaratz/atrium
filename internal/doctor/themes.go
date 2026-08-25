@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -34,30 +35,55 @@ func CheckThemes() (dir string, loaded []string, problems []error) {
 	return dir, loaded, problems
 }
 
-// RenderThemes formats the user-theme report for `atrium doctor` (empty string when
-// there is nothing to say — no files loaded and none refused), in the section shape
+// RenderThemes formats the user-theme report for `atrium doctor`, in the section shape
 // RenderRepoScripts established.
 //
-// When something was refused it also prints the directory and the themes a file may
-// extend. That vocabulary used to be interpolated into the refusal itself, where the
-// startup modal clipped it mid-list; here there is room for it, and the directory
-// answers the one question a refusal structurally cannot — "my file is in neither
-// list".
+// It prints even when nothing loaded and nothing was refused, unlike its siblings, and
+// that empty case is the one it exists for: a file in the wrong directory — themes/
+// misspelt, an XDG path assumed, a legacy ~/.claude-squad install — produces no theme
+// and no refusal, so every OTHER surface is silent about it by construction. The
+// directory line is the answer, and it has to be printed when there is nothing else to
+// say or it is missing exactly when it is needed.
+//
+// The directory line is unconditional; the `extends` vocabulary beneath it is not.
+// Someone is only choosing a base theme when a file already failed, and that vocabulary
+// used to be interpolated into each refusal, where the startup modal clipped it
+// mid-list — this is its home, but a clean run does not need it recited.
+//
+// A refusal carrying measured violations prints ALL of them, indented under its line.
+// The one-line form the modal shows spells out one and counts the rest, which is right
+// for a modal and wrong here: a page has room, and reporting every miss at once is the
+// whole reason theme.Validate does not stop at the first.
 func RenderThemes(dir string, loaded []string, problems []error) string {
-	if len(loaded) == 0 && len(problems) == 0 {
-		return ""
-	}
 	var b strings.Builder
 	b.WriteString("User themes:\n")
 	for _, name := range loaded {
 		fmt.Fprintf(&b, "  ✓ %s\n", name)
 	}
 	for _, p := range problems {
+		var invalid *themefile.InvalidPaletteError
+		if errors.As(p, &invalid) && len(invalid.Violations) > 1 {
+			// Doctor's own header rather than p.Error(), which spells out the first miss
+			// inline — right for a one-line modal, and here it would print that miss twice,
+			// once in the header and once at the top of the list below it.
+			fmt.Fprintf(&b, "  ⚠ %s: palette is not legible, %d misses:\n", invalid.File, len(invalid.Violations))
+			for _, v := range invalid.Violations {
+				fmt.Fprintf(&b, "      %s\n", v.Error())
+			}
+			continue
+		}
 		fmt.Fprintf(&b, "  ⚠ %s\n", p.Error())
 	}
+	if len(loaded) == 0 && len(problems) == 0 {
+		b.WriteString("  none loaded\n")
+	}
+	// Not when ThemesDir() itself failed: dir is "" there, and "Themes live in " is a
+	// sentence that names nowhere. The error is already printed above it.
+	if dir != "" {
+		fmt.Fprintf(&b, "  Themes live in %s\n", dir)
+	}
 	if len(problems) > 0 {
-		fmt.Fprintf(&b, "  Themes live in %s and may extend: %s\n",
-			dir, strings.Join(theme.BuiltinNames(), ", "))
+		fmt.Fprintf(&b, "  A theme file may extend: %s\n", strings.Join(theme.BuiltinNames(), ", "))
 	}
 	return b.String()
 }

@@ -418,17 +418,23 @@ func (m *home) flushThemeProblems() tea.Cmd {
 // themeProblemsReport is that modal's text, bounded on both axes for the reason
 // customCommandProblemsReport is: a themes directory can hold any number of broken
 // files, and both the filename and the failing value are user-authored.
+//
+// The heading counts PROBLEMS, not files, and that is the honest count rather than a
+// vaguer one. Most entries are a refused file, but ApplyThemeAtLaunch pushes
+// directory-level failures into the same slice — an unreadable themes/, or a data dir
+// that would not resolve — and those are one entry standing for every theme the user
+// owns. "1 theme file was ignored" would be a specific claim about a specific file in
+// exactly the case where no file was read at all.
 func themeProblemsReport(problems []error) string {
 	if len(problems) == 0 {
 		return ""
 	}
-	noun := "files"
+	noun := "problems"
 	if len(problems) == 1 {
-		noun = "file"
+		noun = "problem"
 	}
 	lines := []string{fmt.Sprintf(
-		"%d theme %s in the themes directory %s ignored:",
-		len(problems), noun, wereOrWas(len(problems)))}
+		"%d %s loading user themes:", len(problems), noun)}
 	shown := problems
 	if len(shown) > customCommandProblemsShown {
 		shown = shown[:customCommandProblemsShown]
@@ -451,9 +457,9 @@ func themeProblemsReport(problems []error) string {
 	// the trade every one of this modal's siblings makes. These do not have to.
 	// TestThemeProblemsReportFitsANarrowTerminal holds them to it.
 	lines = append(lines, "",
-		"Those palettes are not selectable.",
+		"Any palette named above is not selectable.",
 		"A `theme` naming one falls back to the default.",
-		"`atrium doctor` reports the same list.")
+		"`atrium doctor` reports the same list, in full.")
 	return strings.Join(lines, "\n")
 }
 

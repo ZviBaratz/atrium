@@ -115,13 +115,20 @@ func TestRefusedUserThemeDoesNotStrandTheLaunch(t *testing.T) {
 	assert.NotContains(t, theme.Names(), "washed", "a refused palette must not be registered")
 }
 
-// TestTmuxInitIsOnlyReachedThroughInitAppearanceAndTmux is what stops #574 coming back.
+// TestMainCallsTmuxInitOnlyFromInitAppearanceAndTmux is what stops #574 coming back.
 //
 // The two tests above drive the function that owns the order, so on their own they
-// prove only that THAT function is correct — a new startup path calling tmux.Init
+// prove only that THAT function is correct — a new STARTUP path calling tmux.Init
 // directly would reintroduce the defect with every one of them still green. This reads
-// main.go and holds the call site to one.
-func TestTmuxInitIsOnlyReachedThroughInitAppearanceAndTmux(t *testing.T) {
+// main.go and holds its call site to one.
+//
+// main.go alone, which the name says because the claim cannot be wider than the file it
+// reads. tmux.Init is called from app/app_layout.go too, and that call is not a #574
+// risk of the same kind: it runs from applySettingChange, i.e. from inside a program
+// whose theme was activated before the first frame, and re-rendering the conf is the
+// whole reason it is there. What #574 was is a call in a path that runs BEFORE any
+// theme has been set, and main.go is where those live.
+func TestMainCallsTmuxInitOnlyFromInitAppearanceAndTmux(t *testing.T) {
 	src, err := os.ReadFile("main.go")
 	require.NoError(t, err)
 

@@ -286,7 +286,7 @@ neither. A theme carries both — `Glyphs` exported, the agent table behind
    within the table), not the derivation — a different letter meeting those is a review
    conversation, not a build break.
 
-## Adding a UI state — 7 sites, three of them fixture files
+## Adding a UI state — 8 sites, four of them fixture files
 
 `app/app.go`'s state enum (which bumps `numStates`), plus a nullable overlay pointer
 field. Then six more, and the count is the thing to get right: adding the enum and
@@ -295,8 +295,10 @@ stopping at `statemachine_test.go` is a hard CI fail, not an omission you find l
 1. **`frameStates()`, in `app/frameparity_test.go`** — *not* `app/statemachine_test.go`,
    which only *consumes* it. `TestFrameStatesCoverEveryState` requires
    `len(frameStates()) == numStates`, so bumping the enum fails there immediately.
-   Seven tests fan out from that one entry (frame parity, both colour fingerprints,
-   the bounds sweep, the background-message state machine, both no-colour checks).
+   Everything below fans out from that one entry, so count the consumers rather than
+   trusting a number here: `grep -c 'frameStates()' app/*_test.go`. Today they are
+   frame parity, the three colour fingerprints, the bounds sweep, the
+   background-message state machine, the two no-colour checks, and the hard-tab sweep.
 
    Give it a **`wire` func** that arms the overlay production would keep, or the state
    is swept half-constructed and the interesting dereference never happens. Prefer the
@@ -308,19 +310,23 @@ stopping at `statemachine_test.go` is a hard CI fail, not an omission you find l
 2. **A new golden under `app/testdata/frames/<name>.txt`.** `compareGolden` hard-fails
    on a missing file, and creates it for you: `CS_UPDATE_GOLDEN=1` is an env var, not a
    flag.
-3. + 4. **Re-baseline `app/testdata/colours.txt` and `colours-light.txt`**, each under
-   its own `-run` target. They iterate `frameStates()` in *slice* order and write one
-   block per state, so **append your entry last**: inserted mid-slice it rewrites every
-   block after it and the diff becomes unreadable.
+3. + 4. + 5. **Re-baseline all three colour goldens** — `app/testdata/colours.txt`,
+   `colours-light.txt` and `colours-user.txt` (the last one a registered user theme
+   file, #813) — each under its own `-run` target. They iterate `frameStates()` in
+   *slice* order and write one block per state, so **append your entry last**: inserted
+   mid-slice it rewrites every block after it and the diff becomes unreadable.
    ```
    CS_UPDATE_GOLDEN=1 go test ./app/ -run TestFrameParity
    CS_UPDATE_GOLDEN=1 go test ./app/ -run TestFrameColourFingerprint
    CS_UPDATE_GOLDEN=1 go test ./app/ -run TestLightFrameColourFingerprint
+   CS_UPDATE_GOLDEN=1 go test ./app/ -run TestUserThemeFrameColourFingerprint
    ```
-5. `app/app_layout.go` — `menuVisible()`'s case list if the state hides the hint bar,
+   `-run TestFrameColourFingerprint` matches the other two as a prefix would not: the
+   names diverge before the shared suffix, so each needs its own line.
+6. `app/app_layout.go` — `menuVisible()`'s case list if the state hides the hint bar,
    and a `SetSize` block so the overlay is sized responsively.
-6. `app/frame_restore_test.go` — see below.
-7. The `View()` arm in `app/app.go`, and a router in `app/app_update.go`'s
+7. `app/frame_restore_test.go` — see below.
+8. The `View()` arm in `app/app.go`, and a router in `app/app_update.go`'s
    `handleKeyPress` prelude.
 
 Situational, and worth knowing which: **`app/view_bounds_test.go`'s overlay map has no

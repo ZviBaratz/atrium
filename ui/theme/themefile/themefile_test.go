@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -16,8 +17,15 @@ import (
 func write(t *testing.T, name, body string) string {
 	t.Helper()
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600))
+	writeInto(t, dir, name, body)
 	return dir
+}
+
+// writeInto adds another file to a directory write already made, for the cases that
+// need two — a name collision, or two bases whose difference is the assertion.
+func writeInto(t *testing.T, dir, name, body string) {
+	t.Helper()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600))
 }
 
 // TestLoadAcceptsAPartialOverride is the happy path and the argument for `extends`: a
@@ -122,15 +130,43 @@ func TestLoadRefusals(t *testing.T) {
 			contains: []string{"My Theme", "lowercase"},
 		},
 		{
+			// "-dark" IS lowercase letters, digits and dashes, which is what the message
+			// used to say it had to be — so the one refusal a reader could not act on was
+			// the one they were most likely to hit by naming a variant.
+			name: "name starts with a dash",
+			file: "-dark.json", body: `{"palette": {"fg": "#ffffff"}}`,
+			contains: []string{"-dark.json", "starting with a dash"},
+		},
+		{
+			// A Decoder reads one value and stops. Without a check for what follows, the
+			// second object here is discarded in silence and the file half-applies — the
+			// exact no-op DisallowUnknownFields was added to prevent.
+			name: "a second object after the first",
+			file: "x.json", body: `{"palette": {"accent": "#7aa2f7"}}{"palette": {"accent": "#000000"}}`,
+			contains: []string{"x.json", "content after the theme object"},
+		},
+		{
+			name: "garbage after the object",
+			file: "x.json", body: `{"palette": {"accent": "#7aa2f7"}} !!! not json at all {`,
+			contains: []string{"x.json", "content after the theme object"},
+		},
+		{
+			// json's own word for this is "EOF", which is not a sentence a user can act on.
+			name: "empty file",
+			file: "x.json", body: "   \n",
+			contains: []string{"x.json", "empty"},
+		},
+		{
 			// The one that is the point of the issue: a palette the contrast oracle
 			// refuses is reported with the failing token and its measured ratio, never
 			// darkened into compliance.
 			name: "illegible palette",
 			file: "washed.json", body: `{"extends": "tokyo-night", "palette": {"fg": "#111111"}}`,
 			// The measured ratio and the floor, not just "invalid": tuning a palette
-			// needs the number. Bounded at violationsShown, so the tail is a count —
-			// a single wrong fg fails its own floor and both pairs it appears in.
-			contains: []string{"washed.json", "not legible", "fg: contrast 1.10, floor 4.50", "and 2 more"},
+			// needs the number. Bounded at violationsShown, so the rest is a count —
+			// a single wrong fg fails its own floor and both pairs it appears in — and
+			// the count comes BEFORE the detail, so a clip cannot eat it.
+			contains: []string{"washed.json", "not legible", "3 misses", "fg: contrast 1.10, floor 4.50"},
 		},
 	}
 
@@ -152,19 +188,46 @@ func TestLoadRefusals(t *testing.T) {
 // lands mid-word, which is how "…fg on bg_elevated: contrast 1.3…" shipped in review.
 //
 // 100 is app's reportLineBudget, spelled here rather than imported: app depends on this
-// package, so the constant cannot come the other way. What keeps the two honest is that
-// this asserts the bound with room to spare — the filename is the only unbounded part,
-// and a name long enough to breach it is one the modal clips for its own reasons.
+// package, so the constant cannot come the other way.
+//
+// The FILENAME is what makes this a real bound rather than a formality, and an earlier
+// version of this test hid that by measuring the shortest name in the repo. A theme is
+// named by its file, so the names people actually pick are the names of themes —
+// "catppuccin-frappe", "gruvbox-material-dark" — and every one of those breached a
+// budget "washed.json" cleared with three runes to spare. So the fixture is a long
+// realistic name, and the fixed text was re-cut to fit under one.
+//
+// It is still not an unbounded promise: a filename can be any length, and past some
+// point the clip is the modal doing its job on a name Atrium did not choose. What the
+// message owes is that the COUNT survives, which is why it sits ahead of the detail —
+// asserted below rather than left to the reading.
 func TestRefusalsFitTheModalTheyAreShownIn(t *testing.T) {
 	const modalClip = 100
 
 	// The worst case the fixed text can produce: a palette missing several floors,
-	// under a filename of ordinary length.
-	_, problems := Load(write(t, "washed.json", `{"palette": {"fg": "#111111"}}`))
+	// under the longest theme name anyone has plausibly typed.
+	dir := write(t, "gruvbox-material-dark.json", `{"palette": {"fg": "#111111"}}`)
+	_, problems := Load(dir)
 	require.Len(t, problems, 1)
-	assert.LessOrEqualf(t, len([]rune(problems[0].Error())), modalClip,
-		"the refusal is %d runes; the startup modal clips it mid-word: %v",
-		len([]rune(problems[0].Error())), problems[0])
+	msg := problems[0].Error()
+	assert.LessOrEqualf(t, len([]rune(msg)), modalClip,
+		"the refusal is %d runes; the startup modal clips it mid-word: %s", len([]rune(msg)), msg)
+
+	// What holds for ANY filename and any violation, unlike the width above: the file and
+	// the count are complete before the budget runs out. That is the part a clip may not
+	// take, and it is why they are on the left.
+	head := strings.Index(msg, "):")
+	require.Positive(t, head, "the count must be present for a multi-miss palette: %s", msg)
+	assert.Lessf(t, head, modalClip,
+		"the file and the miss count must fit inside the clip budget: %s", msg)
+
+	// The count is what a clip must never take, because it is the only thing telling the
+	// reader that fixing the named token will not be the end of it. Asserted as an
+	// ORDERING rather than a width: a clip eats the right-hand end, so "survives the
+	// clip" and "sits left of the detail" are the same property, and only the second one
+	// stays true for a filename longer than this fixture's.
+	assert.Lessf(t, strings.Index(msg, "misses"), strings.Index(msg, "contrast"),
+		"the miss count must sit ahead of the violation detail, or a clip takes it: %s", msg)
 }
 
 // TestExtendsCannotChainThroughAUserTheme pins the no-chaining rule against the state
@@ -268,7 +331,60 @@ func TestLoadedThemesPassEveryRegistryGuard(t *testing.T) {
 		assert.Regexpf(t, `^#[0-9a-f]{6}$`, theme.Hex(c),
 			"Palette.%s is not canonical hex after loading", pv.Type().Field(i).Name)
 	}
-	assert.Equal(t, theme.Get("catppuccin-mocha").Glyphs, th.Glyphs,
-		"glyphs come from the base; a theme file cannot introduce one")
 	assert.Equal(t, theme.Get("catppuccin-mocha").Borders, th.Borders)
+}
+
+// TestExtendsCarriesTheBorderStyleAndNotTheGlyphs pins the half of `extends` that is
+// easy to state backwards, and was: the README claimed extends supplies the glyph set
+// and then that a theme file cannot change borders, and both halves were the wrong way
+// round.
+//
+// Borders ARE inherited and DO differ by base — `unicode` is the square-cornered
+// theme and the other four are rounded — so extending it is the only way a theme file
+// reaches square corners. Asserting against two bases is what makes that a real
+// discriminator: every built-in ships the same Glyphs table, so an equality against one
+// base passes for any base and proves nothing about inheritance either way.
+//
+// Glyphs are NOT inherited, and the struct field is not where that is decided:
+// ui/theme's compose() overwrites Glyphs and agentGlyphs from the active glyph_set for
+// every theme it publishes, built-in or user. So what a loaded theme carries in that
+// field never reaches a frame, and the assertion that matters is the one through Set().
+func TestExtendsCarriesTheBorderStyleAndNotTheGlyphs(t *testing.T) {
+	dir := write(t, "square.json", `{"extends": "unicode", "palette": {"bg": "#000000"}}`)
+	writeInto(t, dir, "round.json", `{"extends": "catppuccin-mocha", "palette": {"bg": "#000000"}}`)
+
+	loaded, problems := Load(dir)
+	require.Empty(t, problems)
+	require.Len(t, loaded, 2)
+
+	assert.Equal(t, theme.Get("unicode").Borders, loaded["square"].Borders)
+	assert.Equal(t, theme.Get("catppuccin-mocha").Borders, loaded["round"].Borders)
+	assert.NotEqual(t, loaded["square"].Borders, loaded["round"].Borders,
+		"the two bases must differ here, or inheriting the border style is untested")
+
+	// The glyph half, through the composed theme rather than the loaded struct.
+	defer theme.SetUserThemes(loaded)()
+	defer theme.SetGlyphSet(theme.GlyphSetASCII)()
+	defer theme.Set("square")()
+	assert.Equal(t, theme.Get("unicode").Borders, theme.Current().Borders,
+		"the border style survives composition")
+	assert.NotEqual(t, theme.Get("unicode").Glyphs, theme.Current().Glyphs,
+		"glyph_set overrides whatever the base carried; a theme file cannot pin glyphs")
+}
+
+// TestDuplicateNameIsRefused. The extension is matched case-insensitively and the stem
+// is not, so two files can resolve to one name — and before this they did so silently,
+// with sort order picking the winner. The symptom was "every save to one of these files
+// does nothing", reported by nobody, because neither the startup modal nor `atrium
+// doctor` had a second file to name.
+func TestDuplicateNameIsRefused(t *testing.T) {
+	dir := write(t, "dup.json", `{"palette": {"accent": "#7aa2f7"}}`)
+	writeInto(t, dir, "dup.JSON", `{"palette": {"accent": "#89b4fa"}}`)
+
+	loaded, problems := Load(dir)
+	assert.Len(t, loaded, 1, "one name, one theme")
+	require.Len(t, problems, 1)
+	assert.Contains(t, problems[0].Error(), "dup.JSON")
+	assert.Contains(t, problems[0].Error(), "dup.json",
+		"the refusal must name BOTH files, or the reader cannot tell which one won")
 }

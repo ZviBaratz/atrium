@@ -49,6 +49,28 @@ func TestUserThemeCannotShadowABuiltin(t *testing.T) {
 
 	assert.Equal(t, "#1a1b26", Hex(Get(DefaultThemeName).Palette.Bg),
 		"a user entry under a built-in name must not be reachable through Get")
+
+	// Get consulting the registry first is only half of it. Names() and SelectableNames()
+	// take the UNION, so an entry that survived registration would list the name twice
+	// and make the picker take two presses to move past it — a shadow that Get's ordering
+	// cannot see. SetUserThemes drops it instead, which is what makes "cannot shadow" a
+	// property of this package rather than of the loader's check in another one.
+	assert.Equal(t, 1, countName(Names(), DefaultThemeName),
+		"a colliding entry must be dropped, not merely out-ranked: the union lists it twice")
+	assert.Equal(t, 1, countName(SelectableNames(), DefaultThemeName),
+		"the settings picker offers SelectableNames verbatim")
+}
+
+// countName is how many times a name appears in a list — the question a Contains cannot
+// answer, and the one a duplicate registration turns on.
+func countName(names []string, want string) int {
+	n := 0
+	for _, got := range names {
+		if got == want {
+			n++
+		}
+	}
+	return n
 }
 
 // TestSetUserThemesCopiesTheMap: a caller that keeps its own map and mutates it later
@@ -56,11 +78,22 @@ func TestUserThemeCannotShadowABuiltin(t *testing.T) {
 // is defence for the next caller rather than for that one.
 func TestSetUserThemesCopiesTheMap(t *testing.T) {
 	const name = "fixture-copied"
-	mine := map[string]*Theme{name: userThemeFixture(name, nil)}
+	owned := userThemeFixture(name, nil)
+	mine := map[string]*Theme{name: owned}
 	defer SetUserThemes(mine)()
 
 	delete(mine, name)
 	assert.Contains(t, Names(), name, "deleting from the caller's map must not un-register")
+
+	// The copy is SHALLOW, and pinning that here is the point: the *Theme values are
+	// shared, so a caller that keeps a theme it handed over and mutates it DOES reach the
+	// one Get returns. Not a defect to fix by deep-copying — every caller builds its
+	// themes and lets go of them, and Get already hands out the registry's own pointers —
+	// but a doc comment claiming the caller "cannot reach the registered one" would be
+	// false, and this is what stops it being written again.
+	owned.Palette.Bg = lipgloss.Color("#ff0000")
+	assert.Equal(t, "#ff0000", Hex(Get(name).Palette.Bg),
+		"the map is copied; the themes inside it are not")
 }
 
 // TestUserPaletteDrivesIsLightAndTheBrandTable proves a user palette is a first-class

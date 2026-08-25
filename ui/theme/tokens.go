@@ -71,8 +71,13 @@ func SetToken(p *Palette, name string, c Color) bool {
 	return false
 }
 
-// tokenAt returns the accessor for a token name, or nil. In-package convenience for
-// the oracle, which keys its floors by the same names.
+// tokenAt returns the accessor for a token name, or nil.
+//
+// The oracle does NOT use it — Validate walks paletteTokens directly, since it wants
+// every token in declaration order rather than one by name. Its caller is
+// contrast_test.go's light/dark twin sweep, which iterates tokenFloors' keys and needs
+// the field each one names. Kept unexported for that reason: it is a lookup into this
+// file's table, not part of the palette vocabulary anyone outside it consumes.
 func tokenAt(name string) func(*Palette) *Color {
 	for _, t := range paletteTokens {
 		if t.name == name {

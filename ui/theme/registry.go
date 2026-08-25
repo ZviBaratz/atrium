@@ -317,12 +317,26 @@ func userThemes() map[string]*Theme {
 // anyway (the selection may itself be one of the themes being replaced), and what
 // keeps this function's job to one thing.
 //
-// The map is copied on the way in so a caller that keeps and mutates its own copy
-// cannot reach the registered one — the same reason Theme.agentGlyphs is unexported.
+// A name that is already a built-in is DROPPED rather than registered. Get consults the
+// registry first, so such an entry could never be reached anyway — but Names() and
+// SelectableNames() take the union, so registering one would list the name twice and
+// make the picker take two presses to move past it. Dropping here is what makes "a user
+// theme cannot shadow a built-in" a property of this package instead of a policy the
+// loader happens to enforce in another one.
+//
+// The map itself is copied on the way in, so a caller that keeps and mutates its own map
+// cannot add or remove registered themes behind this function's back. The *Theme values
+// are shared, not deep-copied: a caller that mutates a theme it handed over does reach
+// the one Get returns. Every caller builds its themes and lets go of them, which is why
+// a shallow copy is enough; Get's own callers are already trusted not to write through
+// the pointer it returns.
 func SetUserThemes(m map[string]*Theme) (restore func()) {
 	prev := userRegistry.Load()
 	next := make(map[string]*Theme, len(m))
 	for k, v := range m {
+		if _, builtin := registry[k]; builtin {
+			continue
+		}
 		next[k] = v
 	}
 	userRegistry.Store(&next)
@@ -392,11 +406,13 @@ func Names() []string {
 // included, since Names() carries them and a loaded palette a user cannot select is a
 // file that did nothing.
 //
-// It lives here rather than in the settings overlay so theme vocabulary has one
-// home. Names() deliberately still returns only the registry, because every
-// existing caller that iterates it — the splash's canonical-hex check, the glyph
-// width sweep, the contrast oracle — wants real palettes, and would test `auto`
-// vacuously.
+// It lives here rather than in the settings overlay so theme vocabulary has one home.
+// The list is Names() plus `auto`, and the `auto` half is what stays out of Names():
+// every caller that iterates that one — the splash's canonical-hex check, the glyph
+// width sweep, the contrast oracle — wants a real palette, and `auto` has none to
+// give, so it would test vacuously. A user theme is a real palette and is in both.
+//
+// No dedup, because SetUserThemes cannot register a name the registry already holds.
 func SelectableNames() []string {
 	names := Names()
 	sort.Strings(names)

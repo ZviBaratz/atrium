@@ -11,6 +11,7 @@ import (
 
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/ui/theme"
+	"github.com/ZviBaratz/atrium/ui/theme/themefile"
 )
 
 // writeThemes drops files into the sandbox data dir's themes directory. HOME is
@@ -46,13 +47,57 @@ func TestCheckThemes_ReportsBothHalves(t *testing.T) {
 		"doctor must carry the reason, not just the filename")
 }
 
-// TestCheckThemes_SaysNothingWithoutAThemesDirectory. Almost every install is in this
-// state, so a section here would be noise on every run.
-func TestCheckThemes_SaysNothingWithoutAThemesDirectory(t *testing.T) {
+// TestRenderThemes_NamesTheDirectoryWhenNothingLoaded is the case the whole report
+// exists for, and the one an earlier draft rendered as an empty string.
+//
+// A themes directory that does not exist is indistinguishable, from every other
+// surface, from one holding a file Atrium never looked at: themes/ misspelt, an XDG
+// path assumed, a legacy ~/.claude-squad data dir. Load returns no theme AND no
+// refusal, so the startup modal is silent, the picker is unchanged, and nothing
+// anywhere names the path that would have worked. That is what this line is.
+//
+// It costs one line on an install with no themes, which is most of them. The trade is
+// deliberate: the alternative spends nothing and answers nothing.
+func TestRenderThemes_NamesTheDirectoryWhenNothingLoaded(t *testing.T) {
 	dir, loaded, problems := CheckThemes()
-	assert.Empty(t, loaded)
-	assert.Empty(t, problems)
-	assert.Empty(t, RenderThemes(dir, loaded, problems), "no themes and no problems renders no section")
+	require.Empty(t, loaded)
+	require.Empty(t, problems)
+
+	out := RenderThemes(dir, loaded, problems)
+	assert.Contains(t, out, "User themes:")
+	assert.Contains(t, out, "none loaded")
+	assert.Contains(t, out, dir,
+		"a file in the wrong directory produces no theme and no refusal; this path is the only answer")
+}
+
+// TestRenderThemes_SaysNowhereWhenTheDirCannotBeResolved: CheckThemes returns dir ""
+// when config.ThemesDir() itself fails, and "Themes live in " is a sentence naming
+// nowhere. The error above it already says what happened.
+func TestRenderThemes_SaysNowhereWhenTheDirCannotBeResolved(t *testing.T) {
+	out := RenderThemes("", nil, []error{errors.New("home directory: no such user")})
+	assert.Contains(t, out, "no such user")
+	assert.NotContains(t, out, "Themes live in")
+}
+
+// TestRenderThemes_PrintsEveryViolation. The modal shows one miss and counts the rest,
+// because it has one clipped line per file; doctor has a page, and reporting every miss
+// at once is the whole reason theme.Validate does not stop at the first. Without this,
+// that property was tested in the one place no user could observe it.
+func TestRenderThemes_PrintsEveryViolation(t *testing.T) {
+	writeThemes(t, map[string]string{"washed.json": `{"palette": {"fg": "#111111"}}`})
+
+	dir, loaded, problems := CheckThemes()
+	require.Empty(t, loaded)
+	require.Len(t, problems, 1)
+
+	var invalid *themefile.InvalidPaletteError
+	require.ErrorAs(t, problems[0], &invalid)
+	require.Greater(t, len(invalid.Violations), 1, "the fixture must miss more than one floor")
+
+	out := RenderThemes(dir, loaded, problems)
+	for _, v := range invalid.Violations {
+		assert.Containsf(t, out, v.Error(), "doctor must print every miss, not the first: %s", v.Error())
+	}
 }
 
 func TestRenderThemes(t *testing.T) {
@@ -70,6 +115,7 @@ func TestRenderThemes(t *testing.T) {
 
 	clean := RenderThemes("/data/themes", []string{"midnight"}, nil)
 	assert.Contains(t, clean, "midnight", "a loaded theme is worth reporting even when nothing was refused")
+	assert.Contains(t, clean, "/data/themes", "the directory is unconditional; it is the answer to a file in neither list")
 	assert.NotContains(t, clean, "may extend", "the vocabulary is help for a failure, not noise on every run")
 	assert.Contains(t, RenderThemes("/data/themes", nil, []error{errors.New("x.json: bad")}), "x.json")
 }

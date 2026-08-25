@@ -19,6 +19,13 @@ import (
 // decision disagreeing about a palette is exactly the failure that would not
 // announce itself.
 func relLuminanceOf(c Color) float64 {
+	// A nil colour is the absence of one, which has no luminance. Answering 0 rather
+	// than panicking is Hex's precedent: both are reachable from a hand-built Palette,
+	// and ContrastRatio is exported for exactly such a palette (ui/theme/themefile
+	// validates one before any of it has been painted).
+	if c == nil {
+		return 0
+	}
 	r16, g16, b16, _ := c.RGBA()
 	lin := func(v uint32) float64 {
 		s := float64(v>>8&0xff) / 255

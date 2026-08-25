@@ -339,6 +339,40 @@ func TestSettingsOverlay_ThemeRowOffersUserThemes(t *testing.T) {
 		"cycled %d options without landing on %q", len(names), name)
 }
 
+// TestSettingsOverlay_ThemeRowRecoversFromAVanishedTheme.
+//
+// A stored enum value that is not among the options used to be a hand-edited
+// config.json, i.e. nobody's problem. Since #813 it is an ordinary outcome: the theme
+// row's options include user theme files, and a file that was deleted, renamed, or
+// newly refused by the contrast oracle leaves `theme` naming a palette that no longer
+// exists. The refusal modal's own line sends the user to this row.
+//
+// The unfound value used to leave `cur` at 0, so `right` selected opts[1] and skipped
+// opts[0] in silence — and on this row opts[0] is `auto`, the recommended value and the
+// most likely thing a user in this state wants. Both directions are driven, because
+// anchoring at either end fixes one of them and leaves the other stepping into the
+// middle of the list.
+func TestSettingsOverlay_ThemeRowRecoversFromAVanishedTheme(t *testing.T) {
+	names := theme.SelectableNames()
+	require.Equal(t, theme.AutoThemeName, names[0], "precondition: auto leads the list")
+
+	cfg := config.DefaultConfig()
+	cfg.Theme = "a-theme-whose-file-is-gone"
+	o := NewSettingsOverlay(cfg)
+	settingsAt(t, o, "theme")
+
+	_, changed := o.HandleKeyPress(keyMsg("right"))
+	require.Equal(t, "theme", changed)
+	assert.Equal(t, names[0], cfg.Theme,
+		"the first press must land on the first option, not step past it")
+
+	cfg.Theme = "a-theme-whose-file-is-gone"
+	_, changed = o.HandleKeyPress(keyMsg("left"))
+	require.Equal(t, "theme", changed)
+	assert.Equal(t, names[len(names)-1], cfg.Theme,
+		"and the other direction on the last, not the second to last")
+}
+
 // TestSettingsOverlay_CycleModelIndicator pins the model-chip enum: defaults
 // to on, cycles on → off, and wraps back to on.
 func TestSettingsOverlay_CycleModelIndicator(t *testing.T) {

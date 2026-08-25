@@ -17,11 +17,18 @@ import (
 // admired at review time (#813). contrast_test.go is now one of its callers rather
 // than its home; the other is ui/theme/themefile.
 //
-// The floors are set from the MINIMUM across the shipped dark themes with margin, so
-// they land green on what exists today and constrain what is added next. This is not
-// an accessibility certification — the tokens Atrium deliberately renders faint would
-// fail WCAG AA and should — it is a floor under "did someone pick a colour nobody can
-// see".
+// The floors were DERIVED from the minimum across the shipped dark themes with margin,
+// which is their provenance rather than a live description: the light palettes landed
+// later and are now what binds several of them (bar_bg's 1.6 is the tightest — latte
+// measures 1.6079 against it, half a percent of headroom). This is not an accessibility
+// certification — the tokens Atrium deliberately renders faint would fail WCAG AA and
+// should — it is a floor under "did someone pick a colour nobody can see".
+//
+// Since #813 the oracle is also applied to palettes nobody reviewed, which changes what
+// a tight floor costs: a user extending catppuccin-latte and darkening bg by one unit
+// per channel is refused for bar_bg, a token their file never mentions. That is the
+// floor doing its job on an inherited value, and Violation.Error says which token —
+// but see its note: the key named is not always a key the file wrote.
 
 // ContrastRatio is WCAG 2.1's contrast ratio: 1.0 for two identical colours, 21.0 for
 // black on white. Order-independent.
@@ -50,8 +57,10 @@ func ContrastRatio(a, b Color) float64 {
 // selection fill that must merely be distinguishable, so 1.1.
 //
 // Three tokens are absent, each for a reason TestEveryTokenIsFlooredOrExempt holds to
-// a written-down entry rather than to silence: bg is the reference itself, and
-// badge_bg/badge_fg meet each other rather than the void, under pairFloors.
+// a written-down entry rather than to silence: bg is the reference itself, and the
+// badge pair is floored against each other and against Bg under pairFloors instead —
+// badge_bg is a FILL (Theme.BadgeStyle sets it as a Background), so a floor measuring
+// its foreground contrast with Bg would be asking the wrong question of it.
 var tokenFloors = map[string]float64{
 	"fg":           4.5,
 	"accent":       4.5,
@@ -75,7 +84,7 @@ var tokenFloors = map[string]float64{
 // into "unchecked".
 var tokenFloorExempt = map[string]string{
 	"bg":       "the reference every other token is measured against",
-	"badge_bg": "meets badge_fg, not the void: floored as a pair below",
+	"badge_bg": "a fill, not a foreground: floored against bg and badge_fg as pairs below",
 	"badge_fg": "meets badge_bg, not the void: floored as a pair below",
 }
 
@@ -94,12 +103,29 @@ const glyphFloor = 3.0
 // the selected list row (ui/row.go), and fg over bar_bg is the diff anchor
 // (ui/diff_anchor.go) as well as the in-session bar's neutral status glyphs.
 //
-// The last three are the rest of that bar's status glyphs (ui/contextbar.go's
-// barState), added with #555's fix. Their tier is glyphFloor, not 4.5: on the shipped
-// light palettes these dip as low as 3.16, so a 4.5 floor would refuse two themes that
-// have been legible for months — while 4.5 was never the issue, a fg_dim-valued token
-// at 1.44 was. barState's remaining arms all render fg, which the diff-anchor pair
-// above already floors — so every colour that reaches the band is covered.
+// Three of them are that bar's status glyphs (ui/contextbar.go's barState), added with
+// #555's fix. Their tier is glyphFloor, not 4.5: on the shipped light palettes these dip
+// as low as 3.16, so a 4.5 floor would refuse two themes that have been legible for
+// months — while 4.5 was never the issue, a fg_dim-valued token at 1.44 was. barState's
+// remaining arms all render fg, which the diff-anchor pair above already floors.
+//
+// That covers every PALETTE TOKEN the band can carry, which is not the same as every
+// colour on it. ComposeSessionContext paints one more mark there — the agent brand
+// accent from Theme.AgentGlyph — and those two colours are not palette tokens at all,
+// so no floor here reaches them. They are unfloored against bar_bg on purpose and not
+// by oversight: measured on the band they run 2.86/2.51 (tokyo-night), 2.92/2.56
+// (mocha), 1.95/1.97 (tokyo-night-day) and 2.35/2.37 (latte), and the `generic`
+// fallback is Palette.FgDim, i.e. the 1.44 #555 removed. Adopting glyphFloor for them
+// would refuse all five shipped themes, so the fix is to change those colours rather
+// than to assert about them, and that is #855 rather than something smuggled in here.
+// TestAgentBrandColoursStayLegible floors them against Bg, which is the surface the
+// session LIST paints them on and the only one they clear today.
+//
+// badge_bg over bg is the AUTO chip's fill against the void. It is here rather than in
+// tokenFloors because badge_bg is a background: it needs to be FINDABLE, not readable,
+// so it takes glyphFloor, and the shipped palettes hold 4.73-8.07. Without it a user
+// palette could set badge_bg to its own bg and lose the chip entirely while badge_fg
+// on badge_bg still cleared 4.5.
 //
 // The names carry no site gloss, and that is deliberate rather than terse. They are the
 // text of a refusal a user reads in a modal that wraps at 72 cells, and a palette
@@ -113,6 +139,7 @@ var pairFloors = []struct {
 	bg    func(Palette) Color
 }{
 	{"badge_fg on badge_bg", 4.5, func(p Palette) Color { return p.BadgeFg }, func(p Palette) Color { return p.BadgeBg }},
+	{"badge_bg on bg", glyphFloor, func(p Palette) Color { return p.BadgeBg }, func(p Palette) Color { return p.Bg }},
 	{"bg on accent", 4.5, func(p Palette) Color { return p.Bg }, func(p Palette) Color { return p.Accent }},
 	{"bg on attention", 4.5, func(p Palette) Color { return p.Bg }, func(p Palette) Color { return p.Attention }},
 	{"fg on bg_elevated", 4.5, func(p Palette) Color { return p.Fg }, func(p Palette) Color { return p.BgElevated }},
@@ -131,8 +158,13 @@ type Violation struct {
 	Floor float64
 }
 
-// Error names the miss in the vocabulary of the file that caused it, so a refused user
-// theme reports the key its author has to change.
+// Error names the miss in the on-disk vocabulary, so a refused user theme reports a key
+// its author can look up rather than a Go field name.
+//
+// Not necessarily a key their file WROTE. Every floor is measured on the RESOLVED
+// palette, so a file that overrides bg alone can miss bar_bg's floor — the base
+// theme's bar_bg against the new bg. The name is still the actionable one (that is the
+// token to override next), but the message cannot promise the author has seen it before.
 //
 // Compact because several are joined into one line of a modal that wraps at 72 cells:
 // the token, what it measured, and what it had to clear is all three facts, and the
