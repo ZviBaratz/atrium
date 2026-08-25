@@ -1120,9 +1120,9 @@ func (m *home) viewContent() string {
 	// an empty string as a blank line, so an unused component must be dropped, not
 	// rendered empty — whereas the reserved-but-quiet menu row renders a real blank
 	// line on purpose. That is why each component carries a presence flag into
-	// frameKey rather than relying on "" to mean absent. menuVisible and menuHeight in
-	// updateHandleWindowSizeEvent stay in lockstep so the row the menu occupies here
-	// is exactly the row the layout reserved for it.
+	// frameKey rather than relying on "" to mean absent. This gate and the layout
+	// read the same menuVisible bit — computeBudget charges the menu row off it —
+	// so the row the menu occupies here is exactly the row the layout reserved.
 	if m.menuVisible() {
 		k.menu, k.hasMenu = m.menu.String(), true
 	}

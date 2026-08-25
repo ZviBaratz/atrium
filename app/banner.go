@@ -1,9 +1,9 @@
 package app
 
 // The auto-accept safety banner (#378, item 5): a persistent, attention-colored
-// top row shown while app-wide auto-accept is armed. Its layout row is reserved in
-// lockstep by updateHandleWindowSizeEvent / paneContentHeight (height) and offset by
-// handleMouse (the divider Y-bound), so the frame stays exactly as tall as the
+// top row shown while app-wide auto-accept is armed. Its layout row is charged to
+// computeBudget's partition (both the resize path and the divider Y-bound read it
+// there) and offset by handleMouse, so the frame stays exactly as tall as the
 // terminal.
 
 import (

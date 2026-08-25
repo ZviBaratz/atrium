@@ -16,8 +16,8 @@ const (
 	maxListRatioTest = 0.60
 )
 
-// layoutListWidth mirrors the split math in updateHandleWindowSizeEvent so tests
-// can assert the divider column without reaching into the panes' render output.
+// layoutListWidth mirrors the split math in listCols so tests can assert the
+// divider column without reaching into the panes' render output.
 func layoutListWidth(h *home) int {
 	return int(float32(h.windowWidth) * float32(h.listRatio))
 }

@@ -21,47 +21,24 @@ import (
 // updateHandleWindowSizeEvent sets the sizes of the components.
 // The components will try to render inside their bounds.
 func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
-	// The session list takes listRatio of the width (default 30%); the preview pane
-	// takes the rest. listRatio is user-adjustable with < / > (clamped in appState).
-	// A zero value means the home was built without seeding the ratio (e.g. a struct
-	// literal in tests); fall back to the persisted/default value so the list never
-	// collapses to nothing.
+	// A zero ratio means the home was built without seeding it (e.g. a struct
+	// literal in tests); fall back to the persisted/default value so the list
+	// never collapses to nothing.
 	if m.listRatio <= 0 {
 		m.listRatio = m.appState.GetListRatio()
 	}
-	listWidth := int(float32(msg.Width) * float32(m.listRatio))
-	// Focus preset: the list is hidden (View omits it), so hand its whole column
-	// to the tabbed window. Every other preset keeps the listRatio split.
-	if m.listHidden() {
-		listWidth = 0
-	}
-	tabsWidth := msg.Width - listWidth
+	regions := m.computeRegions(msg.Width)
 
 	m.windowWidth, m.windowHeight = msg.Width, msg.Height
 
-	// The hint bar is contextual (see menuVisible): during plain navigation it always
-	// claims a row — blank when hint_bar is off, so a transient notice rides it with no
-	// reflow (#438) — and the panes reclaim that row only behind overlays. The error
-	// box likewise takes a row only while a notice is showing. Whichever rows are
-	// claimed, the composed frame is always exactly msg.Height tall and never floats in
-	// a centered band; transitions that flip menuVisible call recomputeLayout.
-	menuHeight := 0
-	if m.menuVisible() {
-		menuHeight = 1
-	}
-	errHeight := 0
-	if m.errBox.HasContent() {
-		errHeight = 1
-	}
-	// Kept in lockstep with paneContentHeight, which recomputes this same budget
-	// for the divider's Y-bound; menuHeight/errHeight are needed here anyway to
-	// size the menu and error rows. topBannerHeight reserves the auto-accept safety
-	// banner's row at the top when armed (#378).
-	contentHeight := max(1, msg.Height-m.topBannerHeight()-menuHeight-errHeight)
-	m.errBox.SetSize(int(float32(msg.Width)*0.9), errHeight)
+	// Whichever rows computeBudget claims, the composed frame is always exactly
+	// msg.Height tall and never floats in a centered band; transitions that flip
+	// menuVisible call recomputeLayout.
+	budget := m.computeBudget(msg.Height)
+	m.errBox.SetSize(int(float32(msg.Width)*0.9), budget.err)
 
-	m.tabbedWindow.SetSize(tabsWidth, contentHeight)
-	m.list.SetSize(listWidth, contentHeight)
+	m.tabbedWindow.SetSize(regions.tabs, budget.body)
+	m.list.SetSize(regions.list, budget.body)
 
 	// Each overlay's resize policy is its surfaceSpecs entry's size closure. The
 	// walk runs every entry, not just the current state's: the closures nil-check
@@ -79,7 +56,7 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 	if err := m.list.SetSessionPreviewSize(previewWidth, previewHeight); err != nil {
 		log.ErrorLog.Print(err)
 	}
-	m.menu.SetSize(msg.Width, menuHeight)
+	m.menu.SetSize(msg.Width, budget.menu)
 }
 
 // menuVisible reports whether the hint bar should occupy a row. Inline
@@ -106,22 +83,13 @@ func welcomeWidth(termWidth int) int {
 	return max(20, min(preferred, termWidth-4))
 }
 
-// paneContentHeight is how many rows the list/preview panes occupy: the full
-// terminal height minus the auto-accept banner row (topBannerHeight, at the top when
-// armed) and the contextual hint-bar and error rows (see menuVisible), which View
-// reserves in lockstep with the layout. The panes start at row topBannerHeight(), so
-// their screen span is [topBannerHeight(), topBannerHeight()+paneContentHeight()) —
-// the divider Y-bound in handleMouse is offset by the banner accordingly.
+// paneContentHeight is how many rows the list/preview panes occupy: the body
+// slice of computeBudget's partition at the cached terminal height. The panes
+// start at row topBannerHeight(), so their screen span is [topBannerHeight(),
+// topBannerHeight()+paneContentHeight()) — the divider Y-bound in handleMouse
+// is offset by the banner accordingly.
 func (m *home) paneContentHeight() int {
-	menuHeight := 0
-	if m.menuVisible() {
-		menuHeight = 1
-	}
-	errHeight := 0
-	if m.errBox.HasContent() {
-		errHeight = 1
-	}
-	return max(1, m.windowHeight-m.topBannerHeight()-menuHeight-errHeight)
+	return m.computeBudget(m.windowHeight).body
 }
 
 // recomputeLayout re-runs the size calculation off the cached terminal size. Use
@@ -465,7 +433,7 @@ func (m *home) adjustListCols(delta int) tea.Cmd {
 	if m.windowWidth <= 0 {
 		return m.adjustListRatio(float64(delta) * 0.02)
 	}
-	cols := int(float32(m.windowWidth) * float32(m.listRatio))
+	cols := m.listCols(m.windowWidth)
 	// Center the target column (+0.5) so the layout's int(width*ratio) truncation
 	// lands squarely on cols+delta instead of on a boundary a float32 rounding
 	// error could snap back to cols, which would make a step silently stick.
