@@ -58,11 +58,15 @@ func SplashScreensaver(width, height, frame int) string {
 // wordmark centered on top and the message tucked just below it. The wordmark and
 // message are overlaid separately at their own widths (not one padded block) so
 // each stays centered on its own width rather than on the wider of the two. The
-// overlay is opaque, so nothing bleeds through the text and no clearing under it
-// is needed (see overlayAt and TestOverlayIsOpaque; V5 retired the clearing the
-// organic fields once wore). The outer clamp honors the pane box (#251). Shared by
-// the preview and terminal panes so their idle empty states match. Callers gate on
-// splashFits.
+// overlay is opaque, so nothing bleeds through the text UNDER it (see overlayAt
+// and TestOverlayIsOpaque; V5 retired the clearing the organic fields once wore)
+// — but opacity covers exactly the glyph extent, so each block also wears a
+// one-cell clearance ring (clearanceRing): without it the field's next particle
+// could land in the adjoining column and read as corrupted text, not text over
+// art (#689). The ring is anchored a cell up-left of the art, so the glyphs stay
+// on the cells they always occupied. The outer clamp honors the pane box (#251).
+// Shared by the preview and terminal panes so their idle empty states match.
+// Callers gate on splashFits.
 //
 // The message line is optional: an empty message renders the wordmark alone over
 // an uninterrupted field, which is the screensaver (see SplashScreensaver). Both
@@ -99,9 +103,9 @@ func splashScene(width, height, frame int, message string) string {
 		LumRange: splashLumRange(variant),
 		Profile:  splashProfile(),
 	})
-	scene := overlayAt(field, word, wordX, wordY)
+	scene := overlayAt(field, clearanceRing(word, true), wordX-1, wordY-1)
 	if message != "" {
-		scene = overlayAt(scene, msg, msgX, msgY)
+		scene = overlayAt(scene, clearanceRing(msg, false), msgX-1, msgY)
 	}
 	return lipgloss.NewStyle().MaxWidth(width).MaxHeight(height).Render(scene)
 }
@@ -273,9 +277,10 @@ func splashLines(s string) (lines []string, widest int) {
 }
 
 // trimBlankLines drops leading/trailing all-whitespace lines (the wordmark art
-// is padded with blank rows) so the composited block is exactly its glyph rows —
-// keeping the opaque overlay tight to the wordmark so the field flows right up to
-// its edges instead of being blanked by padding rows around it.
+// is padded with blank rows) so the composited block is its glyph rows plus
+// exactly the one-cell ring clearanceRing adds back — the art's own padding is a
+// band of arbitrary depth, and #689 wants one legible cell of quiet, not a
+// variable-height hole in the field.
 func trimBlankLines(s string) string {
 	lines := strings.Split(s, "\n")
 	start, end := 0, len(lines)
@@ -286,6 +291,31 @@ func trimBlankLines(s string) string {
 		end--
 	}
 	return strings.Join(lines[start:end], "\n")
+}
+
+// clearanceRing pads a block with one blank cell on each side — and, for the
+// wordmark (rows true), one blank row above and below, the taller collision
+// surface — so the overlay's per-cell opacity extends one cell past the glyphs
+// and the field never abuts the text (#689). Every line is padded to the block's
+// widest first, because overlayAt is opaque per LINE, not per rectangle: a short
+// line would leave the field flush against the row above it. Callers anchor the
+// ringed block one cell up-left, keeping the art on its unpadded cells; at the
+// splashFits floor the ringed wordmark is exactly minSplashW wide, so the floor
+// is unchanged.
+func clearanceRing(block string, rows bool) string {
+	lines, widest := splashLines(block)
+	out := make([]string, 0, len(lines)+2)
+	blank := strings.Repeat(" ", widest+2)
+	if rows {
+		out = append(out, blank)
+	}
+	for _, l := range lines {
+		out = append(out, " "+l+strings.Repeat(" ", widest-xansi.StringWidth(l)+1))
+	}
+	if rows {
+		out = append(out, blank)
+	}
+	return strings.Join(out, "\n")
 }
 
 // clampInt bounds v to [lo, hi]. Kept here for overlayAt; the splash engine has
