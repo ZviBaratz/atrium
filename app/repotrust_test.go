@@ -10,6 +10,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/ZviBaratz/atrium/internal/repotrust"
+	"github.com/ZviBaratz/atrium/repocfg"
 
 	tea "charm.land/bubbletea/v2"
 	xansi "github.com/charmbracelet/x/ansi"
@@ -279,13 +281,13 @@ func TestRepoTrustAssessmentReadsTheCreateBase(t *testing.T) {
 
 	fromBranch, ok := h.repoTrustAssessment(repo, false, "setup-branch")
 	require.True(t, ok)
-	require.Len(t, fromBranch.Entries, 1)
-	assert.Equal(t, "branch-entry", fromBranch.Entries[0].Name,
+	require.Len(t, fromBranch.Local.Entries, 1)
+	assert.Equal(t, "branch-entry", fromBranch.Local.Entries[0].Name,
 		"the prompt must describe the base branch's file — that is what the worktree checks out")
 
 	fromHead, ok := h.repoTrustAssessment(repo, false, "")
 	require.True(t, ok)
-	assert.Equal(t, "main-entry", fromHead.Entries[0].Name)
+	assert.Equal(t, "main-entry", fromHead.Local.Entries[0].Name)
 	assert.NotEqual(t, fromBranch.Hash, fromHead.Hash,
 		"two bases, two hashes — a single HEAD hash would grant bytes the session never holds")
 }
@@ -324,4 +326,59 @@ func TestAutoDispatchTrustPathLeavesParkedDraftAlone(t *testing.T) {
 	assert.Equal(t, "half-finished", h.stashedDraft.GetTitle())
 	assert.Empty(t, h.appState.GetPromptHistory(),
 		"the dispatch line is not create-form input; the ordinary dispatch tail records nothing and this path must match")
+}
+
+// TestRepoTrustDialogNamesTheSeedLists: the grant covers the whole file, so the
+// dialog has to describe the whole file. A seed-only repo executes nothing and still
+// decides which of the user's gitignored files reach the agent — a dialog that said
+// only "setup script" (or nothing at all) would collect consent for something it
+// never mentioned.
+func TestRepoTrustDialogNamesTheSeedLists(t *testing.T) {
+	repo := gitInitRepo(t)
+	commitRepoLocal(t, repo, `{"carry_files":[".dev.vars",".other.env"],"link_paths":["node_modules"]}`)
+	h := newCreateFormHome(t)
+	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	_ = submitCreateForm(t, h, repo, "feature")
+	require.Equal(t, stateConfirm, h.state, "a seed-only file must still stage the prompt")
+
+	view := xansi.Strip(h.View().Content)
+	assert.Contains(t, view, "2 carried files")
+	assert.Contains(t, view, "1 linked path")
+	assert.Contains(t, view, ".dev.vars", "the entries themselves, not just a count")
+	assert.Contains(t, view, "node_modules")
+}
+
+// TestRepoTrustDialogBoundsHostileSeedLists: the entry cap
+// (repocfg.MaxRepoLocalSeedEntries) bounds git forks, not frame lines, so the dialog
+// needs its own bound. A file at the cap, with every entry as long and as hostile as
+// the JSON allows, must still leave a box the 80×24 floor can answer.
+func TestRepoTrustDialogBoundsHostileSeedLists(t *testing.T) {
+	entries := make([]string, repocfg.MaxRepoLocalSeedEntries)
+	for i := range entries {
+		// Long, wide, zero-width and bidi all at once: each defeats a different half
+		// of the bound (width measurement, then truncation).
+		entries[i] = fmt.Sprintf("dep%d/%s%s", i, strings.Repeat("\u65e5\u672c\u8a9e\u200b\u202e", 30), strings.Repeat("x", 200))
+	}
+	raw, err := json.Marshal(entries)
+	require.NoError(t, err)
+
+	repo := gitInitRepo(t)
+	commitRepoLocal(t, repo, `{"carry_files":`+string(raw)+`,"link_paths":`+string(raw)+`}`)
+	h := newCreateFormHome(t)
+	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	_ = submitCreateForm(t, h, repo, "feature")
+	require.Equal(t, stateConfirm, h.state)
+
+	view := xansi.Strip(h.View().Content)
+	assert.Contains(t, view, "trust and run setup",
+		"a confirmation the user cannot answer is worse than none")
+	assert.Contains(t, view, "all of them in "+repocfg.RepoLocalFileName,
+		"a truncated sample must point at the file, never read as the whole list")
+	lines := strings.Split(view, "\n")
+	assert.LessOrEqual(t, len(lines), 24)
+	for i, l := range lines {
+		assert.Equalf(t, 80, ansi.PrintableRuneWidth(l), "line %d is the wrong width", i)
+	}
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/tmux"
 	"github.com/ZviBaratz/atrium/ui"
+	"github.com/ZviBaratz/atrium/ui/overlay"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
 	"charm.land/bubbles/v2/spinner"
@@ -104,6 +105,45 @@ func (m *home) refreshSettingsClusteringGate() {
 		return
 	}
 	m.settingsOverlay.SetAccountClusteringVisible(m.list.AccountClusteringVisible())
+}
+
+// refreshSettingsRepoLayer hands the settings panel what the SELECTED session's
+// repository adds to the repo-layerable rows (#815), so those rows can say the
+// value shown is not the effective value there.
+//
+// The selected session is what "this repo" means while browsing the list, and its
+// resolution is one the poll sweep has already done — so this reads a mutex-guarded
+// pair of slices and forks nothing. That matters twice over: the panel's render path
+// may not touch the filesystem, and a fresh assessment here would be git on the
+// update thread, which is the debt #857 already tracks for the create path.
+//
+// nil whenever there is nothing to ask: no session selected (an empty list, the
+// welcome screen), a direct session, or one whose worktree has not been materialized
+// since the app started, so no resolution has run. The panel renders nil as "unknown"
+// rather than "the repo adds nothing" — the difference matters for a paused session
+// in a repo that really does declare a list.
+func (m *home) refreshSettingsRepoLayer() {
+	if m.settingsOverlay == nil || m.list == nil {
+		return
+	}
+	inst := m.list.GetSelectedInstance()
+	if inst == nil {
+		m.settingsOverlay.SetRepoLayer(nil)
+		return
+	}
+	carry, link, resolved := inst.RepoLocalSeeds()
+	if !resolved || (len(carry) == 0 && len(link) == 0) {
+		// An empty resolution is as informative as no resolution for this surface —
+		// there is nothing to annotate either way — so it takes the same nil rather
+		// than a struct every row has to test for emptiness.
+		m.settingsOverlay.SetRepoLayer(nil)
+		return
+	}
+	m.settingsOverlay.SetRepoLayer(&overlay.RepoLayer{
+		Repo:       inst.GetRepoPath(),
+		CarryFiles: carry,
+		LinkPaths:  link,
+	})
 }
 
 // applySplashConfig pushes the `splash` key's two halves into ui: whether the

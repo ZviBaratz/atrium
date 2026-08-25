@@ -119,15 +119,45 @@ func (t applyTiming) badge() string {
 	return "live"
 }
 
-// settingScope is the seam for a later per-repo override layer (#477) and per-session
-// settings (#454). Every row is scopeGlobal today, and the renderer and navigation
-// must stay scope-agnostic so that layer adds a column and a switcher without
-// reshaping this schema. Do not special-case scopeGlobal anywhere (spec §5).
+// settingScope says where a row's value can come from. It was the seam left for a
+// per-repo override layer (#477) and per-session settings (#454); #815 made the
+// first half real, so it now has two members and the renderer reads it.
+//
+// The rule the seam was left under still holds: nothing may special-case
+// scopeGlobal (spec §5). A row is described by its scope, and the provenance a
+// scoped row shows comes from a fact the panel is TOLD (SetRepoLayer) rather than
+// one it derives — the render path may not touch the filesystem, and the panel has
+// no repo of its own to look at.
 type settingScope int
 
 const (
+	// scopeGlobal: config.json is the only source. Every row but the seed lists.
 	scopeGlobal settingScope = iota
+	// scopeRepoLayered: a repository's own trusted .atrium.json can add to this
+	// key for sessions in that repo (#815). The row still edits the global value —
+	// the layer is a union, not a replacement, so the value here remains the value
+	// for every repo — and it renders which repo is adding to it. Exactly the keys
+	// repocfg.RepoLocalLayerKeys names, held to that by
+	// TestRepoLayeredRowsMatchTheRepoLocalSchema.
+	scopeRepoLayered
 )
+
+// allScopes is the ordered, complete member list, so a new scope cannot be added
+// without a label (TestEveryScopeHasALabel), the same completeness discipline
+// allCategories carries.
+func allScopes() []settingScope {
+	return []settingScope{scopeGlobal, scopeRepoLayered}
+}
+
+// label names the scope in help text.
+func (s settingScope) label() string {
+	switch s {
+	case scopeRepoLayered:
+		return "global, plus what a trusted repo adds"
+	default:
+		return "global"
+	}
+}
 
 // settingRow declares one editable config field. The panel is driven entirely by
 // this schema, so exposing a new Config field is a matter of appending a row — the
@@ -142,7 +172,7 @@ type settingRow struct {
 	category settingCategory // section (PR A) / rail entry (PR B)
 	label    string
 	kind     settingKind
-	scope    settingScope // scopeGlobal for every row today; the #477/#454 seam
+	scope    settingScope // where the value can come from; see settingScope
 
 	// summary is the one-line help shown whenever the row is selected. It is capped
 	// at 74 cells so it never wraps at the 80-column floor (TestSummaryFitsOneLine).
@@ -549,14 +579,16 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			"modifies your local branch"),
 		{
 			key: "carry_files", category: catWorktrees, label: "Carry files", kind: kindText,
-			scope:          scopeGlobal,
+			scope:          scopeRepoLayered,
 			timing:         timingNewSessions,
 			defaultDisplay: func() string { return displayList((&config.Config{}).GetCarryFiles()) },
 			reset:          func(c *config.Config) { c.CarryFiles = nil },
 			summary:        "Gitignored files copied into each new worktree.",
 			detail: "Comma-separated repo-relative paths. Copies, so later edits in a worktree " +
 				"do not travel back. An empty list is an explicit opt-out, not a fall back to " +
-				"the default `.claude/settings.local.json`.",
+				"the default `.claude/settings.local.json`. A repository you have trusted can " +
+				"ADD to this list for its own sessions by committing a `.atrium.json`; your " +
+				"entries are never replaced, and `atrium trust revoke` drops the repo's.",
 			get: func(c *config.Config) string { return displayList(c.GetCarryFiles()) },
 			editGet: func(c *config.Config) string {
 				return strings.Join(c.GetCarryFiles(), ", ")
@@ -578,7 +610,7 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		},
 		{
 			key: "link_paths", category: catWorktrees, label: "Link paths", kind: kindText,
-			scope:          scopeGlobal,
+			scope:          scopeRepoLayered,
 			timing:         timingNewSessions,
 			defaultDisplay: func() string { return displayList((&config.Config{}).GetLinkPaths()) },
 			reset:          func(c *config.Config) { c.LinkPaths = nil },
@@ -587,7 +619,10 @@ func newSettingRows(cfg *config.Config) []settingRow {
 				"session shares one directory — unless the session was created with " +
 				"Dependencies set to isolated, which gives it none of them. Ignore the path " +
 				"with a pattern that has no trailing slash — with one, git does not treat the " +
-				"symlink as ignored and it lands in pause commits.",
+				"symlink as ignored and it lands in pause commits. A repository you have " +
+				"trusted can ADD to this list for its own sessions by committing a " +
+				"`.atrium.json`; your entries are never replaced, and `atrium trust revoke` " +
+				"drops the repo's.",
 			get: func(c *config.Config) string { return displayList(c.GetLinkPaths()) },
 			editGet: func(c *config.Config) string {
 				return strings.Join(c.GetLinkPaths(), ", ")

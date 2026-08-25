@@ -454,6 +454,16 @@ type Instance struct {
 	// memoized with it. Guarded by mu.
 	repoKey      string
 	repoKeyKnown bool
+	// repoSeedCarry / repoSeedLink are the seed lists the last resolution took
+	// from a TRUSTED .atrium.json (#815) — empty after any refusal — with
+	// repoSeedsKnown marking that a resolution ran at all. Display API only, read
+	// through RepoLocalSeeds by the settings panel so it can name the rows this
+	// repo contributes to without forking git on the update thread; the seeding
+	// site takes its lists from the resolution's return value, not from here.
+	// Guarded by mu: the Start goroutine and the poll goroutine write them.
+	repoSeedCarry  []string
+	repoSeedLink   []string
+	repoSeedsKnown bool
 
 	// port is the session's managed dev-server port (#389), or 0 when its repo declares
 	// no port_range — or declares one that had nothing free. Unlike the setup fields
@@ -852,6 +862,7 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 		// an isolated session would silently start linking again after the first app
 		// restart or the first pause/resume (#481).
 		instance.gitWorktree.SetIsolateDeps(instance.isolateDeps)
+		instance.gitWorktree.SetRepoLocalSeeds(instance.repoLocalSeedResolver)
 		// A state.json predating the unpushed field omits it. Resolve that gap
 		// conservatively — assume none of the ahead commits are pushed, which is the
 		// pre-field behavior — rather than as a literal 0, which would claim nothing
@@ -1527,6 +1538,7 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		// other goroutines, so the writes happen-before any poll-loop read behind i.mu.
 		gitWorktree.SetGHConfigDir(i.ghConfigDir)
 		gitWorktree.SetIsolateDeps(i.isolateDeps)
+		gitWorktree.SetRepoLocalSeeds(i.repoLocalSeedResolver)
 		i.mu.Lock()
 		i.gitWorktree = gitWorktree
 		i.mu.Unlock()

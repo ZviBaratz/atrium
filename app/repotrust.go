@@ -45,6 +45,22 @@ type proceedRepoTrustMsg struct{}
 // more sentences, so its budget for repo-authored text is smaller.
 const repoTrustPreviewWidth = 120
 
+// repoTrustSeedPreview is how many entries of each seed list the dialog spells
+// out. The lists are capped at repocfg.MaxRepoLocalSeedEntries, but that cap
+// bounds git forks per materialization and is two orders of magnitude past what
+// fits a frame — so the dialog needs its own, much smaller one. Unlike the script
+// entry there is no one-entry rule to lean on here, so the overflow is counted
+// rather than hidden: the remedy for reading the rest is the file itself, which is
+// in the user's own checkout and is the thing being granted.
+const repoTrustSeedPreview = 3
+
+// repoTrustSeedWidth bounds a whole seed line — the joined sample, not one entry.
+// Per-entry bounding is not enough and the frame test is what says so: three
+// entries each within their own cap still wrap to six lines a piece, and two lists
+// of those pushed the answer hints off the 80×24 floor. A confirmation the user
+// cannot answer is worse than none, so the budget is the LINE's.
+const repoTrustSeedWidth = 48
+
 // repoTrustAssessment is the pure half, shared by the form and autoDispatch
 // (the allExhausted split's pattern, #703: a headless create must not stage a
 // modal to learn the answer): should creating at path stage the trust prompt,
@@ -127,30 +143,68 @@ func repoTrustMessage(a repotrust.Assessment) string {
 		a.Root, repocfg.RepoLocalFileName, repoTrustSummary(a))
 }
 
-// repoTrustSummary renders what the file's one entry declares: its name, the
-// surfaces it configures (repocfg.DeclaredSurfaces — the same list `atrium
-// trust allow` prints and enforcement requires non-empty, so the dialog cannot
-// describe surfaces the gate would not run), and the first line of the setup
-// script. There is no "+N more": ParseRepoLocal's one-entry rule means the
-// entry shown here IS the entry that runs, which is the point of the dialog.
+// repoTrustSummary renders what the file declares: the entry's name and the
+// surfaces it configures, the first line of its setup script, and the two seed
+// lists (#815). The surface names come from repocfg.RepoLocalSurfaces — the same
+// list `atrium trust allow` prints and enforcement requires non-empty, so the
+// dialog cannot describe a file the gate would treat as absent, nor stay silent
+// about a half of it the grant would apply.
+//
+// The entry has no "+N more": ParseRepoLocal's one-entry rule means the entry
+// shown here IS the entry that runs. The seed lists have no such rule, so they
+// name their overflow instead of hiding it — the count in the surface line is
+// exact, and every entry is readable in the file the grant is over.
 func repoTrustSummary(a repotrust.Assessment) string {
-	if len(a.Entries) == 0 {
+	surfaces := repocfg.RepoLocalSurfaces(a.Local)
+	if len(surfaces) == 0 {
 		return ""
 	}
-	e := a.Entries[0]
-	name := sanitizeRepoText(e.Name, 24)
-	if name == "" {
-		name = "unnamed entry"
-	}
-	line := name + " · " + strings.Join(repocfg.DeclaredSurfaces(e.RepoScript), " + ")
-	if script := strings.TrimSpace(e.SetupScript); script != "" {
-		first := script
-		if idx := strings.IndexByte(first, '\n'); idx >= 0 {
-			first = strings.TrimSpace(first[:idx]) + " …"
+	// A seed-only file has no entry to name, and calling it "unnamed" would invite
+	// a hunt for one that is not there.
+	name := repocfg.RepoLocalFileName
+	if len(a.Local.Entries) > 0 {
+		if name = sanitizeRepoText(a.Local.Entries[0].Name, 24); name == "" {
+			name = "unnamed entry"
 		}
-		line += "\n" + sanitizeRepoText(first, repoTrustPreviewWidth)
 	}
+	line := name + " · " + strings.Join(surfaces, " + ")
+	if len(a.Local.Entries) > 0 {
+		if script := strings.TrimSpace(a.Local.Entries[0].SetupScript); script != "" {
+			first := script
+			if idx := strings.IndexByte(first, '\n'); idx >= 0 {
+				first = strings.TrimSpace(first[:idx]) + " …"
+			}
+			line += "\n" + sanitizeRepoText(first, repoTrustPreviewWidth)
+		}
+	}
+	line += repoTrustSeedLine("copies in", a.Local.CarryFiles)
+	line += repoTrustSeedLine("links in", a.Local.LinkPaths)
 	return line
+}
+
+// repoTrustSeedLine spells out one seed list, bounded in both directions: each
+// entry sanitized and width-capped, and the list itself truncated to
+// repoTrustSeedPreview with the remainder counted rather than dropped. The verbs
+// say the direction that matters — a copy is private to the session, a link is
+// the user's own tree under another name, writable by the agent.
+func repoTrustSeedLine(verb string, entries []string) string {
+	if len(entries) == 0 {
+		return ""
+	}
+	shown := entries
+	if len(shown) > repoTrustSeedPreview {
+		shown = shown[:repoTrustSeedPreview]
+	}
+	// Sanitize the JOIN, so the cell budget bounds the whole line. Sanitizing each
+	// entry and then joining would bound each and none: n entries at the cap are n
+	// times the cap.
+	out := "\n" + verb + ": " + sanitizeRepoText(strings.Join(shown, ", "), repoTrustSeedWidth)
+	if len(entries) > len(shown) {
+		// The exact count is already in the surfaces line above; this says where to
+		// read the rest, which is the file the grant is over.
+		out += " … (all of them in " + repocfg.RepoLocalFileName + ")"
+	}
+	return out
 }
 
 // sanitizeRepoText makes repo-authored text safe to interpolate into a frame:

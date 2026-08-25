@@ -71,7 +71,7 @@ func TestAssessRepo(t *testing.T) {
 		a, err := AssessRepo(context.Background(), repo, "")
 		require.NoError(t, err)
 		assert.True(t, a.Present)
-		require.Len(t, a.Entries, 1)
+		require.Len(t, a.Local.Entries, 1)
 		assert.True(t, a.WantsPrompt())
 		assert.False(t, a.HasGrant, "never granted: the prompt copy should read as a first ask")
 
@@ -113,7 +113,7 @@ func TestAssessRepo(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, a.Present)
 		assert.Error(t, a.FileErr)
-		assert.Empty(t, a.Entries)
+		assert.Empty(t, a.Local.Entries)
 		assert.False(t, a.WantsPrompt(), "nothing usable declared: nothing to ask about")
 	})
 
@@ -150,8 +150,8 @@ func TestAssessRepo(t *testing.T) {
 		require.NoError(t, err)
 		atFeature, err := AssessRepo(context.Background(), repo, "feature")
 		require.NoError(t, err)
-		require.Len(t, atFeature.Entries, 1)
-		assert.Equal(t, "feature", atFeature.Entries[0].Name)
+		require.Len(t, atFeature.Local.Entries, 1)
+		assert.Equal(t, "feature", atFeature.Local.Entries[0].Name)
 		assert.Equal(t, "feature", atFeature.Ref)
 		assert.NotEqual(t, atHead.Hash, atFeature.Hash,
 			"two refs, two contents — one hash would grant bytes the worktree never holds")
@@ -197,14 +197,14 @@ func TestAssessRepo(t *testing.T) {
 
 		fresh, err := AssessCreateDefault(context.Background(), clone, true)
 		require.NoError(t, err)
-		require.Len(t, fresh.Entries, 1)
-		assert.Equal(t, "v2", fresh.Entries[0].Name, "the session will materialize origin's tip; the prompt must describe it")
+		require.Len(t, fresh.Local.Entries, 1)
+		assert.Equal(t, "v2", fresh.Local.Entries[0].Name, "the session will materialize origin's tip; the prompt must describe it")
 		assert.Contains(t, fresh.Ref, "origin/", "behind-or-equal local means the start point is the remote ref")
 
 		stale, err := AssessCreateDefault(context.Background(), clone, false)
 		require.NoError(t, err)
-		require.Len(t, stale.Entries, 1)
-		assert.Equal(t, "v1", stale.Entries[0].Name, "with freshening off the session starts from local HEAD")
+		require.Len(t, stale.Local.Entries, 1)
+		assert.Equal(t, "v1", stale.Local.Entries[0].Name, "with freshening off the session starts from local HEAD")
 		assert.NotEqual(t, fresh.Hash, stale.Hash)
 	})
 
@@ -220,4 +220,78 @@ func TestAssessRepo(t *testing.T) {
 		assert.False(t, a.Granted)
 		assert.True(t, a.WantsPrompt(), "zero readable grants: the repo reads as untrusted")
 	})
+}
+
+// TestAssessRepo_SeedLists covers #815's half of the prompt decision: a file whose
+// only content is carry_files/link_paths declares something, so it is grantable and
+// asks — it executes nothing, but it decides which of the user's own gitignored
+// files are copied in front of an agent and which of their trees it may write
+// through, which is the recorded reason both halves ride one grant.
+func TestAssessRepo_SeedLists(t *testing.T) {
+	t.Run("a seed-only file wants a prompt", func(t *testing.T) {
+		repo := gitRepo(t)
+		commitRepoConfig(t, repo, `{"carry_files":[".dev.vars"],"link_paths":["node_modules"]}`)
+
+		a, err := AssessRepo(context.Background(), repo, "HEAD")
+		require.NoError(t, err)
+		require.True(t, a.Present)
+		assert.Equal(t, []string{".dev.vars"}, a.Local.CarryFiles)
+		assert.Equal(t, []string{"node_modules"}, a.Local.LinkPaths)
+		assert.True(t, a.WantsPrompt(), "a file that seeds paths must be grantable")
+
+		// And the grant satisfies it, so the prompt is asked once rather than forever.
+		require.NoError(t, Grant(a.Key, a.Hash, a.Remote, time.Now()))
+		again, err := AssessRepo(context.Background(), repo, "HEAD")
+		require.NoError(t, err)
+		assert.False(t, again.WantsPrompt())
+	})
+
+	t.Run("empty lists declare nothing and never prompt", func(t *testing.T) {
+		// The distinction the enforcement gate leans on: present-but-empty must read
+		// like no file, or every repo with a stub .atrium.json carries a standing nag
+		// whose named remedies both refuse.
+		repo := gitRepo(t)
+		commitRepoConfig(t, repo, `{"carry_files":[],"link_paths":[]}`)
+
+		a, err := AssessRepo(context.Background(), repo, "HEAD")
+		require.NoError(t, err)
+		assert.True(t, a.Present)
+		assert.False(t, a.WantsPrompt())
+	})
+
+	t.Run("an unusable seed list is a FileErr, not a prompt", func(t *testing.T) {
+		repo := gitRepo(t)
+		commitRepoConfig(t, repo, `{"carry_files":["../../.ssh/id_rsa"]}`)
+
+		a, err := AssessRepo(context.Background(), repo, "HEAD")
+		require.NoError(t, err)
+		require.Error(t, a.FileErr, "a refused file must be reported, not silently dropped")
+		assert.False(t, a.WantsPrompt(), "nothing can be granted from a file that refuses whole")
+	})
+}
+
+// TestLiveStateNamesWhatAGrantCovers: the COVERS column `atrium trust status` and
+// doctor both print rides LiveState's single assessment. It is populated only for a
+// current grant — for any other state the old file's surfaces would describe a
+// session nobody can create.
+func TestLiveStateNamesWhatAGrantCovers(t *testing.T) {
+	repo := gitRepo(t)
+	commitRepoConfig(t, repo, `{"carry_files":[".dev.vars"],"repo_scripts":[{"setup_script":"npm ci"}]}`)
+	a, err := AssessRepo(context.Background(), repo, "HEAD")
+	require.NoError(t, err)
+	require.NoError(t, Grant(a.Key, a.Hash, a.Remote, time.Now()))
+	rec, ok := func() (Record, bool) { l, _ := Load(); return l.Lookup(a.Key) }()
+	require.True(t, ok)
+
+	state, covers := LiveState(context.Background(), a.Key, rec, false)
+	assert.Equal(t, "current", state)
+	assert.Contains(t, covers, "setup script")
+	assert.Contains(t, covers, "1 carried file", "the seed half of the grant must be named too")
+
+	// Edit the file: the state changes and COVERS empties, because what the grant
+	// covered is no longer what a session would get.
+	commitRepoConfig(t, repo, `{"carry_files":[".dev.vars",".other"]}`)
+	state, covers = LiveState(context.Background(), a.Key, rec, false)
+	assert.Equal(t, "changed (re-allow to use)", state)
+	assert.Empty(t, covers)
 }

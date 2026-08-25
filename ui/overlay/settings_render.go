@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/ZviBaratz/atrium/repocfg"
 	"github.com/ZviBaratz/atrium/ui/theme"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -600,12 +601,40 @@ func (s *SettingsOverlay) rowValueAndBadge(i, width, labelW int, inert string) (
 			s.valueCell(i, width, labelW, strings.Repeat("x", searchBadgeMinCells)),
 			avail, searchBadgeMinCells)
 		return value, searchBadge(s.rows[i].category.label(), badgeAvail(width, labelW, value))
+	case len(s.repoLayer.forKey(s.rows[i].key)) > 0:
+		// A repo-layered row whose selected repo actually contributes (#815). Ranked
+		// under the two above and over the timing badge: it is not a refusal to
+		// explain like an inert reason, nor the only thing telling two search results
+		// apart, but it says the value shown here is not the whole value in this repo
+		// — which outranks reference information. Like the inert chip it degrades
+		// rather than being dropped, and unlike it there is a second surface if the
+		// pane is too narrow even for that: contextLine always renders.
+		candidates := repoLayerBadgeCandidates(len(s.repoLayer.forKey(s.rows[i].key)))
+		shortest := candidates[len(candidates)-1]
+		value = fitValue(s.valueCell(i, width, labelW, shortest), avail, ansi.StringWidth(shortest))
+		return value, fitBadge(candidates, width, labelW, value)
 	default:
 		// No fitValue here, deliberately: spec §10 drops a timing badge before touching the
 		// value, and a timing badge is reference information that loses nothing by going.
 		candidates := []string{s.rows[i].timing.badge()}
 		value = s.valueCell(i, width, labelW, candidates[0])
 		return value, fitBadge(candidates, width, labelW, value)
+	}
+}
+
+// repoLayerBadgeCandidates renders "this repo adds N" widest first, for the same
+// take-the-widest-that-fits ladder the inert chip and the enum value use.
+//
+// The count is the whole payload, so every rung keeps it and only the words go: a
+// bare "+2" still tells the user their list is not the effective list here, which
+// is the one thing this chip exists to say. Which repo, and which entries, is the
+// help pane's job (contextLine) — that is the surface a narrow pane cannot take
+// away.
+func repoLayerBadgeCandidates(n int) []string {
+	return []string{
+		fmt.Sprintf("+%d from %s", n, repocfg.RepoLocalFileName),
+		fmt.Sprintf("+%d from repo", n),
+		fmt.Sprintf("+%d", n),
 	}
 }
 
@@ -922,6 +951,12 @@ func (s *SettingsOverlay) contextLine(width int) string {
 		// The chip is three words in a column and is easy to misread as a prohibition; this is
 		// the sentence that says what it actually means.
 		body = "No effect right now — " + chip + "."
+	case s.repoLayerContext() != "":
+		// A repo-layered row the selected repo contributes to (#815). Ranked over the
+		// gloss/detail fallback because the badge is a bare count and this is the only
+		// place the repo and its entries are named — and this line always renders,
+		// which is what keeps the fact reachable on a pane too narrow for a chip.
+		body = s.repoLayerContext()
 	default:
 		// The current option's gloss, which is what makes cycling an enum teach rather than
 		// guess (D8) — and failing that, the first sentence of detail.
@@ -952,6 +987,26 @@ func (s *SettingsOverlay) contextLine(width int) string {
 	}
 
 	return rightAligned(body, pos, width)
+}
+
+// repoLayerContext names the repository adding to the selected row and the entries
+// it adds, or "" when the row is not repo-layerable, no layer was injected, or this
+// repo adds nothing to it.
+//
+// It leads with the file and the repo and trails with the entries, because
+// contextLine truncates from the right: the entries are recoverable (they are in
+// that file, and the row's own value is not what changed), while "which repo" is
+// the part that makes the badge's count mean anything.
+func (s *SettingsOverlay) repoLayerContext() string {
+	entries := s.repoLayer.forKey(s.selectedRow().key)
+	if len(entries) == 0 {
+		return ""
+	}
+	where := s.repoLayer.Repo
+	if where == "" {
+		where = "this repo"
+	}
+	return fmt.Sprintf("%s in %s also adds: %s", repocfg.RepoLocalFileName, where, strings.Join(entries, ", "))
 }
 
 // rightAligned lays a body string and a right-aligned position readout into exactly width

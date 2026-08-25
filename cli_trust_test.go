@@ -189,3 +189,38 @@ func TestTrustStatusOnACorruptLedgerWarnsWithoutTheFreshInstallLine(t *testing.T
 	// unreadable in the file the warning just named.
 	assert.NotContains(t, out.String(), "no repos are trusted")
 }
+
+// TestTrustReceiptsNameTheSeedLists: a grant covers the whole .atrium.json, so every
+// receipt that says what it covers has to say all of it. A seed-only repo is
+// grantable — it runs nothing and still decides which of the user's gitignored files
+// reach an agent — and `trust allow`'s old "declares nothing usable" refusal was
+// written when repo_scripts was the only readable key.
+func TestTrustReceiptsNameTheSeedLists(t *testing.T) {
+	sandboxDataDir(t)
+	repo := trustRepo(t, `{"carry_files":[".dev.vars"],"link_paths":["node_modules",".venv"]}`)
+	ctx := context.Background()
+
+	var out strings.Builder
+	require.NoError(t, runTrustAllow(ctx, &out, repo, true))
+	assert.Contains(t, out.String(), "trusted")
+	assert.Contains(t, out.String(), "1 carried file")
+	assert.Contains(t, out.String(), "2 linked paths")
+
+	out.Reset()
+	require.NoError(t, runTrustStatus(ctx, &out, repo, true))
+	assert.Contains(t, out.String(), "COVERS", "the column has to exist to carry the answer")
+	assert.Contains(t, out.String(), "1 carried file")
+}
+
+// TestTrustAllowStillRefusesAFileThatDeclaresNothing: the counter-case to the test
+// above. Present-but-empty must stay unbuyable, or `trust allow` writes a grant the
+// enforcement gate treats as being about a file that declares nothing.
+func TestTrustAllowStillRefusesAFileThatDeclaresNothing(t *testing.T) {
+	sandboxDataDir(t)
+	repo := trustRepo(t, `{"carry_files":[],"link_paths":[]}`)
+
+	var out strings.Builder
+	err := runTrustAllow(context.Background(), &out, repo, true)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "declares nothing usable")
+}

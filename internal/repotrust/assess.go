@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/ZviBaratz/atrium/repocfg"
 	"github.com/ZviBaratz/atrium/session/git"
@@ -44,12 +45,14 @@ type Assessment struct {
 	// Hash is the content hash of that file's checked-out form ("" when absent
 	// or unreadable).
 	Hash string
-	// Entries is the usable repo_scripts entry it declares, if any (at most one —
-	// repocfg's one-entry rule — carrying its position in the file); Problems the
-	// refused one. Templates are NOT compiled here — content is still untrusted
-	// at assessment time.
-	Entries  []repocfg.RepoLocalEntry
-	Problems []repocfg.Problem
+	// Local is the parsed file: the usable repo_scripts entry it declares, if any
+	// (at most one — repocfg's one-entry rule — carrying its position in the file),
+	// the refused one as a Problem, and the two seed lists it layers over the
+	// user's own (#815). One field rather than a spread of them so every asking
+	// surface can describe the file through repocfg.RepoLocalSurfaces and none can
+	// describe half of it. Templates are NOT compiled here — content is still
+	// untrusted at assessment time.
+	Local repocfg.RepoLocal
 
 	// Granted is the verdict for exactly (Key, Hash). HasGrant reports whether
 	// the ledger holds ANY record for Key — what separates "never asked" from
@@ -69,14 +72,24 @@ type Assessment struct {
 }
 
 // WantsPrompt reports whether creating a session from this repo should ask the
-// user: the create ref declares a usable entry and the ledger does not grant
-// these bytes. A file that declares nothing usable never prompts — there is
-// nothing to run, so there is nothing to ask about (its Problems still
-// surface at enforcement). "Usable" is parse-usable, which since the parse
-// refuses configures-nothing entries in compile's own words means the entry
-// the prompt describes is one enforcement could actually run.
+// user: the create ref declares something the grant would put into the session,
+// and the ledger does not grant these bytes. A file that declares nothing usable
+// never prompts — there is nothing to apply, so there is nothing to ask about
+// (its Problems still surface at enforcement).
+//
+// "Declares something" is repocfg.RepoLocalSurfaces, which is also what
+// enforcement calls to decide the same question and what the dialog and `trust
+// allow` describe the file by — so the prompt cannot offer to grant a file the
+// gate would treat as absent, or stay silent about one it would apply. Since the
+// parse refuses configures-nothing entries in compile's own words and refuses an
+// unusable seed list whole, everything the list names is something enforcement
+// could actually act on. Note that a seed-only file (carry_files / link_paths,
+// no repo_scripts) prompts: it executes nothing, but it decides which of the
+// user's own gitignored files are copied in front of an agent and which of their
+// trees it may write through, which is #815's recorded reason for gating both
+// halves behind one grant.
 func (a Assessment) WantsPrompt() bool {
-	return a.Present && len(a.Entries) > 0 && !a.Granted
+	return a.Present && len(repocfg.RepoLocalSurfaces(a.Local)) > 0 && !a.Granted
 }
 
 // LiveState compares a recorded grant with its repo as it stands now, in the
@@ -87,21 +100,29 @@ func (a Assessment) WantsPrompt() bool {
 // session created now runs what you granted". Each git probe underneath
 // self-bounds (session/git's local timeout), so a wedged repo costs timeouts,
 // not a hang.
-func LiveState(ctx context.Context, key string, rec Record, updateBase bool) string {
+//
+// declares is what the grant covers, in RepoLocalSurfaces' words — the same list
+// the create-time dialog and `trust allow`'s receipt print. It rides this function
+// rather than a second call because the assessment behind it is the same one, and
+// a separate derivation would double the git forks per trusted repo. It is empty
+// for every state but "current": a grant whose repo has changed, lost the file, or
+// gone away covers nothing that would apply now, and printing the old file's
+// surfaces there would describe a session nobody can create.
+func LiveState(ctx context.Context, key string, rec Record, updateBase bool) (state, declares string) {
 	if _, err := os.Stat(key); err != nil {
-		return "missing (repo gone?)"
+		return "missing (repo gone?)", ""
 	}
 	a, err := AssessCreateDefault(ctx, key, updateBase)
 	if err != nil || a.FileErr != nil {
-		return "unreadable"
+		return "unreadable", ""
 	}
 	switch {
 	case !a.Present:
-		return "absent at " + a.Ref
+		return "absent at " + a.Ref, ""
 	case a.Hash == rec.Hash:
-		return "current"
+		return "current", strings.Join(repocfg.RepoLocalSurfaces(a.Local), " + ")
 	default:
-		return "changed (re-allow to use)"
+		return "changed (re-allow to use)", ""
 	}
 }
 
@@ -151,10 +172,9 @@ func AssessRepo(ctx context.Context, path, ref string) (Assessment, error) {
 	if err != nil {
 		a.FileErr = err
 	} else {
-		a.Entries = parsed.Entries
-		a.Problems = parsed.Problems
+		a.Local = parsed
 	}
-	if len(a.Entries) > 0 {
+	if len(repocfg.RepoLocalSurfaces(a.Local)) > 0 {
 		a.Remote = git.GetRemoteURL(ctx, root)
 	}
 

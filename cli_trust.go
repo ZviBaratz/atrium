@@ -118,9 +118,9 @@ func runTrustAllow(ctx context.Context, w io.Writer, path string, updateBase boo
 		return fmt.Errorf("%s has no tracked %s at %s (the ref a new session starts from) — only committed config reaches a session's worktree, so there is nothing to trust (commit the file first)",
 			a.Root, repocfg.RepoLocalFileName, a.Ref)
 	}
-	if len(a.Entries) == 0 {
+	if len(repocfg.RepoLocalSurfaces(a.Local)) == 0 {
 		msg := fmt.Sprintf("%s's %s declares nothing usable, so there is nothing to trust", a.Root, repocfg.RepoLocalFileName)
-		for _, p := range a.Problems {
+		for _, p := range a.Local.Problems {
 			msg += "\n  " + p.Error()
 		}
 		return errors.New(msg)
@@ -134,7 +134,7 @@ func runTrustAllow(ctx context.Context, w io.Writer, path string, updateBase boo
 		return err
 	}
 	trustf(w, "trusted %s (%s)\n", a.Root, shortHash(a.Hash))
-	trustf(w, "  its %s may now run: %s\n", repocfg.RepoLocalFileName, declaresSummary(a))
+	trustf(w, "  its %s may now apply: %s\n", repocfg.RepoLocalFileName, declaresSummary(a))
 	if replacing {
 		trustf(w, "  replaces the grant from %s (%s)\n", a.Record.GrantedAt.Format("2006-01-02"), shortHash(a.Record.Hash))
 	}
@@ -210,15 +210,22 @@ func runTrustStatus(ctx context.Context, w io.Writer, path string, updateBase bo
 	sort.Strings(keys)
 
 	tw := tabwriter.NewWriter(w, 2, 4, 2, ' ', 0)
-	trustf(tw, "REPO\tSTATE\tGRANTED\tHASH\tREMOTE\n")
+	trustf(tw, "REPO\tSTATE\tCOVERS\tGRANTED\tHASH\tREMOTE\n")
 	for _, key := range keys {
 		rec := ledger.Repos[key]
 		remote := rec.Remote
 		if remote == "" {
 			remote = "-"
 		}
-		trustf(tw, "%s\t%s\t%s\t%s\t%s\n",
-			key, repotrust.LiveState(ctx, key, rec, updateBase), rec.GrantedAt.Format("2006-01-02"), shortHash(rec.Hash), remote)
+		// COVERS is what a session created now would take from the file, and it is
+		// deliberately empty for any state but "current" — see LiveState. A dash
+		// keeps the column readable rather than collapsing two blanks into one.
+		state, covers := repotrust.LiveState(ctx, key, rec, updateBase)
+		if covers == "" {
+			covers = "-"
+		}
+		trustf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			key, state, covers, rec.GrantedAt.Format("2006-01-02"), shortHash(rec.Hash), remote)
 	}
 	if err := tw.Flush(); err != nil {
 		return err
@@ -231,12 +238,14 @@ func runTrustStatus(ctx context.Context, w io.Writer, path string, updateBase bo
 	return nil
 }
 
-// declaresSummary names what the file's one entry configures, off the same
-// repocfg.DeclaredSurfaces list the TUI's trust dialog renders — the one-entry
-// rule means this IS the entry that runs, so the grant receipt cannot describe
-// a different script than enforcement executes.
+// declaresSummary names everything the file would put into a session, off the
+// same repocfg.RepoLocalSurfaces list the create-time dialog, `trust status`'s
+// COVERS column and doctor all render — the entry half is the entry that runs
+// (the one-entry rule), and the seed-list half is counted, so the grant receipt
+// cannot describe a different script than enforcement executes or omit the paths
+// the same grant seeds.
 func declaresSummary(a repotrust.Assessment) string {
-	return strings.Join(repocfg.DeclaredSurfaces(a.Entries[0].RepoScript), " + ")
+	return strings.Join(repocfg.RepoLocalSurfaces(a.Local), " + ")
 }
 
 func shortHash(h string) string {

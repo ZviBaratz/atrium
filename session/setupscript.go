@@ -315,10 +315,7 @@ func (i *Instance) routeRepoScript(dir string) (repocfg.Script, string, bool) {
 	if dir == "" {
 		return repocfg.Script{}, "", false
 	}
-	repoPath := i.GetRepoPath()
-	if repoPath == "" {
-		repoPath = i.Path
-	}
+	repoPath := i.configRepoPath()
 
 	// Repo-local first (#814): a trusted .atrium.json beats a global entry that
 	// also matches this repo, and it must resolve INDEPENDENT of the global list
@@ -327,8 +324,12 @@ func (i *Instance) routeRepoScript(dir string) (repocfg.Script, string, bool) {
 	// out of scope by decision: they run in the user's own checkout, which no
 	// worktree materializes, so there is no checked-out file to gate.
 	if !i.IsDirect() {
-		if script, ok := i.routeRepoLocal(dir, repoPath); ok {
-			return script, repoPath, true
+		// Only the entry is consumed here. The same resolution's seed lists reach
+		// the worktree through the seeding callback (session/git's seedLocalPaths),
+		// and a file declaring lists but no entry deliberately falls through to the
+		// global list below.
+		if res := i.routeRepoLocal(dir, repoPath); res.HasScript {
+			return res.Script, repoPath, true
 		}
 	}
 

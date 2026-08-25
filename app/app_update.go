@@ -1446,6 +1446,7 @@ func (m *home) openSettings() tea.Cmd {
 		m.settingsOverlay.SetRailIndex(*m.settingsRail)
 	}
 	m.refreshSettingsClusteringGate()
+	m.refreshSettingsRepoLayer()
 	m.recomputeLayout() // the hint bar hides behind the modal; panes reclaim its row
 	if bandMoved {
 		// The reload recomposed the active palette — an edited or deleted theme file — so

@@ -135,6 +135,55 @@ func (i *Instance) setRepoConfig(state RepoConfigState, report string) {
 	i.repoConfigState, i.repoConfigReport = state, report
 }
 
+// repoLocalResolution is one repo-local file's whole contribution to a session,
+// as routeRepoLocal resolved it: the repo_scripts entry (when it declared and
+// earned one) and the two seed lists (#815). The three travel together because
+// they come out of ONE read, ONE hash and ONE ledger check — a second entry point
+// for the seed lists could reach a different verdict about the same file, which is
+// the divergence the single funnel exists to make impossible.
+//
+// The zero value is what every refusal returns: nothing applies, and the caller
+// falls back to the user's global config.
+type repoLocalResolution struct {
+	// Script is the validated repo_scripts entry; HasScript reports whether the
+	// file declared one at all. They are separate because a seed-only file is a
+	// legitimate shape: its lists apply while the global repo_scripts list still
+	// gets to route a setup script.
+	Script    repocfg.Script
+	HasScript bool
+	// CarryFiles and LinkPaths are canonical, repo-relative, and UNIONED with the
+	// user's own lists by the seeding site — never a replacement (see
+	// repocfg.RepoLocal).
+	CarryFiles []string
+	LinkPaths  []string
+}
+
+// RepoLocalSeeds is the last resolution's trusted repo-local seed lists, and
+// whether a resolution has run for this session at all. Display API: the settings
+// panel names the rows the selected session's repo contributes to, and it must
+// fork nothing and touch no filesystem to do it — the poll sweep already resolved
+// this. resolved is false before the first resolution (a paused session, a direct
+// session, one restored before its first sweep), which callers must render as
+// "unknown", never as "the repo adds nothing".
+func (i *Instance) RepoLocalSeeds() (carry, link []string, resolved bool) {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	if !i.repoSeedsKnown {
+		return nil, nil, false
+	}
+	return append([]string(nil), i.repoSeedCarry...), append([]string(nil), i.repoSeedLink...), true
+}
+
+// setRepoSeeds publishes the resolution's seed lists. Called on every resolution,
+// including the refusing ones (which publish empty lists) — so a revoked grant
+// stops being advertised on the next sweep rather than lingering as the last
+// answer that happened to be positive.
+func (i *Instance) setRepoSeeds(carry, link []string) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.repoSeedCarry, i.repoSeedLink, i.repoSeedsKnown = carry, link, true
+}
+
 // ledgerKey is the repo's canonical trust identity, derived once per instance
 // and then remembered — the same shape, and the same argument, as
 // originRemote: the repo path is fixed at creation, and the derivation is the
@@ -171,18 +220,60 @@ func (i *Instance) ledgerKey(repoPath string) string {
 	return key
 }
 
-// routeRepoLocal resolves the worktree's own .atrium.json, if the trust ledger
-// grants exactly its current bytes. ok is false for every other condition —
-// absent, untrusted, changed, unusable — with the session's RepoConfigStatus
-// updated to say which; the caller then falls back to the user's global
-// config.json, so untrusted repo config degrades to exactly the behavior the
-// repo would get with no file at all.
+// repoLocalSeedResolver is what a worktree calls at every Setup to learn which
+// carry_files and link_paths entries this repository's own trusted .atrium.json
+// contributes (#815). It is handed to git.Worktree.SetRepoLocalSeeds as a method
+// value, which is what lets the gate stay in this package: internal/repotrust
+// imports session/git, so session/git cannot import the ledger and the dependency
+// has to be inverted.
 //
-// Trusted repo-local config WINS over a global entry that also matches this
-// repo (the repo knows its own environment; gh-dash's precedence, adopted by
-// #814/#815) — which is why this runs before, and independently of, the
-// global list: a fresh install with an empty config.json still honors a
-// trusted repo.
+// The worktree dir is the resolution's, not the repo's, because the bytes that
+// decide the verdict are the ones this worktree checked out — the same property
+// that closes the prompt-to-execution TOCTOU for the script half. Direct sessions
+// return nothing: no worktree materializes anything for them, so there is no
+// checked-out file to gate (#814's recorded scope).
+func (i *Instance) repoLocalSeedResolver(worktreeDir string) (carry, link []string) {
+	if worktreeDir == "" || i.IsDirect() {
+		return nil, nil
+	}
+	res := i.routeRepoLocal(worktreeDir, i.configRepoPath())
+	return res.CarryFiles, res.LinkPaths
+}
+
+// configRepoPath is the repository the session's configuration is resolved
+// against: the origin checkout for a worktree session, and the session's own path
+// when no repo was recorded. One definition, shared by the two resolution entry
+// points, so the seed lists and the script can never be judged against different
+// repos — which would mean different ledger keys, and a grant that covered one
+// half of a file.
+func (i *Instance) configRepoPath() string {
+	if repoPath := i.GetRepoPath(); repoPath != "" {
+		return repoPath
+	}
+	return i.Path
+}
+
+// routeRepoLocal resolves the worktree's own .atrium.json, if the trust ledger
+// grants exactly its current bytes. The zero resolution comes back for every
+// other condition — absent, untrusted, changed, unusable — with the session's
+// RepoConfigStatus updated to say which; the callers then fall back to the
+// user's global config.json alone, so untrusted repo config degrades to exactly
+// the behavior the repo would get with no file at all.
+//
+// It is the single funnel for BOTH halves of a repo-local file: the executable
+// entry and the seed lists (#815). One read, one hash, one ledger check, one
+// verdict — a second reader for the lists could grant them while this one
+// refused the same bytes.
+//
+// Precedence differs by shape, and the shapes differ for a reason. A trusted
+// repo_scripts entry WINS over a global entry that also matches this repo (the
+// repo knows its own environment; gh-dash's precedence, adopted by #814) — which
+// is why this runs before, and independently of, the global list: a fresh install
+// with an empty config.json still honors a trusted repo. The seed lists instead
+// UNION with the user's (see repocfg.RepoLocal): they are sets of independent
+// paths, so replacement would silently drop the user's personal carry in that one
+// repo. What overrides a repo's additions is revoking its grant, which is
+// per-repo and needs no second config surface.
 //
 // The hash is of the same buffer that is parsed — never a second read — so
 // whatever bytes the one bounded os.ReadFile returned are the bytes judged and
@@ -192,7 +283,19 @@ func (i *Instance) ledgerKey(repoPath string) string {
 // granted anyway — never on unjudged bytes. Direct sessions never reach here
 // (their caller gates on IsDirect): they run in the user's own checkout,
 // which no worktree materializes, and are out of #814's scope by decision.
-func (i *Instance) routeRepoLocal(dir, repoPath string) (repocfg.Script, bool) {
+func (i *Instance) routeRepoLocal(dir, repoPath string) repoLocalResolution {
+	res := i.resolveRepoLocal(dir, repoPath)
+	// Publish here rather than inside the body: every one of the body's refusal
+	// paths must leave the panel advertising nothing, and a per-return-site call
+	// is a guard eleven places can forget.
+	i.setRepoSeeds(res.CarryFiles, res.LinkPaths)
+	return res
+}
+
+// resolveRepoLocal is routeRepoLocal's body: the read, the shape checks, the
+// parse, the ledger check, and the post-trust validation, in that order. Split
+// out only so the seed publication above cannot be skipped.
+func (i *Instance) resolveRepoLocal(dir, repoPath string) repoLocalResolution {
 	path := filepath.Join(dir, repocfg.RepoLocalFileName)
 
 	// Lstat, not Stat: Stat follows symlinks and reports the TARGET regular, so a
@@ -202,7 +305,7 @@ func (i *Instance) routeRepoLocal(dir, repoPath string) (repocfg.Script, bool) {
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
 			i.setRepoConfig(RepoConfigInvalid, fmt.Sprintf("repo config ignored: %s is unreadable (%v).", path, err))
-			return repocfg.Script{}, false
+			return repoLocalResolution{}
 		}
 		// Absent. Worth a word only when a grant says this repo HAS setup: then
 		// the branch this worktree checked out simply does not carry it. The
@@ -225,7 +328,7 @@ func (i *Instance) routeRepoLocal(dir, repoPath string) (repocfg.Script, bool) {
 			}
 		}
 		i.setRepoConfig(state, report)
-		return repocfg.Script{}, false
+		return repoLocalResolution{}
 	}
 	if !fi.Mode().IsRegular() {
 		// A fifo would block the read; a device file could feed it forever. A repo
@@ -233,51 +336,56 @@ func (i *Instance) routeRepoLocal(dir, repoPath string) (repocfg.Script, bool) {
 		// the grant's hash was never about — refusing the shape outright is
 		// simpler to reason about than hashing whatever it resolves to today.
 		i.setRepoConfig(RepoConfigInvalid, fmt.Sprintf("repo config ignored: %s is not a regular file.", path))
-		return repocfg.Script{}, false
+		return repoLocalResolution{}
 	}
 	if fi.Size() > repocfg.MaxRepoLocalBytes {
 		i.setRepoConfig(RepoConfigInvalid, fmt.Sprintf(
 			"repo config ignored: %s is %d bytes, over the %d-byte cap.", path, fi.Size(), repocfg.MaxRepoLocalBytes))
-		return repocfg.Script{}, false
+		return repoLocalResolution{}
 	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
 		i.setRepoConfig(RepoConfigInvalid, fmt.Sprintf("repo config ignored: %s could not be read (%v).", path, err))
-		return repocfg.Script{}, false
+		return repoLocalResolution{}
 	}
 	if int64(len(data)) > repocfg.MaxRepoLocalBytes {
 		// The file grew between Stat and ReadFile; refuse rather than work with
 		// bytes the size gate never saw.
 		i.setRepoConfig(RepoConfigInvalid, fmt.Sprintf("repo config ignored: %s is over the %d-byte cap.", path, repocfg.MaxRepoLocalBytes))
-		return repocfg.Script{}, false
+		return repoLocalResolution{}
 	}
 
 	// Parse BEFORE the trust check — ParseRepoLocal is pure JSON, safe on
 	// untrusted bytes (only ValidateOne, below the grant check, touches the
 	// template engine) — because what the file DECLARES decides whether trust is
-	// even a question. A file that declares nothing usable gates nothing, so an
-	// ungranted `{}` or a #815-only shape (carry_files, say) must read as None,
-	// not sit as a permanent "untrusted" nag whose named remedies both refuse:
-	// `atrium trust allow` has nothing to trust, and re-creating never prompts.
+	// even a question. A file that declares nothing gates nothing, so an ungranted
+	// `{}`, or one carrying only keys a future atrium will read, must read as None
+	// rather than sit as a permanent "untrusted" nag whose named remedies both
+	// refuse: `atrium trust allow` would have nothing to trust, and re-creating
+	// never prompts. "Declares nothing" is repocfg.RepoLocalSurfaces' answer, the
+	// same one the prompt and `trust allow` ask — so the states cannot disagree
+	// about whether this file is worth asking about.
 	parsed, parseErr := repocfg.ParseRepoLocal(data)
 	if parseErr != nil {
 		i.setRepoConfig(RepoConfigInvalid, fmt.Sprintf("Repo config ignored: %v. Fix the file to use it.", parseErr))
-		return repocfg.Script{}, false
+		return repoLocalResolution{}
 	}
-	if len(parsed.Entries) == 0 {
-		if len(parsed.Problems) == 0 {
-			// Declares nothing executable (an empty list, or only keys a future
-			// atrium reads): exactly the no-file behavior.
-			i.setRepoConfig(RepoConfigNone, "")
-			return repocfg.Script{}, false
-		}
+	if len(parsed.Problems) > 0 {
+		// A refused entry refuses the FILE, seed lists included. With the one-entry
+		// rule a Problem means the file's only entry is unusable, and applying the
+		// half that parsed would seed a set while the setup it shipped with was
+		// silently missing.
 		report := fmt.Sprintf("Repo config ignored: the entry in %s's %s is not usable. Fix the file to use it.", repoPath, repocfg.RepoLocalFileName)
 		for _, p := range parsed.Problems {
 			report += fmt.Sprintf("\n  %s: %s", repocfg.RepoLocalFileName, p.Error())
 		}
 		i.setRepoConfig(RepoConfigInvalid, report)
-		return repocfg.Script{}, false
+		return repoLocalResolution{}
+	}
+	if len(repocfg.RepoLocalSurfaces(parsed)) == 0 {
+		i.setRepoConfig(RepoConfigNone, "")
+		return repoLocalResolution{}
 	}
 
 	hash := repotrust.HashBytes(data)
@@ -299,24 +407,31 @@ func (i *Instance) routeRepoLocal(dir, repoPath string) (repocfg.Script, bool) {
 			report += fmt.Sprintf("\n\n(The trust ledger could not be read: %v — atrium doctor has details.)", ledgerErr)
 		}
 		i.setRepoConfig(state, report)
-		return repocfg.Script{}, false
+		return repoLocalResolution{}
 	}
 
-	// Exactly one entry can exist here (ParseRepoLocal's one-entry rule), and it
-	// is the entry the trust prompt described — so a late validation failure
-	// refuses the file rather than stepping over the entry, which is what keeps
-	// "the script the user was shown" and "the script that runs" the same script.
-	// The index handed to ValidateOne is the entry's position in the FILE, so
-	// `repo_scripts[N]` in the message is the N the user can find.
-	entry := parsed.Entries[0]
-	script, problem := repocfg.ValidateOne(entry.Index, entry.RepoScript)
-	if problem != nil {
-		log.WarningLog.Printf("repo-local config for %q: %s: %s", i.Title(), repocfg.RepoLocalFileName, problem.Error())
-		i.setRepoConfig(RepoConfigInvalid, fmt.Sprintf(
-			"Repo config ignored: the trusted entry in %s's %s does not validate, so nothing from it ran.\n  %s: %s\nFix the file to use it (the fix re-prompts — its content will have changed).",
-			repoPath, repocfg.RepoLocalFileName, repocfg.RepoLocalFileName, problem.Error()))
-		return repocfg.Script{}, false
+	// At most one entry can exist here (ParseRepoLocal's one-entry rule) and there
+	// may be none at all — a file declaring only seed lists is a legitimate shape,
+	// and its lists apply while the user's global repo_scripts list still gets to
+	// route a setup script. When there IS an entry it is the entry the trust prompt
+	// described, so a late validation failure refuses the whole file rather than
+	// stepping over it: that is what keeps "the script the user was shown" and "the
+	// script that runs" the same script, and it takes the seed lists down with it
+	// for the reason above. The index handed to ValidateOne is the entry's position
+	// in the FILE, so `repo_scripts[N]` in the message is the N the user can find.
+	res := repoLocalResolution{CarryFiles: parsed.CarryFiles, LinkPaths: parsed.LinkPaths}
+	if len(parsed.Entries) > 0 {
+		entry := parsed.Entries[0]
+		script, problem := repocfg.ValidateOne(entry.Index, entry.RepoScript)
+		if problem != nil {
+			log.WarningLog.Printf("repo-local config for %q: %s: %s", i.Title(), repocfg.RepoLocalFileName, problem.Error())
+			i.setRepoConfig(RepoConfigInvalid, fmt.Sprintf(
+				"Repo config ignored: the trusted entry in %s's %s does not validate, so nothing from it ran.\n  %s: %s\nFix the file to use it (the fix re-prompts — its content will have changed).",
+				repoPath, repocfg.RepoLocalFileName, repocfg.RepoLocalFileName, problem.Error()))
+			return repoLocalResolution{}
+		}
+		res.Script, res.HasScript = script, true
 	}
 	i.setRepoConfig(RepoConfigActive, "")
-	return script, true
+	return res
 }

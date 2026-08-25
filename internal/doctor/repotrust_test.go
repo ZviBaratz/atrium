@@ -76,3 +76,20 @@ func TestRepoTrustRenderKeepsColumnsAligned(t *testing.T) {
 	assert.Contains(t, lines[1], "/repo/a")
 	assert.Contains(t, lines[2], "/repo/b")
 }
+
+// TestRenderRepoTrustNamesWhatAGrantCovers: doctor is the surface a user reaches
+// when they cannot tell why a repo's config is or is not applying, so "trusted" is
+// not enough on its own — the grant covers a whole file, and this says which parts
+// of it a session would take. The line only appears for a current grant, because
+// LiveState leaves Covers empty for any other state.
+func TestRenderRepoTrustNamesWhatAGrantCovers(t *testing.T) {
+	got := RenderRepoTrust([]RepoTrustEntry{
+		{Key: "/src/web", State: "current", Covers: "setup script + 2 carried files", Granted: "2026-08-01", Hash: "abc123abc123"},
+		{Key: "/src/api", State: "changed (re-allow to use)", Granted: "2026-07-01", Hash: "def456def456"},
+	}, nil)
+
+	assert.Contains(t, got, "covers: setup script + 2 carried files")
+	assert.NotContains(t, got, "covers: \n", "an empty Covers must render no line at all")
+	// One continuation line, not two: the changed grant covers nothing that applies.
+	assert.Equal(t, 1, strings.Count(got, "covers:"))
+}

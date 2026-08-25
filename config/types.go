@@ -525,6 +525,12 @@ type Config struct {
 	// commit the file into the session branch. Committing the rule on the session's
 	// base satisfies that; so does .git/info/exclude, which lives in the common git
 	// dir and is shared by every linked worktree, or a global excludes file.
+	//
+	// This list is not the whole story for a repository whose own trusted
+	// .atrium.json declares one (#815): the two are UNIONED, repo entries first,
+	// for that repo's sessions only. Nothing here is ever replaced, which is why
+	// this stays a plain global list rather than growing a per-repo dimension —
+	// repo scoping lives in the repo, gated by the trust ledger.
 	CarryFiles []string `json:"carry_files"`
 	// LinkPaths lists repo-relative paths that are symlinked — not copied — from
 	// the origin checkout into each newly materialized session worktree, with an
@@ -538,7 +544,8 @@ type Config struct {
 	// directory but not the link, which git stores as a file. Otherwise the link
 	// leaks into the session branch (pause commits with `git add .`) and into the
 	// live diff (which stages untracked paths every poll tick). The rule must reach
-	// the worktree on the same terms as CarryFiles above.
+	// the worktree on the same terms as CarryFiles above — and a repository's own
+	// trusted .atrium.json unions into this list on the same terms too.
 	LinkPaths []string `json:"link_paths,omitempty"`
 	// PRCreateDraft selects whether a PR opened with the create key (c) starts as
 	// a draft. nil means use the default (draft), so configs predating this key
