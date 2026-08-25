@@ -144,9 +144,17 @@ func TestRepoSeedEntryCannotEscapeThroughASymlink(t *testing.T) {
 	// would still pass while guarding nothing.
 	repoPath := newTestRepo(t)
 	writeCarryConfig(t, nil)
-	commitGitignore(t, repoPath, "deps/")
+	commitGitignore(t, repoPath, "deps/", "shared")
+	// TWO symlinks, and they must not nest: a first draft used one path for both
+	// entries, which put the carry entry underneath the link entry — so
+	// dropCarriesUnderLinks refused the carry and the escape guard was never
+	// reached. The carry assertion passed for the wrong reason, and a mutation
+	// removing that guard survived.
 	if err := os.Symlink(outside, filepath.Join(repoPath, "deps")); err != nil {
-		t.Fatalf("symlink: %v", err)
+		t.Fatalf("symlink deps: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(repoPath, "shared")); err != nil {
+		t.Fatalf("symlink shared: %v", err)
 	}
 
 	warnings := captureWarnings(t)
@@ -155,7 +163,7 @@ func TestRepoSeedEntryCannotEscapeThroughASymlink(t *testing.T) {
 		t.Fatalf("NewWorktree: %v", err)
 	}
 	wt.SetRepoLocalSeeds(func(string) ([]string, []string) {
-		return []string{"deps/secret.txt"}, []string{"deps"}
+		return []string{"deps/secret.txt"}, []string{"shared"}
 	})
 	if err := wt.Setup(); err != nil {
 		t.Fatalf("Setup: %v", err)
@@ -165,7 +173,7 @@ func TestRepoSeedEntryCannotEscapeThroughASymlink(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(wt.GetWorktreePath(), "deps", "secret.txt")); err == nil {
 		t.Error("a repo's carry_files entry followed a symlink out of the repo and copied a file the trust dialog never named")
 	}
-	if _, err := os.Lstat(filepath.Join(wt.GetWorktreePath(), "deps")); err == nil {
+	if _, err := os.Lstat(filepath.Join(wt.GetWorktreePath(), "shared")); err == nil {
 		t.Error("a repo's link_paths entry handed the agent a writable symlink to a tree outside the repo")
 	}
 	if got := warnings(); !strings.Contains(got, "outside this repository") {
