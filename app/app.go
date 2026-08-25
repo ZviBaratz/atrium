@@ -763,6 +763,13 @@ type home struct {
 	// confirmation drops its action without ever running it. Reset by confirmAction,
 	// so a dialog that stages none cannot inherit the previous one's.
 	pendingConfirmArm func()
+	// pendingConfirmDecline is the action to run when the confirmation is DECLINED
+	// (n/esc). Nil for every ordinary dialog — declining stays a pure cancel, which
+	// is the contract the rest of this machinery keeps — and set only by the dialog
+	// whose decline still proceeds somewhere: the repo-trust prompt (#814), where
+	// both answers create the session and only the grant differs. Runs inline, like
+	// an instantAction. Reset by confirmAction alongside the other pending fields.
+	pendingConfirmDecline tea.Cmd
 	// hostCap is the host-derived soft session cap (config.DefaultSessionCap() at
 	// construction). It is the Limit used when max_sessions is unset; a field rather
 	// than a live call so tests can pin it independent of the runner's CPU count.
@@ -782,6 +789,11 @@ type home struct {
 	// confirmation (see confirmAllExhausted). Its account is already pinned to the
 	// soonest-to-reset member. Nil when no such confirm is pending.
 	pendingExhausted *spawnPlan
+	// pendingTrust holds a creation staged behind the repo-trust prompt (#814).
+	// Unlike the two above, BOTH answers consume it — confirming grants first,
+	// declining spawns untrusted — via proceedRepoTrustMsg either way. Nil when no
+	// such confirm is pending.
+	pendingTrust *spawnPlan
 	// quitRequested records that the user asked to quit while a session was still
 	// Loading. handleQuit defers the exit (a Loading session isn't yet persisted,
 	// so quitting would drop it); handleInstanceStarted re-invokes handleQuit once

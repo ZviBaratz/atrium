@@ -96,6 +96,7 @@ if one is missing from this table.
 | `doctor` | Check core dependencies (tmux, git, gh) and agent CLI heuristic versions |
 | `reap` | List tmux servers Atrium left behind, and stop them on request |
 | `profiles` | Manage agent profiles (e.g. `profiles detect`) |
+| `trust` | Decide which repos may run their own committed setup (e.g. `trust allow`) |
 | `debug` | Print debug information like config and log paths |
 | `update` | Download, verify, and install the latest release |
 | `reset` | Reset all stored instances |
@@ -1083,9 +1084,11 @@ matching on it is not something you can usefully do — and a trailing slash on 
 that spells the root exactly (`/projects/web/`) will never match, because the root has
 none.
 
-Nothing here is read from the repository itself. That is deliberate: a setup script
-committed alongside a project would run whatever its author wrote the moment you opened
-a clone of it.
+A repository can also commit an [`.atrium.json` of its own](#repo-local-config-and-trust)
+— but nothing in it runs until you have trusted that repo, and trusted the file's exact
+content. That gate is deliberate and load-bearing: a setup script committed alongside a
+project would otherwise run whatever its author wrote the moment you opened a clone of
+it.
 
 `setup_script` runs through `sh -c` with the worktree as its working directory, after
 carried files and linked paths are in place. It gets the same `$ATRIUM_*` environment
@@ -1127,6 +1130,65 @@ Dependencies set to **isolated**
 ([dependency-isolated sessions](#dependency-isolated-sessions)): that worktree gets no
 links, so the script installs into a tree of its own. That is the combination to reach
 for when a session's job is to change dependencies.
+
+#### Repo-local config and trust
+
+A repository can declare its own setup by committing an **`.atrium.json`** at its
+root, so a fresh clone already knows how to install and run itself:
+
+```json
+{
+  "repo_scripts": [{
+    "name": "web",
+    "setup_script": "npm ci && npm run db:migrate",
+    "run_command": "npm run dev -- --port {{.Session.Port}}",
+    "port_range": "3000-3099"
+  }]
+}
+```
+
+The entry is the same `repo_scripts` shape as above, minus the routing: the file
+already belongs to exactly one repo, so `remote_matches`/`path_matches` are refused
+in it — and for the same reason the file carries **exactly one** entry. With no
+routing, only the first entry could ever run, so a second one could only differ
+from what the trust prompt showed you; a file declaring more than one is refused
+whole. Once trusted, the entry **wins over** any `config.json` entry that also
+matches the repo: the repo knows its own environment, and your global entry stays
+the fallback.
+
+**Nothing in this file applies until you trust the repo.** Repo config is
+repo-authored content, and `setup_script` is arbitrary code running as you — so the
+first session you create from a repo whose committed `.atrium.json` declares
+anything usable opens a prompt naming what it declares. Trust is for the file as
+a whole, direnv-style, not per field. Trusting records a
+grant for the file's **exact content**; declining still creates the session, just
+with the repo's config inert. Headless creates (`atrium new`) never prompt: they
+start untrusted and say so, and `atrium trust allow <path>` is the headless grant.
+
+The grant is direnv-shaped, and its edges are deliberate:
+
+- **It names one repo by resolved path.** A moved repo, or a different clone of the
+  same remote, is a different identity and asks again. (A path reached through a
+  symlink resolves to the same repo it always was.)
+- **It names one version by content hash.** Any change to the file — a new commit,
+  a rewritten history, an agent editing it on its own branch — makes it inert again
+  until you re-allow, and the next create re-prompts. Sessions check the bytes in
+  their *own worktree* at the moment of use, so nothing that happens between the
+  prompt and the run can smuggle different content past it.
+- **Only committed content counts — at the ref your session will start from.**
+  A worktree checks out the session's *base*: with `update_base_on_create` (the
+  default) that is origin's tip whenever it is ahead of your local branch, and
+  the create form can pick a base branch outright. The prompt reads the file at
+  that resolved start point, and `atrium trust allow` at the ref a default
+  create would use — never the working tree, so an untracked or uncommitted
+  `.atrium.json` never reaches a session and is never offered for trust.
+
+When a session's repo config is withheld — untrusted, changed since its grant, or
+unusable — the session still starts; its row says so, a one-time modal explains and
+names the remedy, and `atrium doctor` reports every grant against the repo's
+current state. `atrium trust status` lists them, `atrium trust revoke [path|--all]`
+withdraws them. Direct (non-git) sessions ignore repo-local config entirely: they
+run in your own checkout, where no worktree materializes anything.
 
 #### Managed ports
 

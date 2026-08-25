@@ -28,6 +28,9 @@ type ConfirmationOverlay struct {
 	// confirmLabel names what confirming does ("pause 3 sessions"), replacing the
 	// generic "confirm" in the key hint. Empty keeps "confirm" — see SetConfirmLabel.
 	confirmLabel string
+	// cancelLabel names what declining does, replacing the generic "cancel" in the
+	// key hint. Empty keeps "cancel" — see SetCancelLabel.
+	cancelLabel string
 	// destructive selects which palette role paints the border. It stores the
 	// *role*, not a resolved colour: a colour captured here would be the palette in
 	// force when the overlay was built, and a theme change while a confirmation is
@@ -115,10 +118,14 @@ func (c *ConfirmationOverlay) Render() string {
 	if c.confirmLabel != "" {
 		action = c.confirmLabel
 	}
+	dismiss := "cancel"
+	if c.cancelLabel != "" {
+		dismiss = c.cancelLabel
+	}
 	content := c.message + "\n\n" +
 		hintStyle.Render("Press ") + confirmHint + hintStyle.Render(" to "+action+", ") +
 		keyStyle.Render(c.CancelKey) + hintStyle.Render(" or ") +
-		keyStyle.Render("esc") + hintStyle.Render(" to cancel")
+		keyStyle.Render("esc") + hintStyle.Render(" to "+dismiss)
 
 	// Apply the border style and return
 	return style.Render(content)
@@ -170,4 +177,13 @@ func (c *ConfirmationOverlay) SetConfirmAltKey(key string) {
 // is rather than the kill chord alone (see SetConfirmAltKey).
 func (c *ConfirmationOverlay) SetConfirmLabel(label string) {
 	c.confirmLabel = label
+}
+
+// SetCancelLabel names what DECLINING does, for the dialog whose decline is not a
+// plain "nothing happens". Every other confirmation aborts on n/esc and keeps the
+// default "cancel"; the repo-trust prompt (#814) proceeds with the create either
+// way — declining spawns the session with the repo's config inert — and a hint
+// still reading "cancel" there would promise an abort it does not perform.
+func (c *ConfirmationOverlay) SetCancelLabel(label string) {
+	c.cancelLabel = label
 }
