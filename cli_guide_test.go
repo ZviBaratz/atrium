@@ -243,6 +243,7 @@ func TestGuideAdvertisesRegisteredFlags(t *testing.T) {
 		{"new", "model"},
 		{"new", "effort"},
 		{"new", "permission-mode"},
+		{"new", "account"},
 	} {
 		t.Run(tc.command+"/"+tc.flag, func(t *testing.T) {
 			require.Contains(t, guidePage, "--"+tc.flag,

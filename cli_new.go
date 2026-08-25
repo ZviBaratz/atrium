@@ -28,6 +28,7 @@ var (
 	newModelFlag    string
 	newModeFlag     string
 	newEffortFlag   string
+	newAccountFlag  string
 	newForceFlag    bool
 	newWaitFlag     time.Duration
 
@@ -87,6 +88,20 @@ var (
 			"no --program or --profile a pin resolves the configured default program now,\n" +
 			"from the stored config, where an unpinned request leaves that choice to the\n" +
 			"draining TUI.\n\n" +
+			"--account pins which claude_accounts entry the session runs on, by the name it\n" +
+			"is configured under — the create form's Account picker, as a flag. Without it\n" +
+			"the account is routed from the repository, which for two accounts sharing a\n" +
+			"pool and a rule is a choice the caller does not control. The name is resolved\n" +
+			"by the atrium that creates the session, and its CLAUDE_CONFIG_DIR and the\n" +
+			"account name recorded for the session come off that one entry, so the label the\n" +
+			"session carries and the login it runs under cannot disagree. Like a pick at the\n" +
+			"keyboard it overrides pool rotation and creates even on a rate-limited account.\n\n" +
+			"Setting CLAUDE_CONFIG_DIR inside --program is the older way to force an account\n" +
+			"and it still works, but it is invisible to Atrium: the env the program sets is\n" +
+			"closer to the process than the one Atrium injects, so the session runs on that\n" +
+			"directory while the account recorded for it is the routed one. It warns on\n" +
+			"stderr, and combining it with --account is refused rather than resolved in the\n" +
+			"pin's favour, because the program string is the half that would win.\n\n" +
 			"The first prompt is optional, as it is in the create form. Pass \"-\" to read it\n" +
 			"from stdin, which is what makes a multi-line prompt practical to pipe in; omit\n" +
 			"the argument entirely and the session starts with no prompt at all.",
@@ -110,6 +125,7 @@ var (
 				model:       newModelFlag,
 				mode:        newModeFlag,
 				effort:      newEffortFlag,
+				account:     newAccountFlag,
 				prompt:      prompt,
 				force:       newForceFlag,
 				wait:        newWaitFlag,
@@ -145,9 +161,17 @@ type newRequest struct {
 	model  string
 	mode   string
 	effort string
-	prompt string
-	force  bool
-	wait   time.Duration
+	// account is the claude_accounts name --account pinned ("" = not asked, let routing
+	// choose). Unlike the three pins above it does NOT ride the program string: an
+	// account is injected as a tmux session env rather than composed into a command, and
+	// writing it into the program as `env CLAUDE_CONFIG_DIR=...` is the workaround #854
+	// is about — it beats Atrium's own injection, so the session runs on one account
+	// while state.json records another. So it travels as outbox.Request.Account, a NAME
+	// the draining atrium resolves once for both halves.
+	account string
+	prompt  string
+	force   bool
+	wait    time.Duration
 }
 
 // firstPrompt returns the session's first prompt: the second argument, or stdin
@@ -231,6 +255,15 @@ func runNew(out, errOut io.Writer, r newRequest) error {
 	if err != nil {
 		return err
 	}
+	// The account belongs to the same round as the programs: it is part of what the
+	// session will run, so a name that is not in claude_accounts is answered before a
+	// bad --path, and before anything is spooled. The name it returns is canonical —
+	// what the drain will resolve again against its own config.
+	account, err := resolveCreateAccount(cfg, r, programs)
+	if err != nil {
+		return err
+	}
+	warnProgramSetsAccount(errOut, r, programs)
 
 	instances, err := loadStoredInstances()
 	if err != nil {
@@ -241,7 +274,7 @@ func runNew(out, errOut io.Writer, r newRequest) error {
 		return err
 	}
 
-	reqs, err := planCreateRequests(context.Background(), cfg, r, programs, title, path, instances)
+	reqs, err := planCreateRequests(context.Background(), cfg, r, programs, account, title, path, instances)
 	if err != nil {
 		return err
 	}
@@ -341,6 +374,90 @@ func applyProgramPins(cfg *config.Config, r newRequest, programs []string) ([]st
 	return programs, nil
 }
 
+// resolveCreateAccount settles which claude_accounts entry --account named, returning
+// the canonical name to spool ("" when the flag was not passed, which leaves the choice
+// to routing exactly as it was before the flag existed).
+//
+// A courtesy check, like every other check this command makes: the drain resolves the
+// name again against its own config, which is the copy that will be honoured. What it
+// buys is the error a caller can act on — a typo answered at the terminal that made it,
+// naming the accounts that exist, rather than minutes later in a rejection receipt.
+//
+// The contradiction is not a courtesy. A --program that sets CLAUDE_CONFIG_DIR itself
+// wins over the dir Atrium injects — the program's env is closer to the process — so a
+// pin combined with one would stamp the pinned name onto a session running somewhere
+// else, which is the exact divergence #854 is about. Refused rather than resolved in
+// either direction: honouring the pin means silently rewriting the caller's own program
+// string, and honouring the program means accepting the flag and ignoring it.
+func resolveCreateAccount(cfg *config.Config, r newRequest, programs []string) (string, error) {
+	if r.account == "" {
+		return "", nil
+	}
+	if overriding := programsSettingConfigDir(programs); len(overriding) > 0 {
+		return "", fmt.Errorf("--account %q cannot hold: %s sets CLAUDE_CONFIG_DIR itself, "+
+			"which the agent reads in preference to the directory Atrium injects; drop one of the two",
+			r.account, quoteProgram(overriding))
+	}
+	acct, ok := cfg.ClaudeAccountNamed(r.account)
+	if !ok {
+		return "", fmt.Errorf("--account %q names no configured claude account; config.json has %s",
+			r.account, cfg.ClaudeAccountVocabulary())
+	}
+	return acct.Name, nil
+}
+
+// warnProgramSetsAccount says on stderr that a program string is choosing the Claude
+// account behind Atrium's back, and what that costs. It is a warning and not a refusal
+// because that spelling is the only way to pin an account on an atrium without
+// --account, so it is in active use; what it is not is silent.
+//
+// Never reached alongside a pin — resolveCreateAccount refuses that combination first —
+// so this speaks only to a caller who has not been told about the flag yet, which is why
+// it names it.
+func warnProgramSetsAccount(errOut io.Writer, r newRequest, programs []string) {
+	if r.account != "" {
+		return
+	}
+	overriding := programsSettingConfigDir(programs)
+	if len(overriding) == 0 {
+		return
+	}
+	_, _ = fmt.Fprintf(errOut, "warning: %s sets CLAUDE_CONFIG_DIR, so the session will run on that "+
+		"directory while Atrium records the account its routing chose — the two can name "+
+		"different logins. Pass --account <name> to pin one Atrium also records.\n",
+		quoteProgram(overriding))
+}
+
+// programsSettingConfigDir returns the resolved programs that set CLAUDE_CONFIG_DIR in
+// their own command line, in the order they were resolved.
+//
+// A substring test on the variable name, which is what the shape being detected reduces
+// to: `env CLAUDE_CONFIG_DIR=<dir> claude …`, or the bare `CLAUDE_CONFIG_DIR=<dir>
+// claude …` a shell would accept. Case-sensitive because environment variable names are.
+// It over-reports a program that merely mentions the name — one that unsets it, or passes
+// it as text — and that is the direction to be wrong in: the outcome of a false positive
+// is a warning about a real ambiguity, or a refusal telling a caller to drop one of two
+// flags. Under-reporting is the outcome this exists to prevent.
+func programsSettingConfigDir(programs []string) []string {
+	var hits []string
+	for _, program := range programs {
+		if strings.Contains(program, "CLAUDE_CONFIG_DIR") {
+			hits = append(hits, program)
+		}
+	}
+	return hits
+}
+
+// quoteProgram names the offending program(s) for the two messages above: the string
+// itself when there is one to quote, and a count when a fan-out has several, because
+// quoting three command lines into one sentence is not readable.
+func quoteProgram(programs []string) string {
+	if len(programs) == 1 {
+		return fmt.Sprintf("--program %q", programs[0])
+	}
+	return fmt.Sprintf("%d of the requested sessions' programs", len(programs))
+}
+
 // pinFlagNames names the pin flags this command line actually passed, so a refusal
 // tells the caller which of their own flags to drop rather than listing all three.
 func pinFlagNames(r newRequest) string {
@@ -368,7 +485,7 @@ func pinFlagNames(r newRequest) string {
 // contract that a batch of one is not a batch.
 func planCreateRequests(
 	ctx context.Context, cfg *config.Config, r newRequest,
-	programs []string, title, path string, instances []session.InstanceData,
+	programs []string, account, title, path string, instances []session.InstanceData,
 ) ([]outbox.Request, error) {
 	// Tail only, for runSend's reason: trailing newlines are an artifact of how the text
 	// arrived (a heredoc, a pipe), while leading whitespace could be meaningful. Trimmed
@@ -378,6 +495,12 @@ func planCreateRequests(
 		Branch: r.branch,
 		Prompt: strings.TrimRight(r.prompt, "\r\n"),
 		Force:  r.force,
+		// One account for every member of a fan-out, and deliberately so: a bake-off
+		// compares programs, and spreading its members across two logins would put the
+		// thing being measured and the thing paying for it on different accounts. An
+		// unpinned fan-out still rotates, which is the spread a caller who wants one asks
+		// for by not passing this.
+		Account: account,
 	}
 
 	if len(programs) == 1 {

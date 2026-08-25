@@ -1140,6 +1140,40 @@ func capRoomClause(limit, count, adding int) string {
 	return fmt.Sprintf("%d sessions from this atrium new are still queued with room for %d", adding, free)
 }
 
+// pinRequestedAccount turns a request's --account name into the same account pin the
+// create form's Account picker makes, or refuses the request (#854).
+//
+// One resolution, one struct, one source. The account this returns is where BOTH halves
+// of the session's account identity come from — the name startNewSession stamps into
+// state.json and the CLAUDE_CONFIG_DIR it injects at launch — so the label and the login
+// cannot name different accounts. That divergence is what `--account` exists to remove,
+// and a second place deciding either half is how it comes back.
+//
+// The name is resolved against the DRAINING atrium's config, not against whatever the
+// CLI saw when it spooled. The config is a file both processes read and either may have
+// re-read since, and the drain's copy is the one that will be honoured — so it is the
+// one that has to answer, and an account deleted or renamed between spool and drain is
+// refused here rather than silently routed.
+//
+// A name is nil-and-no-refusal only when the request asked for nothing: an unresolvable
+// name is never quietly downgraded to routing, because routing is exactly the answer the
+// caller passed a flag to avoid. Pool comes off the resolved account, matching the
+// picker (a member entry carries its own declared pool, "" when ungrouped), so a pinned
+// session clusters where a picked one would.
+func (m *home) pinRequestedAccount(r outbox.Request) (*overlay.AccountSelection, *createVerdict) {
+	if r.Account == "" {
+		return nil, nil
+	}
+	acct, ok := m.appConfig.ClaudeAccountNamed(r.Account)
+	if !ok {
+		refusal := createRefusal(fmt.Sprintf(
+			"--account %q names no configured claude account; this atrium has %s",
+			r.Account, m.appConfig.ClaudeAccountVocabulary()))
+		return nil, &refusal
+	}
+	return &overlay.AccountSelection{Pool: acct.Pool, Member: &acct}, nil
+}
+
 // executeCreateRequest runs every gate the create form runs and, if they all
 // pass, starts the session. It returns the boot command, or a reason the request
 // was refused — a reason written for the person who ran `atrium new`, because it
@@ -1228,6 +1262,21 @@ func (m *home) executeCreateRequest(r outbox.Request, adding int) (*session.Inst
 		programs: []string{program}, branch: r.Branch, prompt: r.Prompt,
 	}
 
+	// --account, resolved here and nowhere else (#854). The pin is a fact about the
+	// request rather than a gate that asks anybody a question, so it is settled ahead of
+	// the caps: a name this config does not have can never be met by freeing a session,
+	// and reporting it first is the reason the caller can act on.
+	//
+	// It goes onto the plan and not only into sel, because allExhausted reads
+	// plan.account: a deliberate pin bypasses rate-limit availability, the same escape
+	// hatch the picker's own member pin is, so it must be visible to that gate before it
+	// runs rather than added after it.
+	sel, refused := m.pinRequestedAccount(r)
+	if refused != nil {
+		return nil, nil, *refused
+	}
+	plan.account = sel
+
 	sc := m.sessionCap()
 	count := m.capCount(sc)
 	verdict := capVerdict(sc, count, adding)
@@ -1246,7 +1295,6 @@ func (m *home) executeCreateRequest(r outbox.Request, adding int) (*session.Inst
 	// reset member. Without the pin, startNewSession fails closed on an unpinned
 	// all-limited pool and answers "pick a member explicitly", a flag `atrium new`
 	// does not have: --force would be documented as an accept and refused every time.
-	var sel *overlay.AccountSelection
 	if pool, members, exhausted := m.allExhausted(plan); exhausted {
 		if !r.Force {
 			return nil, nil, createRefusal(fmt.Sprintf(
@@ -1260,8 +1308,9 @@ func (m *home) executeCreateRequest(r outbox.Request, adding int) (*session.Inst
 	}
 
 	// Never dependency-isolating: that is a form choice, and shared is the default the
-	// form itself starts from. sel is nil unless --force just accepted an exhausted
-	// pool, which is the only account choice this path can make.
+	// form itself starts from. sel is nil unless --account pinned a member or --force
+	// just accepted an exhausted pool; the two cannot both have set it, because a pin
+	// makes allExhausted report nothing to accept.
 	inst, cmd, err := m.startNewSession(r.Title, path, direct, false, program, r.Branch, r.Prompt, sel, spawnBackground, nil)
 	if err != nil {
 		// Never an empty reason. "" is this function's success sentinel, so an error

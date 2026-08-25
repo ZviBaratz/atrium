@@ -102,6 +102,18 @@ const (
 	// zero and does the same. The field only ever ADDS a hold, and a hold is not a
 	// verdict.
 	//
+	// Account (#854) is the one field whose degradation is a lost guarantee rather
+	// than a lost optimisation, and it stays at 1 anyway because what is lost is what
+	// the caller had before the flag existed. An atrium too old to know the field
+	// creates the session on the account ROUTING picks — which is what `atrium new`
+	// did for every request it has ever written — so the outcome is the pre-flag one
+	// and not a wrong one, but it is silent, and a caller that pinned a pool member
+	// specifically to avoid the sibling gets the sibling with nothing said. A gate
+	// would not improve it: bumping the version refuses the request instead, with a
+	// receipt naming the version rather than the account, and refuses every OTHER
+	// request in the spool across the same upgrade. Bounded by the fact that the
+	// producer and the drain are normally the same binary on the same machine.
+	//
 	// The asymmetry that argument does not cover is a *downgrade* while a claim is
 	// on disk: an older atrium has no ListClaims, so it neither drains nor settles
 	// that file, and a `--wait` blocked on it sees the record gone. Downgrading
@@ -161,6 +173,22 @@ type Request struct {
 	// Prompt is the optional first prompt, delivered on the create form's terms:
 	// queued at creation and typed in once the agent is past its startup screen.
 	Prompt string `json:"prompt,omitempty"`
+	// Account is the claude_accounts entry `atrium new --account` pinned, by the name
+	// it is configured under. Empty means "let routing choose", which is every request
+	// written before the flag existed and every one that does not pass it.
+	//
+	// A NAME and not a directory, deliberately, and this is the whole of #854. The drain
+	// resolves the name against its own live config and takes both the stamped account
+	// and the injected CLAUDE_CONFIG_DIR off the single entry it finds
+	// (Config.ClaudeAccountNamed), so the label a session carries and the login it runs
+	// under cannot name different accounts. Spooling the directory as well would put a
+	// second answer on the wire, free to disagree with the config that has to honour it.
+	//
+	// It is the same pin the create form's Account picker makes, which is why the drain
+	// hands it on as an overlay.AccountSelection rather than inventing a second kind of
+	// account choice: a pin bypasses rotation and rate-limit availability, exactly as a
+	// deliberate choice at the keyboard does.
+	Account string `json:"account,omitempty"`
 	// Force answers in advance the two gates that would otherwise ask the user —
 	// the host-derived soft session cap and a fully rate-limited account pool.
 	// It deliberately does not reach the explicit hard cap, which refuses in the

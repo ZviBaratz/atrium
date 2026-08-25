@@ -290,3 +290,59 @@ func containsAny(lower string, subs []string) bool {
 	}
 	return false
 }
+
+// ClaudeAccountNamed resolves a claude_accounts entry by the name it is configured
+// under. It is the lookup behind `atrium new --account`, where the caller names the
+// login instead of letting routing pick one — so unlike ResolveClaudeAccount it
+// consults no rules, no pool and no rotation cursor, and unlike FindClaudeAccount it
+// is asked before a session exists and so has no config dir to anchor on.
+//
+// Returning the whole account rather than its directory is the point. The pin's
+// stamped name and its injected CLAUDE_CONFIG_DIR both come off this one struct, which
+// is what stops them naming different logins (#854): a resolver that answered with a
+// dir alone would leave the name to be settled somewhere else, and somewhere else is
+// where routing already answers it.
+//
+// An exact match on Name, and exactly one. A name two entries share matches nothing:
+// which login it means is precisely what a pin exists to settle, and picking the first
+// would inject one dir under a name the caller may have meant for the other — the
+// divergence this lookup exists to close, re-introduced by the thing closing it.
+// (`atrium doctor` is where a config that ambiguous gets reported.) An empty name never
+// matches, so "not asked for" cannot resolve to an entry that also declares none.
+func (c *Config) ClaudeAccountNamed(name string) (ClaudeAccount, bool) {
+	if name == "" {
+		return ClaudeAccount{}, false
+	}
+	hit, hits := ClaudeAccount{}, 0
+	for _, a := range c.ClaudeAccounts {
+		if a.Name != name {
+			continue
+		}
+		hit, hits = a, hits+1
+	}
+	if hits != 1 {
+		return ClaudeAccount{}, false
+	}
+	return hit, true
+}
+
+// ClaudeAccountVocabulary lists the configured account names in config order, as the
+// clause an --account refusal quotes back so a caller that misspelled one is told what it
+// could have said rather than only that it was wrong. One function because both the CLI's
+// courtesy refusal and the drain's authoritative one say it, and two spellings of the
+// same list is how they come to disagree about what the config holds.
+//
+// Duplicates are not collapsed: a name listed twice is why ClaudeAccountNamed refuses it,
+// and hiding that would make the message argue against itself. The empty case is named
+// rather than rendered as an empty list — with no claude_accounts the feature is dormant
+// and no name would have worked, which is a different mistake from a misspelling.
+func (c *Config) ClaudeAccountVocabulary() string {
+	if len(c.ClaudeAccounts) == 0 {
+		return "no claude_accounts (the feature is off)"
+	}
+	names := make([]string, 0, len(c.ClaudeAccounts))
+	for _, a := range c.ClaudeAccounts {
+		names = append(names, a.Name)
+	}
+	return strings.Join(names, ", ")
+}

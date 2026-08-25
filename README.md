@@ -1357,6 +1357,17 @@ list to your config file:
   up both.
 - When more than one account is configured, the new-session form shows an
   **Account** picker, preset to the auto-routed account, to override the choice.
+  `atrium new --account <name>` is the same choice from a script. Pass the name an
+  entry is configured under; the atrium that creates the session resolves it and
+  takes both the injected `CLAUDE_CONFIG_DIR` and the account it records off that
+  one entry, so the badge and the login cannot name different accounts. Like a
+  pick at the keyboard it overrides pool rotation and creates even on a
+  rate-limited member. Writing `CLAUDE_CONFIG_DIR` into `--program` instead still
+  works and is now warned about: the program's own env is closer to the process
+  than the one Atrium injects, so the session runs on that directory while the
+  account recorded for it is the routed one, and because the record is anchored on
+  the directory Atrium injected the wrong name survives every relaunch. Combining
+  the two is refused rather than resolved in the pin's favour.
 - `expect_account` (optional) is the email address that `config_dir` is supposed to
   be logged in as. `name` is only a label: running `/login` inside a config dir
   re-points it at a different Claude account in place, and nothing about the routing

@@ -758,6 +758,8 @@ func init() {
 		"Pin claude's --permission-mode in the new session (e.g. plan, acceptEdits, auto)")
 	newCmd.Flags().StringVar(&newEffortFlag, "effort", "",
 		"Pin claude's --effort in the new session (low, medium, high, xhigh, max)")
+	newCmd.Flags().StringVar(&newAccountFlag, "account", "",
+		"Pin the claude_accounts entry the new session runs on, by name")
 	newCmd.Flags().BoolVar(&newForceFlag, "force", false,
 		"Create even past host capacity, or on a fully rate-limited account pool")
 	newCmd.Flags().DurationVar(&newWaitFlag, "wait", 0,
