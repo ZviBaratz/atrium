@@ -1496,6 +1496,16 @@ instead of pinning every session in a repo to one account:
   session lands on the one account regardless of the cursor). `atrium doctor`
   flags this — a pool with two members sharing a `config_dir` prints a warning
   naming both.
+- Two members that *are* separate logins can still fail to be **substitutes**.
+  Plugins, marketplaces and MCP servers live in per-`CLAUDE_CONFIG_DIR` files that
+  the identity check never reads, so one member can quietly lack an integration the
+  pool is assumed to share — and rotation will keep placing sessions on it, because
+  routing does not consult capability. `atrium doctor`'s **Account pool parity**
+  section reads each member's `settings.json` and `.claude.json` and names what
+  one has that another lacks. It reads files only — no network call and no token —
+  so it measures what the dirs are *configured* with, not what claude.ai has
+  granted them. A member whose dir cannot be read gets a line of its own rather
+  than being counted as having nothing.
 - **Renaming a pool** means retyping the same `pool` name on each of its members
   (a pool is just that shared string — there is no pool entity to rename). Open
   sessions follow the rename, and the cluster keeps the position `[` / `]` gave it.

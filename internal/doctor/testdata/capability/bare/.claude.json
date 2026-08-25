@@ -1,0 +1,5 @@
+{
+  "numStartups": 3,
+  "oauthAccount": { "emailAddress": "bare@example.com", "accountUuid": "u-bare" },
+  "claudeAiMcpEverConnected": ["Gmail", "Google Calendar", "Google Drive", "Linear"]
+}

@@ -486,6 +486,20 @@ var (
 				fmt.Print(pools)
 			}
 
+			// Account pool parity: the third way to ask the same question, and the
+			// only one that can see two genuinely distinct logins that are not
+			// substitutes for each other. Identity catches one login wearing two
+			// names; pools catches two names on one dir; parity diffs what each
+			// member's dir is CONFIGURED with — plugins, marketplaces, MCP servers —
+			// since rotation spends the pool's interchangeability promise on every
+			// unpinned session without ever checking it. Local JSON reads only, two
+			// per dir, so no probe budget for the same reason as the two sections
+			// above.
+			if parity := doctor.RenderParity(doctor.CheckParityInstalled()); parity != "" {
+				fmt.Println()
+				fmt.Print(parity)
+			}
+
 			// Custom commands: an entry that fails validation is dropped rather than
 			// bound, so the only symptom in the TUI is a command that isn't in the
 			// menu. This section is where that silence gets a reason.
