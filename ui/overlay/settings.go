@@ -380,7 +380,10 @@ func (s *SettingsOverlay) boxWidth() int {
 	if w < 20 {
 		w = 20
 	}
-	return w
+	// The shared inset rule (#695): on a terminal just wider than the cap the
+	// box would sit one to three cells from the edge, which reads as a
+	// doubled border — take the full width there instead.
+	return SnapFullBleed(w+2, s.width) - 2
 }
 
 func (s *SettingsOverlay) innerWidth() int { return s.boxWidth() - 4 }

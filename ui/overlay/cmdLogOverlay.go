@@ -46,6 +46,11 @@ func NewCmdLogOverlay(session string) *CmdLogOverlay {
 	return &CmdLogOverlay{session: session, width: 90, height: 24}
 }
 
+// CmdLogSize is the command log's share: it benefits from width (argv) and
+// height (many rows), so it takes more than the queue overlay, capped for
+// very wide terminals.
+var CmdLogSize = SizeSpec{WFrac: 0.85, WMax: 120, HFrac: 0.85, HMax: 44}
+
 // SetSize sets the box dimensions; the list windows to the available height.
 func (c *CmdLogOverlay) SetSize(width, height int) {
 	if width < 40 {
@@ -57,9 +62,6 @@ func (c *CmdLogOverlay) SetSize(width, height int) {
 	c.width = width
 	c.height = height
 }
-
-// SetWidth mirrors the other overlays' responsive-width setter.
-func (c *CmdLogOverlay) SetWidth(width int) { c.SetSize(width, c.height) }
 
 // records returns the currently-filtered command records, newest first. Read live
 // so the view is always current.

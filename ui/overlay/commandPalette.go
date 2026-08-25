@@ -69,6 +69,16 @@ func NewCommandPaletteOverlay(actions []PaletteAction) *CommandPaletteOverlay {
 	}
 }
 
+// CommandPaletteSize gives the palette three columns' worth of width (key,
+// verb, prose) and as many rows as it can get — the palette's whole value is
+// seeing a lot of the keymap at once — capped like the command log so a very
+// wide terminal doesn't stretch the prose column past comfortable reading.
+// The share is of the box, border and padding included, so it is the room the
+// palette may occupy rather than the room it fills and then overruns; HExtra
+// keeps the rendered size where it was before that was true, and Fit's
+// terminal clamp is what keeps the overhang inside a short terminal.
+var CommandPaletteSize = SizeSpec{WFrac: 0.85, WMax: 100, HFrac: 0.85, HExtra: 3, HMax: 43}
+
 // SetSize sets the box dimensions. The floors keep the columns legible rather
 // than letting the layout collapse into unreadable slivers on a tiny terminal.
 func (p *CommandPaletteOverlay) SetSize(width, height int) {

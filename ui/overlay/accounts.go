@@ -452,7 +452,9 @@ func (o *AccountsOverlay) boxWidth() int {
 	if w < 20 {
 		w = 20
 	}
-	return w
+	// The shared inset rule (#695): a box one to three cells from the edge
+	// reads as a doubled border — take the full width there instead.
+	return SnapFullBleed(w+2, o.width) - 2
 }
 
 func (o *AccountsOverlay) inner() int { return o.boxWidth() - 4 } // Padding(1,2) → 4 cols

@@ -162,7 +162,7 @@ func runConfirmationHeightCase(t *testing.T, minWidth, minHeight, limit, live, n
 			box := strings.Split(xansi.Strip(h.confirmationOverlay.Render()), "\n")
 			bottom := box[len(box)-1]
 			// Contains("") is true of every string, so a render that came back empty —
-			// a zero width reaching SetWidth, an overlay left unarmed — would satisfy
+			// a zero width reaching SetSize, an overlay left unarmed — would satisfy
 			// both assertions below while measuring nothing at all. Pin the line to the
 			// shape of a real bottom border first, so this subtest cannot pass vacuously.
 			require.NotEmpty(t, strings.TrimSpace(bottom), "the overlay rendered no box to measure")
@@ -213,7 +213,7 @@ func TestOverCapMessage(t *testing.T) {
 // Teaching the key costs less than pointing at config.json did: the old tail wrapped onto a
 // second line and the new one does not.
 func TestOverCapMessageIsShorterThanThePathItReplaced(t *testing.T) {
-	// confirmWidth's preferred 50 less Padding(1,2)'s four cells. Stated as a literal because
+	// ConfirmSize's preferred 52 outer less the border and Padding(1,2) — six cells. Stated as a literal because
 	// the dialog is only this wide on a terminal that can afford it; a narrower terminal wraps
 	// harder, and this is the case the wording was chosen against.
 	const wrap = 46

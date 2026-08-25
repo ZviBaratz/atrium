@@ -16,10 +16,13 @@ const (
 	maxListRatioTest = 0.60
 )
 
-// layoutListWidth mirrors the split math in updateHandleWindowSizeEvent so tests
-// can assert the divider column without reaching into the panes' render output.
+// layoutListWidth reads the divider column through listCols — the declared
+// single owner of the ratio→columns conversion — so these tests click where
+// the layout actually put the seam and cannot silently diverge from it. The
+// conversion itself is pinned independently, by literal, in
+// layout_budget_test.go.
 func layoutListWidth(h *home) int {
-	return int(float32(h.windowWidth) * float32(h.listRatio))
+	return h.listCols(h.windowWidth)
 }
 
 // pressAt / motionAt / releaseAt build the three mouse phases of a divider drag.

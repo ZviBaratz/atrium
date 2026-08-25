@@ -7,16 +7,24 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/muesli/ansi"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/ZviBaratz/atrium/ui/overlay"
 )
 
 // The dialog keeps its classic width on normal terminals, shrinks with narrow
-// ones, and never collapses below a readable floor.
+// ones, and never collapses below a readable floor. The table is the old
+// confirmWidth helper's, translated to outer cells (each value is the old
+// border-exclusive one plus 2) — the box these numbers describe is unchanged.
 func TestConfirmWidth(t *testing.T) {
-	assert.Equal(t, 50, confirmWidth(0), "unsized (startup/tests) keeps the default")
-	assert.Equal(t, 50, confirmWidth(120))
-	assert.Equal(t, 50, confirmWidth(54), "54-4 = 50: exactly fits")
-	assert.Equal(t, 40, confirmWidth(44))
-	assert.Equal(t, 20, confirmWidth(10), "floor at 20 even on absurdly narrow terminals")
+	fitW := func(termW int) int {
+		w, _ := overlay.ConfirmSize.Fit(termW, 0)
+		return w
+	}
+	assert.Equal(t, 52, fitW(0), "unsized (startup/tests) keeps the default")
+	assert.Equal(t, 52, fitW(120))
+	assert.Equal(t, 52, fitW(54), "54-2 = 52: exactly fits")
+	assert.Equal(t, 42, fitW(44))
+	assert.Equal(t, 22, fitW(10), "floor even on absurdly narrow terminals")
 }
 
 // A confirmation opened on a narrow terminal must not spill past the screen

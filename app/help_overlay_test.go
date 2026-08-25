@@ -56,11 +56,33 @@ func TestHelpOverlayFitsShortTerminal(t *testing.T) {
 	}
 }
 
+// TestHelpOverlayFullBleedsAtTheFloor pins #695's fix at the width it was
+// reported: the real general cheatsheet at the 80-column floor takes the full
+// terminal width. Its old cap kept a one-column margin, which rendered as a
+// doubled border beside the frame's own border; SnapFullBleed is the rule
+// that forbids that zone. Inverting or off-by-one-ing the rule leaves the box
+// at 77-79 columns, and this equality is what dies.
+func TestHelpOverlayFullBleedsAtTheFloor(t *testing.T) {
+	home := newCreateFormHome(t)
+	home.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 80, Height: 24})
+	home.showHelpScreen(helpTypeGeneral{}, nil)
+
+	widest := 0
+	for _, l := range strings.Split(xansi.Strip(home.textOverlay.Render()), "\n") {
+		if lw := xansi.StringWidth(l); lw > widest {
+			widest = lw
+		}
+	}
+	if widest != 80 {
+		t.Fatalf("cheatsheet box at the 80-column floor is %d wide; want the full 80 (#695)", widest)
+	}
+}
+
 // While the help modal is up, the wheel scrolls it (wherever it hovers), a
 // click inside the box is inert, and a click outside dismisses — the mouse
 // mirror of the scroll-keys-scroll / any-other-key-closes semantics.
 func TestHelpOverlayMouse(t *testing.T) {
-	const w, h = 80, 15
+	const w, h = 160, 15
 
 	mouse := func(btn tea.MouseButton, x, y int) tea.MouseMsg {
 		if btn == tea.MouseWheelUp || btn == tea.MouseWheelDown ||
@@ -74,8 +96,11 @@ func TestHelpOverlayMouse(t *testing.T) {
 	home.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: w, Height: h})
 	home.showHelpScreen(helpTypeGeneral{}, nil)
 
-	// At 80×15 the overflowing dialog spans the full height and is centered
-	// horizontally (78 cols wide → x ∈ [1, 78]), so column 0 is outside.
+	// At 160×15 the overflowing dialog spans the full height and hugs its
+	// natural width, centered well inside the terminal, so column 0 is
+	// outside the box. Narrower stagings stopped working with #695: at the
+	// 80-column floor the box now takes the full width (SnapFullBleed), and
+	// there is no outside column to click.
 	before := xansi.Strip(home.View().Content)
 	home.Update(mouse(tea.MouseWheelDown, w/2, h/2))
 	if home.state != stateHelp {

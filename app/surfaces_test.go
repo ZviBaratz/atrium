@@ -80,9 +80,10 @@ func TestEverySurfaceSpecIsComplete(t *testing.T) {
 // TestSurfaceSpecHasNotGrownAField pins surfaceSpec's field count so a new
 // per-state fact cannot ship classified for no state: the completeness walk
 // above cannot see a field that was added and left zero in every entry, so
-// growing the struct (the layout-budget SizeSpec of #802 is the expected next
-// customer) must come back here, classify the field for every state, and bump
-// the pin — a new field fails under any name, and the author must decide.
+// growing the struct must come back here, classify the field for every state,
+// and bump the pin — a new field fails under any name, and the author must
+// decide. (#802's SizeSpec arrived as the size column's new shape, not a new
+// column, which is why the pin still reads 7.)
 func TestSurfaceSpecHasNotGrownAField(t *testing.T) {
 	require.Equal(t, 7, reflect.TypeOf(surfaceSpec{}).NumField(),
 		"surfaceSpec grew or lost a field — classify it for every state in surfaceSpecs, check whether TestEverySurfaceSpecIsComplete must assert it, then update this pin")
