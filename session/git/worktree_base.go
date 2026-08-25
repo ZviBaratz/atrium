@@ -74,19 +74,70 @@ func (g *Worktree) baseBranchName() string {
 // historical start point and leaves baseRef untouched. This is what prevents a fresh
 // session from ever discarding local-only commits.
 func (g *Worktree) freshenRef(name string) string {
+	return freshenedRef(name, func(args ...string) bool {
+		_, err := g.runGitCommand(g.repoPath, args...)
+		return err == nil
+	})
+}
+
+// freshenedRef is the freshen DECISION, shared by Worktree.freshenRef (the
+// creating side) and StartPointPreview (the asking side) so the two cannot
+// disagree about which ref a session starts from. ok runs one git command
+// against the base repo and reports success; the caller owns how (a Worktree's
+// recorded runner, or the package-level localGit).
+func freshenedRef(name string, ok func(args ...string) bool) string {
 	remote := "origin/" + name
-	if _, err := g.runGitCommand(g.repoPath, "show-ref", "--verify", "refs/remotes/"+remote); err != nil {
+	if !ok("show-ref", "--verify", "refs/remotes/"+remote) {
 		return "" // no remote-tracking ref to prefer
 	}
-	if _, err := g.runGitCommand(g.repoPath, "show-ref", "--verify", "refs/heads/"+name); err != nil {
+	if !ok("show-ref", "--verify", "refs/heads/"+name) {
 		return remote // local branch absent: the remote tip is the only/freshest base
 	}
 	// Local present: prefer the remote only when local is an ancestor of it (behind
 	// or equal), never when it carries commits the remote lacks (ahead/diverged).
-	if _, err := g.runGitCommand(g.repoPath, "merge-base", "--is-ancestor", name, remote); err == nil {
+	if ok("merge-base", "--is-ancestor", name, remote) {
 		return remote
 	}
 	return ""
+}
+
+// StartPointPreview is the ref a NEW session created off (repoPath, baseRef)
+// would branch from — Worktree.resolveStartPoint's decision, recomputed for the
+// asking side (#814's trust prompt and `atrium trust`), which must read the
+// same bytes a worktree will materialize rather than whatever literal HEAD
+// holds. Three deliberate differences from the creating side: no fetch (that
+// side runs updateBaseRef first, so a remote that moved since the last fetch
+// can still diverge the two — enforcement re-hashes the worktree's own file, so
+// that residue fails closed rather than executing), no baseRef rewrite, and no
+// hard errors: anything it cannot resolve degrades to "HEAD".
+func StartPointPreview(ctx context.Context, repoPath, baseRef string, updateBase bool) string {
+	probe := func(args ...string) bool {
+		_, err := localGit(ctx, repoPath, args...)
+		return err == nil
+	}
+	if baseRef == "" {
+		if updateBase {
+			if branch := CurrentBranchName(ctx, repoPath); branch != "" && branch != "HEAD" {
+				if remote := freshenedRef(branch, probe); remote != "" {
+					return remote
+				}
+			}
+		}
+		return "HEAD"
+	}
+	name := strings.TrimPrefix(baseRef, "origin/")
+	if updateBase {
+		if remote := freshenedRef(name, probe); remote != "" {
+			return remote
+		}
+	}
+	if probe("show-ref", "--verify", "refs/heads/"+name) {
+		return name
+	}
+	if probe("show-ref", "--verify", "refs/remotes/origin/"+name) {
+		return "origin/" + name
+	}
+	return "HEAD"
 }
 
 // fastForwardBase advances the local <name> branch to origin/<name> when that is a

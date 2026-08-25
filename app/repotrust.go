@@ -1,0 +1,209 @@
+package app
+
+// repotrust.go — the create-time half of #814's per-repo trust ledger: the
+// prompt. A repo whose create ref — the start point the session's worktree
+// will actually check out, not literal HEAD — declares executable config
+// (.atrium.json → repo_scripts) that the ledger does not grant gets asked
+// ONCE, at create time, on the update thread — never mid-Start, where there is
+// no surface to ask on. The answer only writes (or does not write) a grant;
+// enforcement is session/repoconfig.go's, which re-hashes the worktree's own
+// bytes at every use, so this dialog can be skipped (headless drain),
+// declined, or raced without anything untrusted ever executing.
+//
+// Declining is NOT a cancel: both answers create the session, and only the
+// grant differs — an untrusted repo is still a workable cold worktree (#629's
+// Q4). That inversion of every other create-staged dialog's decline is why
+// the overlay's cancel hint is relabeled and why this is the one caller of
+// armOnDecline.
+
+import (
+	"fmt"
+	"strings"
+	"time"
+	"unicode"
+
+	"github.com/ZviBaratz/atrium/internal/repotrust"
+	"github.com/ZviBaratz/atrium/log"
+	"github.com/ZviBaratz/atrium/repocfg"
+	"github.com/ZviBaratz/atrium/session/git"
+	"github.com/ZviBaratz/atrium/ui"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/mattn/go-runewidth"
+)
+
+// proceedRepoTrustMsg is emitted when the repo-trust prompt is answered — by
+// EITHER key: confirming granted first (armOnConfirm), declining granted
+// nothing. Its Update handler runs the remaining spawn gates on the staged
+// pendingTrust plan.
+type proceedRepoTrustMsg struct{}
+
+// repoTrustPreviewWidth bounds the script preview interpolated into the
+// dialog. Nothing caps a setup_script in the repo's file, so the ceiling has
+// to be here — the same argument, and a tighter figure, than
+// customCommandDialogDescWidth's: this dialog carries the repo path and three
+// more sentences, so its budget for repo-authored text is smaller.
+const repoTrustPreviewWidth = 120
+
+// repoTrustAssessment is the pure half, shared by the form and autoDispatch
+// (the allExhausted split's pattern, #703: a headless create must not stage a
+// modal to learn the answer): should creating at path stage the trust prompt,
+// and with what material.
+//
+// base is the create's base branch ("" for the repo's current), because the
+// file is read at the ref the worktree will actually check out — the form can
+// pick a base outright, and update_base_on_create (default on) freshens to
+// origin's tip, so literal HEAD can hold a different .atrium.json than the
+// session materializes. Hashing HEAD there would grant one version and then
+// immediately report the session's as "changed" (or skip the prompt for a
+// file HEAD does not carry yet).
+//
+// False for a direct target (out of #814's scope — no worktree materializes
+// anything), for a path git cannot assess, and for a repo whose config is
+// absent, already granted, or declares nothing usable. The enforcement gate
+// below the TUI refuses anything unproven regardless of what this says.
+func (m *home) repoTrustAssessment(path string, direct bool, base string) (repotrust.Assessment, bool) {
+	if direct {
+		return repotrust.Assessment{}, false
+	}
+	ref := git.StartPointPreview(m.ctx, path, base, m.appConfig.GetUpdateBaseOnCreate())
+	a, err := repotrust.AssessRepo(m.ctx, path, ref)
+	if err != nil {
+		return repotrust.Assessment{}, false
+	}
+	return a, a.WantsPrompt()
+}
+
+// confirmRepoTrust stages plan behind the trust prompt and dismisses the create
+// form (when one is open — autoDispatch has none), stashing it as a restorable
+// draft first, exactly as confirmOverCap does. Both trust answers proceed
+// toward the spawn, but the spawn is not yet committed: finishSpawnGates can
+// stage the over-cap/exhausted confirms next, whose DECLINE spawns nothing —
+// without the stash, that decline (or a first-variant spawn failure) would
+// have consumed the whole form for a session that never existed. The stash
+// cannot double-create: every path that actually spawns ends in
+// closeCreateForm, which clears it.
+func (m *home) confirmRepoTrust(plan spawnPlan, a repotrust.Assessment) tea.Cmd {
+	m.pendingTrust = &plan
+	m.stashDirtyCreateForm()
+	m.textInputOverlay = nil
+	m.menu.SetState(ui.StateDefault)
+	m.resetTitleCheck()
+
+	proceed := func() tea.Msg { return proceedRepoTrustMsg{} }
+	cmd := m.confirmAction(repoTrustMessage(a), instantAction, proceed)
+	m.armOnConfirm(func() {
+		if err := repotrust.Grant(a.Key, a.Hash, a.Remote, time.Now()); err != nil {
+			// The create still proceeds. Enforcement re-reads the ledger, finds no
+			// grant, and keeps the config inert WITH its notice — a failed write is
+			// loud downstream rather than silently trusted here.
+			log.ErrorLog.Printf("repo-trust grant for %s failed: %v", a.Root, err)
+		}
+	})
+	m.armOnDecline(proceed)
+	m.confirmationOverlay.SetConfirmLabel("trust and run setup")
+	// Decline proceeds, so the stock "cancel" would promise an abort this dialog
+	// does not perform.
+	m.confirmationOverlay.SetCancelLabel("create without it")
+	// Deliberately no armDoubleTap, for both reasons doubleTapDialogs' docstring
+	// enumerates this dialog under: it is staged by a message rather than a key
+	// (nothing to echo), and it exists to state a fact — what the repo wants to
+	// run — that a reflex confirm would grant unread.
+	return cmd
+}
+
+// repoTrustMessage is the dialog body: whose config, what it declares (bounded
+// — repo-authored text never reaches the frame unsanitized or unmeasured), and
+// what a grant means. The verbs live in the key hint (trust and run setup /
+// create without it), per the voice rule in app_feedback.go.
+func repoTrustMessage(a repotrust.Assessment) string {
+	if a.HasGrant {
+		return fmt.Sprintf(
+			"%s's %s has CHANGED since you trusted it:\n\n%s\n\nTrusting runs the new version in every new worktree of this repo until it changes again.",
+			a.Root, repocfg.RepoLocalFileName, repoTrustSummary(a))
+	}
+	return fmt.Sprintf(
+		"%s declares its own setup in %s:\n\n%s\n\nTrusting runs it, as you, in every new worktree of this repo until the file changes.",
+		a.Root, repocfg.RepoLocalFileName, repoTrustSummary(a))
+}
+
+// repoTrustSummary renders what the file's one entry declares: its name, the
+// surfaces it configures (repocfg.DeclaredSurfaces — the same list `atrium
+// trust allow` prints and enforcement requires non-empty, so the dialog cannot
+// describe surfaces the gate would not run), and the first line of the setup
+// script. There is no "+N more": ParseRepoLocal's one-entry rule means the
+// entry shown here IS the entry that runs, which is the point of the dialog.
+func repoTrustSummary(a repotrust.Assessment) string {
+	if len(a.Entries) == 0 {
+		return ""
+	}
+	e := a.Entries[0]
+	name := sanitizeRepoText(e.Name, 24)
+	if name == "" {
+		name = "unnamed entry"
+	}
+	line := name + " · " + strings.Join(repocfg.DeclaredSurfaces(e.RepoScript), " + ")
+	if script := strings.TrimSpace(e.SetupScript); script != "" {
+		first := script
+		if idx := strings.IndexByte(first, '\n'); idx >= 0 {
+			first = strings.TrimSpace(first[:idx]) + " …"
+		}
+		line += "\n" + sanitizeRepoText(first, repoTrustPreviewWidth)
+	}
+	return line
+}
+
+// sanitizeRepoText makes repo-authored text safe to interpolate into a frame:
+// any rune that is not plainly printable becomes '·', and the result is
+// truncated to a cell budget. Width-bounding alone is not enough, and
+// sanitizing alone is not enough; this is both, in that order, so the
+// truncation measures what will actually render.
+//
+// "Not plainly printable" is customcmd's user-text rule (!IsPrint, plus the
+// Mn/Me combining marks), not a bare C0 check, because the runes that defeat
+// each half of this function are wider than C0: ESC and the C1 set (U+009B is
+// an 8-bit CSI) would write straight through lipgloss into the terminal; and
+// Cf runes — U+202E RIGHT-TO-LEFT OVERRIDE visually reversing the one command
+// this dialog exists to let the user read, zero-width spaces/joiners — measure
+// ZERO cells, so runewidth.Truncate's budget bounds nothing on a string made
+// of them. Replacing with a 1-cell '·' makes every byte of hostile input
+// measurable again, which is what makes the truncation a real bound.
+func sanitizeRepoText(s string, width int) string {
+	cleaned := strings.Map(func(r rune) rune {
+		if !unicode.IsPrint(r) || unicode.In(r, unicode.Mn, unicode.Me) {
+			return '·'
+		}
+		return r
+	}, s)
+	return runewidth.Truncate(cleaned, width, "…")
+}
+
+// finishSpawnGates runs the remaining pre-spawn gates — all-exhausted, then
+// the host-capacity soft cap — and spawns. It is the shared tail of the create
+// paths: called in line when no trust prompt staged, and from the
+// proceedRepoTrustMsg handler when one resolved. The order is
+// createSessionFromForm's, for its recorded reason: neither accept path
+// re-checks the other gate, so the hard cap must already be settled and the
+// exhausted gate must stage ahead of the soft cap.
+//
+// The cap is recomputed here rather than carried through the trust stage, so a
+// fleet that changed while that dialog sat open is measured as it is now. That
+// gives the hard cap a second look too: a block that appeared meanwhile
+// refuses with a notice (the form is already gone) rather than spawning past
+// the user's explicit limit.
+func (m *home) finishSpawnGates(plan spawnPlan) tea.Cmd {
+	sc := m.sessionCap()
+	count := m.capCount(sc)
+	verdict := capVerdict(sc, count, len(plan.programs))
+	if verdict == capBlock {
+		free := max(0, sc.Limit-count)
+		return m.flashNotice(fmt.Sprintf("need %d, %d free (max_sessions)", len(plan.programs), free), ui.NoticeError)
+	}
+	if cmd, gated := m.gateAllExhausted(plan); gated {
+		return cmd
+	}
+	if verdict == capConfirm {
+		return m.confirmOverCap(plan, sc.Limit, count)
+	}
+	return m.spawnVariants(plan)
+}

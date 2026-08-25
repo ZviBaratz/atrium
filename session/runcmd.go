@@ -404,20 +404,26 @@ type RunState struct {
 // renderer reads belongs on it.
 //
 // What it must NOT do is what the setup path does with the same config: it routes
-// through routeRepoScript, which has no side effects, never through resolveSetupRun,
-// which reserves and releases ports.
+// through routeRepoScript — which touches no ports and runs nothing, though it does
+// publish RepoConfigStatus (the row's repo-config line) as every resolution does —
+// never through resolveSetupRun, which reserves and releases ports and arms the
+// one-shot modal.
 //
-// Both halves are priced to cost nothing for the vast majority of sessions, whose config
-// has no repo_scripts at all:
+// Both halves are priced to cost almost nothing for the vast majority of sessions,
+// whose repos declare no .atrium.json and whose config has no repo_scripts:
 //
 //   - "configured" is re-resolved every time this runs, so a config edit that adds a
-//     run_command reaches the hint bar within a sweep. It is affordable because the
-//     expensive half is memoized elsewhere: an empty repo_scripts early-outs before
-//     anything forks, and the origin remote — the one subprocess — is remembered per
-//     instance (originRemote). What is left is one small JSON read per polled session.
-//     It is deliberately NOT memoized here: the answer gates the `d` key, and a memo that
-//     never expired left the key permanently dead for any session whose first tick
-//     happened to answer "no".
+//     run_command — or a trust grant for the repo's own config (#814) — reaches the
+//     hint bar within a sweep. It is affordable because everything that forks is
+//     memoized per instance (originRemote, ledgerKey) and the rest is local file
+//     I/O: routing now probes the worktree's .atrium.json first, which for a repo
+//     not using it is one Lstat plus one Stat of the (absent) ledger file, and then
+//     the global half's small JSON read (an empty repo_scripts early-outs there).
+//     Once any grant exists the ledger — a file of a few records — is read and
+//     parsed per resolution rather than cached, the price of revocations reaching
+//     a running session on the next poll. It is deliberately NOT memoized here:
+//     the answer gates the `d` key, and a memo that never expired left the key
+//     permanently dead for any session whose first tick happened to answer "no".
 //   - "live" is one has-session, and only for a session that has actually started a run
 //     command. A session that never has never probes.
 func (i *Instance) ComputeRunState() (r RunState) {

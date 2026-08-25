@@ -251,6 +251,7 @@ func (m *home) handleConfirmState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.pendingConfirmAction = nil
 		m.pendingConfirmBusyLabel = ""
 		m.pendingConfirmArm = nil
+		m.pendingConfirmDecline = nil
 		m.confirmationOverlay = nil
 		return m, m.openSettingsAt(key)
 	}
@@ -260,16 +261,19 @@ func (m *home) handleConfirmState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		action := m.pendingConfirmAction
 		busyLabel := m.pendingConfirmBusyLabel
 		arm := m.pendingConfirmArm
+		decline := m.pendingConfirmDecline
 		m.state = stateDefault
 		m.confirmationOverlay = nil
 		m.pendingConfirmAction = nil
 		m.pendingConfirmBusyLabel = ""
 		m.pendingConfirmArm = nil
+		m.pendingConfirmDecline = nil
 		m.pendingConfirmSettingKey = ""
 		if confirmed && action != nil {
 			// Here, on the update thread, is the only place a staged action's
 			// bookkeeping may be applied: a declined dialog returns below having
-			// touched nothing, which is what keeps a cancel free of side effects.
+			// touched nothing — unless it armed a decline action of its own
+			// (armOnDecline), which for every ordinary dialog is nil.
 			if arm != nil {
 				arm()
 			}
@@ -277,6 +281,10 @@ func (m *home) handleConfirmState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, m.beginAsyncAction(busyLabel, action)
 			}
 			resultMsg := action()
+			return m, func() tea.Msg { return resultMsg }
+		}
+		if !confirmed && decline != nil {
+			resultMsg := decline()
 			return m, func() tea.Msg { return resultMsg }
 		}
 		return m, nil

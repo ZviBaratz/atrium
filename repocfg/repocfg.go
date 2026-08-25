@@ -30,6 +30,7 @@
 package repocfg
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -155,15 +156,42 @@ func ValidateOne(index int, e config.RepoScript) (Script, *Problem) {
 	return script, nil
 }
 
+// DeclaredSurfaces names the execution-adjacent surfaces entry e configures, in
+// a fixed order, under the same emptiness rules compile enforces — an empty
+// list IS compile's "configures nothing". One definition on purpose: the
+// create-time trust prompt and `atrium trust allow` describe an entry by this
+// list, and both compile here and the repo-local parse refuse an entry it is
+// empty for, so a private copy in any of those places could describe an entry
+// the others refuse (or grant one they never run).
+func DeclaredSurfaces(e config.RepoScript) []string {
+	var out []string
+	if strings.TrimSpace(e.SetupScript) != "" {
+		out = append(out, "setup script")
+	}
+	if strings.TrimSpace(e.RunCommand) != "" {
+		out = append(out, "run command")
+	}
+	if len(e.SessionEnv) > 0 {
+		out = append(out, "session env")
+	}
+	if strings.TrimSpace(e.PortRange) != "" {
+		out = append(out, "port range")
+	}
+	return out
+}
+
+// configuresNothingMsg is shared by compile's refusal and ParseRepoLocal's, so
+// the same defect reads the same whichever list it was found in.
+const configuresNothingMsg = "entry configures nothing — set setup_script, run_command, session_env or port_range"
+
 // compile applies every rule to one entry, returning the first failure.
 func compile(e config.RepoScript) (Script, error) {
 	// An entry that configures nothing is refused rather than kept as a harmless
 	// no-op. Its route rules still MATCH, so keeping it would shadow a later entry
 	// that does configure something — a silent "my setup script never ran" with
 	// nothing to point at.
-	if strings.TrimSpace(e.SetupScript) == "" && strings.TrimSpace(e.RunCommand) == "" &&
-		len(e.SessionEnv) == 0 && strings.TrimSpace(e.PortRange) == "" {
-		return Script{}, fmt.Errorf("entry configures nothing — set setup_script, run_command, session_env or port_range")
+	if len(DeclaredSurfaces(e)) == 0 {
+		return Script{}, errors.New(configuresNothingMsg)
 	}
 
 	script := Script{Name: e.Name}

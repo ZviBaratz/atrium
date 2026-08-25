@@ -55,7 +55,10 @@ type doubleTapDialog struct {
 // oversight: over-capacity create and all-accounts-exhausted (there the dialog IS the
 // feature — it exists to state a fact the user does not know, and a reflex confirm
 // defeats it); the two quit confirmations, which fire a handful of times ever;
-// cleanup-after-merge, opened by a message rather than a key; the branch-busy
+// cleanup-after-merge, opened by a message rather than a key; the repo-trust prompt
+// (#814), which is both of those at once — staged by the create flow rather than a
+// key, and a dialog whose whole reason is a fact (what the repo wants to run) that a
+// reflex confirm would grant unread; the branch-busy
 // detach-and-resume follow-up, whose question is not the one r asked; custom-command
 // confirms, where Confirm:true is the user asking to be asked; and undo-restore, a
 // recovery verb rather than a destructive one.
