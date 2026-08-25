@@ -1,6 +1,9 @@
 package ui
 
 import (
+	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -43,11 +46,46 @@ func TestTabbedWindow_PaneCaptureIsTabScoped(t *testing.T) {
 	require.True(t, w.ActivePaneInScrollMode(), "a scrolled preview on the preview tab claims the keys")
 	require.True(t, w.activePaneCaptured())
 	require.True(t, w.ActivePaneScrollAtBottom(), "scroll-mode entry lands at the bottom")
+	require.True(t, w.ActivePaneScrollAtTop(),
+		"three lines in a ten-line viewport is a zero-travel snapshot: top and bottom at once")
 
 	w.SetActiveTab(DiffTab)
 	require.False(t, w.ActivePaneInScrollMode(), "a background snapshot must not claim the diff tab's keys")
 	require.False(t, w.activePaneCaptured(), "nor keep the chrome accent lit")
 	require.False(t, w.ActivePaneScrollAtBottom())
+	require.False(t, w.ActivePaneScrollAtTop())
+}
+
+// The TerminalTab arms of the scroll-position predicates, driven directly the
+// way the memo test pokes the pane: the router's held-j guard depends on them,
+// and a copy/paste that answered with the preview's position would pass every
+// preview-driven test while silently un-holding the terminal snapshot.
+func TestTabbedWindow_TerminalScrollPositionArms(t *testing.T) {
+	w := NewTabbedWindow(NewPreviewPane(), nil, NewTerminalPane(context.Background()))
+	w.terminal.SetSize(40, 5)
+	w.SetActiveTab(TerminalTab)
+
+	require.False(t, w.ActivePaneScrollAtBottom(), "a live terminal reports no scroll position")
+	require.False(t, w.ActivePaneScrollAtTop())
+
+	var b strings.Builder
+	for i := 1; i <= 30; i++ {
+		fmt.Fprintf(&b, "line-%02d\n", i)
+	}
+	w.terminal.viewport.SetContent(b.String())
+	w.terminal.viewport.GotoBottom()
+	w.terminal.isScrolling = true
+
+	require.True(t, w.ActivePaneScrollAtBottom(), "a terminal snapshot enters at its bottom")
+	require.False(t, w.ActivePaneScrollAtTop(), "thirty lines in a five-line viewport has travel")
+
+	w.terminal.viewport.GotoTop()
+	require.False(t, w.ActivePaneScrollAtBottom())
+	require.True(t, w.ActivePaneScrollAtTop())
+
+	w.SetActiveTab(PreviewTab)
+	require.False(t, w.ActivePaneScrollAtTop(),
+		"a background terminal snapshot must not answer for the preview tab")
 }
 
 // The preview's hint overlay is the other key-capturing mode: it lights the

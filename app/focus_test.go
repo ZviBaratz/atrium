@@ -164,11 +164,65 @@ func TestFocusTabs_BarSwapsWithScroll(t *testing.T) {
 	require.NotContains(t, frame, "exit scroll", "the bar must revert when focus returns to the list")
 }
 
+// A zero-travel snapshot — scrollback shorter than the viewport, so the entry
+// position is top and bottom at once — must NOT be held: with nothing above to
+// read, holding would leave both nav keys dead on a frozen pane. Down exits to
+// the live view instead, the accidental-entry self-heal the wheel keeps.
+func TestFocusTabs_DownOnZeroTravelSnapshotExits(t *testing.T) {
+	h := newPresetHome(t)
+	h.instanceChanged()
+	h.tabbedWindow.SetPreviewScrollContent(h.list.GetSelectedInstance(), "one\ntwo\nthree")
+	require.True(t, h.tabbedWindow.IsPreviewInScrollMode())
+	selected := h.list.GetSelectedInstance()
+
+	h.Update(keyMsg("down"))
+	require.False(t, h.tabbedWindow.IsPreviewInScrollMode(),
+		"down on a zero-travel snapshot must exit scroll mode, not hold a dead key")
+	require.Same(t, selected, h.list.GetSelectedInstance(),
+		"the exiting press itself must not reach the list")
+}
+
+// A scroll-captured active pane outranks explicit focus: the border is lit and
+// the bar teaches the pane vocabulary, so the nav keys must scroll the pane
+// whatever home.focus says — and esc unwinds the capture first (rung order),
+// leaving the explicit target in place.
+func TestFocusTabs_ScrollCaptureOutranksExplicitFocus(t *testing.T) {
+	h := scrollHome(t)
+	h.focus = focusInspector
+	selected := h.list.GetSelectedInstance()
+	bottom, ok := h.tabbedWindow.PreviewScrollContent()
+	require.True(t, ok)
+
+	h.Update(keyMsg("up"))
+	moved, ok := h.tabbedWindow.PreviewScrollContent()
+	require.True(t, ok, "the capture must keep owning the keys under explicit inspector focus")
+	require.NotEqual(t, bottom, moved, "up must scroll the captured pane, not fall through to dispatch")
+	require.Same(t, selected, h.list.GetSelectedInstance())
+
+	h.Update(keyMsg("esc"))
+	require.False(t, h.tabbedWindow.IsPreviewInScrollMode(), "esc must unwind the capture first")
+	require.Equal(t, focusInspector, h.focus, "the explicit target must survive the scroll-exit esc")
+}
+
+// Explicit focus without scroll capture keeps the DEFAULT bar: the pane-focus
+// bar's esc copy names the scroll exit, and esc here fires the focus pop, so
+// the app gates the SetPaneFocus push on the capture, not on focus alone.
+func TestFocusTabs_ExplicitFocusWithoutScrollKeepsDefaultBar(t *testing.T) {
+	h := newPresetHome(t)
+	h.instanceChanged()
+	h.focus = focusTabs
+
+	frame := xansi.Strip(h.View().Content)
+	require.NotContains(t, frame, "exit scroll",
+		"the pane-focus bar must not render while no pane is scroll-captured")
+}
+
 // Down at the snapshot's bottom is consumed and held, not passed to the pane —
 // scroll-mode entry lands at the bottom, and the pane's own bottom exit plus a
 // fall-through to the list would turn a held j into a selection switch on the
 // press after the silent exit. Three presses stand in for autorepeat; esc must
-// then still be the working exit the bar advertises.
+// then still be the working exit the bar advertises. (scrollHome's 80 lines
+// are the with-travel case; the zero-travel case above exits instead.)
 func TestFocusTabs_DownAtBottomHoldsScroll(t *testing.T) {
 	h := scrollHome(t)
 	selected := h.list.GetSelectedInstance()

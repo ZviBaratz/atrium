@@ -1136,10 +1136,13 @@ func (m *home) viewContent() string {
 		// Pushed at render time so the bar always shows the same frame's
 		// derived focus: scroll mode can exit inside a pane (wheel at the
 		// bottom, snapshot owner change), and no imperative writer could
-		// cover those paths without staling. focusInspector pushes nothing on
-		// purpose — routeFocusKey routes nothing for it, so there is no pane
-		// vocabulary to teach until an inspector exists.
-		m.menu.SetPaneFocus(m.currentFocus() == focusTabs)
+		// cover those paths without staling. Gated on scroll capture, not on
+		// focusTabs alone, so the bar only swaps when its esc copy is true —
+		// under explicit focus with a live pane, esc pops focus rather than
+		// exiting scroll, and that bar variant is #806's to design
+		// (focusInspector likewise pushes nothing: routeFocusKey routes
+		// nothing for it until an inspector exists).
+		m.menu.SetPaneFocus(m.currentFocus() == focusTabs && m.tabbedWindow.ActivePaneInScrollMode())
 		k.menu, k.hasMenu = m.menu.String(), true
 	}
 	if m.errBox.HasContent() {

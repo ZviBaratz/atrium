@@ -93,6 +93,13 @@ func TestMenuBars_KeysExistInRegistry(t *testing.T) {
 		arm(m)
 		tokens := scanBar("bar "+name, m)
 		for _, b := range table {
+			// A keyless entry is the shape a table takes under an unbound
+			// action; renderModeLine skips it by design, so the containment
+			// check must too, or an unbound-nav config would fail this scan
+			// with a misleading message.
+			if b.Help().Key == "" {
+				continue
+			}
 			require.Truef(t, tokens[b.Help().Key],
 				"mode table %q entry %q does not render in its own bar — its arm renders a different table", name, b.Help().Key)
 		}

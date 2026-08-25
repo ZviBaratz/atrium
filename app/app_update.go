@@ -1108,9 +1108,10 @@ func (m *home) handleKeyPress(msg tea.KeyPressMsg) (mod tea.Model, cmd tea.Cmd) 
 		return m, m.handleInfoNotice(notice)
 	}
 
-	// While the tabs (or inspector) hold focus, the pane-local nav keys route
-	// there instead of dispatching; everything else still dispatches, so the
-	// whole global keymap keeps working under focus.
+	// While the tabs hold focus, the pane-local nav keys route there instead
+	// of dispatching; everything else still dispatches, so the whole global
+	// keymap keeps working under focus. (Inspector focus routes nothing until
+	// an inspector pane exists — see routeFocusKey.)
 	if cmd, handled := m.routeFocusKey(name); handled {
 		return m, cmd
 	}

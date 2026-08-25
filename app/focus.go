@@ -40,30 +40,32 @@ const (
 	focusInspector
 )
 
-// currentFocus is the effective focus target. It reads the explicit home.focus
-// first, then derives focusTabs from the active tab's scroll mode
-// (TabbedWindow.ActivePaneInScrollMode — tab-scoped, so a preview snapshot
-// left scrolled in the background cannot re-target the diff tab's nav keys;
-// the esc ladder's scroll rung and the pane border read the same predicate).
-// Deriving rather than storing is what keeps the pane-internal scroll exits
-// (wheel at the bottom, snapshot owner change) from ever leaving a stale focus
-// bit behind.
+// currentFocus is the effective focus target. A scroll-captured active pane
+// outranks even explicit focus: scroll mode is a modal capture — the pane
+// border lights, the bar swaps to the pane vocabulary, and esc's first rung is
+// the scroll exit — so the nav keys must agree with all three, whatever the
+// explicit target says (it resurfaces when the capture ends, matching the
+// ladder's order: scroll exit before focus pop). The predicate is
+// TabbedWindow.ActivePaneInScrollMode — tab-scoped, so a preview snapshot left
+// scrolled in the background cannot re-target the diff tab's nav keys; the esc
+// ladder's scroll rung reads the same predicate, and the pane border reads it
+// plus the preview's hint overlay (activePaneCaptured). Deriving rather than
+// storing is what keeps the pane-internal scroll exits (wheel at the bottom,
+// snapshot owner change) from ever leaving a stale focus bit behind.
 //
 // Focus is a stateDefault concept: in every other state the surface handler
 // owns the keys, so the question this answers does not arise there. The nil
 // guard tolerates the minimal fixture homes (settings/account tests) that run
-// stateDefault without a tabbed window; escLadder's rungs guard the same way.
+// stateDefault without a tabbed window; escLadder's scroll rung guards the
+// same way.
 func (m *home) currentFocus() focusTarget {
 	if m.state != stateDefault || m.tabbedWindow == nil {
 		return focusList
 	}
-	if m.focus != focusList {
-		return m.focus
-	}
 	if m.tabbedWindow.ActivePaneInScrollMode() {
 		return focusTabs
 	}
-	return focusList
+	return m.focus
 }
 
 // routeFocusKey consumes the pane-local nav keys while the tabs hold focus;
@@ -74,13 +76,19 @@ func (m *home) currentFocus() focusTarget {
 // any key this switch grows is busy-checked the same way a dispatched one is.
 //
 // Down at the snapshot's bottom is consumed and held rather than passed to the
-// pane: the pane's own ScrollDown exits scroll mode there (the wheel's and
-// shift+↓'s tmux-copy-mode exit), and under key autorepeat that exit would
-// hand the very next press to the list and switch the selected session
-// mid-read. A held j pins at the bottom instead; esc stays the routed exit.
-// Up on a live pane enters scroll mode exactly as shift+↑ does (same
-// TabbedWindow.ScrollUp), and down with no snapshot is consumed with nothing
-// to do — the pane owns the key even when it has no travel.
+// pane — WHEN there is scrollback above to hold for: the pane's own ScrollDown
+// exits scroll mode there (the wheel's and shift+↓'s tmux-copy-mode exit), and
+// under key autorepeat that exit would hand the very next press to the list
+// and switch the selected session mid-read. A held j pins at the bottom
+// instead; esc stays the routed exit. A zero-travel snapshot — scrollback
+// shorter than the viewport, so the entry position is top and bottom at once —
+// exits instead of holding: there is nothing above to read, and holding would
+// leave both nav keys dead on a frozen pane (this keeps the accidental-entry
+// self-heal PreviewPane.ScrollDown documents for the wheel).
+// On the preview and terminal tabs, up on a live pane enters scroll mode
+// exactly as shift+↑ does (same TabbedWindow.ScrollUp; the diff tab scrolls
+// live with no mode), and down with no snapshot is consumed with nothing to
+// do — the pane owns the key even when it has no travel.
 //
 // The routed keys return instanceChanged like the scroll actions in
 // dispatchAction do: the pane content repaints immediately instead of on the
@@ -94,7 +102,7 @@ func (m *home) routeFocusKey(name keys.KeyName) (tea.Cmd, bool) {
 			m.tabbedWindow.ScrollUp(1)
 			return m.instanceChanged(), true
 		case keys.KeyDown:
-			if m.tabbedWindow.ActivePaneScrollAtBottom() {
+			if m.tabbedWindow.ActivePaneScrollAtBottom() && !m.tabbedWindow.ActivePaneScrollAtTop() {
 				return nil, true
 			}
 			m.tabbedWindow.ScrollDown(1)
@@ -124,10 +132,6 @@ type escRung struct {
 //
 // A function returning a fresh slice each call, like frameStates(); nothing
 // here needs package-level state.
-//
-// Each rung's when guards its own derefs against nil the way currentFocus
-// does: the minimal fixture homes (settings/account tests) run stateDefault
-// without a tabbed window, and esc must be as inert there as any other key.
 func escLadder() []escRung {
 	return []escRung{
 		// Scroll exit: the active tab's pane leaves scroll mode and resumes
@@ -136,7 +140,11 @@ func escLadder() []escRung {
 		// tab must not kill a background preview snapshot. This rung cannot
 		// read currentFocus() == focusTabs instead: explicit focus satisfies
 		// that with no scroll mode to exit, and would steal the pop rung's
-		// press.
+		// press. The nil guard, like currentFocus's, tolerates the minimal
+		// fixture homes (settings/account tests) that run stateDefault
+		// without a tabbed window — no fixture or production path pairs a
+		// scroll-captured pane with a nil list, so fire assumes the list the
+		// way instanceChanged does.
 		{
 			when: func(m *home) bool {
 				return m.tabbedWindow != nil && m.tabbedWindow.ActivePaneInScrollMode()

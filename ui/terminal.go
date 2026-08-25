@@ -851,3 +851,11 @@ func (t *TerminalPane) ScrollAtBottom() bool {
 	defer t.mu.Unlock()
 	return t.isScrolling && t.viewport.AtBottom()
 }
+
+// ScrollAtTop is ScrollAtBottom's mirror; both true at once means the snapshot
+// has no travel (scrollback shorter than the viewport).
+func (t *TerminalPane) ScrollAtTop() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.isScrolling && t.viewport.AtTop()
+}
