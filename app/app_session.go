@@ -2520,7 +2520,7 @@ func (m *home) confirmAction(message string, label busyLabel, action tea.Cmd) te
 
 	// Create and show the confirmation overlay using ConfirmationOverlay
 	m.confirmationOverlay = overlay.NewConfirmationOverlay(message)
-	m.confirmationOverlay.SetWidth(confirmWidth(m.windowWidth))
+	m.confirmationOverlay.SetSize(confirmWidth(m.windowWidth)+2, 0)
 
 	return nil
 }

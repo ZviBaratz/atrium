@@ -94,10 +94,13 @@ func (p *PromptHistoryOverlay) ClearRequested() bool {
 	return r
 }
 
-// SetWidth sets the box width, flooring it so the box never collapses.
-func (p *PromptHistoryOverlay) SetWidth(width int) {
-	if width < 20 {
-		width = 20
+// SetSize sets the box's TOTAL width, border and padding included — outer
+// cells, which is what lipgloss v2's Width means (see theme.Panel) — flooring
+// it so the box never collapses. The height is accepted and ignored so the
+// resize walk can hand every overlay the same call: the box hugs its rows.
+func (p *PromptHistoryOverlay) SetSize(width, _ int) {
+	if width < 22 {
+		width = 22
 	}
 	p.width = width
 }
@@ -109,8 +112,7 @@ func (p *PromptHistoryOverlay) Render() string {
 		Border(th.Borders.Style).
 		BorderForeground(th.Palette.Accent).
 		Padding(1, 2).
-		// +2 for the left/right border — v2 counts it inside Width. See theme.Panel.
-		Width(p.width + 2)
+		Width(p.width)
 
 	inner := p.width - 6 // borders (2) + horizontal padding (2*2)
 	if inner < 10 {

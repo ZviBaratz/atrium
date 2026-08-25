@@ -102,7 +102,7 @@ func (m *home) handlePromptState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "up" && m.textInputOverlay.PromptFocusedAndEmpty() {
 		if texts := promptHistoryTexts(m.appState.GetPromptHistory()); len(texts) > 0 {
 			m.promptHistoryOverlay = overlay.NewPromptHistoryOverlay(texts)
-			m.promptHistoryOverlay.SetWidth(historyOverlayWidth(m.windowWidth))
+			m.promptHistoryOverlay.SetSize(historyOverlayWidth(m.windowWidth)+2, 0)
 			m.state = stateHistory
 			return m, nil
 		}

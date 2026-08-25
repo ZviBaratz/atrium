@@ -99,10 +99,7 @@ func (c *ConfirmationOverlay) Render() string {
 		Border(theme.Current().Borders.Style).
 		BorderForeground(c.BorderColor()).
 		Padding(1, 2).
-		// +2 for the left/right border: Lip Gloss v2 counts the border inside
-		// Width, where v1 added it outside. Same silent semantic change as in
-		// theme.Panel — see the note there.
-		Width(c.width + 2)
+		Width(c.width)
 
 	// Add the confirmation instructions. When an alt confirm key is set (e.g. the
 	// kill chord for double-tap), surface it alongside the primary confirm key.
@@ -131,8 +128,11 @@ func (c *ConfirmationOverlay) Render() string {
 	return style.Render(content)
 }
 
-// SetWidth sets the width of the confirmation overlay
-func (c *ConfirmationOverlay) SetWidth(width int) {
+// SetSize sets the dialog's TOTAL width, border and padding included — outer
+// cells, which is what lipgloss v2's Width means (see theme.Panel). The
+// height is accepted and ignored so the resize walk can hand every overlay
+// the same call: the dialog hugs its message.
+func (c *ConfirmationOverlay) SetSize(width, _ int) {
 	c.width = width
 }
 

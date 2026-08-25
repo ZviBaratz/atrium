@@ -17,7 +17,7 @@ func detectedFixture() []config.Profile {
 
 func TestWelcomeOverlay_DetectingThenPick(t *testing.T) {
 	w := NewWelcomeOverlay()
-	w.SetWidth(54)
+	w.SetSize(56, 0)
 
 	// Before detection resolves, Enter/nav must not close or confirm.
 	if w.HandleKeyPress(keyMsg("down")) {
@@ -97,7 +97,7 @@ func flowText(s string) string {
 func TestWelcomeOverlay_IntroNeverBreaksMidWord(t *testing.T) {
 	for _, width := range []int{28, 40, 50, 54} {
 		w := NewWelcomeOverlay()
-		w.SetWidth(width)
+		w.SetSize(width+2, 0)
 		w.SetDetected(detectedFixture())
 		if got := flowText(w.Render()); !strings.Contains(got, normalizeWS(welcomeIntro)) {
 			t.Errorf("width %d: intro broke mid-word.\n got: %s\nwant substring: %s",
@@ -118,7 +118,7 @@ func TestWelcomeOverlay_Pluralization(t *testing.T) {
 		{3, "3 agents detected"},
 	} {
 		w := NewWelcomeOverlay()
-		w.SetWidth(54)
+		w.SetSize(56, 0)
 		w.SetDetected(detectedFixture()[:tc.n])
 		out := stripANSI(w.Render())
 		if !strings.Contains(out, tc.want) {
@@ -135,22 +135,22 @@ func TestWelcomeOverlay_Pluralization(t *testing.T) {
 func TestWelcomeOverlay_ContentWidthFloor(t *testing.T) {
 	w := NewWelcomeOverlay()
 	for _, tc := range []struct{ width, want int }{
-		{54, 50}, {24, 20}, {5, 1}, {4, 1}, {0, 1},
+		{56, 50}, {26, 20}, {7, 1}, {6, 1}, {0, 1},
 	} {
-		w.SetWidth(tc.width)
+		w.SetSize(tc.width, 0)
 		if got := w.contentWidth(); got != tc.want {
 			t.Errorf("contentWidth(width=%d) = %d, want %d", tc.width, got, tc.want)
 		}
 	}
 	// Render must not panic at a degenerate width.
-	w.SetWidth(3)
+	w.SetSize(5, 0)
 	w.SetDetected(detectedFixture())
 	_ = w.Render()
 }
 
 func TestWelcomeOverlay_EmptyDetection(t *testing.T) {
 	w := NewWelcomeOverlay()
-	w.SetWidth(54)
+	w.SetSize(56, 0)
 	w.SetDetected(nil)
 
 	if got := w.SelectedProfile().Program; got != "" {
@@ -172,7 +172,7 @@ func TestWelcomeOverlay_EmptyDetection(t *testing.T) {
 // same key two different ways. The footer is the one place the keys are named.
 func TestWelcomeOverlay_FooterOwnsTheNavKeys(t *testing.T) {
 	w := NewWelcomeOverlay()
-	w.SetWidth(54)
+	w.SetSize(56, 0)
 	w.SetDetected(detectedFixture())
 
 	out := w.Render()

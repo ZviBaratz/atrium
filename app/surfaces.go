@@ -200,7 +200,7 @@ func init() {
 					// The dialog keeps its classic width on normal terminals and
 					// shrinks with narrow ones; it was the one overlay excluded from
 					// resize handling.
-					m.confirmationOverlay.SetWidth(confirmWidth(msg.Width))
+					m.confirmationOverlay.SetSize(confirmWidth(msg.Width)+2, 0)
 				}
 			},
 		},
@@ -228,7 +228,7 @@ func init() {
 					// and historyOverlayWidth owns the one expression of it — the
 					// opener sends tea.RequestWindowSize, so this closure is the
 					// queue's only sizing site.
-					m.queueOverlay.SetWidth(historyOverlayWidth(msg.Width))
+					m.queueOverlay.SetSize(historyOverlayWidth(msg.Width)+2, 0)
 				}
 			},
 		},
@@ -331,7 +331,7 @@ func init() {
 					// Same idiom as the confirmation dialog: keep the authored width
 					// on normal terminals, shrink so the box never spills off a
 					// narrow one.
-					m.welcomeOverlay.SetWidth(welcomeWidth(msg.Width))
+					m.welcomeOverlay.SetSize(welcomeWidth(msg.Width)+2, 0)
 				}
 			},
 		},
@@ -372,7 +372,7 @@ func init() {
 				if m.promptHistoryOverlay != nil {
 					// The same width the picker opened with: historyOverlayWidth
 					// owns the expression, so open and resize cannot drift apart.
-					m.promptHistoryOverlay.SetWidth(historyOverlayWidth(msg.Width))
+					m.promptHistoryOverlay.SetSize(historyOverlayWidth(msg.Width)+2, 0)
 				}
 			},
 		},
