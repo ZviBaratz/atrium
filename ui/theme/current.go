@@ -37,7 +37,7 @@ func init() { current.Store(compose()) }
 // theme.
 //
 // AutoThemeName is resolved here rather than being a registry entry, because Get
-// must return a concrete eighteen-token palette and `auto` has none — an `auto`
+// must return a concrete palette — every token in tokens.go — and `auto` has none, so an `auto`
 // entry would have to hold a fiction, which the canonical-hex and contrast oracles
 // would then dutifully validate. Resolving it here is also what makes AC#4
 // structural: this is the only place curScheme is read TO SELECT A PALETTE, and the

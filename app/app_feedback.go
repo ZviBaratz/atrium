@@ -397,6 +397,75 @@ func repoScriptProblemsReport(problems []repocfg.Problem) string {
 	return strings.Join(lines, "\n")
 }
 
+// flushThemeProblems opens the startup report for the user theme files the loader
+// refused (#813), once the screen is free. Nil while an overlay owns the screen, and
+// the buffer is cleared as it fires so the preview tick cannot reopen it forever — the
+// shape flushCustomCommandProblems uses.
+//
+// Its own report rather than a section of a shared "your config has problems" modal,
+// for the reason flushRepoScriptProblems is separate: the two fail for unrelated
+// reasons, and showInfo switches to stateInfo as it builds, so a second flush in the
+// same tick defers itself to the next one rather than clobbering the first.
+func (m *home) flushThemeProblems() tea.Cmd {
+	if len(m.pendingThemeProblems) == 0 || m.state != stateDefault {
+		return nil
+	}
+	problems := m.pendingThemeProblems
+	m.pendingThemeProblems = nil
+	return m.showInfo(themeProblemsReport(problems))
+}
+
+// themeProblemsReport is that modal's text, bounded on both axes for the reason
+// customCommandProblemsReport is: a themes directory can hold any number of broken
+// files, and both the filename and the failing value are user-authored.
+//
+// The heading counts PROBLEMS, not files, and that is the honest count rather than a
+// vaguer one. Most entries are a refused file, but applyThemeSelection pushes two other
+// kinds into the same slice: directory-level failures — an unreadable themes/, or a data
+// dir that would not resolve — which are one entry standing for every theme the user
+// owns, and a configured `theme` that no file loads under, which names no file at all.
+// "1 theme file was ignored" would be a specific claim about a specific file in exactly
+// the cases where no file was read.
+func themeProblemsReport(problems []error) string {
+	if len(problems) == 0 {
+		return ""
+	}
+	noun := "problems"
+	if len(problems) == 1 {
+		noun = "problem"
+	}
+	lines := []string{fmt.Sprintf(
+		"%d %s loading user themes:", len(problems), noun)}
+	shown := problems
+	if len(shown) > customCommandProblemsShown {
+		shown = shown[:customCommandProblemsShown]
+	}
+	for _, p := range shown {
+		lines = append(lines, "  "+clipReportLine(p.Error()))
+	}
+	if len(problems) > len(shown) {
+		lines = append(lines, fmt.Sprintf("  … and %d more", len(problems)-len(shown)))
+	}
+	// Naming the consequence, in ONE sentence that has to hold for all three kinds of
+	// entry this slice carries — a refused file, a directory that would not resolve, and a
+	// `theme` naming something no file loads under. An earlier pair of lines said "any
+	// palette named above" and "a theme naming one", both of which describe the first kind
+	// and are false of the other two: a directory-level failure names no palette, and the
+	// third entry IS the configured name rather than something that might be it.
+	//
+	// Three short lines rather than two long ones. The overlay hugs its content and caps
+	// at the terminal width less four, and pads two columns each side, so 72 cells is
+	// what survives an 80-column terminal unwrapped — and a wrapped line costs a row the
+	// modal's height budget never counted. The entry lines above can still wrap: they
+	// carry a user-authored filename and are only clipped at reportLineBudget, which is
+	// the trade every one of this modal's siblings makes. These do not have to.
+	// TestThemeProblemsReportFitsANarrowTerminal holds them to it.
+	lines = append(lines, "",
+		"Nothing named above is selectable; `theme` falls back.",
+		"`atrium doctor` reports the same list, in full.")
+	return strings.Join(lines, "\n")
+}
+
 // flushSetupFailures opens the report for a session whose repo environment came up
 // short of what config.json asked for (#389): a setup script that failed, or a
 // port_range with nothing free. Once the screen is free.

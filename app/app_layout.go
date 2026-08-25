@@ -199,6 +199,18 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 	case "theme", "glyph_set":
 		// Styles read theme.Current() lazily at render time, so swapping the
 		// palette / glyph set plus a forced repaint restyles the whole UI in place.
+		//
+		// Set, not applyThemeSelection: the themes directory was re-read when this panel
+		// OPENED (reloadUserThemes), so the name being saved here is already registered and
+		// re-reading would only repeat the work — per keypress, since cycling a row calls
+		// this on every left/right press, and with it a second buffering of every refusal
+		// into a modal the user would meet on closing the panel.
+		//
+		// And NOT ApplyThemeAtLaunch, whose extra step is SetScheme(initialScheme()): that
+		// reads COLORFGBG, which is silent on most terminals, and would overwrite a
+		// polarity OSC 11 had already detected. Saving glyph_set would then flip a
+		// correctly-detected light terminal to the dark default, with no re-query to
+		// correct it (applySchemeQueryCmd fires for the theme row alone).
 		theme.Set(m.appConfig.GetTheme())
 		theme.SetGlyphSet(m.appConfig.GetGlyphSet())
 		// The spinner snapshots its frames at construction (assembleHome), so a

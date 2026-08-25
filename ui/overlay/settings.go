@@ -310,6 +310,15 @@ func (s *SettingsOverlay) toggleBool(row *settingRow) string {
 
 // cycleEnum advances an enum row by delta (wrapping). A single-option enum is
 // a no-op and reports no change.
+//
+// A stored value that is not among the options is an ordinary state, not a hand-edited
+// config: since #813 the theme row's options include user theme files, and a file that
+// was deleted, renamed, or newly refused by the contrast oracle leaves `theme` naming a
+// palette that no longer exists. The row renders no marker in that case, correctly —
+// none of the offered values IS the current one — so the first press has to land on an
+// end of the list rather than in the middle of it. Anchoring at 0 (which is what an
+// unfound value used to leave `cur` at) made `right` select opts[1] and silently skip
+// opts[0], and on the theme row opts[0] is `auto`.
 func (s *SettingsOverlay) cycleEnum(row *settingRow, delta int) string {
 	if row.kind != kindEnum {
 		return ""
@@ -318,14 +327,23 @@ func (s *SettingsOverlay) cycleEnum(row *settingRow, delta int) string {
 	if len(opts) < 2 {
 		return ""
 	}
-	cur := 0
+	cur, found := 0, false
 	for i, o := range opts {
 		if o == row.get(s.cfg) {
-			cur = i
+			cur, found = i, true
 			break
 		}
 	}
 	next := wrapIndex(cur, delta, len(opts))
+	if !found {
+		// Not through wrapIndex: there is no index to step from, so pick an END of the
+		// list by direction. wrapIndex(-1, -1, n) is n-2, which would skip the last
+		// option the same way anchoring at 0 skips the first.
+		next = 0
+		if delta < 0 {
+			next = len(opts) - 1
+		}
+	}
 	_ = row.set(s.cfg, opts[next]) // enum setters never fail
 	s.lastErr = ""
 	return row.key

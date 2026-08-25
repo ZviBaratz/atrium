@@ -62,3 +62,18 @@ func Hex(c Color) string {
 	// the mask says the range out loud instead of asserting it in a cast.
 	return fmt.Sprintf("#%02x%02x%02x", r>>8&0xff, g>>8&0xff, b>>8&0xff)
 }
+
+// ParseHex is the inverse of Hex: it turns a canonical "#rrggbb" string into a palette
+// colour. It lives beside Hex so both directions of the colour seam are in one file.
+//
+// It does NOT validate. A caller handing it something other than canonical hex — a
+// colour word, empty, anything lipgloss cannot parse — gets lipgloss.NoColor, and that is
+// worse than an error in a specific way: Hex renders it "#000000" and the contrast oracle
+// therefore MEASURES it as black, while a terminal renders it as the terminal's own
+// default foreground. A palette carrying one would be judged on a colour nobody sees.
+// (Shorthand is the exception that proves it: lipgloss expands #fff to white.)
+//
+// Which is why validation belongs at the boundary that has a filename and a key to name
+// in the message — ui/theme/themefile refuses on hexRE before reaching this — rather than
+// here, where doing it twice would mean two spellings of "what counts as a colour".
+func ParseHex(s string) Color { return lipgloss.Color(s) }

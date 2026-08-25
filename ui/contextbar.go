@@ -41,14 +41,32 @@ func tmuxFg(colour, s string) string {
 
 // barState returns a session's status glyph and tmux color. Unlike the list — which
 // animates a spinner for Running/Loading — the pushed header is static, so working
-// states get a steady filled marker. The glyph's color is the only state signal in
-// the header, so no status word is needed.
+// states get a steady filled marker. There is no status word: shape and colour together
+// carry the state, which is what makes one cell enough.
+//
+// The states that RECEDE in the list do not recede here (#555). Running, Loading,
+// Paused and the default arm all painted Palette.FgDim — Working carries the same hex
+// as FgDim in every shipped palette, deliberately, so working rows sink among their
+// neighbours — which on the bar's BarBg band measured 1.44:1 on tokyo-night. There are
+// no neighbours on this surface to sink among: the band shows one session, and
+// ComposeSessionContext's own comment below already says hierarchy here comes from
+// weight rather than colour. So those four arms take the bar's default foreground,
+// Palette.Fg, at a legible ratio, floored in contrast.go rather than left to intentions.
+//
+// Which SPLITS the signal, and the split is the thing to keep straight rather than to
+// paper over. Palette.Fg is literally what barStyleColours hands tmux as the band's own
+// fg, so those four arms emit markup repainting the glyph the colour it already had:
+// among them only the GLYPH distinguishes anything, and beside them the repo name and
+// separator are that colour too. The three states the header exists to catch the eye
+// with — Ready, NeedsInput, Pending — are the ones that still differ in colour, and each
+// must stay distinct from Palette.Fg or it joins the neutral group without saying so.
+// contextbar_contrast_test.go holds both halves.
 func barState(s session.Status, th *theme.Theme) (glyph, color string) {
 	switch s {
 	case session.Running:
-		return "●", theme.Hex(th.Palette.Working)
+		return "●", theme.Hex(th.Palette.Fg)
 	case session.Loading:
-		return "●", theme.Hex(th.Palette.Working)
+		return "●", theme.Hex(th.Palette.Fg)
 	case session.Pending:
 		// Still busy with autonomous work (a sub-agent finishing (#290), or a background
 		// shell/monitor the ended turn left running), but
@@ -60,9 +78,9 @@ func barState(s session.Status, th *theme.Theme) (glyph, color string) {
 	case session.NeedsInput:
 		return th.Glyphs.Waiting, theme.Hex(th.Palette.Attention)
 	case session.Paused:
-		return th.Glyphs.Paused, theme.Hex(th.Palette.FgDim)
+		return th.Glyphs.Paused, theme.Hex(th.Palette.Fg)
 	default:
-		return " ", theme.Hex(th.Palette.FgDim)
+		return " ", theme.Hex(th.Palette.Fg)
 	}
 }
 
@@ -74,10 +92,11 @@ func barState(s session.Status, th *theme.Theme) (glyph, color string) {
 // The header rides a slate background band (status-style, set in the managed config),
 // where dim greys wash out — so hierarchy comes from weight, not color: the agent
 // glyph carries its brand accent (which agent this is), the state glyph carries the
-// state color (the only state signal), the repo + separator ride the bar's default
-// foreground, and the name is bold so the eye lands on it. Branch and status word are
-// intentionally omitted: the branch duplicates the name in practice, and the glyph
-// color already conveys state. repo is empty for direct-mode (non-git) sessions,
+// state, the repo + separator ride the bar's default foreground, and the name is bold so
+// the eye lands on it. Branch and status word are intentionally omitted: the branch
+// duplicates the name in practice, and the glyph conveys state in one cell — by colour
+// for the three that must catch the eye, by shape for the neutral ones, which share the
+// band's own foreground (see barState). repo is empty for direct-mode (non-git) sessions,
 // which collapse to "<agent> <glyph> <name>".
 func ComposeSessionContext(current *session.Instance, repo string) (name, left string) {
 	th := theme.Current()

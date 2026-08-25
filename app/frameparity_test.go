@@ -514,6 +514,72 @@ func TestLightFrameColourFingerprint(t *testing.T) {
 	compareGolden(t, filepath.Join("testdata", "colours-light.txt"), b.String())
 }
 
+// goldenUserTheme is the fixture palette for the user-theme fingerprint below: a
+// tokyo-night derivative whose five most-painted tokens are all moved, so a frame that
+// ignored the user palette would be byte-identical to colours.txt rather than merely
+// similar to it.
+//
+// It is built the way the loader builds one — copy a built-in, write tokens by their
+// on-disk names, validate — rather than hand-writing eighteen colours, so the fixture
+// cannot drift from what a real file produces. The Validate assertion is not decoration:
+// a fixture that would be REFUSED on disk is not a user theme, and a golden generated
+// from one would pin a palette no user could ever have.
+func goldenUserTheme(t *testing.T) *theme.Theme {
+	t.Helper()
+	th := *theme.Get("tokyo-night")
+	th.Name = "golden-user"
+	for token, hex := range map[string]string{
+		"fg":        "#e8e8ff",
+		"accent":    "#ff8ac4",
+		"success":   "#7fe0a8",
+		"attention": "#ffb454",
+		"danger":    "#ff5370",
+	} {
+		require.Truef(t, theme.SetToken(&th.Palette, token, theme.ParseHex(hex)), "unknown token %q", token)
+	}
+	require.Empty(t, theme.Validate(th.Palette), "the fixture must be a palette the loader would accept")
+	return &th
+}
+
+// TestUserThemeFrameColourFingerprint is TestFrameColourFingerprint under a USER
+// palette (#813). It exists for the reason TestLightFrameColourFingerprint does:
+// colours.txt is generated at the default theme and must never move, so without a
+// golden of its own a user theme would have only its hex values checked and never what
+// the frame actually emits.
+//
+// Its own file, appended rather than folded into either existing golden — those two are
+// the proof that `theme: auto` with no detection and the light twin are what they claim
+// to be, and rewriting them to make room for a third palette would spend that proof.
+//
+// Regenerate with:
+//
+//	CS_UPDATE_GOLDEN=1 go test ./app/ -run TestUserThemeFrameColourFingerprint
+func TestUserThemeFrameColourFingerprint(t *testing.T) {
+	t.Cleanup(theme.SetUserThemes(map[string]*theme.Theme{"golden-user": goldenUserTheme(t)}))
+	require.Equal(t, "golden-user", theme.Get("golden-user").Name, "the fixture must be registered")
+
+	const w, h = 120, 40
+	var b strings.Builder
+	for _, fs := range frameStates() {
+		counts := map[string]int{}
+		m := newParityHomeThemed(t, fs, w, h, "golden-user")
+		for _, seq := range sgrRE.FindAllString(m.View().Content, -1) {
+			counts[seq]++
+		}
+		seqs := make([]string, 0, len(counts))
+		for seq := range counts {
+			seqs = append(seqs, seq)
+		}
+		sort.Strings(seqs)
+
+		fmt.Fprintf(&b, "## %s (%d distinct)\n", fs.name, len(seqs))
+		for _, seq := range seqs {
+			fmt.Fprintf(&b, "  %-24s %d\n", strings.ReplaceAll(seq, "\x1b", "ESC"), counts[seq])
+		}
+	}
+	compareGolden(t, filepath.Join("testdata", "colours-user.txt"), b.String())
+}
+
 // TestViewFitsTerminalBoundsEveryState sweeps the box contract — no more rows
 // than the terminal has, every row exactly its width — across every state and a
 // wide spread of sizes.

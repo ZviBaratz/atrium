@@ -308,6 +308,71 @@ func TestSettingsOverlay_CycleThemeWraps(t *testing.T) {
 	assert.Equal(t, names[(indexOf(names, start)+len(names)-1)%len(names)], cfg.Theme)
 }
 
+// TestSettingsOverlay_ThemeRowOffersUserThemes is the picker half of #813: a palette
+// loaded from a file is selectable, or the file did nothing.
+//
+// It drives the row's cycle rather than reading options() — the row's own list is what
+// the arrow keys walk, so a list that contained the theme while the cycle skipped it
+// would pass a weaker check. Cycling to it also proves the theme is a legal value for
+// the config field, which is what the settings panel persists.
+func TestSettingsOverlay_ThemeRowOffersUserThemes(t *testing.T) {
+	const name = "fixture-user-theme"
+	fixture := *theme.Get(theme.DefaultThemeName)
+	fixture.Name = name
+	t.Cleanup(theme.SetUserThemes(map[string]*theme.Theme{name: &fixture}))
+
+	cfg := config.DefaultConfig()
+	o := NewSettingsOverlay(cfg)
+	settingsAt(t, o, "theme")
+
+	names := theme.SelectableNames()
+	require.Contains(t, names, name, "precondition: the picker's vocabulary carries it")
+
+	for range names {
+		if cfg.Theme == name {
+			return
+		}
+		_, changed := o.HandleKeyPress(keyMsg("right"))
+		require.Equal(t, "theme", changed)
+	}
+	assert.Failf(t, "the theme row never reached the user theme",
+		"cycled %d options without landing on %q", len(names), name)
+}
+
+// TestSettingsOverlay_ThemeRowRecoversFromAVanishedTheme.
+//
+// A stored enum value that is not among the options used to be a hand-edited
+// config.json, i.e. nobody's problem. Since #813 it is an ordinary outcome: the theme
+// row's options include user theme files, and a file that was deleted, renamed, or
+// newly refused by the contrast oracle leaves `theme` naming a palette that no longer
+// exists. The refusal modal's own line sends the user to this row.
+//
+// The unfound value used to leave `cur` at 0, so `right` selected opts[1] and skipped
+// opts[0] in silence — and on this row opts[0] is `auto`, the recommended value and the
+// most likely thing a user in this state wants. Both directions are driven, because
+// anchoring at either end fixes one of them and leaves the other stepping into the
+// middle of the list.
+func TestSettingsOverlay_ThemeRowRecoversFromAVanishedTheme(t *testing.T) {
+	names := theme.SelectableNames()
+	require.Equal(t, theme.AutoThemeName, names[0], "precondition: auto leads the list")
+
+	cfg := config.DefaultConfig()
+	cfg.Theme = "a-theme-whose-file-is-gone"
+	o := NewSettingsOverlay(cfg)
+	settingsAt(t, o, "theme")
+
+	_, changed := o.HandleKeyPress(keyMsg("right"))
+	require.Equal(t, "theme", changed)
+	assert.Equal(t, names[0], cfg.Theme,
+		"the first press must land on the first option, not step past it")
+
+	cfg.Theme = "a-theme-whose-file-is-gone"
+	_, changed = o.HandleKeyPress(keyMsg("left"))
+	require.Equal(t, "theme", changed)
+	assert.Equal(t, names[len(names)-1], cfg.Theme,
+		"and the other direction on the last, not the second to last")
+}
+
 // TestSettingsOverlay_CycleModelIndicator pins the model-chip enum: defaults
 // to on, cycles on → off, and wraps back to on.
 func TestSettingsOverlay_CycleModelIndicator(t *testing.T) {
@@ -1216,4 +1281,42 @@ func TestSettingsOverlay_CycleContextIndicator(t *testing.T) {
 
 	o.HandleKeyPress(keyMsg("left"))
 	assert.Equal(t, config.ContextIndicatorOff, cfg.GetContextIndicator(), "left wraps backwards too")
+}
+
+// TestThemeRowOffersWhatIsRegisteredPlusTheConfiguredName is the picker half of #813's
+// apply-without-restart wire, and of the row's one destructive edge.
+//
+// Two properties, and each has a distinct failure. The options must be read from
+// theme.SelectableNames() LIVE, or a theme file registered after this package was built
+// is unreachable from the picker. And a configured name the registry does NOT hold must
+// still be offered, or cycling cannot return to it: applySettingChange persists before
+// anything else and `esc` moves focus to the rail rather than cancelling, so one arrow
+// press would destroy a name the user then has to retype from memory. default_program
+// solves the identical problem the identical way (settings_schema.go).
+func TestThemeRowOffersWhatIsRegisteredPlusTheConfiguredName(t *testing.T) {
+	const absent = "vanished-theme"
+	cfg := config.DefaultConfig()
+	cfg.Theme = absent
+
+	row := rowByKey(t, cfg, "theme")
+	opts := row.options(cfg)
+
+	assert.Equal(t, theme.AutoThemeName, opts[0],
+		"`auto` leads the list; the row summary points at it as the first thing there")
+	for _, name := range theme.SelectableNames() {
+		assert.Containsf(t, opts, name, "the picker must offer every registered theme (%s)", name)
+	}
+	assert.Contains(t, opts, absent,
+		"a configured theme the registry has lost must stay reachable, or one press destroys it")
+
+	// And it is not duplicated once the registry does hold it.
+	registered := theme.DefaultThemeName
+	cfg.Theme = registered
+	n := 0
+	for _, o := range rowByKey(t, cfg, "theme").options(cfg) {
+		if o == registered {
+			n++
+		}
+	}
+	assert.Equal(t, 1, n, "the captured value must not be appended when it is already offered")
 }
