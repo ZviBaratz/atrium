@@ -63,6 +63,7 @@ func TestKeyEffects_Golden(t *testing.T) {
 		KeyNextNeedsInput: EffectObserve,
 		KeyTabPreview:     EffectObserve,
 		KeyTabDiff:        EffectObserve,
+		KeyTabInspector:   EffectObserve,
 		KeyHelp:           EffectObserve,
 		KeyFilter:         EffectObserve,
 		KeyToggleMark:     EffectObserve,

@@ -75,11 +75,15 @@ func windowStyle(th *theme.Theme, focused bool) lipgloss.Style {
 		Border(th.Borders.Style, false, true, true, true)
 }
 
-// Indices of the right pane's tabs, in display order.
+// Indices of the right pane's tabs, in display order. The order is mirrored by
+// the KeyTabPreview..KeyTabInspector run in the keys package — the direct-jump
+// dispatch turns a key's offset in that run into an index here, and
+// TestTabJumpKeys is what fails when either side moves alone.
 const (
 	PreviewTab int = iota
 	DiffTab
 	TerminalTab
+	InspectorTab
 )
 
 // Tab pairs a tab's display name with the function that renders its content.
@@ -100,10 +104,11 @@ type TabbedWindow struct {
 	height    int
 	width     int
 
-	preview  *PreviewPane
-	diff     *DiffPane
-	terminal *TerminalPane
-	instance *session.Instance
+	preview   *PreviewPane
+	diff      *DiffPane
+	terminal  *TerminalPane
+	inspector *InspectorPane
+	instance  *session.Instance
 
 	// memo skips compose for a window whose inputs have not moved. This pane is the
 	// single most expensive thing Atrium builds: 40% of a cold 14-session frame
@@ -143,19 +148,25 @@ type tabbedKey struct {
 	theme     *theme.Theme
 }
 
-// NewTabbedWindow assembles the right pane from its three tab panes.
-// The slice order is the display order and must match the tab index
-// constants above (SetActiveTab and the direct-jump keys address by index).
+// NewTabbedWindow assembles the right pane from its tab panes. The inspector
+// pane is built here rather than injected: unlike its siblings it needs
+// nothing from the app yet (#805 will feed it through an Update proxy, like
+// the diff pane's). The slice order is the display order and must match the
+// tab index constants above (SetActiveTab and the direct-jump keys address by
+// index).
 func NewTabbedWindow(preview *PreviewPane, diff *DiffPane, terminal *TerminalPane) *TabbedWindow {
+	inspector := NewInspectorPane()
 	return &TabbedWindow{
 		tabs: []Tab{
 			{Name: "Preview", Render: preview.String},
 			{Name: "Diff", Render: diff.String},
 			{Name: "Terminal", Render: terminal.String},
+			{Name: "Inspector", Render: inspector.String},
 		},
-		preview:  preview,
-		diff:     diff,
-		terminal: terminal,
+		preview:   preview,
+		diff:      diff,
+		terminal:  terminal,
+		inspector: inspector,
 	}
 }
 
@@ -165,8 +176,8 @@ func (w *TabbedWindow) SetInstance(instance *session.Instance) {
 	w.instance = instance
 }
 
-// SetSize resizes the window and propagates the resulting content area to all
-// three tab panes.
+// SetSize resizes the window and propagates the resulting content area to
+// every tab pane.
 func (w *TabbedWindow) SetSize(width, height int) {
 	// w.width is the inner (pre-border) width; the window border adds its
 	// horizontal frame back, so the pane's total rendered width equals the given
@@ -187,6 +198,7 @@ func (w *TabbedWindow) SetSize(width, height int) {
 	w.preview.SetSize(contentWidth, contentHeight)
 	w.diff.SetSize(contentWidth, contentHeight)
 	w.terminal.SetSize(contentWidth, contentHeight)
+	w.inspector.SetSize(contentWidth, contentHeight)
 }
 
 // SetSplashFrame advances the empty-state splash animation clock on the panes
@@ -282,11 +294,16 @@ func (w *TabbedWindow) ResetPreviewToNormalMode(instance *session.Instance) erro
 //   - Diff tab: the raw `git diff` output the pane rendered FROM — or, in comment
 //     mode, just the rows the cursor has selected.
 //   - Preview / Terminal: the captured pane with its ANSI stripped.
+//   - Inspector: nothing — the skeleton renders only its placeholder (#805).
 //
 // ok is false when there is nothing to copy (an empty diff, a pane that has never
 // captured, a fallback state), so the caller can say so rather than copying "".
 func (w *TabbedWindow) CopyableContent(instance *session.Instance) (text, what string, ok bool) {
 	switch w.activeTab {
+	case InspectorTab:
+		// Explicit, not left to default: the default arm copies the preview
+		// capture, which is not what an inspector-tab user is looking at.
+		return "", "", false
 	case DiffTab:
 		if sel := w.diff.SelectedText(); sel != "" {
 			return sel, "selected diff lines", true

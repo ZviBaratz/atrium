@@ -1,8 +1,8 @@
 ### 80x24
 ╭─ Ses╭──────────────────────────────────────────────────────────────────╮─────╮
-│ FIXT│                                                                  │     │
+│ FIXT│                                                                  │tor  │
 │▎○ pa│  Command Palette                                                 │─────┤
-│▎    │  ▏  59 actions                                                   │     │
+│▎    │  ▏  60 actions                                                   │     │
 │     │                                                                  │     │
 │     │    Navigate                                                      │     │
 │     │  ▸ ↑/k        up                    move selection               │     │
@@ -14,21 +14,21 @@
 │     │    1          preview tab           jump to preview / diff / t…  │     │
 │     │    2          diff tab              jump to preview / diff / t…  │     │
 │     │    3          terminal tab          jump to preview / diff / t…  │     │
+│     │    4          inspector tab         jump to preview / diff / t…  │     │
 │     │    shift-↑    scroll                scroll the active pane       │     │
 │     │    shift-↓    scroll                scroll the active pane       │     │
-│     │    <          shrink list           shrink / grow the session …  │     │
-│     │    … 51 more                                                     │     │
+│     │    … 52 more                                                     │     │
 │     │                                                                  │     │
 │     │  type to filter · ↑↓ move · ↵ run · esc close                    │     │
 │     │                                                                  │     │
 │     ╰──────────────────────────────────────────────────────────────────╯     │
 ╰──────────────────────╯╰──────────────────────────────────────────────────────╯
 ### 120x40
-╭─ Sessions ───────────────────────╮╭──────────────────────────╮╭──────────────────────────╮╭──────────────────────────╮
-│ FIXTURE ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮         │
+╭─ Sessions ───────────────────────╮╭───────────────────╮╭───────────────────╮╭───────────────────╮╭───────────────────╮
+│ FIXTURE ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮ctor     │
 │▎○ parity│                                                                                                  │─────────┤
 │▎        │  Command Palette                                                                                 │         │
-│         │  ▏  59 actions                                                                                   │         │
+│         │  ▏  60 actions                                                                                   │         │
 │         │                                                                                                  │         │
 │         │    Navigate                                                                                      │         │
 │         │  ▸ ↑/k        up                         move selection                                          │         │
@@ -37,9 +37,10 @@
 │         │    b          next blocked               jump to next unread / blocked                           │         │
 │         │    tab        switch tab                 next / prev pane                                        │         │
 │         │    shift-tab  prev tab                   next / prev pane                                        │         │
-│         │    1          preview tab                jump to preview / diff / terminal                       │         │
-│         │    2          diff tab                   jump to preview / diff / terminal                       │         │
-│         │    3          terminal tab               jump to preview / diff / terminal                       │         │
+│         │    1          preview tab                jump to preview / diff / terminal / inspector           │         │
+│         │    2          diff tab                   jump to preview / diff / terminal / inspector           │         │
+│         │    3          terminal tab               jump to preview / diff / terminal / inspector           │         │
+│         │    4          inspector tab              jump to preview / diff / terminal / inspector           │         │
 │         │    shift-↑    scroll                     scroll the active pane                                  │         │
 │         │    shift-↓    scroll                     scroll the active pane                                  │         │
 │         │    <          shrink list                shrink / grow the session list (or drag the divider)    │         │
@@ -56,8 +57,7 @@
 │         │    v          multi-select               multi-select: space marks, p/r/x act on the marked se…  │         │
 │         │    Handoff                                                                                       │         │
 │         │    ↵/o        open                       terminal has exited                                     │         │
-│         │    ctrl-q     attach/detach              terminal has exited                                     │         │
-│         │    … 37 more                                                                                     │         │
+│         │    … 38 more                                                                                     │         │
 │         │                                                                                                  │         │
 │         │  type to filter · ↑↓ move · ↵ run · esc close                                                    │         │
 │         │                                                                                                  │         │

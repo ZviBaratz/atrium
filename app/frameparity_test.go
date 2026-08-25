@@ -484,9 +484,10 @@ func newParityHomeThemed(t *testing.T, fs frameState, w, h int, themeName string
 
 // TestLightFrameColourFingerprint is TestFrameColourFingerprint under the light
 // palette. It exists because colours.txt is generated at the DEFAULT theme and must
-// never move (that immovability is what proves `theme: auto` with no detection is a
-// no-op), which would otherwise leave the light palette with no rendering guard at
-// all — only its hex values checked, never what the frame actually emits.
+// never move on a theme change (that immovability is what proves `theme: auto` with
+// no detection is a no-op; a deliberate frame-content re-baseline rewrites it like
+// any other golden), which would otherwise leave the light palette with no rendering
+// guard at all — only its hex values checked, never what the frame actually emits.
 //
 // Regenerate with:
 //

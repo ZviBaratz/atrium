@@ -153,7 +153,8 @@ func (m *home) resolveFrameTarget() frameTarget {
 		}
 		return frameTarget{terminal: sess, termKey: key, termInstance: selected, termTitle: selected.Title()}
 	default:
-		// The diff tab renders from cached git metadata and captures nothing.
+		// The diff tab renders from cached git metadata and the inspector tab
+		// from in-memory session state; neither captures anything.
 		return frameTarget{}
 	}
 }

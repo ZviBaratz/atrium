@@ -60,7 +60,7 @@ cannot install it. Once per machine:
 
 ## Adding a keybinding — 10 sites, every one guarded
 
-At last count: **63 registry entries** and **52 dispatch-case lines**, with a dozen-odd
+At last count: **64 registry entries** and **52 dispatch-case lines**, with a dozen-odd
 drift guards in `keys/*_test.go` and **4** in `app/dispatch_coverage_test.go`.
 
 Those two numbers, and the `Config` field count below, are checked against the tree by

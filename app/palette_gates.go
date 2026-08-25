@@ -123,6 +123,7 @@ var paletteGates = map[keys.KeyName]paletteGate{
 	keys.KeyTabPreview:     global(),
 	keys.KeyTabDiff:        global(),
 	keys.KeyTabTerminal:    global(),
+	keys.KeyTabInspector:   global(),
 	keys.KeyShrinkList:     global(),
 	keys.KeyGrowList:       global(),
 	keys.KeyLayoutPreset:   global(),
