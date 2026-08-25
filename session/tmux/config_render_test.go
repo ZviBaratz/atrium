@@ -78,6 +78,30 @@ func TestRenderManagedConfig(t *testing.T) {
 	}
 }
 
+// TestRenderManagedConfig_ConfiguredThemeBeforeInit is the startup-ordering guard
+// for issue #574: main.go calls theme.Set(cfg.GetTheme()) before tmux.Init, so the
+// managed conf carries the configured palette's band, not the default's. A theme
+// activated AFTER renderManagedConfig would write the default (tokyo-night) palette
+// into the file every launch, regardless of the user's setting; this test verifies
+// the mechanism works when theme.Set precedes the render.
+func TestRenderManagedConfig_ConfiguredThemeBeforeInit(t *testing.T) {
+	restore := theme.Set("tokyo-night-day") // light twin — maximally far from the default dark
+	defer restore()
+
+	out, err := renderManagedConfig(true)
+	require.NoError(t, err)
+
+	dayBg := theme.Hex(theme.Get("tokyo-night-day").Palette.BarBg)
+	defaultBg := theme.Hex(theme.Get("tokyo-night").Palette.BarBg)
+	require.NotEqual(t, dayBg, defaultBg, "test setup: configured and default themes must differ")
+
+	conf := collapseWS(string(out))
+	require.Contains(t, conf, `status-style "bg=`+dayBg,
+		"after theme.Set, managed conf must carry the configured palette's band, not the default's")
+	require.NotContains(t, conf, defaultBg,
+		"default (tokyo-night) band colour must not appear when a different theme is configured")
+}
+
 // The managed config's status-style must carry no colours under NO_COLOR. tmux
 // reads this file, not Bubble Tea, so the renderer's colour profile cannot help
 // here — the values have to be absent from what is written to disk.
