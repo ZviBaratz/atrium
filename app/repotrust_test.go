@@ -349,16 +349,25 @@ func TestRepoTrustDialogNamesTheSeedLists(t *testing.T) {
 	assert.Contains(t, view, "node_modules")
 }
 
-// TestRepoTrustDialogBoundsHostileSeedLists: the entry cap
-// (repocfg.MaxRepoLocalSeedEntries) bounds git forks, not frame lines, so the dialog
-// needs its own bound. A file at the cap, with every entry as long and as hostile as
-// the JSON allows, must still leave a box the 80×24 floor can answer.
-func TestRepoTrustDialogBoundsHostileSeedLists(t *testing.T) {
+// TestRepoTrustDialogBoundsWideSeedLists: the entry cap
+// (repocfg.MaxRepoLocalSeedEntries) bounds git forks per materialization, not frame
+// lines, so the dialog needs its own bound. A file at that cap, with every entry as
+// long and as wide as a LEGAL path can be, must still leave a box the 80x24 floor
+// can answer.
+//
+// Legal is the operative word, and it is what makes this test's fixture different
+// from the create form's: the unprintable classes that defeat a width budget
+// outright are refused by repocfg.CanonicalSeedPath before a dialog ever sees them
+// (see TestRepoTrustNeverPromptsForAnUnprintableSeedEntry below, and
+// TestCanonicalSeedPathRefusesUnprintableRunes for the rule). What is left to bound
+// here is sheer size: wide runes measure two cells and render two, so nothing lies
+// about them - there is just far too much.
+func TestRepoTrustDialogBoundsWideSeedLists(t *testing.T) {
 	entries := make([]string, repocfg.MaxRepoLocalSeedEntries)
 	for i := range entries {
-		// Long, wide, zero-width and bidi all at once: each defeats a different half
-		// of the bound (width measurement, then truncation).
-		entries[i] = fmt.Sprintf("dep%d/%s%s", i, strings.Repeat("\u65e5\u672c\u8a9e\u200b\u202e", 30), strings.Repeat("x", 200))
+		// Double-width CJK and a long ASCII tail: one defeats a naive rune count, the
+		// other a naive cell count that forgot there are 64 of these.
+		entries[i] = fmt.Sprintf("dep%d/%s%s", i, strings.Repeat("\u65e5\u672c\u8a9e", 30), strings.Repeat("x", 200))
 	}
 	raw, err := json.Marshal(entries)
 	require.NoError(t, err)
@@ -381,4 +390,23 @@ func TestRepoTrustDialogBoundsHostileSeedLists(t *testing.T) {
 	for i, l := range lines {
 		assert.Equalf(t, 80, ansi.PrintableRuneWidth(l), "line %d is the wrong width", i)
 	}
+}
+
+// TestRepoTrustNeverPromptsForAnUnprintableSeedEntry is the other half of the pact
+// above: a seed entry carrying a zero-width or bidi rune is refused at the parse, so
+// no dialog is asked to describe it and no grant can cover it. Asserted through the
+// create path rather than the parser because the parser test cannot see that the
+// refusal actually reaches the prompt decision.
+func TestRepoTrustNeverPromptsForAnUnprintableSeedEntry(t *testing.T) {
+	raw, err := json.Marshal([]string{"node_modules/\u202egnp.exe"})
+	require.NoError(t, err)
+
+	repo := gitInitRepo(t)
+	commitRepoLocal(t, repo, `{"link_paths":`+string(raw)+`}`)
+	h := newCreateFormHome(t)
+	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	_ = submitCreateForm(t, h, repo, "feature")
+	assert.NotEqual(t, stateConfirm, h.state,
+		"a refused file has nothing grantable, so it must never stage a trust prompt")
 }

@@ -24,8 +24,9 @@ import (
 // seedFixture is a repo whose committed .atrium.json declares seed lists, plus the
 // gitignored content those lists name sitting in the origin checkout — and an
 // Instance whose resolver is installed on the worktree BEFORE Setup runs, which is
-// the ordering production uses (session.LoadInstances and Start both push the
-// resolver in before the worktree is shared or set up).
+// the ordering production uses: Start and FromInstanceData both push the resolver
+// in before the worktree is shared or set up, for the reason SetIsolateDeps'
+// docstring gives about its own two call sites.
 //
 // materialize is deliberately separate from the build: a test grants, or does not,
 // between the two, which is the whole variable under test.

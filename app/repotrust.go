@@ -47,17 +47,18 @@ const repoTrustPreviewWidth = 120
 
 // repoTrustSeedPreview is how many entries of each seed list the dialog spells
 // out. The lists are capped at repocfg.MaxRepoLocalSeedEntries, but that cap
-// bounds git forks per materialization and is two orders of magnitude past what
-// fits a frame — so the dialog needs its own, much smaller one. Unlike the script
+// bounds git forks per materialization and is far past what fits a frame — so the
+// dialog needs its own, much smaller one. Unlike the script
 // entry there is no one-entry rule to lean on here, so the overflow is counted
 // rather than hidden: the remedy for reading the rest is the file itself, which is
 // in the user's own checkout and is the thing being granted.
 const repoTrustSeedPreview = 3
 
 // repoTrustSeedWidth bounds a whole seed line — the joined sample, not one entry.
-// Per-entry bounding is not enough and the frame test is what says so: three
-// entries each within their own cap still wrap to six lines a piece, and two lists
-// of those pushed the answer hints off the 80×24 floor. A confirmation the user
+// Per-entry bounding is not enough, and TestRepoTrustDialogBoundsWideSeedLists is
+// what says so rather than this comment: n entries each inside their own cap are n
+// times the cap, so an earlier draft that capped each one wrapped both lists far
+// enough to push the answer hints off the 80×24 floor. A confirmation the user
 // cannot answer is worse than none, so the budget is the LINE's.
 const repoTrustSeedWidth = 48
 

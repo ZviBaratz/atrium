@@ -1,6 +1,7 @@
 package repocfg
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"sort"
@@ -222,6 +223,44 @@ func TestCanonicalSeedPath(t *testing.T) {
 		_, err := CanonicalSeedPath(bad)
 		assert.Errorf(t, err, "entry %q must be refused", bad)
 	}
+}
+
+// TestCanonicalSeedPathRefusesUnprintableRunes is a display guard living in a
+// validator, and that placement is the point: these entries are interpolated into a
+// confirm dialog and into the settings panel's provenance line, and the classes
+// below are exactly the ones that defeat a width bound \u2014 a zero-cell rune makes a
+// truncation budget bound nothing, and an escape writes through the renderer. A
+// surface that forgot to sanitize would ship the hole; refusing at the parse means
+// there is nothing left to sanitize.
+func TestCanonicalSeedPathRefusesUnprintableRunes(t *testing.T) {
+	for name, entry := range map[string]string{
+		"bidi override":     "node_modules/\u202egnp.exe",
+		"zero-width space":  "node_\u200bmodules",
+		"zero-width joiner": "deps/\U0001f468\u200d\U0001f469",
+		"escape":            "deps/\x1b[31m",
+		"c1 control":        "deps/\u009b31m",
+		"newline":           "deps\nmore",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := CanonicalSeedPath(entry)
+			require.Error(t, err, "entry must be refused, not laundered into a frame")
+
+			// And the refusal reaches the file, so nothing from it applies.
+			body, jerr := json.Marshal([]string{entry})
+			require.NoError(t, jerr)
+			_, err = ParseRepoLocal([]byte(`{"link_paths":` + string(body) + `}`))
+			assert.Error(t, err)
+		})
+	}
+
+	// The counter-case, and the reason the rule is IsPrint rather than "ASCII only":
+	// macOS stores filenames decomposed, so a legitimate accented path arrives as a
+	// base letter plus a combining mark. Refusing every mark would break real repos,
+	// and a mark is measured at the width a terminal renders it \u2014 which is the
+	// property that actually matters here.
+	got, err := CanonicalSeedPath("cafe\u0301/node_modules")
+	require.NoError(t, err, "a decomposed accent is a real filename, not an attack")
+	assert.Equal(t, "cafe\u0301/node_modules", got)
 }
 
 // TestRepoLocalLayerKeysMatchTheWireSchema is the bridge guard: the settings panel

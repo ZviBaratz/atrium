@@ -12,6 +12,7 @@ import (
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/repocfg"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -78,28 +79,50 @@ func TestRepoLayerBadgeOutranksTheTimingBadge(t *testing.T) {
 }
 
 // TestRepoLayerBadgeDegradesButKeepsTheCount: the count is the whole payload, so
-// every rung of the ladder keeps it — a bare "+2" still says the list shown is not
-// the list in force. Dropping the chip is the one degradation this column must not
-// make silently, which is why the help pane carries the same fact (below).
+// every rung of the ladder keeps it - a bare "+2" still says the list shown is not
+// the list in force.
+//
+// It asserts on the RENDERED row line, and that distinction is the test. A draft
+// asserted on rowValueAndBadge's return value, and a mutation bypassing fitBadge
+// survived it: composeRowLine DROPS a badge that does not fit, so an un-laddered
+// chip still returns a string carrying the count while the rendered row shows no
+// chip at all. Only the rendered line can tell the two apart.
 func TestRepoLayerBadgeDegradesButKeepsTheCount(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
 	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", LinkPaths: []string{"node_modules", ".venv"}})
+	i := rowIndexOf(t, o, "link_paths")
 
-	for _, w := range []int{120, 96, 80, 72, 64, 56, 48, 40} {
+	// 80 and below is the band that matters: the widest rung (20 cells) no longer
+	// fits beside the value there, so the row keeps its chip only because a shorter
+	// rung exists.
+	for _, w := range []int{120, 96, 84, 80, 72, 64, 56, 52, 48, 44} {
 		o.SetSize(w, 24)
-		badge := badgeFor(t, o, "link_paths")
-		if badge == "" {
-			continue // too narrow for any chip; contextLine is the fallback, asserted below
-		}
-		assert.Containsf(t, badge, "+2", "width %d: badge %q dropped the count", w, badge)
+		line := stripANSI(o.renderRowLine(i, o.rowsPaneWidth(), o.visibleLabelWidth()))
+		assert.Containsf(t, line, "+2", "width %d: the rendered row lost the count: %q", w, line)
 	}
 
-	// Every rung the ladder can produce keeps the count, so the loop above cannot
-	// pass by never reaching a narrow rung.
-	for _, c := range repoLayerBadgeCandidates(2) {
+	// The floor, stated rather than assumed: below this the rows pane cannot carry
+	// any chip, and the help pane is the fallback (TestRepoLayerContextLineNamesTheRepo
+	// covers it). Pinning it also stops a future "always render the chip" from
+	// passing the sweep above by overrunning the pane instead of degrading.
+	o.SetSize(40, 24)
+	assert.NotContains(t, stripANSI(o.renderRowLine(i, o.rowsPaneWidth(), o.visibleLabelWidth())), "+2")
+
+	// Every rung the ladder can produce keeps the count, so the sweep above cannot
+	// pass by way of a one-rung ladder that happens to be short.
+	rungs := repoLayerBadgeCandidates(2)
+	assert.Greater(t, len(rungs), 1, "a one-rung ladder does not degrade")
+	for _, c := range rungs {
 		assert.Contains(t, c, "+2")
 	}
-	assert.Greater(t, len(repoLayerBadgeCandidates(2)), 1, "a one-rung ladder does not degrade")
+
+	// And they must be ordered widest first, because fitBadge returns the FIRST rung
+	// that fits: a rung wider than the one before it can never be reached, so a
+	// mis-ordered ladder skips rungs invisibly at every width rather than failing.
+	for i := 1; i < len(rungs); i++ {
+		assert.LessOrEqualf(t, ansi.StringWidth(rungs[i]), ansi.StringWidth(rungs[i-1]),
+			"rung %d (%q) is wider than the rung before it (%q)", i, rungs[i], rungs[i-1])
+	}
 }
 
 // TestRepoLayerContextLineNamesTheRepo: the badge is a bare count, so the help pane

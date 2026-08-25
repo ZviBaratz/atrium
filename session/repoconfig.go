@@ -1,18 +1,26 @@
 package session
 
-// repoconfig.go — repo-local config enforcement (#814): the one place
-// repo-authored .atrium.json bytes are allowed to become a repocfg.Script,
-// gated by the per-repo trust ledger.
+// repoconfig.go — repo-local config enforcement (#814, #815): the one place
+// repo-authored .atrium.json bytes are allowed to become anything a session
+// acts on — a repocfg.Script, or the carry_files/link_paths a worktree is
+// seeded from — gated by the per-repo trust ledger.
 //
-// This file sits at routeRepoScript's front door on purpose. That function is
-// the single funnel from configuration to everything that executes or leaks —
-// setup_script, run_command, session_env — and it is reached from paths that
-// have no UI in the process at all (the autoyes daemon relaunches agents
-// through startResuming → applySessionEnv), so the gate cannot live in app/.
-// The TUI's create-time prompt is advisory: it records a grant. THIS check,
-// against the bytes in the session's own worktree at the moment of use, is the
-// authority — which is also what closes the prompt-to-execution TOCTOU, and
-// what keeps a paused session inert when an agent edits .atrium.json on its
+// One funnel for both because the grant is one hash over the whole file: two
+// resolution sites could reach different verdicts about the same bytes, and the
+// half that said yes would apply content the prompt described under the other
+// half's refusal.
+//
+// It sits at routeRepoScript's front door, and behind the worktree's seeding
+// resolver, for the same reason. routeRepoScript is the single funnel from
+// configuration to everything that executes or leaks — setup_script,
+// run_command, session_env — and it is reached from paths that have no UI in
+// the process at all (the autoyes daemon relaunches agents through
+// startResuming → applySessionEnv), so the gate cannot live in app/. Seeding is
+// reached from Setup, on every materialization including a resume, with no UI
+// either. The TUI's create-time prompt is advisory: it records a grant. THIS
+// check, against the bytes in the session's own worktree at the moment of use,
+// is the authority — which is also what closes the prompt-to-execution TOCTOU,
+// and what keeps a paused session inert when an agent edits .atrium.json on its
 // branch before a resume re-materializes it.
 
 import (

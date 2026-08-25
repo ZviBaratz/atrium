@@ -303,9 +303,12 @@ func withPortEnv(port string, env []string) []string {
 	return append([]string{"ATRIUM_PORT=" + port}, env...)
 }
 
-// routeRepoScript loads the config and resolves the entry that governs this session's
-// repository, validated and ready to render. ok is false when the section is empty,
-// when nothing routes here, or when the routed entry is one the validator refuses.
+// routeRepoScript resolves the repo_scripts entry that governs this session's
+// repository, validated and ready to render — from the repo's own trusted
+// .atrium.json if it has one, else from the user's config.json. ok is false when
+// neither source yields an entry: the global section is empty, nothing routes here,
+// the routed entry is one the validator refuses, or the repo-local file declared no
+// entry (or was refused, in which case its whole contribution is withheld).
 //
 // The config is read here rather than captured on the Instance for the reason carry.go
 // gives for the same choice: instances are rebuilt once at startup and Resume reuses

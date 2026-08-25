@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path"
 	"path/filepath"
+	"unicode"
 
 	"github.com/ZviBaratz/atrium/config"
 )
@@ -31,10 +32,10 @@ const MaxRepoLocalBytes = 1 << 20
 // fork inside the session's worktree (session/git's carryLocalFile and
 // linkLocalPath each run one), on every worktree materialization — create and
 // every resume. A few thousand entries fit comfortably under a megabyte and
-// would fork git a few thousand times per session start. Sixty-four is two
-// orders of magnitude past the handful a real project declares, and past it the
-// file is refused WHOLE like every other structural refusal here: a truncated
-// list would seed a set the trust prompt never described.
+// would fork git a few thousand times per session start. Sixty-four is
+// far past the handful a real project declares, and past it the file is refused
+// WHOLE like every other structural refusal here: a truncated list would seed a
+// set the trust prompt never described.
 const MaxRepoLocalSeedEntries = 64
 
 // RepoLocal is a parsed .atrium.json: the repo_scripts entry that survived the
@@ -112,6 +113,25 @@ func RepoLocalLayerKeys() []string {
 func CanonicalSeedPath(rel string) (string, error) {
 	if rel == "" {
 		return "", errors.New("empty entry")
+	}
+	// Refuse anything unprintable before the path rules, because the failure it
+	// prevents is not about paths: a seed entry is repo-authored text that surfaces
+	// interpolate into a frame (the trust dialog, the settings panel's provenance
+	// line), and unicode.IsPrint excludes exactly the classes that defeat a width
+	// bound — C0/C1 and ESC write straight through a renderer, and the Cf format
+	// runes (U+200B zero-width space, U+200D joiner, U+202E right-to-left override)
+	// measure ZERO cells, so a truncation budget bounds nothing on a string made of
+	// them. Refusing here rather than sanitizing at each surface is what keeps a
+	// hostile entry from reaching one that forgot to.
+	//
+	// Combining marks (Mn) are printable and stay ALLOWED on purpose: macOS stores
+	// filenames decomposed, so a legitimate "café" is "cafe" plus U+0301, and
+	// go-runewidth scores it the width a terminal renders it at. The dangerous
+	// property is measuring differently than it renders, which Mn does not have.
+	for _, r := range rel {
+		if !unicode.IsPrint(r) {
+			return "", fmt.Errorf("contains the unprintable character U+%04X", r)
+		}
 	}
 	canon := path.Clean(filepath.ToSlash(rel))
 	if !filepath.IsLocal(canon) {

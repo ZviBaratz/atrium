@@ -573,20 +573,26 @@ func (s *SettingsOverlay) renderRowLine(i, width, labelW int) string {
 	}
 }
 
-// rowValueAndBadge sizes a row's value cell and picks its right-aligned badge. There are
-// three claims on that column, in priority order:
+// rowValueAndBadge sizes a row's value cell and picks its right-aligned badge. The
+// claims on that column, in priority order:
 //
 //   - an inert reason chip, which degrades to one word but never drops: a dimmed row with no
 //     marker reads as broken, and the help pane only describes the SELECTED row;
 //   - a search result's category, which degrades by truncation for the same reason — a flat
 //     list drawn from ten categories needs it — and is why the timing badge yields while a
 //     filter is active;
+//   - a repo-layered row's contribution count (#815), which degrades to a bare "+N": it is
+//     not a refusal to explain like the first, nor the only thing telling two results apart
+//     like the second, but "the value shown is not the value in force here" outranks
+//     reference information. It is the one claim with a second surface — contextLine always
+//     renders — which is what makes it safe to drop below the narrowest rung;
 //   - the apply timing, which is reference information and is dropped outright (spec §10).
 //
-// For the first two the value is sized against the SHORTEST form the badge can take, never
-// the widest: reserving against the widest lets a rich enum value find no room beside a long
-// chip, fall back to the whole slack, and evict the very chip the ladder was supposed to
-// guarantee. fitValue then covers the kinds valueCell's own reservation does not reach.
+// For every claim but the last the value is sized against the SHORTEST form the badge can
+// take, never the widest: reserving against the widest lets a rich enum value find no room
+// beside a long chip, fall back to the whole slack, and evict the very chip the ladder was
+// supposed to guarantee. fitValue then covers the kinds valueCell's own reservation does not
+// reach.
 func (s *SettingsOverlay) rowValueAndBadge(i, width, labelW int, inert string) (value, badge string) {
 	avail := valueAvail(width, labelW)
 	switch {
