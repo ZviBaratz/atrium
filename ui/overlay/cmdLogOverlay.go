@@ -46,9 +46,9 @@ func NewCmdLogOverlay(session string) *CmdLogOverlay {
 	return &CmdLogOverlay{session: session, width: 90, height: 24}
 }
 
-// CmdLogSize: the command log benefits from width (argv) and height (many
-// rows), so it takes a larger share than the queue overlay, capped for very
-// wide terminals.
+// CmdLogSize is the command log's share: it benefits from width (argv) and
+// height (many rows), so it takes more than the queue overlay, capped for
+// very wide terminals.
 var CmdLogSize = SizeSpec{WFrac: 0.85, WMax: 120, HFrac: 0.85, HMax: 44}
 
 // SetSize sets the box dimensions; the list windows to the available height.
