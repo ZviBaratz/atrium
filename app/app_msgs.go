@@ -393,7 +393,7 @@ func (m *home) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if g.button == tea.MouseLeft && g.action == mousePress &&
 		m.state == stateDefault && m.windowWidth > 0 &&
 		g.y >= bannerH && g.y < bannerH+m.paneContentHeight() && !m.listHidden() {
-		listWidth := int(float32(m.windowWidth) * float32(m.listRatio))
+		listWidth := m.computeRegions(m.windowWidth).list
 		if g.x >= listWidth-dividerGrab && g.x <= listWidth+dividerGrab {
 			m.draggingDivider = true
 			return m, nil

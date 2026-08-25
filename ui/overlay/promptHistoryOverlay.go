@@ -23,9 +23,9 @@ type PromptHistoryOverlay struct {
 }
 
 // NewPromptHistoryOverlay builds the picker over the given most-recent-first
-// prompt texts. The app widens it responsively via SetWidth.
+// prompt texts. The app widens it responsively via SetSize.
 func NewPromptHistoryOverlay(items []string) *PromptHistoryOverlay {
-	return &PromptHistoryOverlay{items: items, width: 60}
+	return &PromptHistoryOverlay{items: items, width: 62}
 }
 
 // SetItems replaces the displayed history (e.g. after a clear) and clamps the
@@ -94,10 +94,22 @@ func (p *PromptHistoryOverlay) ClearRequested() bool {
 	return r
 }
 
-// SetWidth sets the box width, flooring it so the box never collapses.
-func (p *PromptHistoryOverlay) SetWidth(width int) {
-	if width < 20 {
-		width = 20
+// HistoryPickerSize is the responsive width the prompt-history picker and
+// the queue overlay share — one declaration so the two boxes cannot drift
+// apart, and so the picker's open-time sizing and the resize walk agree. The
+// share is deliberately narrower than the command log's: these boxes list
+// one-line prompts, not argv dumps. The floor matches the collapse guard
+// both SetSizes keep, so Fit's claim and the rendered box agree at every
+// terminal width, not only the ones where no floor binds.
+var HistoryPickerSize = SizeSpec{WFrac: 0.6, WExtra: 2, WMax: 82, WMin: 22}
+
+// SetSize sets the box's TOTAL width, border and padding included — outer
+// cells, which is what lipgloss v2's Width means (see theme.Panel) — flooring
+// it so the box never collapses. The height is accepted and ignored so the
+// resize walk can hand every overlay the same call: the box hugs its rows.
+func (p *PromptHistoryOverlay) SetSize(width, _ int) {
+	if width < 22 {
+		width = 22
 	}
 	p.width = width
 }
@@ -109,8 +121,7 @@ func (p *PromptHistoryOverlay) Render() string {
 		Border(th.Borders.Style).
 		BorderForeground(th.Palette.Accent).
 		Padding(1, 2).
-		// +2 for the left/right border — v2 counts it inside Width. See theme.Panel.
-		Width(p.width + 2)
+		Width(p.width)
 
 	inner := p.width - 6 // borders (2) + horizontal padding (2*2)
 	if inner < 10 {
@@ -124,7 +135,9 @@ func (p *PromptHistoryOverlay) Render() string {
 		b.WriteString(overlayDimStyle().Render("no prompts yet") + "\n\n")
 	} else {
 		for idx, text := range p.items {
-			bw := inner - 4 // room for the "▸ " cursor
+			// Room for the two-cell "▸ " cursor; unlike the queue's rows there
+			// is no trailing in-flight mark to reserve for.
+			bw := inner - 2
 			if bw < 1 {
 				bw = 1
 			}

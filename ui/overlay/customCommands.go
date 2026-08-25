@@ -93,6 +93,12 @@ func NewCustomCommandsOverlay(rows []CustomCommandRow) *CustomCommandsOverlay {
 	return &CustomCommandsOverlay{rows: rows, width: 60, height: 20}
 }
 
+// CustomCommandsSize is narrower than the palette: two columns (key,
+// description) of user-authored prose, where the palette has three of
+// generated text. Capped for the same reason — a very wide terminal should
+// not stretch a one-line description across the screen.
+var CustomCommandsSize = SizeSpec{WFrac: 0.7, WMax: 80, HFrac: 0.7, HMax: 30}
+
 // SetSize sets the box's TOTAL dimensions, border and padding included — that is
 // what lipgloss v2's Width and this box's height budget both mean, so a caller
 // passing a fraction of the terminal is passing the room the menu may occupy. The
