@@ -588,7 +588,7 @@ func newSettingRows(cfg *config.Config) []settingRow {
 				"do not travel back. An empty list is an explicit opt-out, not a fall back to " +
 				"the default `.claude/settings.local.json`. A repository you have trusted can " +
 				"ADD to this list for its own sessions by committing a `.atrium.json`; your " +
-				"entries are never replaced, and `atrium trust revoke` drops the repo's.",
+				"entries are never replaced, and `atrium trust revoke` stops the repo's from being seeded into new worktrees.",
 			get: func(c *config.Config) string { return displayList(c.GetCarryFiles()) },
 			editGet: func(c *config.Config) string {
 				return strings.Join(c.GetCarryFiles(), ", ")
@@ -622,7 +622,7 @@ func newSettingRows(cfg *config.Config) []settingRow {
 				"symlink as ignored and it lands in pause commits. A repository you have " +
 				"trusted can ADD to this list for its own sessions by committing a " +
 				"`.atrium.json`; your entries are never replaced, and `atrium trust revoke` " +
-				"drops the repo's.",
+				"stops the repo's from being seeded into new worktrees.",
 			get: func(c *config.Config) string { return displayList(c.GetLinkPaths()) },
 			editGet: func(c *config.Config) string {
 				return strings.Join(c.GetLinkPaths(), ", ")

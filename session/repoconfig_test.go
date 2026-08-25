@@ -414,9 +414,10 @@ func TestRepoLocal_DecoyEntriesRefuseTheWholeFile(t *testing.T) {
 // at all — an empty repo_scripts list, or only keys a newer atrium will read —
 // gates nothing, so it must read as None even UNGRANTED: no permanent "untrusted"
 // row, no modal, and no remedy pointing at `atrium trust allow`, which would
-// refuse it ("nothing to trust"). The counter-case is one line down in
-// TestRepoLocal_SeedListsAreGated: a file declaring only carry_files/link_paths
-// DOES declare something, so it is grantable and reads untrusted until granted.
+// refuse it ("nothing to trust"). The counter-case lives in
+// TestRepoSeeds_UntrustedNeverMaterialize and in repotrust's
+// TestAssessRepo_SeedLists: a file declaring only carry_files/link_paths DOES
+// declare something, so it is grantable and reads untrusted until granted.
 func TestRepoLocal_NothingDeclaredIsSilent(t *testing.T) {
 	for name, content := range map[string]string{
 		"an empty object":       `{}`,

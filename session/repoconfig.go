@@ -285,9 +285,11 @@ func (i *Instance) configRepoPath() string {
 // the behavior the repo would get with no file at all.
 //
 // It is the single funnel for BOTH halves of a repo-local file: the executable
-// entry and the seed lists (#815). One read, one hash, one ledger check, one
-// verdict — a second reader for the lists could grant them while this one
-// refused the same bytes.
+// entry and the seed lists (#815). Each resolution is one read, one hash, one
+// ledger check and one verdict drawn from them — a claim about there being a
+// single code path, not about how often it is called (a materialization reaches
+// it more than once). A second reader for the lists could grant them while this
+// one refused the same bytes.
 //
 // Precedence differs by shape, and the shapes differ for a reason. A trusted
 // repo_scripts entry WINS over a global entry that also matches this repo (the
@@ -346,7 +348,7 @@ func (i *Instance) resolveRepoLocal(dir, repoPath string) repoLocalResolution {
 				if _, has := ledger.Lookup(i.ledgerKey(repoPath)); has {
 					state = RepoConfigAbsentGranted
 					report = fmt.Sprintf(
-						"This worktree has no %s, but the repo has a trusted one — the branch it checked out does not carry the setup you granted, so that setup was not used. Your own config.json still applies as usual.",
+						"This worktree has no %s, but the repo has a trusted one — the branch it checked out does not carry the file you granted, so nothing from it was applied. Your own config.json still applies as usual.",
 						repocfg.RepoLocalFileName)
 				}
 			}
@@ -417,12 +419,12 @@ func (i *Instance) resolveRepoLocal(dir, repoPath string) repoLocalResolution {
 	ledger, ledgerErr := repotrust.Load()
 	if !ledger.Granted(key, hash) {
 		state, report := RepoConfigUntrusted, fmt.Sprintf(
-			"Repo config ignored: %s carries a %s that is not trusted, so its setup was skipped and the session runs on your own config only.\n\nTo allow it: atrium trust allow %s — or re-create the session to be asked.",
+			"Repo config ignored: %s carries a %s that is not trusted, so nothing from it was applied and the session runs on your own config only.\n\nTo allow it: atrium trust allow %s — or re-create the session to be asked.",
 			repoPath, repocfg.RepoLocalFileName, repoPath)
 		if _, has := ledger.Lookup(key); has {
 			state = RepoConfigChanged
 			report = fmt.Sprintf(
-				"Repo config ignored: %s's %s has CHANGED since you trusted it, so its setup was skipped and the session runs on your own config only.\n\nTo allow the new version: atrium trust allow %s — or re-create the session to be asked.",
+				"Repo config ignored: %s's %s has CHANGED since you trusted it, so nothing from it was applied and the session runs on your own config only.\n\nTo allow the new version: atrium trust allow %s — or re-create the session to be asked.",
 				repoPath, repocfg.RepoLocalFileName, repoPath)
 		}
 		if ledgerErr != nil {

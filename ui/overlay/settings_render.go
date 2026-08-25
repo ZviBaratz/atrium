@@ -615,8 +615,12 @@ func (s *SettingsOverlay) rowValueAndBadge(i, width, labelW int, inert string) (
 		// explain like an inert reason, nor the only thing telling two search results
 		// apart, but it says the value shown here is not the whole value in this repo
 		// — which outranks reference information. Like the inert chip it degrades
-		// rather than being dropped, and unlike it there is a second surface if the
-		// pane is too narrow even for that: contextLine always renders.
+		// rather than being dropped. The surface that survives a pane too narrow even
+		// for the shortest rung is expandedHelpContent, NOT contextLine: contextLine
+		// ranks this below a truncated value (spec §10) and returns nothing at all for
+		// an empty row range or a filter with no hits — and a long list is both the
+		// reason the value truncates and the reason the layer is interesting, so the two
+		// compete exactly when it matters. repoLayerContext's own clause says this.
 		candidates := repoLayerBadgeCandidates(len(s.repoLayerEntries(i)))
 		shortest := candidates[len(candidates)-1]
 		value = fitValue(s.valueCell(i, width, labelW, shortest), avail, ansi.StringWidth(shortest))

@@ -94,6 +94,22 @@ func RepoLocalLayerKeys() []string {
 	return []string{"carry_files", "link_paths"}
 }
 
+// repoLocalNonLayeringKeys names the wire keys that are deliberately NOT panel
+// layers, each with the reason, so the bridge guard can be a completeness sweep
+// instead of a bare equality.
+//
+// The distinction it records is real and the guard needs it: a key REPLACES (there
+// is one script to run, so a repo-local entry supersedes the user's for that repo)
+// or it LAYERS (the value is a set, so the two combine). Only the second can have a
+// scopeRepoLayered row, because only the second leaves the user's own value partly
+// in force for the panel to annotate. Without this map the guard was an equality
+// over every non-repo_scripts tag, so the next replacing key could not be added
+// without either breaking the test or being declared a panel layer it can never
+// be — and the failure pointed at the second.
+var repoLocalNonLayeringKeys = map[string]string{
+	"repo_scripts": "a repo-local entry REPLACES the user's matching entry rather than adding to it, and it has no single panel row to annotate",
+}
+
 // CanonicalSeedPath is the one lexical rule for a carry_files / link_paths
 // entry: the slash-separated spelling git pathspecs and filesystem joins must
 // both be derived from, or an error saying why the entry can never be seeded.

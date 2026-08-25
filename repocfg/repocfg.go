@@ -111,7 +111,7 @@ type envEntry struct {
 type Problem struct {
 	// Section is the config key the entry sits under. The zero value means
 	// repo_scripts, which is every Problem the global config produces — a default
-	// rather than a required field so the dozen existing construction sites keep
+	// rather than a required field so the existing construction sites keep
 	// naming the section they always named.
 	Section string
 	Index   int

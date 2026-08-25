@@ -221,3 +221,98 @@ func TestRepoLayerIsReachableOnEveryLayeredRow(t *testing.T) {
 	settingsAt(t, plain, "carry_files")
 	assert.NotContains(t, stripANSI(plain.expandedHelpContent(plain.cursor)), "also adds")
 }
+
+// TestRepoLayerRoutesThroughTheRowScope closes the hole the two bridge guards could
+// not see. Both of them passed — a row's scope agreed with
+// repocfg.RepoLocalLayerKeys, which agreed with repoLocalWire's json tags — while
+// nothing in production read scope at all: the render path keyed off a hardcoded
+// two-case switch, so a third layered key rendered no badge, no provenance line and
+// no `?` entry. That is exactly the silent "the value shown is not the effective
+// value and never admits it" failure the scope seam exists to prevent.
+//
+// The test drives it from the seam's own vocabulary rather than from the two keys
+// that exist today: any row the schema marks scopeRepoLayered must annotate when the
+// injected layer carries its key.
+func TestRepoLayerRoutesThroughTheRowScope(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetSize(96, 32)
+
+	layered := map[string][]string{}
+	for _, r := range o.rows {
+		if r.scope == scopeRepoLayered {
+			layered[r.key] = []string{"a-" + r.key, "b-" + r.key}
+		}
+	}
+	require.NotEmpty(t, layered, "the schema must mark some row repo-layered, or this guard is vacuous")
+	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", Lists: layered})
+
+	for key := range layered {
+		i := rowIndexOf(t, o, key)
+		assert.Containsf(t, badgeFor(t, o, key), "+2",
+			"row %q is scopeRepoLayered and the layer carries it, so it must say so", key)
+		assert.Containsf(t, o.repoLayerFor(i), "a-"+key,
+			"row %q must name the entries the repo adds", key)
+	}
+
+	// And the negative: a row the schema does NOT mark layered must ignore a layer
+	// that names its key. Without this, routing on the key alone would pass above.
+	var unlayered string
+	for _, r := range o.rows {
+		if r.scope != scopeRepoLayered {
+			unlayered = r.key
+			break
+		}
+	}
+	require.NotEmpty(t, unlayered)
+	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", Lists: map[string][]string{unlayered: {"x", "y"}}})
+	assert.NotContains(t, badgeFor(t, o, unlayered), "+2",
+		"a row whose scope is not repo-layered must not grow a provenance badge because a caller named its key")
+}
+
+// TestRepoLayerSaysWhenLinksWereNotLinked: a dependency-isolated session receives
+// NONE of the link_paths — session/git's seedLocalPaths returns before linking — so
+// advertising them as added is false in a way that invites damage. The user either
+// reads the panel as evidence the repo overrode their isolation choice, or believes
+// the tree is shared and runs a destructive dependency upgrade expecting it to be
+// private. carry_files is unaffected: isolation is about the linked trees.
+func TestRepoLayerSaysWhenLinksWereNotLinked(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetSize(120, 40)
+	o.SetRepoLayer(&RepoLayer{
+		Repo: "/src/web",
+		Lists: map[string][]string{
+			"carry_files": {".dev.vars"},
+			"link_paths":  {"node_modules"},
+		},
+		DepsIsolated: true,
+	})
+
+	link := o.repoLayerFor(rowIndexOf(t, o, "link_paths"))
+	require.NotEmpty(t, link)
+	assert.Contains(t, link, "dependency-isolated", "the row must say the paths were not linked")
+	assert.NotContains(t, link, "also adds", "a path that was never linked was not added")
+
+	carry := o.repoLayerFor(rowIndexOf(t, o, "carry_files"))
+	assert.Contains(t, carry, "also adds", "isolation does not withhold carried files")
+}
+
+// TestRepoLayerSanitizesRepoAuthoredText: the provenance line interpolates strings a
+// repository committed, and it is measured and truncated downstream. The parse
+// deliberately ALLOWS combining marks so macOS's decomposed filenames work, and a
+// long run of them measures one cell in every width library while rendering as a
+// smear that overruns the row — the overflow that desyncs bubbletea's incremental
+// renderer into ghost rows. A per-rune parse rule cannot judge a grapheme cluster,
+// so the display boundary has to.
+func TestRepoLayerSanitizesRepoAuthoredText(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetSize(96, 32)
+	hostile := "a" + strings.Repeat("́", 300)
+	o.SetRepoLayer(&RepoLayer{Repo: "/src/web", Lists: map[string][]string{"carry_files": {hostile}}})
+
+	line := o.repoLayerFor(rowIndexOf(t, o, "carry_files"))
+	require.NotEmpty(t, line)
+	assert.LessOrEqual(t, ansi.StringWidth(line), repoLayerPathWidth+repoLayerEntriesWidth+64,
+		"the provenance line must be bounded by the display rule, not by what the repo committed")
+	assert.NotContains(t, line, strings.Repeat("́", 10),
+		"combining marks must be replaced at the display boundary, where their cell count can be judged")
+}

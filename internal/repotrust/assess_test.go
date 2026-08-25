@@ -295,3 +295,87 @@ func TestLiveStateNamesWhatAGrantCovers(t *testing.T) {
 	assert.Equal(t, "changed (re-allow to use)", state)
 	assert.Empty(t, covers)
 }
+
+// TestGrantScopeUpgradeReprompts: a grant covers what its prompt described, and the
+// content hash alone cannot say what that was once the set of powers has grown.
+//
+// repoLocalWire tolerated carry_files/link_paths as unknown keys before #815 read
+// them, and its own comment invited repos to ship them ahead of the reader — so a
+// repo's file could already carry both lists while the dialog that granted it
+// described only the setup script. The bytes are identical afterwards, so a hash
+// comparison silently extends that grant to two powers nobody was asked about: on
+// the next materialization, including an automatic resume or the autoyes daemon's
+// relaunch (neither of which has a UI), the repo starts choosing which of the user's
+// gitignored files are copied in front of an agent.
+func TestGrantScopeUpgradeReprompts(t *testing.T) {
+	repo := gitRepo(t)
+	commitRepoConfig(t, repo, `{"repo_scripts":[{"name":"web","setup_script":"npm ci"}],"carry_files":[".dev.vars"]}`)
+
+	a, err := AssessRepo(context.Background(), repo, "HEAD")
+	require.NoError(t, err)
+
+	// A pre-#815 record: the hash the user allowed, with no grant version — exactly
+	// what every ledger written before this release holds.
+	l, err := loadForWrite()
+	require.NoError(t, err)
+	l.Repos[a.Key] = Record{Hash: a.Hash, GrantedAt: time.Now()}
+	require.NoError(t, save(l))
+
+	again, err := AssessRepo(context.Background(), repo, "HEAD")
+	require.NoError(t, err)
+	require.Equal(t, a.Hash, again.Hash, "the file must be unchanged, or this tests the wrong thing")
+	assert.True(t, again.HasGrant, "the record is still there")
+	assert.False(t, again.Granted, "a grant cannot cover powers its prompt never described")
+	assert.True(t, again.ScopeUpgrade, "and the reason must be distinguishable from a changed file")
+	assert.True(t, again.WantsPrompt(), "so the user is asked, once")
+
+	// Re-granting stamps the current version, and the prompt does not come back.
+	require.NoError(t, Grant(again.Key, again.Hash, again.Remote, time.Now()))
+	settled, err := AssessRepo(context.Background(), repo, "HEAD")
+	require.NoError(t, err)
+	assert.True(t, settled.Granted)
+	assert.False(t, settled.ScopeUpgrade)
+	assert.False(t, settled.WantsPrompt())
+}
+
+// TestGrantScopeUpgradeOnlyForSeedLists is the control: a pre-#815 record for a file
+// that declares nothing NEW is still a valid grant. Without it, invalidating every
+// old record — which would re-prompt every trusted repo on upgrade for no reason —
+// would read as a pass.
+func TestGrantScopeUpgradeOnlyForSeedLists(t *testing.T) {
+	repo := gitRepo(t)
+	commitRepoConfig(t, repo, `{"repo_scripts":[{"name":"web","setup_script":"npm ci"}]}`)
+
+	a, err := AssessRepo(context.Background(), repo, "HEAD")
+	require.NoError(t, err)
+	l, err := loadForWrite()
+	require.NoError(t, err)
+	l.Repos[a.Key] = Record{Hash: a.Hash, GrantedAt: time.Now()}
+	require.NoError(t, save(l))
+
+	again, err := AssessRepo(context.Background(), repo, "HEAD")
+	require.NoError(t, err)
+	assert.True(t, again.Granted, "a script-only file confers exactly what the old prompt described")
+	assert.False(t, again.ScopeUpgrade)
+	assert.False(t, again.WantsPrompt())
+}
+
+// TestRefusedEntryIsNotGrantable: a file whose repo_scripts entry the parse refused
+// is unusable, not partly usable — enforcement refuses it WHOLE, its Problems check
+// running before its surfaces check. Before this, such a file's seed lists made it
+// describable, so the dialog offered a grant ("copies in: .dev.vars"), never
+// mentioned the refused entry, and confirming wrote a record for a file that then
+// applied nothing — permanently, since re-creating re-prompts and `trust allow`
+// re-grants. main gated on Entries and so never had the hole; the seed lists are
+// what gave a Problems-only file something to advertise.
+func TestRefusedEntryIsNotGrantable(t *testing.T) {
+	repo := gitRepo(t)
+	commitRepoConfig(t, repo, `{"repo_scripts":[{"name":"web","path_matches":["/elsewhere"],"setup_script":"echo hi"}],"carry_files":[".dev.vars"]}`)
+
+	a, err := AssessRepo(context.Background(), repo, "HEAD")
+	require.NoError(t, err)
+	require.True(t, a.Present)
+	require.Error(t, a.FileErr, "a refused entry makes the file unusable, and that must be reported")
+	assert.False(t, a.WantsPrompt(), "nothing may offer a grant the gate would apply nothing from")
+	assert.Empty(t, a.Local.CarryFiles, "the lists must not survive the refusal that drops the file")
+}

@@ -220,3 +220,29 @@ func TestRepoSeeds_PublishedForThePanel(t *testing.T) {
 	assert.Equal(t, []string{".dev.vars"}, carry)
 	assert.Equal(t, []string{"node_modules"}, link)
 }
+
+// TestRepoSeeds_PausedSessionReadsAsUnknown: the panel reads the last resolution
+// rather than performing one, so a session that can no longer GET a fresh one must
+// stop being quoted. ComputeRunState is the only thing that re-resolves for a live
+// session and it early-returns on a paused instance — so a session paused after a
+// positive resolution kept advertising it forever, and the moment that matters is
+// the moment a user runs `atrium trust revoke` and opens the panel to check the
+// revoke took effect.
+func TestRepoSeeds_PausedSessionReadsAsUnknown(t *testing.T) {
+	inst := &Instance{ident: identity{title: "parked"}}
+	inst.setRepoSeeds([]string{".dev.vars"}, []string{"node_modules"})
+
+	carry, link, resolved := inst.RepoLocalSeeds()
+	require.True(t, resolved, "the fixture must start resolved, or this tests nothing")
+	require.Equal(t, []string{".dev.vars"}, carry)
+	require.Equal(t, []string{"node_modules"}, link)
+
+	inst.mu.Lock()
+	inst.status = Paused
+	inst.mu.Unlock()
+
+	carry, link, resolved = inst.RepoLocalSeeds()
+	assert.False(t, resolved, "a paused session's last resolution is stale and nothing will refresh it")
+	assert.Empty(t, carry)
+	assert.Empty(t, link)
+}

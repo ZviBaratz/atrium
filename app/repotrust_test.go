@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/internal/repotrust"
 	"github.com/ZviBaratz/atrium/repocfg"
 
@@ -555,6 +556,21 @@ func TestRepoTrustCopyOnlyPromisesWhatRuns(t *testing.T) {
 // what makes the assertion able to fail for the right reason instead of always.
 func trustConsequenceSentence(t *testing.T, view string) string {
 	t.Helper()
+	flat := flattenFrame(view)
+	i := strings.Index(flat, "Trusting")
+	require.GreaterOrEqual(t, i, 0, "the dialog must carry a consequence sentence")
+	rest := flat[i:]
+	if end := strings.Index(rest, "."); end >= 0 {
+		rest = rest[:end+1]
+	}
+	return rest
+}
+
+// flattenFrame reflows a rendered frame onto one line, dropping the box drawing, so
+// an assertion about a PHRASE cannot fail merely because the phrase wrapped across
+// two rows. Every prose assertion on this dialog needs it: the body is wrapped by
+// the confirm overlay on purpose.
+func flattenFrame(view string) string {
 	var b strings.Builder
 	for _, r := range view {
 		switch {
@@ -564,12 +580,76 @@ func trustConsequenceSentence(t *testing.T, view string) string {
 			b.WriteRune(r)
 		}
 	}
-	flat := strings.Join(strings.Fields(b.String()), " ")
-	i := strings.Index(flat, "Trusting")
-	require.GreaterOrEqual(t, i, 0, "the dialog must carry a consequence sentence")
-	rest := flat[i:]
-	if end := strings.Index(rest, "."); end >= 0 {
-		rest = rest[:end+1]
+	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+// TestRepoTrustDialogHoldsTheFloorWithALongRepoPath is the margin guard the one
+// above could not be: its fixture takes whatever short path t.TempDir() hands out,
+// and the repo path is interpolated into the body uncapped. A real Atrium worktree
+// path is long — the data dir, "worktrees", a user prefix, a session name, a hash —
+// and a header that wraps to six rows was what actually spent the last of the 80x24
+// height margin once #815's two seed lines took their two.
+//
+// It asserts the box's own bottom border, because that is the edge that goes first
+// and the decline hint sits just above it: a confirmation whose "create without it"
+// is off the frame is worse than no confirmation at all.
+func TestRepoTrustDialogHoldsTheFloorWithALongRepoPath(t *testing.T) {
+	repo := gitInitRepo(t)
+	commitRepoLocal(t, repo, `{
+		"repo_scripts":[{"name":"web-frontend-and-backend","setup_script":"npm ci && npm run db:migrate && npm run build && npm run seed && echo done"}],
+		"carry_files":[".dev.vars",".claude/settings.local.json",".env.local",".x"],
+		"link_paths":["node_modules",".venv","vendor/bundle","x"]
+	}`)
+
+	h := newCreateFormHome(t)
+	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 80, Height: 24})
+	_ = submitCreateForm(t, h, repo, "feature")
+	require.Equal(t, stateConfirm, h.state)
+
+	// Stage the same dialog again with a path the length a real worktree has. Going
+	// through repoTrustMessage directly is the point: the fixture cannot choose its
+	// own TempDir length, and the uncapped interpolation is what is under test.
+	long := "/home/somebody/.atrium/worktrees/somebody/ux2-815-repo-local-config-and-trust_18cf01ef4c9cb403"
+	require.Greater(t, len(long), repoTrustSeedWidth, "the fixture path must actually be long")
+	body := repoTrustMessage(repotrust.Assessment{
+		Root:     long,
+		Present:  true,
+		HasGrant: true,
+		Local: repocfg.RepoLocal{
+			Entries:    []repocfg.RepoLocalEntry{{Index: 0, RepoScript: config.RepoScript{Name: "web-frontend-and-backend", SetupScript: strings.Repeat("npm run build && ", 12) + "done"}}},
+			CarryFiles: longSeedList(4, "carry/entry-with-a-long-name-"),
+			LinkPaths:  longSeedList(4, "link/entry-with-a-long-name-"),
+		},
+	})
+	// The PROSE is meant to wrap — the confirm overlay wraps it. What must be bounded
+	// is every span interpolated from outside: the path, the entry name, the script
+	// preview and the seed samples. The path is the one #815 left uncapped.
+	assert.NotContains(t, body, long, "the repo path must be truncated, not interpolated whole")
+	assert.Contains(t, body, "…", "and the truncation must say it happened")
+	for i, line := range strings.Split(repoTrustSummary(repotrust.Assessment{
+		Local: repocfg.RepoLocal{
+			Entries:    []repocfg.RepoLocalEntry{{Index: 0, RepoScript: config.RepoScript{Name: strings.Repeat("n", 80), SetupScript: strings.Repeat("s", 400)}}},
+			CarryFiles: longSeedList(40, "carry/very-long-entry-name-"),
+			LinkPaths:  longSeedList(40, "link/very-long-entry-name-"),
+		},
+	}), "\n") {
+		assert.LessOrEqualf(t, ansi.PrintableRuneWidth(line), repoTrustPreviewWidth,
+			"summary line %d is unbounded (%q)", i, line)
 	}
-	return rest
+
+	h2 := newCreateFormHome(t)
+	h2.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 80, Height: 24})
+	h2.confirmAction(body, instantAction, func() tea.Msg { return nil })
+	h2.confirmationOverlay.SetConfirmLabel("trust: run setup, seed files")
+	h2.confirmationOverlay.SetCancelLabel("create without it")
+	view := xansi.Strip(h2.View().Content)
+	lines := strings.Split(view, "\n")
+	assert.LessOrEqual(t, len(lines), 24)
+	flat := flattenFrame(view)
+	assert.Contains(t, flat, "create without it", "the decline must never leave the frame")
+	assert.Contains(t, flat, "trust: run setup, seed files", "and neither may the confirm")
+	assert.Regexp(t, `╰─{10,}╯`, view, "the dialog's bottom border must be on screen")
+	for i, l := range lines {
+		assert.Equalf(t, 80, ansi.PrintableRuneWidth(l), "line %d is the wrong width", i)
+	}
 }

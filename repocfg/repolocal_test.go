@@ -288,22 +288,48 @@ func TestCanonicalSeedPathKeepsLegalFilenames(t *testing.T) {
 // TestRepoLocalLayerKeysMatchTheWireSchema is the bridge guard: the settings panel
 // marks exactly these row keys as repo-layered, so a key added to the file's schema
 // without being added here would layer over a global row that still claims to be the
-// only source. repo_scripts is excluded because a repo-local entry REPLACES the
-// user's matching entry rather than layering over it — and it has no panel row.
+// only source.
+//
+// A completeness sweep, not an equality over every non-repo_scripts tag. Every wire
+// key must be declared EITHER layerable or non-layerable-with-a-reason, so the next
+// key that replaces rather than layers can be added by recording why — where the
+// equality form left only two moves, breaking the test or declaring a replacing key
+// a panel layer it can never be, and the failure message pointed at the second.
 func TestRepoLocalLayerKeysMatchTheWireSchema(t *testing.T) {
+	layer := map[string]bool{}
+	for _, k := range RepoLocalLayerKeys() {
+		layer[k] = true
+	}
 	tp := reflect.TypeOf(repoLocalWire{})
-	var tagged []string
+	var undeclared []string
 	for i := 0; i < tp.NumField(); i++ {
 		name := strings.Split(tp.Field(i).Tag.Get("json"), ",")[0]
-		if name == "" || name == "-" || name == "repo_scripts" {
+		if name == "" || name == "-" {
 			continue
 		}
-		tagged = append(tagged, name)
+		if reason, ok := repoLocalNonLayeringKeys[name]; ok {
+			assert.NotEmptyf(t, reason, "%q is excluded from the panel with no reason", name)
+			assert.Falsef(t, layer[name], "%q cannot be both a panel layer and excluded from being one", name)
+			continue
+		}
+		if !layer[name] {
+			undeclared = append(undeclared, name)
+		}
 	}
-	sort.Strings(tagged)
-	got := RepoLocalLayerKeys()
-	sort.Strings(got)
-	assert.Equal(t, tagged, got, "every layerable key in .atrium.json's schema must be declared for the settings panel")
+	sort.Strings(undeclared)
+	assert.Emptyf(t, undeclared, "every key in .atrium.json's schema must be declared either layerable (RepoLocalLayerKeys, which needs a scopeRepoLayered settings row) or non-layerable with a reason (repoLocalNonLayeringKeys): %v", undeclared)
+
+	// And the other direction: a declared layer key that is not in the schema would
+	// give the panel a row nothing can ever populate.
+	for _, k := range RepoLocalLayerKeys() {
+		found := false
+		for i := 0; i < tp.NumField(); i++ {
+			if strings.Split(tp.Field(i).Tag.Get("json"), ",")[0] == k {
+				found = true
+			}
+		}
+		assert.Truef(t, found, "%q is declared as a panel layer but is not a key in the file's schema", k)
+	}
 }
 
 // TestProblemNamesItsSection keeps the two spellings apart: the global config's
@@ -313,4 +339,19 @@ func TestProblemNamesItsSection(t *testing.T) {
 	assert.Equal(t, `repo_scripts[2]: bad`, Problem{Index: 2, Msg: "bad"}.Error())
 	assert.Equal(t, `repo_scripts[0] ("web"): bad`, Problem{Index: 0, Name: "web", Msg: "bad"}.Error())
 	assert.Equal(t, `carry_files[1] (".env"): bad`, Problem{Section: "carry_files", Index: 1, Name: ".env", Msg: "bad"}.Error())
+}
+
+// TestParseSeedListDedupes: the count in a seed list is quoted on every consent
+// surface — the trust dialog, `atrium trust allow`'s receipt, `trust status`, doctor
+// and the settings badge — and the union at seed time collapses distinct spellings
+// of one path to a single entry. Without a dedupe here those surfaces all said
+// three where one applies, and one path could consume 64 slots of a cap whose whole
+// justification is bounding the git probes the union then removes.
+func TestParseSeedListDedupes(t *testing.T) {
+	rl, err := ParseRepoLocal([]byte(`{"carry_files":["node_modules","./node_modules/","node_modules/.","other"]}`))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"node_modules", "other"}, rl.CarryFiles,
+		"three spellings of one path are one entry, in the canonical form the pathspec is derived from")
+	assert.Equal(t, []string{"2 carried files"}, RepoLocalSurfaces(rl),
+		"the count every consent surface prints must equal what actually applies")
 }
