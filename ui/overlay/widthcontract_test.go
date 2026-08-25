@@ -1,10 +1,12 @@
 package overlay
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/muesli/ansi"
 	"github.com/stretchr/testify/assert"
 
@@ -119,8 +121,12 @@ func TestEverySizerHonorsItsSpec(t *testing.T) {
 				o := tc.build()
 				o.SetSize(w, h)
 				lines := strings.Split(o.Render(), "\n")
+				widest := 0
 				for i, l := range lines {
 					got := ansi.PrintableRuneWidth(l)
+					if got > widest {
+						widest = got
+					}
 					if tc.exact {
 						assert.Equalf(t, w, got, "term %dx%d: line %d must be exactly the claimed %d columns\n%q",
 							term[0], term[1], i, w, l)
@@ -128,6 +134,15 @@ func TestEverySizerHonorsItsSpec(t *testing.T) {
 						assert.LessOrEqualf(t, got, w, "term %dx%d: line %d exceeds the claimed %d columns\n%q",
 							term[0], term[1], i, w, l)
 					}
+				}
+				if !tc.exact && w == term[0] {
+					// A hugger given the whole terminal obeys the inset rule
+					// (#695, SnapFullBleed): the full width, or a gap of at
+					// least two cells per side — never the doubled-border
+					// sliver between.
+					assert.Truef(t, widest == w || widest <= w-4,
+						"term %dx%d: a %d-wide box inside a %d-wide terminal reads as a doubled border (#695)",
+						term[0], term[1], widest, w)
 				}
 				if tc.hAware {
 					assert.LessOrEqualf(t, len(lines), h, "term %dx%d: %d lines exceed the claimed height %d",
@@ -141,6 +156,22 @@ func TestEverySizerHonorsItsSpec(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestTextOverlayFullBleedGolden photographs the #695 rule: content wide
+// enough to hit the terminal cap renders a box that meets both terminal edges
+// — no one-cell halo of background for the frame underneath to double
+// against. The content is deliberately synthetic (rulers wider than the
+// terminal), so the golden pins the geometry without inheriting the
+// cheatsheet's copy; TestHelpOverlayFullBleedsAtTheFloor in app holds the
+// same rule over the real cheatsheet.
+func TestTextOverlayFullBleedGolden(t *testing.T) {
+	ruler := strings.Repeat("0123456789", 9) // 90 columns: capped at 80, snapped full
+	o := NewTextOverlay(ruler + "\n" + ruler)
+	w, h := Fullscreen.Fit(80, 24)
+	o.SetSize(w, h)
+	compareOverlayGolden(t, filepath.Join("testdata", "textoverlay-fullbleed-80x24.txt"),
+		xansi.Strip(o.Render())+"\n")
 }
 
 // contentReach is how far the widest content row extends before its right

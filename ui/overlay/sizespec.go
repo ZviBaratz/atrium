@@ -38,6 +38,23 @@ type SizeSpec struct {
 	WMin, HMin int
 }
 
+// SnapFullBleed is the one statement of the inset rule (#695): a box whose
+// outer width lands within three cells of the terminal's renders as a doubled
+// border, not as a modal over a background — one stray cell of frame beside a
+// border reads as a rendering fault — so such a box takes the full terminal
+// width instead. Gaps are either zero or at least two cells per side. The
+// content-huggers apply it inside their own width caps; spec-driven boxes
+// never reach the zone (their fractions leave real gaps), so Fit does not
+// call it. A box already wider than the terminal (a floor on an absurdly
+// narrow one) is left alone: PlaceOverlay anchors an oversize box, and
+// shrinking it here would undo the floor's promise.
+func SnapFullBleed(outer, termW int) int {
+	if termW > 0 && outer > termW-4 && outer <= termW {
+		return termW
+	}
+	return outer
+}
+
 // Fullscreen hands an overlay the whole terminal, for boxes that size
 // themselves: the cheatsheet hugs its content width and windows its lines to
 // fit short terminals; the settings and accounts panels cap their own width
