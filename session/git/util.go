@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -103,12 +104,7 @@ var checkGHCLI = func(ctx context.Context) error {
 // result so a git diagnostic can't corrupt a parsed value; callers that only care
 // whether the command succeeded ignore the string and check err.
 func localGit(ctx context.Context, dir string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, gitLocalTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
-	start := time.Now()
-	out, err := cmd.Output()
-	recordCmd(cmd, "", start, nil, err)
+	out, err := localGitBytes(ctx, dir, args...)
 	return strings.TrimSpace(string(out)), err
 }
 
@@ -124,6 +120,47 @@ func localGitBytes(ctx context.Context, dir string, args ...string) ([]byte, err
 	out, err := cmd.Output()
 	recordCmd(cmd, "", start, nil, err)
 	return out, err
+}
+
+// errOutputOverCap marks a localGitBytesCapped read that hit its byte cap, so a
+// caller can name the cap in its own words rather than parse the message.
+var errOutputOverCap = errors.New("git output exceeds the byte cap")
+
+// localGitBytesCapped is localGitBytes for output whose size git cannot promise
+// in advance: stdout is read through a hard cap and the command is killed the
+// moment output exceeds it. cat-file --filters is the caller that needs this —
+// the stored blob size says nothing about what a smudge filter expands it to
+// (git-lfs would fetch and stream the real object), so checking len() after a
+// buffering Output() would let the repo choose the allocation; here the
+// overflow costs maxBytes+1 of memory and returns errOutputOverCap, never the
+// partial bytes. Unlike its siblings stderr is discarded rather than captured
+// into the ExitError, a diagnostic loss the capped callers accept.
+func localGitBytesCapped(ctx context.Context, dir string, maxBytes int64, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, gitLocalTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	start := time.Now()
+	if err := cmd.Start(); err != nil {
+		recordCmd(cmd, "", start, nil, err)
+		return nil, err
+	}
+	data, readErr := io.ReadAll(io.LimitReader(stdout, maxBytes+1))
+	if int64(len(data)) > maxBytes {
+		cancel() // kill the writer; the exit status it dies with is the cap's doing
+		_ = cmd.Wait()
+		recordCmd(cmd, "", start, nil, errOutputOverCap)
+		return nil, errOutputOverCap
+	}
+	err = errors.Join(readErr, cmd.Wait())
+	recordCmd(cmd, "", start, nil, err)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 // IsGitRepo checks if the given path is within a git repository

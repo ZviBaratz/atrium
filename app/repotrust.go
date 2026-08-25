@@ -1,13 +1,14 @@
 package app
 
 // repotrust.go — the create-time half of #814's per-repo trust ledger: the
-// prompt. A repo whose HEAD declares executable config (.atrium.json →
-// repo_scripts) that the ledger does not grant gets asked ONCE, at create
-// time, on the update thread — never mid-Start, where there is no surface to
-// ask on. The answer only writes (or does not write) a grant; enforcement is
-// session/repoconfig.go's, which re-hashes the worktree's own bytes at every
-// use, so this dialog can be skipped (headless drain), declined, or raced
-// without anything untrusted ever executing.
+// prompt. A repo whose create ref — the start point the session's worktree
+// will actually check out, not literal HEAD — declares executable config
+// (.atrium.json → repo_scripts) that the ledger does not grant gets asked
+// ONCE, at create time, on the update thread — never mid-Start, where there is
+// no surface to ask on. The answer only writes (or does not write) a grant;
+// enforcement is session/repoconfig.go's, which re-hashes the worktree's own
+// bytes at every use, so this dialog can be skipped (headless drain),
+// declined, or raced without anything untrusted ever executing.
 //
 // Declining is NOT a cancel: both answers create the session, and only the
 // grant differs — an untrusted repo is still a workable cold worktree (#629's
@@ -19,10 +20,12 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/ZviBaratz/atrium/internal/repotrust"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/repocfg"
+	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/ui"
 
 	tea "charm.land/bubbletea/v2"
@@ -42,20 +45,29 @@ type proceedRepoTrustMsg struct{}
 // more sentences, so its budget for repo-authored text is smaller.
 const repoTrustPreviewWidth = 120
 
-// repoTrustAssessment is the pure half, shared by the form, autoDispatch and
-// the headless drain (the allExhausted split's pattern, #703: a headless
-// create must not stage a modal to learn the answer): should creating at path
-// stage the trust prompt, and with what material.
+// repoTrustAssessment is the pure half, shared by the form and autoDispatch
+// (the allExhausted split's pattern, #703: a headless create must not stage a
+// modal to learn the answer): should creating at path stage the trust prompt,
+// and with what material.
+//
+// base is the create's base branch ("" for the repo's current), because the
+// file is read at the ref the worktree will actually check out — the form can
+// pick a base outright, and update_base_on_create (default on) freshens to
+// origin's tip, so literal HEAD can hold a different .atrium.json than the
+// session materializes. Hashing HEAD there would grant one version and then
+// immediately report the session's as "changed" (or skip the prompt for a
+// file HEAD does not carry yet).
 //
 // False for a direct target (out of #814's scope — no worktree materializes
 // anything), for a path git cannot assess, and for a repo whose config is
 // absent, already granted, or declares nothing usable. The enforcement gate
 // below the TUI refuses anything unproven regardless of what this says.
-func (m *home) repoTrustAssessment(path string, direct bool) (repotrust.Assessment, bool) {
+func (m *home) repoTrustAssessment(path string, direct bool, base string) (repotrust.Assessment, bool) {
 	if direct {
 		return repotrust.Assessment{}, false
 	}
-	a, err := repotrust.AssessRepo(m.ctx, path)
+	ref := git.StartPointPreview(m.ctx, path, base, m.appConfig.GetUpdateBaseOnCreate())
+	a, err := repotrust.AssessRepo(m.ctx, path, ref)
 	if err != nil {
 		return repotrust.Assessment{}, false
 	}
@@ -63,11 +75,17 @@ func (m *home) repoTrustAssessment(path string, direct bool) (repotrust.Assessme
 }
 
 // confirmRepoTrust stages plan behind the trust prompt and dismisses the create
-// form (when one is open — autoDispatch has none). Unlike confirmOverCap
-// nothing is stashed as a draft: BOTH answers spawn, and a restorable draft of
-// an already-created session would double-create on restore.
+// form (when one is open — autoDispatch has none), stashing it as a restorable
+// draft first, exactly as confirmOverCap does. Both trust answers proceed
+// toward the spawn, but the spawn is not yet committed: finishSpawnGates can
+// stage the over-cap/exhausted confirms next, whose DECLINE spawns nothing —
+// without the stash, that decline (or a first-variant spawn failure) would
+// have consumed the whole form for a session that never existed. The stash
+// cannot double-create: every path that actually spawns ends in
+// closeCreateForm, which clears it.
 func (m *home) confirmRepoTrust(plan spawnPlan, a repotrust.Assessment) tea.Cmd {
 	m.pendingTrust = &plan
+	m.stashDirtyCreateForm()
 	m.textInputOverlay = nil
 	m.menu.SetState(ui.StateDefault)
 	m.resetTitleCheck()
@@ -109,8 +127,12 @@ func repoTrustMessage(a repotrust.Assessment) string {
 		a.Root, repocfg.RepoLocalFileName, repoTrustSummary(a))
 }
 
-// repoTrustSummary renders what the file's governing entry declares: its name,
-// the surfaces it configures, and the first line of the setup script.
+// repoTrustSummary renders what the file's one entry declares: its name, the
+// surfaces it configures (repocfg.DeclaredSurfaces — the same list `atrium
+// trust allow` prints and enforcement requires non-empty, so the dialog cannot
+// describe surfaces the gate would not run), and the first line of the setup
+// script. There is no "+N more": ParseRepoLocal's one-entry rule means the
+// entry shown here IS the entry that runs, which is the point of the dialog.
 func repoTrustSummary(a repotrust.Assessment) string {
 	if len(a.Entries) == 0 {
 		return ""
@@ -120,23 +142,7 @@ func repoTrustSummary(a repotrust.Assessment) string {
 	if name == "" {
 		name = "unnamed entry"
 	}
-	var declares []string
-	if strings.TrimSpace(e.SetupScript) != "" {
-		declares = append(declares, "setup script")
-	}
-	if strings.TrimSpace(e.RunCommand) != "" {
-		declares = append(declares, "run command")
-	}
-	if len(e.SessionEnv) > 0 {
-		declares = append(declares, "session env")
-	}
-	if strings.TrimSpace(e.PortRange) != "" {
-		declares = append(declares, "port range")
-	}
-	line := name + " · " + strings.Join(declares, " + ")
-	if extra := len(a.Entries) - 1; extra > 0 {
-		line += fmt.Sprintf(" (+%d more)", extra)
-	}
+	line := name + " · " + strings.Join(repocfg.DeclaredSurfaces(e.RepoScript), " + ")
 	if script := strings.TrimSpace(e.SetupScript); script != "" {
 		first := script
 		if idx := strings.IndexByte(first, '\n'); idx >= 0 {
@@ -148,14 +154,23 @@ func repoTrustSummary(a repotrust.Assessment) string {
 }
 
 // sanitizeRepoText makes repo-authored text safe to interpolate into a frame:
-// control runes (ESC first among them — an escape sequence in a script would
-// otherwise write straight through lipgloss into the terminal) become '·', and
-// the result is truncated to a cell budget. Width-bounding alone is not
-// enough, and sanitizing alone is not enough; this is both, in that order, so
-// the truncation measures what will actually render.
+// any rune that is not plainly printable becomes '·', and the result is
+// truncated to a cell budget. Width-bounding alone is not enough, and
+// sanitizing alone is not enough; this is both, in that order, so the
+// truncation measures what will actually render.
+//
+// "Not plainly printable" is customcmd's user-text rule (!IsPrint, plus the
+// Mn/Me combining marks), not a bare C0 check, because the runes that defeat
+// each half of this function are wider than C0: ESC and the C1 set (U+009B is
+// an 8-bit CSI) would write straight through lipgloss into the terminal; and
+// Cf runes — U+202E RIGHT-TO-LEFT OVERRIDE visually reversing the one command
+// this dialog exists to let the user read, zero-width spaces/joiners — measure
+// ZERO cells, so runewidth.Truncate's budget bounds nothing on a string made
+// of them. Replacing with a 1-cell '·' makes every byte of hostile input
+// measurable again, which is what makes the truncation a real bound.
 func sanitizeRepoText(s string, width int) string {
 	cleaned := strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
+		if !unicode.IsPrint(r) || unicode.In(r, unicode.Mn, unicode.Me) {
 			return '·'
 		}
 		return r

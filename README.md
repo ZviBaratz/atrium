@@ -1147,11 +1147,14 @@ root, so a fresh clone already knows how to install and run itself:
 }
 ```
 
-The entries are the same `repo_scripts` shape as above, minus the routing: the file
+The entry is the same `repo_scripts` shape as above, minus the routing: the file
 already belongs to exactly one repo, so `remote_matches`/`path_matches` are refused
-in it. The first usable entry governs, and — once trusted — it **wins over** any
-`config.json` entry that also matches the repo: the repo knows its own environment,
-and your global entry stays the fallback.
+in it — and for the same reason the file carries **exactly one** entry. With no
+routing, only the first entry could ever run, so a second one could only differ
+from what the trust prompt showed you; a file declaring more than one is refused
+whole. Once trusted, the entry **wins over** any `config.json` entry that also
+matches the repo: the repo knows its own environment, and your global entry stays
+the fallback.
 
 **Nothing in this file applies until you trust the repo.** Repo config is
 repo-authored content, and `setup_script` is arbitrary code running as you — so the
@@ -1172,10 +1175,13 @@ The grant is direnv-shaped, and its edges are deliberate:
   until you re-allow, and the next create re-prompts. Sessions check the bytes in
   their *own worktree* at the moment of use, so nothing that happens between the
   prompt and the run can smuggle different content past it.
-- **Only committed content counts.** The prompt and `atrium trust allow` read the
-  file as `HEAD` has it, because that is what a worktree checks out; an untracked
-  or uncommitted `.atrium.json` never reaches a session and is never offered for
-  trust.
+- **Only committed content counts — at the ref your session will start from.**
+  A worktree checks out the session's *base*: with `update_base_on_create` (the
+  default) that is origin's tip whenever it is ahead of your local branch, and
+  the create form can pick a base branch outright. The prompt reads the file at
+  that resolved start point, and `atrium trust allow` at the ref a default
+  create would use — never the working tree, so an untracked or uncommitted
+  `.atrium.json` never reaches a session and is never offered for trust.
 
 When a session's repo config is withheld — untrusted, changed since its grant, or
 unusable — the session still starts; its row says so, a one-time modal explains and

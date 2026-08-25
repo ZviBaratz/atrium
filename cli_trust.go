@@ -24,6 +24,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/internal/repotrust"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/repocfg"
@@ -43,7 +44,8 @@ var (
 		RunE: func(cmd *cobra.Command, args []string) error {
 			log.Initialize(logDir(), false)
 			defer log.Close()
-			return runTrustStatus(cmd.Context(), cmd.OutOrStdout(), firstOrCwd(args))
+			return runTrustStatus(cmd.Context(), cmd.OutOrStdout(), firstOrCwd(args),
+				config.LoadConfig().GetUpdateBaseOnCreate())
 		},
 	}
 
@@ -51,15 +53,18 @@ var (
 		Use:   "allow [path]",
 		Short: "Trust a repo's committed .atrium.json, exactly as it is now",
 		Long: "Records that the repo containing path (default: the working directory) may run the\n" +
-			"repo_scripts its committed .atrium.json declares — the HEAD version, which is what a\n" +
-			"session worktree checks out; uncommitted edits are not what runs and cannot be trusted.\n" +
-			"The grant is for the file's exact content: any later change makes it inert again until\n" +
-			"re-allowed. The equivalent of answering the TUI's create-time prompt, for headless use.",
+			"repo_scripts its committed .atrium.json declares — read at the ref a new session\n" +
+			"would start from (with update_base_on_create, origin's tip when that is ahead),\n" +
+			"which is what a session worktree checks out; uncommitted edits are not what runs\n" +
+			"and cannot be trusted. The grant is for the file's exact content: any later change\n" +
+			"makes it inert again until re-allowed. The equivalent of answering the TUI's\n" +
+			"create-time prompt, for headless use.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			log.Initialize(logDir(), false)
 			defer log.Close()
-			return runTrustAllow(cmd.Context(), cmd.OutOrStdout(), firstOrCwd(args))
+			return runTrustAllow(cmd.Context(), cmd.OutOrStdout(), firstOrCwd(args),
+				config.LoadConfig().GetUpdateBaseOnCreate())
 		},
 	}
 
@@ -101,8 +106,8 @@ func firstOrCwd(args []string) string {
 	return wd
 }
 
-func runTrustAllow(ctx context.Context, w io.Writer, path string) error {
-	a, err := repotrust.AssessRepo(ctx, path)
+func runTrustAllow(ctx context.Context, w io.Writer, path string, updateBase bool) error {
+	a, err := repotrust.AssessCreateDefault(ctx, path, updateBase)
 	if err != nil {
 		return err
 	}
@@ -110,8 +115,8 @@ func runTrustAllow(ctx context.Context, w io.Writer, path string) error {
 		return fmt.Errorf("cannot trust %s: %w", a.Root, a.FileErr)
 	}
 	if !a.Present {
-		return fmt.Errorf("%s has no tracked %s at HEAD — only committed config reaches a session's worktree, so there is nothing to trust (commit the file first)",
-			a.Root, repocfg.RepoLocalFileName)
+		return fmt.Errorf("%s has no tracked %s at %s (the ref a new session starts from) — only committed config reaches a session's worktree, so there is nothing to trust (commit the file first)",
+			a.Root, repocfg.RepoLocalFileName, a.Ref)
 	}
 	if len(a.Entries) == 0 {
 		msg := fmt.Sprintf("%s's %s declares nothing usable, so there is nothing to trust", a.Root, repocfg.RepoLocalFileName)
@@ -183,10 +188,15 @@ func trustKeyFor(ctx context.Context, path string) string {
 	return key
 }
 
-func runTrustStatus(ctx context.Context, w io.Writer, path string) error {
+func runTrustStatus(ctx context.Context, w io.Writer, path string, updateBase bool) error {
 	ledger, ledgerErr := repotrust.Load()
 	if ledgerErr != nil {
+		// Stop here: Load returns an EMPTY ledger on corrupt/future-version, so
+		// falling through would add "no repos are trusted; grant one…" — a
+		// fresh-install invitation to re-grant, printed exactly when real grants
+		// exist but cannot be read.
 		trustf(w, "warning: %v — every repo reads as untrusted until this is fixed\n", ledgerErr)
+		return nil
 	}
 	if len(ledger.Repos) == 0 {
 		trustf(w, "no repos are trusted; grant one with `atrium trust allow <path>`\n")
@@ -208,7 +218,7 @@ func runTrustStatus(ctx context.Context, w io.Writer, path string) error {
 			remote = "-"
 		}
 		trustf(tw, "%s\t%s\t%s\t%s\t%s\n",
-			key, repotrust.LiveState(ctx, key, rec), rec.GrantedAt.Format("2006-01-02"), shortHash(rec.Hash), remote)
+			key, repotrust.LiveState(ctx, key, rec, updateBase), rec.GrantedAt.Format("2006-01-02"), shortHash(rec.Hash), remote)
 	}
 	if err := tw.Flush(); err != nil {
 		return err
@@ -221,29 +231,12 @@ func runTrustStatus(ctx context.Context, w io.Writer, path string) error {
 	return nil
 }
 
-// declaresSummary names what the file's governing entry configures — the entry
-// routing would pick (the first usable one), so the grant receipt describes
-// what will actually run.
+// declaresSummary names what the file's one entry configures, off the same
+// repocfg.DeclaredSurfaces list the TUI's trust dialog renders — the one-entry
+// rule means this IS the entry that runs, so the grant receipt cannot describe
+// a different script than enforcement executes.
 func declaresSummary(a repotrust.Assessment) string {
-	e := a.Entries[0]
-	var parts []string
-	if strings.TrimSpace(e.SetupScript) != "" {
-		parts = append(parts, "a setup script")
-	}
-	if strings.TrimSpace(e.RunCommand) != "" {
-		parts = append(parts, "a run command")
-	}
-	if len(e.SessionEnv) > 0 {
-		parts = append(parts, "session env")
-	}
-	if strings.TrimSpace(e.PortRange) != "" {
-		parts = append(parts, "a port range")
-	}
-	s := strings.Join(parts, ", ")
-	if extra := len(a.Entries) - 1; extra > 0 {
-		s += fmt.Sprintf(" (+%d more entries)", extra)
-	}
-	return s
+	return strings.Join(repocfg.DeclaredSurfaces(a.Entries[0].RepoScript), " + ")
 }
 
 func shortHash(h string) string {

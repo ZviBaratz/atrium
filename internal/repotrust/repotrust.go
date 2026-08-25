@@ -33,9 +33,10 @@
 //   - WHAT UNTRUSTED DOES: nothing, visibly. The whole repo-local entry is
 //     inert — script, run command and environment together — and resolution
 //     falls back to the user's own config.json. The refusal is surfaced, never
-//     silent. Enforcement lives at the single resolution funnel in
-//     session/setupscript.go, below the TUI, because the daemon reaches it
-//     with no UI in the process at all; this package only keeps the records.
+//     silent. Enforcement lives in session/repoconfig.go's routeRepoLocal, the
+//     front door of the single resolution funnel (routeRepoScript), below the
+//     TUI, because the daemon reaches it with no UI in the process at all;
+//     this package only keeps the records.
 //   - PRECEDENCE: a trusted repo-local entry beats the user's global
 //     config.json entry for the same repo (the repo knows its own
 //     environment); the resolution site records that choice.
@@ -140,6 +141,21 @@ func Path() (string, error) {
 		return "", fmt.Errorf("repotrust: resolve data dir: %w", err)
 	}
 	return filepath.Join(dir, fileName), nil
+}
+
+// Exists reports whether a ledger file is present at all, without reading it.
+// It is the enforcement sweep's cheap pre-gate: for a session whose worktree
+// has no .atrium.json, whether a grant could even be relevant is answerable by
+// one Stat, and a user who never granted anything then pays no read+parse per
+// poll. Racing a concurrent first Grant only delays that grant's visibility to
+// the next sweep, which the re-read-every-resolution contract already allows.
+func Exists() bool {
+	path, err := Path()
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(path)
+	return err == nil
 }
 
 // Load reads the ledger. It never writes, whatever it finds.

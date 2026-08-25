@@ -18,7 +18,7 @@ import (
 // repo-local config is no section at all.
 func TestRepoTrustSilentWhenClean(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	entries, err := CheckRepoTrust(context.Background())
+	entries, err := CheckRepoTrust(context.Background(), true)
 	require.NoError(t, err)
 	assert.Empty(t, entries)
 	assert.Empty(t, RenderRepoTrust(entries, err))
@@ -32,7 +32,7 @@ func TestRepoTrustReportsEachGrant(t *testing.T) {
 	gone := filepath.Join(t.TempDir(), "gone-repo")
 	require.NoError(t, repotrust.Grant(gone, "aaaabbbbccccdddd", "git@example.com:x.git", time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)))
 
-	entries, err := CheckRepoTrust(context.Background())
+	entries, err := CheckRepoTrust(context.Background(), true)
 	require.NoError(t, err)
 	require.Len(t, entries, 1, "a check that reports nothing for a real grant would be vacuously silent")
 	assert.Equal(t, gone, entries[0].Key)
@@ -54,7 +54,7 @@ func TestRepoTrustReportsAnUnreadableLedger(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	require.NoError(t, os.WriteFile(path, []byte("{not json"), 0o600))
 
-	entries, checkErr := CheckRepoTrust(context.Background())
+	entries, checkErr := CheckRepoTrust(context.Background(), true)
 	require.Error(t, checkErr)
 	out := RenderRepoTrust(entries, checkErr)
 	assert.Contains(t, out, "untrusted until this is fixed")

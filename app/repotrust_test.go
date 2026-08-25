@@ -81,6 +81,8 @@ func TestCreateSessionFromForm_UntrustedRepoStagesTheTrustPrompt(t *testing.T) {
 	assert.Equal(t, before, h.list.NumInstances(), "nothing spawns while the prompt is up")
 	assert.True(t, h.stagedSpawnPlan(), "the headless drain must hold while the prompt is up")
 	assert.Nil(t, h.textInputOverlay, "the form is consumed before the dialog opens")
+	require.NotNil(t, h.stashedDraft,
+		"the dismissed form must be stashed (confirmOverCap's contract): a later gate's decline or a spawn failure has to have something to restore")
 
 	view := flattenOverlay(h.confirmationOverlay.Render())
 	assert.Contains(t, view, ".atrium.json")
@@ -92,7 +94,8 @@ func TestCreateSessionFromForm_UntrustedRepoStagesTheTrustPrompt(t *testing.T) {
 
 	assert.Equal(t, before+1, h.list.NumInstances(), "confirming spawns the staged plan")
 	assert.Nil(t, h.pendingTrust)
-	a, err := repotrust.AssessRepo(context.Background(), repo)
+	assert.Nil(t, h.stashedDraft, "the committed spawn consumes the stash — a restorable draft of a created session would double-create")
+	a, err := repotrust.AssessRepo(context.Background(), repo, "")
 	require.NoError(t, err)
 	assert.True(t, a.Granted, "y must write the grant before the spawn proceeds")
 }
@@ -111,7 +114,7 @@ func TestCreateSessionFromForm_DecliningTrustStillSpawnsUntrusted(t *testing.T) 
 	assert.Equal(t, before+1, h.list.NumInstances(),
 		"declining trust is not declining the create — the session spawns with the config inert")
 	assert.Nil(t, h.pendingTrust)
-	a, err := repotrust.AssessRepo(context.Background(), repo)
+	a, err := repotrust.AssessRepo(context.Background(), repo, "")
 	require.NoError(t, err)
 	assert.False(t, a.Granted, "declining must write nothing")
 	assert.True(t, a.WantsPrompt(), "the next create must ask again")
@@ -120,7 +123,7 @@ func TestCreateSessionFromForm_DecliningTrustStillSpawnsUntrusted(t *testing.T) 
 func TestCreateSessionFromForm_GrantedRepoSkipsThePrompt(t *testing.T) {
 	repo := gitInitRepo(t)
 	commitRepoLocal(t, repo, testRepoLocal)
-	a, err := repotrust.AssessRepo(context.Background(), repo)
+	a, err := repotrust.AssessRepo(context.Background(), repo, "")
 	require.NoError(t, err)
 	require.NoError(t, repotrust.Grant(a.Key, a.Hash, a.Remote, time.Now()))
 	h := newCreateFormHome(t)
@@ -221,4 +224,104 @@ func jsonString(s string) string {
 		panic(err)
 	}
 	return string(b)
+}
+
+// TestSanitizeRepoTextNeutralizesZeroWidthAndBidi: the frame test above cannot
+// see these — ansi.PrintableRuneWidth scores a bidi override or a zero-width
+// rune as 0 cells, so a frame full of them still measures 80 — which is
+// exactly how they defeat runewidth.Truncate too (StringWidth <= budget
+// returns the whole string). The guard is therefore direct: nothing
+// non-printable survives sanitizeRepoText, and because every hostile rune
+// becomes a 1-cell '·', the cell budget bounds the LENGTH again.
+func TestSanitizeRepoTextNeutralizesZeroWidthAndBidi(t *testing.T) {
+	for name, hostile := range map[string]string{
+		"bidi override flood":  strings.Repeat("\u202e", 4000) + "rm -rf /", // Trojan Source, CVE-2021-42574
+		"zero-width flood":     strings.Repeat("\u200b\u200d", 4000),
+		"c1 controls":          "npm ci \u009b31m \u0085", // U+009B is an 8-bit CSI
+		"combining-mark stack": "a" + strings.Repeat("\u0301", 4000),
+		"esc and bel":          "npm ci \x1b[31mRED\x1b[0m\x07",
+	} {
+		t.Run(name, func(t *testing.T) {
+			out := sanitizeRepoText(hostile, repoTrustPreviewWidth)
+			for _, bad := range []string{"\u202e", "\u200b", "\u200d", "\u009b", "\u0085", "\u0301", "\x1b", "\x07"} {
+				assert.NotContains(t, out, bad)
+			}
+			assert.LessOrEqual(t, ansi.PrintableRuneWidth(out), repoTrustPreviewWidth)
+			assert.LessOrEqual(t, len([]rune(out)), repoTrustPreviewWidth+1,
+				"every rune must be measurable, so the cell budget must bound the rune count too")
+		})
+	}
+}
+
+// TestRepoTrustAssessmentReadsTheCreateBase pins the app half of finding #1's
+// fix: the assessment hashes the file at the ref the worktree will check out —
+// the form's base branch resolved through git.StartPointPreview — not literal
+// HEAD. A HEAD read here shows and grants one version while the session
+// materializes another.
+func TestRepoTrustAssessmentReadsTheCreateBase(t *testing.T) {
+	repo := gitInitRepo(t)
+	commitRepoLocal(t, repo, `{"repo_scripts":[{"name":"main-entry","setup_script":"make main"}]}`)
+	for _, args := range [][]string{
+		{"checkout", "-b", "setup-branch"},
+		{"rm", "--cached", ".atrium.json"},
+	} {
+		cmd := exec.CommandContext(context.Background(), "git", args...)
+		cmd.Dir = repo
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+	}
+	commitRepoLocal(t, repo, `{"repo_scripts":[{"name":"branch-entry","setup_script":"make branch"}]}`)
+	cmd := exec.CommandContext(context.Background(), "git", "checkout", "-")
+	cmd.Dir = repo
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "checkout -: %s", out)
+	h := newCreateFormHome(t)
+
+	fromBranch, ok := h.repoTrustAssessment(repo, false, "setup-branch")
+	require.True(t, ok)
+	require.Len(t, fromBranch.Entries, 1)
+	assert.Equal(t, "branch-entry", fromBranch.Entries[0].Name,
+		"the prompt must describe the base branch's file — that is what the worktree checks out")
+
+	fromHead, ok := h.repoTrustAssessment(repo, false, "")
+	require.True(t, ok)
+	assert.Equal(t, "main-entry", fromHead.Entries[0].Name)
+	assert.NotEqual(t, fromBranch.Hash, fromHead.Hash,
+		"two bases, two hashes — a single HEAD hash would grant bytes the session never holds")
+}
+
+// TestAutoDispatchTrustPathLeavesParkedDraftAlone pins the dispatch plan's
+// finalize split: the smart-dispatch path has no form, so a create that routes
+// through the staged trust prompt must neither destroy a PARKED draft (an
+// earlier Escape's unfinished create) nor write the dispatch line into the
+// create form's prompt history — exactly what its ordinary, unprompted tail
+// already does not do.
+func TestAutoDispatchTrustPathLeavesParkedDraftAlone(t *testing.T) {
+	repo := gitInitRepo(t)
+	commitRepoLocal(t, repo, testRepoLocal)
+	h := newCreateFormHome(t)
+
+	// Park a draft, as an Escape from a half-filled create form would.
+	h.newSessionPath = repo
+	ov, _ := h.newSessionFormOverlay()
+	h.textInputOverlay = ov
+	ov.HandleKeyPress(keyMsg("tab"))
+	ov.HandleKeyPress(keyMsg("tab"))
+	ov.HandleKeyPress(textMsg("half-finished"))
+	h.stashDirtyCreateForm()
+	h.textInputOverlay = nil
+	require.NotNil(t, h.stashedDraft)
+
+	before := h.list.NumInstances()
+	_, handled := h.autoDispatch(PrefillResult{Path: repo, Title: "dispatched", Prompt: "do the thing"})
+	require.True(t, handled)
+	require.Equal(t, stateConfirm, h.state, "an untrusted repo prompts on the dispatch path too")
+
+	answerConfirm(t, h, "y")
+
+	assert.Equal(t, before+1, h.list.NumInstances())
+	require.NotNil(t, h.stashedDraft, "the parked draft belongs to a different create; the dispatch must not consume it")
+	assert.Equal(t, "half-finished", h.stashedDraft.GetTitle())
+	assert.Empty(t, h.appState.GetPromptHistory(),
+		"the dispatch line is not create-form input; the ordinary dispatch tail records nothing and this path must match")
 }

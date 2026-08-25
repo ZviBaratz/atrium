@@ -48,21 +48,22 @@ func TestTrustAllowRevokeStatusRoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	var out strings.Builder
-	require.NoError(t, runTrustAllow(ctx, &out, repo))
+	require.NoError(t, runTrustAllow(ctx, &out, repo, true))
 	assert.Contains(t, out.String(), "trusted")
-	assert.Contains(t, out.String(), "a setup script")
+	assert.Contains(t, out.String(), "setup script",
+		"the receipt names the declared surfaces, off the same list the TUI dialog renders")
 
-	a, err := repotrust.AssessRepo(ctx, repo)
+	a, err := repotrust.AssessRepo(ctx, repo, "")
 	require.NoError(t, err)
 	assert.True(t, a.Granted, "allow must record the grant the gate will honor")
 
 	// Idempotent: allowing again reports, changes nothing, fails nothing.
 	out.Reset()
-	require.NoError(t, runTrustAllow(ctx, &out, repo))
+	require.NoError(t, runTrustAllow(ctx, &out, repo, true))
 	assert.Contains(t, out.String(), "already trusted")
 
 	out.Reset()
-	require.NoError(t, runTrustStatus(ctx, &out, repo))
+	require.NoError(t, runTrustStatus(ctx, &out, repo, true))
 	assert.Contains(t, out.String(), "current")
 
 	// A subdirectory names its repo, matching the grant made at the root.
@@ -72,7 +73,7 @@ func TestTrustAllowRevokeStatusRoundTrip(t *testing.T) {
 	require.NoError(t, runTrustRevoke(ctx, &out, sub))
 	assert.Contains(t, out.String(), "revoked")
 
-	a, err = repotrust.AssessRepo(ctx, repo)
+	a, err = repotrust.AssessRepo(ctx, repo, "")
 	require.NoError(t, err)
 	assert.False(t, a.Granted, "revoke must withdraw the grant")
 }
@@ -87,20 +88,20 @@ func TestTrustAllowRefusesWhatCannotRun(t *testing.T) {
 		// reaches a worktree, so a grant for it would approve nothing.
 		require.NoError(t, os.WriteFile(filepath.Join(repo, ".atrium.json"),
 			[]byte(`{"repo_scripts":[{"setup_script":"make"}]}`), 0o644))
-		err := runTrustAllow(ctx, &strings.Builder{}, repo)
+		err := runTrustAllow(ctx, &strings.Builder{}, repo, true)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "commit the file first")
 	})
 
 	t.Run("declares nothing usable", func(t *testing.T) {
 		repo := trustRepo(t, `{"repo_scripts":[]}`)
-		err := runTrustAllow(ctx, &strings.Builder{}, repo)
+		err := runTrustAllow(ctx, &strings.Builder{}, repo, true)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "nothing to trust")
 	})
 
 	t.Run("not a repo", func(t *testing.T) {
-		assert.Error(t, runTrustAllow(ctx, &strings.Builder{}, t.TempDir()))
+		assert.Error(t, runTrustAllow(ctx, &strings.Builder{}, t.TempDir(), true))
 	})
 }
 
@@ -108,7 +109,7 @@ func TestTrustAllowSurvivesAnEdit(t *testing.T) {
 	sandboxDataDir(t)
 	repo := trustRepo(t, `{"repo_scripts":[{"setup_script":"make v1"}]}`)
 	ctx := context.Background()
-	require.NoError(t, runTrustAllow(ctx, &strings.Builder{}, repo))
+	require.NoError(t, runTrustAllow(ctx, &strings.Builder{}, repo, true))
 
 	// A new committed version goes stale...
 	require.NoError(t, os.WriteFile(filepath.Join(repo, ".atrium.json"),
@@ -119,14 +120,14 @@ func TestTrustAllowSurvivesAnEdit(t *testing.T) {
 		require.NoError(t, cmd.Run())
 	}
 	var out strings.Builder
-	require.NoError(t, runTrustStatus(ctx, &out, repo))
+	require.NoError(t, runTrustStatus(ctx, &out, repo, true))
 	assert.Contains(t, out.String(), "changed", "status must flag a grant the repo has moved past")
 
 	// ...and re-allowing replaces the grant and says so.
 	out.Reset()
-	require.NoError(t, runTrustAllow(ctx, &out, repo))
+	require.NoError(t, runTrustAllow(ctx, &out, repo, true))
 	assert.Contains(t, out.String(), "replaces the grant")
-	a, err := repotrust.AssessRepo(ctx, repo)
+	a, err := repotrust.AssessRepo(ctx, repo, "")
 	require.NoError(t, err)
 	assert.True(t, a.Granted)
 }
@@ -141,7 +142,7 @@ func TestTrustRevokeAGoneRepoByItsRecordedKey(t *testing.T) {
 	require.NoError(t, repotrust.Grant(key, "deadbeef", "", time.Now()))
 
 	var out strings.Builder
-	require.NoError(t, runTrustStatus(context.Background(), &out, key))
+	require.NoError(t, runTrustStatus(context.Background(), &out, key, true))
 	assert.Contains(t, out.String(), "missing", "status must flag a grant whose repo is gone")
 
 	out.Reset()
@@ -168,6 +169,23 @@ func TestTrustRevokeAll(t *testing.T) {
 func TestTrustStatusOnAnEmptyLedger(t *testing.T) {
 	sandboxDataDir(t)
 	var out strings.Builder
-	require.NoError(t, runTrustStatus(context.Background(), &out, t.TempDir()))
+	require.NoError(t, runTrustStatus(context.Background(), &out, t.TempDir(), true))
 	assert.Contains(t, out.String(), "no repos are trusted")
+}
+
+func TestTrustStatusOnACorruptLedgerWarnsWithoutTheFreshInstallLine(t *testing.T) {
+	sandboxDataDir(t)
+	path, err := repotrust.Path()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte("{not json"), 0o600))
+
+	var out strings.Builder
+	require.NoError(t, runTrustStatus(context.Background(), &out, t.TempDir(), true))
+	assert.Contains(t, out.String(), "warning")
+	// Load returns an EMPTY ledger on corruption, so without the early return the
+	// empty-ledger branch fires too — and "no repos are trusted; grant one…" reads
+	// as a fresh install, inviting a re-grant while the user's real grants sit
+	// unreadable in the file the warning just named.
+	assert.NotContains(t, out.String(), "no repos are trusted")
 }

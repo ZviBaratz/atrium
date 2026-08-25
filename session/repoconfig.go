@@ -53,17 +53,23 @@ const (
 	// content — inert until re-granted.
 	RepoConfigChanged
 	// RepoConfigAbsentGranted means the ledger holds a grant for this repo but
-	// the worktree has no file — nothing runs (there is nothing to run), and
-	// the divergence is worth a word: the setup this repo was granted for is
-	// not on this branch.
+	// the worktree has no file — nothing repo-local runs (there is nothing to
+	// run; the user's global config.json still applies via the fallback), and
+	// the divergence is worth one word at materialization: the setup this repo
+	// was granted for is not on this branch.
 	RepoConfigAbsentGranted
 	// RepoConfigInvalid means the file is present but unusable — undecodable,
-	// not a regular file, over the size cap, or every entry refused — inert.
+	// not a regular file, over the size cap, more than one entry, or its one
+	// entry refused (structurally or by post-trust validation) — inert.
 	RepoConfigInvalid
 )
 
-// Inert reports whether the state describes present-but-withheld repo config —
-// the states a session surface should flag.
+// Inert reports whether the state is one where repo config the user might
+// expect to apply did not — the states whose report the one-shot modal flags.
+// The persistent row line is narrower (ui's repoConfigLine): it carries the
+// REFUSALS (untrusted/changed/invalid), while AbsentGranted — a benign
+// divergence, common when working a branch that predates the file — gets the
+// modal once per materialization and then leaves the row's git line alone.
 func (s RepoConfigState) Inert() bool {
 	switch s {
 	case RepoConfigUntrusted, RepoConfigChanged, RepoConfigAbsentGranted, RepoConfigInvalid:
@@ -82,9 +88,11 @@ func (i *Instance) RepoConfigStatus() RepoConfigState {
 	return i.repoConfigState
 }
 
-// RepoConfigReport is the current state's user-facing explanation, or "" when
-// there is nothing to explain (None/Active).
-func (i *Instance) RepoConfigReport() string {
+// repoConfigReportSnapshot is the current state's user-facing explanation, or
+// "" when there is nothing to explain (None/Active). Unexported on purpose:
+// the surfaces read the one-shot RepoConfigProblem, and an exported live
+// report with no reader would be dead API.
+func (i *Instance) repoConfigReportSnapshot() string {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	return i.repoConfigReport
@@ -134,9 +142,14 @@ func (i *Instance) setRepoConfig(state RepoConfigState, report string) {
 // ledger and the file are re-read at every resolution so a grant, a
 // revocation, or an edit reaches a running session on the next poll.
 //
-// The empty answer is memoized too: a repo whose root cannot be resolved keys
-// as "", which repotrust.Ledger.Granted refuses — the failing side is the
-// refusing side.
+// Only a SUCCESSFUL derivation is memoized. originRemote can cache its empty
+// answer because "no remote" is a real state of the repo; here "" is produced
+// only by failure (git off PATH mid-upgrade, a fork error, a timeout), and
+// pinning one transient failure for the life of the instance would read every
+// later resolution as untrusted while `atrium trust status` — deriving the key
+// itself, successfully — insists the repo is current. The failing side still
+// refuses (repotrust.Ledger.Granted rejects the empty key); it just also
+// retries, at the cost of one extra fork per resolution only while broken.
 func (i *Instance) ledgerKey(repoPath string) string {
 	i.mu.RLock()
 	key, known := i.repoKey, i.repoKeyKnown
@@ -150,9 +163,11 @@ func (i *Instance) ledgerKey(repoPath string) string {
 			key = k
 		}
 	}
-	i.mu.Lock()
-	i.repoKey, i.repoKeyKnown = key, true
-	i.mu.Unlock()
+	if key != "" {
+		i.mu.Lock()
+		i.repoKey, i.repoKeyKnown = key, true
+		i.mu.Unlock()
+	}
 	return key
 }
 
@@ -190,17 +205,23 @@ func (i *Instance) routeRepoLocal(dir, repoPath string) (repocfg.Script, bool) {
 			return repocfg.Script{}, false
 		}
 		// Absent. Worth a word only when a grant says this repo HAS setup: then
-		// the branch this worktree checked out simply does not carry it. The key
-		// derivation (a memoized git fork) is skipped while the ledger holds no
-		// records at all, so a session in a repo using none of this pays one
-		// stat and one ENOENT per sweep and forks nothing.
+		// the branch this worktree checked out simply does not carry it. The
+		// ledger is only READ once a ledger file exists at all (one Stat), and
+		// the key derivation (a memoized git fork) only once it holds records —
+		// so a session in a repo using none of this pays one Lstat and one Stat
+		// per sweep and forks nothing. A ledger that exists but cannot be read
+		// stays None: nothing can execute from an absent file either way, and
+		// the failure is reported where it gates (the file-present path below)
+		// and by doctor.
 		state, report := RepoConfigNone, ""
-		if ledger, _ := repotrust.Load(); len(ledger.Repos) > 0 {
-			if _, has := ledger.Lookup(i.ledgerKey(repoPath)); has {
-				state = RepoConfigAbsentGranted
-				report = fmt.Sprintf(
-					"This worktree has no %s, but the repo has a trusted one — the branch it checked out does not carry the setup you granted. Nothing was run.",
-					repocfg.RepoLocalFileName)
+		if repotrust.Exists() {
+			if ledger, err := repotrust.Load(); err == nil && len(ledger.Repos) > 0 {
+				if _, has := ledger.Lookup(i.ledgerKey(repoPath)); has {
+					state = RepoConfigAbsentGranted
+					report = fmt.Sprintf(
+						"This worktree has no %s, but the repo has a trusted one — the branch it checked out does not carry the setup you granted, so that setup was not used. Your own config.json still applies as usual.",
+						repocfg.RepoLocalFileName)
+				}
 			}
 		}
 		i.setRepoConfig(state, report)
@@ -232,6 +253,33 @@ func (i *Instance) routeRepoLocal(dir, repoPath string) (repocfg.Script, bool) {
 		return repocfg.Script{}, false
 	}
 
+	// Parse BEFORE the trust check — ParseRepoLocal is pure JSON, safe on
+	// untrusted bytes (only ValidateOne, below the grant check, touches the
+	// template engine) — because what the file DECLARES decides whether trust is
+	// even a question. A file that declares nothing usable gates nothing, so an
+	// ungranted `{}` or a #815-only shape (carry_files, say) must read as None,
+	// not sit as a permanent "untrusted" nag whose named remedies both refuse:
+	// `atrium trust allow` has nothing to trust, and re-creating never prompts.
+	parsed, parseErr := repocfg.ParseRepoLocal(data)
+	if parseErr != nil {
+		i.setRepoConfig(RepoConfigInvalid, fmt.Sprintf("Repo config ignored: %v. Fix the file to use it.", parseErr))
+		return repocfg.Script{}, false
+	}
+	if len(parsed.Entries) == 0 {
+		if len(parsed.Problems) == 0 {
+			// Declares nothing executable (an empty list, or only keys a future
+			// atrium reads): exactly the no-file behavior.
+			i.setRepoConfig(RepoConfigNone, "")
+			return repocfg.Script{}, false
+		}
+		report := fmt.Sprintf("Repo config ignored: the entry in %s's %s is not usable. Fix the file to use it.", repoPath, repocfg.RepoLocalFileName)
+		for _, p := range parsed.Problems {
+			report += fmt.Sprintf("\n  %s: %s", repocfg.RepoLocalFileName, p.Error())
+		}
+		i.setRepoConfig(RepoConfigInvalid, report)
+		return repocfg.Script{}, false
+	}
+
 	hash := repotrust.HashBytes(data)
 	key := i.ledgerKey(repoPath)
 	ledger, ledgerErr := repotrust.Load()
@@ -254,33 +302,21 @@ func (i *Instance) routeRepoLocal(dir, repoPath string) (repocfg.Script, bool) {
 		return repocfg.Script{}, false
 	}
 
-	parsed, err := repocfg.ParseRepoLocal(data)
-	if err != nil {
-		i.setRepoConfig(RepoConfigInvalid, fmt.Sprintf("repo config ignored: %v.", err))
-		return repocfg.Script{}, false
-	}
-	// First valid entry wins, same as global routing's first-match rule; a broken
-	// sibling is logged (the same loudness routeRepoScript gives a refused global
-	// entry) and stepped over. The index handed to ValidateOne is the entry's
-	// position in the FILE, not in the filtered slice, so `repo_scripts[N]` in
-	// the message is the N the user can find.
-	for _, entry := range parsed.Entries {
-		script, problem := repocfg.ValidateOne(entry.Index, entry.RepoScript)
-		if problem == nil {
-			i.setRepoConfig(RepoConfigActive, "")
-			return script, true
-		}
+	// Exactly one entry can exist here (ParseRepoLocal's one-entry rule), and it
+	// is the entry the trust prompt described — so a late validation failure
+	// refuses the file rather than stepping over the entry, which is what keeps
+	// "the script the user was shown" and "the script that runs" the same script.
+	// The index handed to ValidateOne is the entry's position in the FILE, so
+	// `repo_scripts[N]` in the message is the N the user can find.
+	entry := parsed.Entries[0]
+	script, problem := repocfg.ValidateOne(entry.Index, entry.RepoScript)
+	if problem != nil {
 		log.WarningLog.Printf("repo-local config for %q: %s: %s", i.Title(), repocfg.RepoLocalFileName, problem.Error())
-	}
-	if len(parsed.Entries) == 0 && len(parsed.Problems) == 0 {
-		// A file that declares nothing executable gates nothing.
-		i.setRepoConfig(RepoConfigNone, "")
+		i.setRepoConfig(RepoConfigInvalid, fmt.Sprintf(
+			"Repo config ignored: the trusted entry in %s's %s does not validate, so nothing from it ran.\n  %s: %s\nFix the file to use it (the fix re-prompts — its content will have changed).",
+			repoPath, repocfg.RepoLocalFileName, repocfg.RepoLocalFileName, problem.Error()))
 		return repocfg.Script{}, false
 	}
-	report := fmt.Sprintf("Repo config ignored: no entry in %s's %s is usable.", repoPath, repocfg.RepoLocalFileName)
-	for _, p := range parsed.Problems {
-		report += fmt.Sprintf("\n  %s: %s", repocfg.RepoLocalFileName, p.Error())
-	}
-	i.setRepoConfig(RepoConfigInvalid, report)
-	return repocfg.Script{}, false
+	i.setRepoConfig(RepoConfigActive, "")
+	return script, true
 }

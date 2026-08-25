@@ -3,12 +3,13 @@ package session
 // repoconfig_test.go — the #814 trust gate's proof. The load-bearing assertion
 // style is the execSetup recorder (stubSetupExec): a refused entry must spawn
 // NO PROCESS, not merely report that it didn't. Grants are made through
-// repotrust.AssessRepo — the same derivation the create-time prompt and
-// `atrium trust allow` use — so every granted-then-executes test also proves
-// the pact between the two readers: the grant hashes HEAD's checked-out form
-// (git.HeadFile), enforcement hashes the worktree's own file, and if the two
-// ever disagree systematically (a trimmed newline, an unapplied filter) these
-// tests fail before any user hits it.
+// repotrust.AssessCreateDefault — the same derivation the create-time prompt
+// and `atrium trust allow` use — so every granted-then-executes test also
+// proves the pact between the two readers: the grant hashes the create ref's
+// checked-out form (git.FileAtRef at the start-point preview, HEAD here since
+// the fixtures have no origin), enforcement hashes the worktree's own file,
+// and if the two ever disagree systematically (a trimmed newline, an unapplied
+// filter) these tests fail before any user hits it.
 
 import (
 	"context"
@@ -81,11 +82,11 @@ func repoLocalFixture(t *testing.T, repoConfig string) (inst *Instance, worktree
 	return inst, wt.GetWorktreePath(), repoPath
 }
 
-// grantRepo records trust for the repo's CURRENT HEAD config, through the same
-// assessment the prompt and the CLI use.
+// grantRepo records trust for the repo's current committed config, through the
+// same default-create assessment `atrium trust allow` uses.
 func grantRepo(t *testing.T, repoPath string) {
 	t.Helper()
-	a, err := repotrust.AssessRepo(context.Background(), repoPath)
+	a, err := repotrust.AssessCreateDefault(context.Background(), repoPath, true)
 	require.NoError(t, err)
 	require.True(t, a.Present, "fixture should have committed a .atrium.json")
 	require.NoError(t, repotrust.Grant(a.Key, a.Hash, a.Remote, time.Now()))
@@ -197,7 +198,14 @@ func TestRepoLocal_AbsentWithGrantSaysSo(t *testing.T) {
 
 	assert.Empty(t, rec.scripts())
 	assert.Equal(t, RepoConfigAbsentGranted, inst.RepoConfigStatus())
-	assert.NotEmpty(t, inst.RepoConfigProblem())
+	problem := inst.RepoConfigProblem()
+	require.NotEmpty(t, problem)
+	// The fallback to the user's own config still runs on this path, so the copy
+	// must not claim nothing ran — review finding: the one sentence whose job is
+	// to say whether code executed said the opposite whenever a global entry
+	// matched.
+	assert.NotContains(t, problem, "Nothing was run")
+	assert.Contains(t, problem, "config.json still applies")
 }
 
 // TestRepoLocal_MovedRepoIsUntrusted: the ledger keys on the canonical repo
@@ -205,7 +213,7 @@ func TestRepoLocal_AbsentWithGrantSaysSo(t *testing.T) {
 // — deliberate, path identity IS the trust boundary.
 func TestRepoLocal_MovedRepoIsUntrusted(t *testing.T) {
 	_, dir, repoPath := repoLocalFixture(t, oneEntry)
-	granted, err := repotrust.AssessRepo(context.Background(), repoPath)
+	granted, err := repotrust.AssessRepo(context.Background(), repoPath, "")
 	require.NoError(t, err)
 	require.NoError(t, repotrust.Grant(granted.Key, granted.Hash, granted.Remote, time.Now()))
 	rec := &setupRecorder{}
@@ -279,7 +287,7 @@ func TestRepoLocal_InvalidShapesAreInertWithAReason(t *testing.T) {
 		inst.RunSetupScript(dir)
 		assert.Empty(t, rec.scripts())
 		assert.Equal(t, RepoConfigInvalid, inst.RepoConfigStatus())
-		assert.Contains(t, inst.RepoConfigReport(), "regular file")
+		assert.Contains(t, inst.repoConfigReportSnapshot(), "regular file")
 	})
 
 	t.Run("an oversized file is refused whole", func(t *testing.T) {
@@ -322,7 +330,7 @@ func TestRepoLocal_InvalidShapesAreInertWithAReason(t *testing.T) {
 		inst.RunSetupScript(dir)
 		assert.Empty(t, rec.scripts())
 		assert.Equal(t, RepoConfigInvalid, inst.RepoConfigStatus())
-		assert.Contains(t, inst.RepoConfigReport(), ".atrium.json")
+		assert.Contains(t, inst.repoConfigReportSnapshot(), ".atrium.json")
 	})
 }
 
@@ -375,4 +383,98 @@ func TestRepoLocal_SweepRefreshesStateButNeverReArmsTheModal(t *testing.T) {
 	assert.True(t, state.Configured, "the trusted repo-local run_command reaches the sweep")
 	assert.Equal(t, RepoConfigActive, inst.RepoConfigStatus())
 	assert.Empty(t, rec.scripts(), "a sweep only reads; nothing may execute from it")
+}
+
+// TestRepoLocal_DecoyEntriesRefuseTheWholeFile is the consent-integrity pin
+// behind the one-entry rule: a first entry that fails LATE validation (a bad
+// port_range passes the parse) beside a second that would validate is the
+// shape where "the entry the prompt showed" and "the entry that runs" can
+// differ — so the file refuses whole, even when its exact bytes are granted,
+// and neither entry spawns anything.
+func TestRepoLocal_DecoyEntriesRefuseTheWholeFile(t *testing.T) {
+	decoy := `{"repo_scripts":[` +
+		`{"name":"deps","setup_script":"echo shown-to-user","port_range":"nope"},` +
+		`{"setup_script":"echo never-shown"}]}`
+	inst, dir, repoPath := repoLocalFixture(t, decoy)
+	// Grant the exact bytes by hand (grantRepo cannot: the assessment carries no
+	// usable entries) — a hand-edited ledger, or a grant minted by an older
+	// atrium, must still not make the second entry reachable.
+	require.NoError(t, repotrust.Grant(mustCanonical(t, repoPath), repotrust.HashBytes([]byte(decoy)), "", time.Now()))
+	rec := &setupRecorder{}
+	defer stubSetupExec(rec.record)()
+
+	inst.RunSetupScript(dir)
+
+	assert.Empty(t, rec.scripts(), "neither the decoy nor the hidden entry may spawn")
+	assert.Equal(t, RepoConfigInvalid, inst.RepoConfigStatus())
+	assert.Contains(t, inst.RepoConfigProblem(), "exactly one")
+}
+
+// TestRepoLocal_NothingDeclaredIsSilent: a committed file that declares nothing
+// executable — an empty list, or only keys a future atrium reads (#815's
+// carry_files) — gates nothing, so it must read as None even UNGRANTED: no
+// permanent "untrusted" row, no modal, and no remedy pointing at `atrium trust
+// allow`, which would refuse it ("nothing to trust").
+func TestRepoLocal_NothingDeclaredIsSilent(t *testing.T) {
+	for name, content := range map[string]string{
+		"an empty object":       `{}`,
+		"an empty list":         `{"repo_scripts":[]}`,
+		"a future-shape file":   `{"carry_files":[".env"]}`,
+		"an empty entry object": `{"repo_scripts":[{}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			inst, dir, _ := repoLocalFixture(t, content)
+			rec := &setupRecorder{}
+			defer stubSetupExec(rec.record)()
+
+			inst.RunSetupScript(dir)
+
+			assert.Empty(t, rec.scripts())
+			if content == `{"repo_scripts":[{}]}` {
+				// A DECLARED entry that configures nothing is a defect worth a word
+				// (the author wrote an entry expecting something), unlike no entry.
+				assert.Equal(t, RepoConfigInvalid, inst.RepoConfigStatus())
+				assert.Contains(t, inst.RepoConfigProblem(), "configures nothing")
+				return
+			}
+			assert.Equal(t, RepoConfigNone, inst.RepoConfigStatus(),
+				"nothing usable declared must read exactly like no file")
+			assert.Empty(t, inst.RepoConfigProblem(), "nothing gated, nothing to nag about")
+		})
+	}
+}
+
+// TestRepoLocal_TrustedEntryFailingValidationRefusesWithTheProblem: with one
+// entry there is nothing to "step over" — a granted entry that fails post-trust
+// validation (an uncompilable template here; the parse cannot see it) goes
+// Invalid with the validator's own words, and nothing runs.
+func TestRepoLocal_TrustedEntryFailingValidationRefusesWithTheProblem(t *testing.T) {
+	inst, dir, repoPath := repoLocalFixture(t,
+		`{"repo_scripts":[{"name":"web","setup_script":"echo {{.NoSuchField}}"}]}`)
+	grantRepo(t, repoPath)
+	rec := &setupRecorder{}
+	defer stubSetupExec(rec.record)()
+
+	inst.RunSetupScript(dir)
+
+	assert.Empty(t, rec.scripts())
+	assert.Equal(t, RepoConfigInvalid, inst.RepoConfigStatus())
+	assert.Contains(t, inst.RepoConfigProblem(), "repo_scripts[0]",
+		"the notice must carry the validator's problem, findable by file position")
+}
+
+// TestRepoLocal_TransientKeyFailureIsNotPinned: ledgerKey memoizes only a
+// SUCCESSFUL derivation. A repo git momentarily could not answer for must not
+// read as untrusted for the life of the instance — the next resolution
+// re-derives.
+func TestRepoLocal_TransientKeyFailureIsNotPinned(t *testing.T) {
+	dir := t.TempDir()
+	inst := &Instance{ident: identity{title: "web"}, Path: dir}
+
+	assert.Empty(t, inst.ledgerKey(dir), "no repo yet: no key")
+
+	runGit(t, "", "init", dir)
+	key := inst.ledgerKey(dir)
+	assert.NotEmpty(t, key, "the failure must not have been memoized — a later resolution derives the key")
+	assert.Equal(t, key, inst.ledgerKey(dir), "the success IS memoized")
 }

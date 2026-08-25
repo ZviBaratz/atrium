@@ -425,9 +425,10 @@ func (m *home) flushSetupFailures() tea.Cmd {
 	// Repo-local config that was withheld (#814): untrusted, changed since its
 	// grant, absent though granted, or unusable. Same channel — the session is
 	// missing something its repo promised, and this says why and names the remedy.
-	// The one-shot is armed only on the applying paths (session/repoconfig.go), and
-	// cleared as shown, so the tick cannot reopen it; every drained `atrium new`
-	// create reaches this too, which is how a headless create "says so".
+	// The one-shot is armed only on the applying paths (resolveSetupRun in
+	// session/setupscript.go), and cleared as shown, so the tick cannot reopen it;
+	// every drained `atrium new` create reaches this too, which is how a headless
+	// create "says so".
 	for _, inst := range m.list.GetInstances() {
 		report := inst.RepoConfigProblem()
 		if report == "" {

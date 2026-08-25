@@ -248,18 +248,22 @@ func (p rowPaint) noteSeg(i *session.Instance) rowSeg {
 }
 
 // repoConfigLine is line 2's copy for a session whose repo-local config was
-// withheld (#814), and false for every state with nothing to flag (unset, none,
-// active). Fixed strings on purpose: nothing repo-authored — no path, no entry
-// name — reaches the row, so the line has a knowable worst-case width and the
-// flex segment's truncation is a formality.
+// REFUSED (#814), and false for every state with nothing to hold against the
+// session — unset, none, active, and deliberately also AbsentGranted: a
+// granted file simply not on this branch is a benign divergence that already
+// got its one-shot modal at materialization, and a fixed line held for the
+// life of the session would displace the git line (ahead/behind, PR, diff)
+// over routine branch work. The refusals keep the line because a security
+// refusal must not be the thing that vanishes. Fixed strings on purpose:
+// nothing repo-authored — no path, no entry name — reaches the row, so the
+// line has a knowable worst-case width and the flex segment's truncation is a
+// formality.
 func repoConfigLine(s session.RepoConfigState) (string, bool) {
 	switch s {
 	case session.RepoConfigUntrusted:
 		return "repo config ignored · untrusted", true
 	case session.RepoConfigChanged:
 		return "repo config ignored · changed since granted", true
-	case session.RepoConfigAbsentGranted:
-		return "repo config absent on this branch", true
 	case session.RepoConfigInvalid:
 		return "repo config ignored · invalid", true
 	}

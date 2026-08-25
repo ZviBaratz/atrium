@@ -891,12 +891,14 @@ func (m *home) quitPending() bool { return m.quitRequested }
 //
 // Of the four holds this is the one about corrupting another surface rather than about
 // interleaving with work already under way.
-// Accepting either confirm goes straight to spawnVariants, which re-validates nothing:
-// creating a session in between would let the accepted plan spawn a duplicate title —
-// and therefore a second session deriving one branch slug, which Worktree.Setup treats
-// as a resume — or spawn past the cap the user was shown. Deferring is safe where a
-// state gate was not: a staged plan means a human is looking at a dialog right now, so
-// the wait is seconds, and the request is retried on the next tick either way.
+// Accepting the over-cap or exhausted confirm goes straight to spawnVariants, which
+// re-validates nothing, and the trust prompt's answers re-enter only the gates BELOW
+// it (the cap is recomputed, the title never is): creating a session in between would
+// let the staged plan spawn a duplicate title — and therefore a second session
+// deriving one branch slug, which Worktree.Setup treats as a resume — or, for the
+// first two, spawn past the cap the user was shown. Deferring is safe where a state
+// gate was not: a staged plan means a human is looking at a dialog right now, so the
+// wait is seconds, and the request is retried on the next tick either way.
 func (m *home) stagedSpawnPlan() bool {
 	return m.pendingOverCap != nil || m.pendingExhausted != nil || m.pendingTrust != nil
 }

@@ -19,16 +19,18 @@ func RepoRoot(ctx context.Context, path string) (string, error) {
 	return findGitRepoRoot(ctx, path)
 }
 
-// HeadFile reads one file out of a repository's HEAD commit, as it would be
-// CHECKED OUT: `git cat-file --filters`, so eol/smudge attributes apply and the
-// bytes match what a fresh worktree of HEAD will hold on disk. That is the
+// FileAtRef reads one file out of a repository at ref, as it would be CHECKED
+// OUT: `git cat-file --filters`, so eol/smudge attributes apply and the bytes
+// match what a fresh worktree of that ref will hold on disk. That is the
 // property the repo-trust ledger needs — a grant hashes these bytes, and
 // enforcement hashes the worktree's file, so any systematic difference between
 // the two readers (a trimmed newline, an unapplied filter) would make every
 // grant unmatchable. (localGit's TrimSpace is exactly such a difference, which
-// is why this rides localGitBytes.)
+// is why this rides the bytes-returning runners.) ref is what
+// StartPointPreview answers: the ref the session's worktree will materialize,
+// which is HEAD only when no base freshening or explicit base applies.
 //
-// present is false when HEAD has no such file — including an unborn HEAD (a
+// present is false when ref carries no such file — including an unborn HEAD (a
 // fresh init with no commits), where nothing is checked out at all. err is for
 // git being unable to answer (off PATH, killed by timeout), telling the caller
 // "could not determine" apart from "determined absent"; the discriminator is
@@ -36,26 +38,29 @@ func RepoRoot(ctx context.Context, path string) (string, error) {
 //
 // maxBytes bounds the read twice: the blob's stored size is checked before the
 // content is asked for (a repo can commit a file of any size, and this runs on
-// session-creation paths), and the filtered output is checked after (a filter
-// can expand — an LFS pointer is tiny, its content is not). Oversized returns
+// session-creation paths), and the filtered stream is read through a hard cap
+// that kills the filter on overflow — a filter can expand (an LFS pointer is
+// tiny, its content is not; the smudge command comes from the user's global
+// gitconfig but the repo's .gitattributes selects it), and buffering first and
+// checking after would let the repo choose the allocation. Oversized returns
 // present=true with an error, never a truncation: truncated bytes would parse
 // and hash as something the repo never said.
-func HeadFile(ctx context.Context, root, name string, maxBytes int64) (data []byte, present bool, err error) {
-	listed, err := localGit(ctx, root, "ls-tree", "--name-only", "HEAD", "--", name)
+func FileAtRef(ctx context.Context, root, ref, name string, maxBytes int64) (data []byte, present bool, err error) {
+	listed, err := localGit(ctx, root, "ls-tree", "--name-only", ref, "--", name)
 	if err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) && exit.ExitCode() >= 0 {
-			// git ran and said no: an unborn HEAD, or no repository here any more.
-			// Either way HEAD checks out no such file.
+			// git ran and said no: an unborn HEAD, a ref that does not exist, or no
+			// repository here any more. Either way the ref checks out no such file.
 			return nil, false, nil
 		}
-		return nil, false, fmt.Errorf("list %s in HEAD of %s: %w", name, root, err)
+		return nil, false, fmt.Errorf("list %s in %s of %s: %w", name, ref, root, err)
 	}
 	if strings.TrimSpace(listed) == "" {
 		return nil, false, nil
 	}
 
-	spec := "HEAD:" + name
+	spec := ref + ":" + name
 	sizeText, err := localGit(ctx, root, "cat-file", "-s", spec)
 	if err != nil {
 		return nil, true, fmt.Errorf("size %s in %s: %w", spec, root, err)
@@ -68,12 +73,12 @@ func HeadFile(ctx context.Context, root, name string, maxBytes int64) (data []by
 		return nil, true, fmt.Errorf("%s in %s is %d bytes, over the %d-byte cap", name, root, size, maxBytes)
 	}
 
-	data, err = localGitBytes(ctx, root, "cat-file", "--filters", spec)
+	data, err = localGitBytesCapped(ctx, root, maxBytes, "cat-file", "--filters", spec)
 	if err != nil {
+		if errors.Is(err, errOutputOverCap) {
+			return nil, true, fmt.Errorf("%s in %s filters to more than the %d-byte cap", name, root, maxBytes)
+		}
 		return nil, true, fmt.Errorf("read %s in %s: %w", spec, root, err)
-	}
-	if int64(len(data)) > maxBytes {
-		return nil, true, fmt.Errorf("%s in %s filters to %d bytes, over the %d-byte cap", name, root, len(data), maxBytes)
 	}
 	return data, true, nil
 }

@@ -407,7 +407,7 @@ func (m *home) autoDispatch(res PrefillResult) (tea.Cmd, bool) {
 	count := m.capCount(sc)
 	plan := spawnPlan{
 		titles: []string{res.Title}, path: res.Path, direct: direct,
-		programs: []string{m.program}, prompt: res.Prompt,
+		programs: []string{m.program}, prompt: res.Prompt, dispatch: true,
 	}
 	verdict := capVerdict(sc, count, 1)
 	if verdict == capBlock {
@@ -422,7 +422,7 @@ func (m *home) autoDispatch(res PrefillResult) (tea.Cmd, bool) {
 	// then all-exhausted, then the soft cap — staging the soft-cap confirm ahead
 	// of the exhausted one would let accepting it spawn on a fully rate-limited
 	// pool without ever asking.
-	if a, ok := m.repoTrustAssessment(res.Path, direct); ok {
+	if a, ok := m.repoTrustAssessment(res.Path, direct, ""); ok {
 		return m.confirmRepoTrust(plan, a), true
 	}
 	if cmd, gated := m.gateAllExhausted(plan); gated {
@@ -1853,7 +1853,7 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	// it would bypass them. Both of ITS answers proceed — declining creates the
 	// session with the repo's config inert — so nothing about the cap ordering
 	// above is weakened by it.
-	if a, ok := m.repoTrustAssessment(path, direct); ok {
+	if a, ok := m.repoTrustAssessment(path, direct, branch); ok {
 		return m.confirmRepoTrust(plan, a)
 	}
 

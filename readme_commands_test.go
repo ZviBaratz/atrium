@@ -198,7 +198,7 @@ func TestHeadlessCommandsRunWhileTheTUIHoldsItsLock(t *testing.T) {
 	// TUI re-reads at every resolution — so, like the rest, it must never take the
 	// lock: `atrium trust allow` exists precisely for the moments a TUI is busy
 	// elsewhere (#814).
-	require.NoError(t, runTrustStatus(context.Background(), io.Discard, t.TempDir()),
+	require.NoError(t, runTrustStatus(context.Background(), io.Discard, t.TempDir(), true),
 		"trust status must work while a TUI holds the lock")
 }
 

@@ -512,7 +512,8 @@ var (
 			// whether each grant still matches the repo's committed config. A grant
 			// that has drifted (or a ledger that cannot be read) leaves sessions
 			// silently cold, so this is where that state gets a line.
-			if trust := doctor.RenderRepoTrust(doctor.CheckRepoTrust(cmd.Context())); trust != "" {
+			if trust := doctor.RenderRepoTrust(doctor.CheckRepoTrust(
+				cmd.Context(), config.LoadConfig().GetUpdateBaseOnCreate())); trust != "" {
 				fmt.Println()
 				fmt.Print(trust)
 			}

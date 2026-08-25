@@ -63,3 +63,24 @@ func TestRender_UntrustedRepoConfigSurvivesANarrowPane(t *testing.T) {
 	require.Contains(t, out, "repo config",
 		"narrowing the pane may truncate the hint but must not drop it")
 }
+
+// The row line is for REFUSALS only. AbsentGranted — a granted file simply not
+// on this branch — is benign divergence: it gets the one-shot modal at
+// materialization, and holding a fixed line for the life of the session would
+// displace the git line (ahead/behind, PR, diff stats) over routine branch
+// work.
+func TestRepoConfigLineFlagsRefusalsOnly(t *testing.T) {
+	for state, want := range map[session.RepoConfigState]bool{
+		session.RepoConfigUnset:         false,
+		session.RepoConfigNone:          false,
+		session.RepoConfigActive:        false,
+		session.RepoConfigAbsentGranted: false,
+		session.RepoConfigUntrusted:     true,
+		session.RepoConfigChanged:       true,
+		session.RepoConfigInvalid:       true,
+	} {
+		line, ok := repoConfigLine(state)
+		require.Equal(t, want, ok, "state %v", state)
+		require.Equal(t, want, line != "", "a flagged state needs copy; an unflagged one must render nothing")
+	}
+}
