@@ -255,3 +255,56 @@ func TestRepoCarryCannotSuppressAUserLink(t *testing.T) {
 		t.Errorf("the refused carry must name the collision, got:\n%s", got)
 	}
 }
+
+// TestSharedEntryKeepsTheUsersProvenance: a path the user declares TOO is not
+// repo-authored, however the dedupe orders it — and the consequence is a refusal, not
+// a label.
+//
+// unionSeedEntries puts the repo's entries first, so a path both sides declare is
+// emitted once, from the repo's pass. Marking that single entry repo-authored hands it
+// to seedSourceEscapes, which refuses any repo entry whose source resolves outside the
+// checkout. The user's own carry of a symlinked shared file is documented, working
+// configuration; it must not stop working because a repo happened to name the same
+// path — and the overlap is the LIKELY case, since a repo names the same local-config
+// files its developers already name.
+//
+// TestGlobalSeedEntryMayStillLeaveTheRepo is the no-overlap control and cannot see
+// this: with nothing on the repo side the entry is user-authored by construction, so
+// it passes whether or not provenance transfers.
+func TestSharedEntryKeepsTheUsersProvenance(t *testing.T) {
+	outside := t.TempDir()
+	shared := filepath.Join(outside, "shared.env")
+	if err := os.WriteFile(shared, []byte("TOKEN=1"), 0600); err != nil {
+		t.Fatalf("write shared: %v", err)
+	}
+
+	repoPath := newTestRepo(t)
+	// The user declares it in their OWN global list.
+	writeCarryConfig(t, []string{"shared.env"})
+	commitGitignore(t, repoPath, "shared.env")
+	if err := os.Symlink(shared, filepath.Join(repoPath, "shared.env")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	warnings := captureWarnings(t)
+	wt, _, err := NewWorktree(t.Context(), repoPath, "shared-entry")
+	if err != nil {
+		t.Fatalf("NewWorktree: %v", err)
+	}
+	// And the repo declares the SAME path. This is the whole fixture: drop this line
+	// and the test degenerates into the no-overlap control above.
+	wt.SetRepoLocalSeeds(func(string) ([]string, []string) {
+		return []string{"shared.env"}, nil
+	})
+	if err := wt.Setup(); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	t.Cleanup(func() { _ = wt.Cleanup() })
+
+	if _, err := os.Lstat(filepath.Join(wt.GetWorktreePath(), "shared.env")); err != nil {
+		t.Errorf("the user's own carry_files entry was refused because a repo also named it: %v", err)
+	}
+	if got := warnings(); strings.Contains(got, "outside this repository") {
+		t.Errorf("the user's own entry was refused and the repo blamed for it:\n%s", got)
+	}
+}

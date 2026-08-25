@@ -649,3 +649,33 @@ func TestRepoTrustDialogHoldsTheFloorWithALongRepoPath(t *testing.T) {
 		assert.Equalf(t, 80, ansi.PrintableRuneWidth(l), "line %d is the wrong width", i)
 	}
 }
+
+// TestRepoTrustDialogCallsSessionEnvExecution is the guard for repoTrustRuns'
+// session_env clause, which shipped with none.
+//
+// session_env is rendered into `tmux new-session -e` independently of any script, and
+// repocfg.reservedEnvName blocks only ATRIUM_*, CLAUDE_CONFIG_DIR and GH_CONFIG_DIR —
+// so NODE_OPTIONS, GIT_SSH_COMMAND, LD_PRELOAD and BASH_ENV all reach the agent. A
+// file carrying one of those and NO script is arbitrary code execution as the user,
+// and the consent copy has to say "runs" for it or the user approves execution while
+// reading a sentence about configuration.
+//
+// The fixture therefore declares session_env ALONE. A file that also carried a
+// setup_script would say "runs" from the script clause whatever this one did, which is
+// how the clause came to be deleted and re-added without any test noticing either way.
+func TestRepoTrustDialogCallsSessionEnvExecution(t *testing.T) {
+	repo := gitInitRepo(t)
+	commitRepoLocal(t, repo, `{"repo_scripts":[{"name":"dev","session_env":{"NODE_OPTIONS":"--require /tmp/p.js"}}]}`)
+	h := newCreateFormHome(t)
+	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	_ = submitCreateForm(t, h, repo, "feature")
+	require.Equal(t, stateConfirm, h.state, "a session_env-only file must still stage the prompt")
+
+	view := xansi.Strip(h.View().Content)
+	assert.Contains(t, view, "runs it",
+		"session_env alone is execution, so the consent copy must say so — it reaches the "+
+			"agent through tmux new-session -e with no script in the file at all")
+	assert.NotContains(t, view, "Trusting applies it to",
+		"that is the verb for a file where NOTHING executes; session_env is not that file")
+}

@@ -177,9 +177,14 @@ func TestRepoLayerContextLineNamesTheRepo(t *testing.T) {
 	settingsAt(t, o, "carry_files")
 	require.NotContains(t, stripANSI(o.contextLine(o.innerWidth())), "/src/web",
 		"the fixture must actually produce the yielding case, or the next assertion proves nothing")
+	// Assert the whole provenance sentence, not the file name: carry_files' own
+	// static detail already names `.atrium.json`, so a bare Contains on it passes
+	// with the layer entirely absent from the ? view. Mutating away the provenance
+	// write left that assertion green and only the repo path caught it.
 	help := stripANSI(o.expandedHelpContent(o.cursor))
-	assert.Contains(t, help, repocfg.RepoLocalFileName, "the ? view is the guaranteed surface")
-	assert.Contains(t, help, "/src/web")
+	prov := stripANSI(o.repoLayerFor(o.cursor))
+	require.NotEmpty(t, prov, "the fixture must produce a provenance sentence to look for")
+	assert.Contains(t, help, prov, "the ? view is the guaranteed surface")
 
 	// And it says nothing at all when there is nothing to say — otherwise the row's
 	// own detail would be evicted for a sentence about a layer that does not exist.
@@ -228,9 +233,11 @@ func TestRepoLayerIsReachableOnEveryLayeredRow(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
 	o.SetRepoLayer(&RepoLayer{
 		Repo: "/home/dev/src/a-project-with-a-long-path",
+		// Only layerable keys. A `link_paths` entry here was dead weight once that key
+		// was deferred — the sweep below iterates RepoLocalLayerKeys, so it was never
+		// read, and deleting it changed nothing.
 		Lists: map[string][]string{
 			"carry_files": {".dev.vars", ".claude/settings.local.json"},
-			"link_paths":  {"node_modules"},
 		},
 	})
 
@@ -239,10 +246,14 @@ func TestRepoLayerIsReachableOnEveryLayeredRow(t *testing.T) {
 			o.SetSize(w, 24)
 			settingsAt(t, o, key)
 			help := stripANSI(o.expandedHelpContent(o.cursor))
-			assert.Containsf(t, help, repocfg.RepoLocalFileName,
+			// The whole sentence, for the reason given in
+			// TestRepoLayerContextLineNamesTheRepo: a row's static detail may name
+			// `.atrium.json` on its own, so the file name alone is not evidence the
+			// layer reached the view.
+			prov := stripANSI(o.repoLayerFor(o.cursor))
+			require.NotEmptyf(t, prov, "row %q at %d cols: no provenance sentence to look for", key, w)
+			assert.Containsf(t, help, prov,
 				"row %q at %d cols: the `?` view is the guaranteed surface and lost the layer", key, w)
-			assert.Containsf(t, help, "/home/dev/src/a-project-with-a-long-path",
-				"row %q at %d cols: the `?` view must name the repo", key, w)
 		}
 	}
 

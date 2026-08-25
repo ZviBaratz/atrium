@@ -27,17 +27,21 @@ func TestSettingsFrameFitsWithARepoLayer(t *testing.T) {
 	// for the same slack at the narrow end of the ladder.
 	layer := &overlay.RepoLayer{
 		Repo: "/home/dev/src/a-project-with-a-long-path",
+		// carry_files only: link_paths is not a layerable key, so an entry for it is
+		// never read and its presence made this fixture look wider than it was.
 		Lists: map[string][]string{
-			"carry_files": {".dev.vars", ".claude/settings.local.json"},
-			"link_paths":  {"node_modules", "container/agent-runner/node_modules", ".venv"},
+			"carry_files": {".dev.vars", ".claude/settings.local.json", "container/agent-runner/.env"},
 		},
 	}
 	fs := frameState{name: "settings-repolayer", st: stateSettings, wire: func(h *home, _ *session.Instance) {
 		h.settingsOverlay = overlay.NewSettingsOverlay(h.appConfig)
 		h.settingsOverlay.SetRepoLayer(layer)
-		// Park the cursor on a layered row, so the help pane renders the provenance
-		// line as well as the chip.
-		h.settingsOverlay.OpenAt("link_paths")
+		// Park the cursor on a LAYERED row, so the help pane renders the provenance
+		// line as well as the chip. This said link_paths for one release, after that
+		// key went back to scopeGlobal — so repoLayerEntries returned nil for it and
+		// the frame this test measures had no chip and no provenance line in it at
+		// all, which is the one thing it exists to measure.
+		h.settingsOverlay.OpenAt("carry_files")
 	}}
 
 	for _, dim := range [][2]int{{200, 50}, {160, 40}, {120, 30}, {96, 30}, {80, 24}} {
