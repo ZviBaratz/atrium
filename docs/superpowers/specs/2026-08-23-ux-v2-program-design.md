@@ -1,6 +1,8 @@
 # UX v2 — the orchestration-IDE overhaul (program design record)
 
 Filed 2026-08-23 as **epic #793**, issues **#794–#833** (40), at HEAD `b5e3ec3`.
+Extended 2026-08-25 with **#870–#873** (4: C10–C12, A7), multi-account integration
+parity — filed against HEAD `9483313` and not part of the original triage.
 Research: three codebase/ecosystem exploration passes + a 34-issue backlog
 triage + a code-verified foundations design, all run 2026-08-23; digests in the
 appendix are the evidence the issue bodies cite. File:line citations were
@@ -16,9 +18,12 @@ Program ID → issue number:
 | F4a #804 | R3 #808 | C4 #797 | P4 #822 | A4 #828 | X4 #794 |
 | F4b #805 | R4 #809 | C5 #816 | P5 #824 | A5 #827 | X5 #795 |
 | | R5 #810 | C6 #817 | P6 #823 | A6 #825 | X6 #833 |
-| | R6 #811 | C7 #818 | | | |
+| | R6 #811 | C7 #818 | | A7 #873 | |
 | | R7 #812 | C8 #799 | | | |
 | | | C9 #819 | | | |
+| | | C10 #870 | | | |
+| | | C11 #871 | | | |
+| | | C12 #872 | | | |
 
 ## 1. Context
 
@@ -122,7 +127,7 @@ tabs; PR creation gains agent-drafted descriptions (#810, headless-hygiene
 inherited); one key cycles a ranked review queue (#811); variant bake-offs get
 the compare surface they never had (#812).
 
-### C — configurability (#797, #799, #813–#819)
+### C — configurability (#797, #799, #813–#819, #870–#872)
 
 User theme files over the 18 semantic tokens, validated by the contrast
 oracle (#813, honoring L1); a per-repo trust ledger (#814, answering #629's
@@ -135,6 +140,22 @@ commented dump); four curated cadence knobs (#799 — the rest stay hardcoded by
 recorded decision); one liveness model for run_auto + Dev tab + re-run setup
 (#819).
 
+Added 2026-08-25, after a pooled rotation was found routing sessions to accounts
+that silently lacked the integrations the pool was assumed to share: a read-only
+per-config-dir capability probe plus a doctor parity section (#870, completing the
+identity / aliasing / interchangeability three-way that CheckIdentity and
+CheckPools leave two-thirds finished); an integrations view in the accounts panel
+(#871, a fourth overlay MODE rather than a new app state, so it costs none of the
+state or keybinding drift sites); and a declaration of which per-dir settings are
+pool-shared versus deliberately individual, with an allowlisted writer (#872).
+Recorded decisions for that group: no outbound API probe of connector grant state
+(it would be Atrium's first network egress and its first token handling, and
+Claude Code keeps credentials in the macOS Keychain rather than a readable file);
+the writer touches settings.json only, never .claude.json's token material and
+never .credentials.json; and routing still does not consult capability, preserving
+expect_account's boundary that verification decides whether a chosen account may
+launch, never which one is chosen.
+
 ### P — coherence & polish (#798, #820–#824, #823)
 
 A table-driven notice priority ladder + NoticeWarn level (#820); confirm
@@ -144,7 +165,7 @@ staged under the old renderer first, config-panel style); help/palette
 inversion per #694 (#822); onboarding + doctor + host pressure in-TUI (#824);
 designed empty/loading states everywhere (#823).
 
-### A — attention & fleet, wave 2 (#825–#830)
+### A — attention & fleet, wave 2 (#825–#830, #873)
 
 The capstone is the unified approval inbox (#830): every blocked
 session/gate/asked-question in one ranked queue, inline-answerable where the
@@ -153,6 +174,15 @@ Feeding it: blocked-duration + asked-question row indicators (#826), the
 StatusHistory timeline (#829 — the ring's first consumer), handoff visibility
 (#828), saved filter presets (#827), and `--readonly` per #522's adopted spec
 (#825).
+
+Added 2026-08-25: #873 gives AccountAvailability its missing sensor. The flag, the
+rotation skip and SoonestResetMember all exist; Limited is only ever set by hand,
+and Until has never been written by anything. The signal is read from the
+transcript, discriminated by the isApiErrorMessage field, and deliberately NOT
+through a session/agent PromptMatcher — a flat pane window over a limit literal is
+#343 with a worse consequence, because the literal would live in this repo and a
+session merely reading the file would match itself and flag a live account out of
+rotation.
 
 ### X — production hardening (#794, #795, #800, #831–#833)
 
@@ -171,9 +201,14 @@ attach-fanout measurement (#800), and doctor report depth (#833).
 - **Wave 2**: #825 anytime; #826/#827 after #821; #828 after #820; #829 after
   #805; #830 last. 6 issues.
 - **Ongoing**: #831, #832, #833 opportunistically.
+- **Added 2026-08-25** (multi-account integration parity, no foundation deps):
+  #870 first, then #871, then #872 — wave 1, configurability. #873 is wave 2 by
+  workstream but blocked on nothing. 4 issues.
 
-Totals: 40 issues (≈12 S / 21 M / 7 L). Recommended models: Fable 5 ×15
-(#801, #814, #830 at max effort), Opus 5 ×17, Sonnet 5 ×8.
+Totals at filing: 40 issues (≈12 S / 21 M / 7 L). Recommended models: Fable 5 ×15
+(#801, #814, #830 at max effort), Opus 5 ×17, Sonnet 5 ×8. The 2026-08-25 extension
+adds 4 (3 M, 1 M-L; Fable 5 ×1, Opus 5 ×3) and is counted separately, because the
+figures above are the output of the 2026-08-23 triage and nothing re-ran it.
 
 ## 6. Absorb map
 
