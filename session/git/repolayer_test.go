@@ -120,3 +120,130 @@ func TestIsolatedSessionSkipsRepoLinkPaths(t *testing.T) {
 		t.Fatalf("an isolated session must get no link even from a trusted repo, lstat err = %v", err)
 	}
 }
+
+// TestRepoSeedEntryCannotEscapeThroughASymlink is #815's trust boundary at its
+// sharpest point, and the one the lexical guards could not hold.
+//
+// The setup is ordinary, not contrived: users keep gitignored convenience symlinks
+// in their checkouts (a pnpm store, .venv → /opt/..., deps → somewhere shared). A
+// trusted repo commits the .gitignore rule AND the seed entry, so every lexical
+// check passes — "deps/secret.txt" is a repo-relative path — while os.Stat in the
+// ORIGIN follows the link out of the repo entirely. The check-ignore probe a
+// comment here once named as the guard for this cannot see it either: it runs in
+// the WORKTREE, where `deps` does not exist, and `deps/` in .gitignore still makes
+// it exit 0.
+func TestRepoSeedEntryCannotEscapeThroughASymlink(t *testing.T) {
+	outside := t.TempDir()
+	secret := filepath.Join(outside, "secret.txt")
+	if err := os.WriteFile(secret, []byte("id_rsa"), 0600); err != nil {
+		t.Fatalf("write secret: %v", err)
+	}
+
+	// Prove the premise rather than assuming it: if check-ignore ever stopped
+	// answering "ignored" for a path under a missing ignored directory, this test
+	// would still pass while guarding nothing.
+	repoPath := newTestRepo(t)
+	writeCarryConfig(t, nil)
+	commitGitignore(t, repoPath, "deps/")
+	if err := os.Symlink(outside, filepath.Join(repoPath, "deps")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	warnings := captureWarnings(t)
+	wt, _, err := NewWorktree(t.Context(), repoPath, "escape")
+	if err != nil {
+		t.Fatalf("NewWorktree: %v", err)
+	}
+	wt.SetRepoLocalSeeds(func(string) ([]string, []string) {
+		return []string{"deps/secret.txt"}, []string{"deps"}
+	})
+	if err := wt.Setup(); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	t.Cleanup(func() { _ = wt.Cleanup() })
+
+	if _, err := os.Lstat(filepath.Join(wt.GetWorktreePath(), "deps", "secret.txt")); err == nil {
+		t.Error("a repo's carry_files entry followed a symlink out of the repo and copied a file the trust dialog never named")
+	}
+	if _, err := os.Lstat(filepath.Join(wt.GetWorktreePath(), "deps")); err == nil {
+		t.Error("a repo's link_paths entry handed the agent a writable symlink to a tree outside the repo")
+	}
+	if got := warnings(); !strings.Contains(got, "outside this repository") {
+		t.Errorf("the refusal must say what it refused and why, got:\n%s", got)
+	}
+}
+
+// TestGlobalSeedEntryMayStillLeaveTheRepo is the other side of that asymmetry, and
+// it is deliberate rather than an oversight. The user's own link_paths pointing at a
+// shared package store outside the checkout is documented, working configuration —
+// linkLocalPath Lstats rather than Stats precisely so it survives — and #815 must
+// not narrow it. Without this control, tightening the repo side by tightening
+// BOTH would look like a pass.
+func TestGlobalSeedEntryMayStillLeaveTheRepo(t *testing.T) {
+	outside := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(outside, "pkg"), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	repoPath := newTestRepo(t)
+	writeLinkConfig(t, []string{"store"})
+	commitGitignore(t, repoPath, "store")
+	if err := os.Symlink(outside, filepath.Join(repoPath, "store")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	wt, _, err := NewWorktree(t.Context(), repoPath, "shared-store")
+	if err != nil {
+		t.Fatalf("NewWorktree: %v", err)
+	}
+	if err := wt.Setup(); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	t.Cleanup(func() { _ = wt.Cleanup() })
+
+	if _, err := os.Lstat(filepath.Join(wt.GetWorktreePath(), "store")); err != nil {
+		t.Errorf("the user's own link_paths entry must still reach a store outside the repo: %v", err)
+	}
+}
+
+// TestRepoCarryCannotSuppressAUserLink: ordering alone cannot resolve a carry entry
+// nested under a link entry, and the collision is silent. Carrying first has
+// os.MkdirAll create a real directory at the link's path, so the never-clobber guard
+// finds something there and skips the link with one log line — a repo declaring
+// `carry_files: ["node_modules/.x"]` would cost the user their whole linked
+// node_modules in every session in that repo, which is precisely the suppression
+// union semantics exist to prevent.
+func TestRepoCarryCannotSuppressAUserLink(t *testing.T) {
+	repoPath := newTestRepo(t)
+	writeLinkConfig(t, []string{"node_modules"})
+	makeDepsDir(t, repoPath, "node_modules")
+	commitGitignore(t, repoPath, "node_modules")
+	if err := os.WriteFile(filepath.Join(repoPath, "node_modules", ".pkg-lock"), []byte("x"), 0644); err != nil {
+		t.Fatalf("write nested file: %v", err)
+	}
+
+	warnings := captureWarnings(t)
+	wt, _, err := NewWorktree(t.Context(), repoPath, "collide")
+	if err != nil {
+		t.Fatalf("NewWorktree: %v", err)
+	}
+	wt.SetRepoLocalSeeds(func(string) ([]string, []string) {
+		return []string{"node_modules/.pkg-lock"}, nil
+	})
+	if err := wt.Setup(); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	t.Cleanup(func() { _ = wt.Cleanup() })
+
+	// The user's link survived, as a link — not as a directory holding one file.
+	info, err := os.Lstat(filepath.Join(wt.GetWorktreePath(), "node_modules"))
+	if err != nil {
+		t.Fatalf("the user's link_paths entry was suppressed by a repo carry entry: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("node_modules is a %v, not a symlink: the repo's carry entry pre-created the directory and the link was silently skipped", info.Mode().Type())
+	}
+	if got := warnings(); !strings.Contains(got, "link_paths symlinks") {
+		t.Errorf("the refused carry must name the collision, got:\n%s", got)
+	}
+}
