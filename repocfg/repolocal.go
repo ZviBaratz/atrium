@@ -87,11 +87,49 @@ type repoLocalWire struct {
 // over — the seed lists, not repo_scripts, which a repo-local entry REPLACES
 // rather than adds to. It is exported for the settings panel, whose
 // scopeRepoLayered rows must be exactly these keys and no others;
-// TestRepoLocalLayerKeysMatchTheWireSchema holds it to repoLocalWire by
-// reflection, so a third layered key cannot reach the file without reaching the
-// panel too.
+// TestRepoLocalLayerKeysMatchTheWireSchema holds it to repoLocalWire by reflection.
+//
+// That guard is necessary and NOT sufficient on its own, and the difference is worth
+// stating because the stronger claim shipped here once: satisfying it (plus the row's
+// scope, plus the renderer's routing) still left a third key invisible, because the
+// map handed to the panel was built from hardcoded keys by its producer.
+// RepoLocalLayers is the other half — see its doc.
 func RepoLocalLayerKeys() []string {
-	return []string{"carry_files", "link_paths"}
+	return []string{KeyCarryFiles, KeyLinkPaths}
+}
+
+// KeyCarryFiles and KeyLinkPaths are the two layerable keys by name. They exist as
+// constants because the name is a VOCABULARY shared across four packages — the wire
+// tag, RepoLocalLayerKeys, RepoLocalLayers' map, and the settings row keys the panel
+// matches against — and a literal in any one of them is a copy that can drift
+// silently.
+const (
+	KeyCarryFiles = "carry_files"
+	KeyLinkPaths  = "link_paths"
+)
+
+// RepoLocalLayers is a parsed file's seed lists KEYED BY the settings-row key each
+// one layers over. It is the single mapping from key name to list, and it exists
+// because having that mapping in more than one place is how a layered key reaches
+// the schema, passes every bridge guard, and then renders nothing.
+//
+// That is not hypothetical: the settings panel's producer used to build this map
+// itself from two hardcoded keys, so a third key would have been declared
+// layerable, been given a scopeRepoLayered row, satisfied both bridge guards AND
+// the renderer's scope routing — and still shown no badge, because the map handed
+// to the panel never carried it. The renderer reading r.scope closed only the
+// consumer half; this closes the producer half.
+//
+// Every layer key is present in the result, with a nil list where the file declares
+// nothing for it. Present-but-nil is what lets the panel distinguish "this repo adds
+// nothing to this row" from "this key is not one a repo can layer" without consulting
+// a second list. TestRepoLocalLayersCoversEveryLayerKey holds the key set to
+// RepoLocalLayerKeys.
+func RepoLocalLayers(rl RepoLocal) map[string][]string {
+	return map[string][]string{
+		KeyCarryFiles: rl.CarryFiles,
+		KeyLinkPaths:  rl.LinkPaths,
+	}
 }
 
 // repoLocalNonLayeringKeys names the wire keys that are deliberately NOT panel

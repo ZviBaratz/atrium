@@ -131,8 +131,14 @@ func (m *home) refreshSettingsRepoLayer() {
 		m.settingsOverlay.SetRepoLayer(nil)
 		return
 	}
-	carry, link, resolved := inst.RepoLocalSeeds()
-	if !resolved || (len(carry) == 0 && len(link) == 0) {
+	seeds, resolved := inst.RepoLocalSeeds()
+	empty := true
+	for _, v := range seeds {
+		if len(v) > 0 {
+			empty = false
+		}
+	}
+	if !resolved || empty {
 		// An empty resolution is as informative as no resolution for this surface —
 		// there is nothing to annotate either way — so it takes the same nil rather
 		// than a struct every row has to test for emptiness.
@@ -141,10 +147,14 @@ func (m *home) refreshSettingsRepoLayer() {
 	}
 	m.settingsOverlay.SetRepoLayer(&overlay.RepoLayer{
 		Repo: inst.GetRepoPath(),
-		Lists: map[string][]string{
-			"carry_files": carry,
-			"link_paths":  link,
-		},
+		// Forwarded WHOLE, never rebuilt key by key. This used to name the two keys
+		// itself, which made it a third copy of the layerable-key list that no guard
+		// covered: a third layered key would have been declared in repoLocalWire, in
+		// RepoLocalLayerKeys and on a scopeRepoLayered row, satisfied both bridge
+		// guards and the renderer's scope routing, and still rendered nothing — because
+		// the map handed over here never carried it. The keys come from
+		// repocfg.RepoLocalLayers now, which is guarded against that vocabulary.
+		Lists: seeds,
 		// A dependency-isolated session receives NONE of the link_paths — session/git's
 		// seedLocalPaths returns before linking — so the row must say that rather than
 		// advertising paths that were never linked. Isolation is a choice about this

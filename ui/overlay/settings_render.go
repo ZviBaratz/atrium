@@ -1060,7 +1060,7 @@ func (s *SettingsOverlay) repoLayerFor(i int) string {
 // while carried files are copies and arrive regardless.
 func (s *SettingsOverlay) repoLayerSuppressed(i int) bool {
 	return s.repoLayer != nil && s.repoLayer.DepsIsolated &&
-		i >= 0 && i < len(s.rows) && s.rows[i].key == "link_paths"
+		i >= 0 && i < len(s.rows) && s.rows[i].key == repocfg.KeyLinkPaths
 }
 
 // repoLayerPathWidth and repoLayerEntriesWidth bound the two untrusted spans in the

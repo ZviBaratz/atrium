@@ -159,12 +159,23 @@ type repoLocalResolution struct {
 	// gets to route a setup script.
 	Script    repocfg.Script
 	HasScript bool
-	// CarryFiles and LinkPaths are canonical, repo-relative, and UNIONED with the
-	// user's own lists by the seeding site — never a replacement (see
-	// repocfg.RepoLocal).
-	CarryFiles []string
-	LinkPaths  []string
+	// Seeds is the file's seed lists keyed by the config key each layers over
+	// (repocfg.RepoLocalLayers' map — every layer key present, nil where the file
+	// declares nothing). Canonical, repo-relative, and UNIONED with the user's own
+	// lists by the seeding site, never a replacement (see repocfg.RepoLocal).
+	//
+	// Keyed rather than two named fields so the settings panel's producer has
+	// nothing to omit: it forwards this map whole. Two named fields meant the
+	// producer re-derived the key names itself, and a third layered key would have
+	// passed every guard while never reaching the panel.
+	Seeds map[string][]string
 }
+
+// carry and link are the two lists the SEEDING site treats differently — one copies,
+// one symlinks — so it names them rather than iterating. Reading them off Seeds keeps
+// the keyed map the only container.
+func (r repoLocalResolution) carry() []string { return r.Seeds[repocfg.KeyCarryFiles] }
+func (r repoLocalResolution) link() []string  { return r.Seeds[repocfg.KeyLinkPaths] }
 
 // RepoLocalSeeds is the last resolution's trusted repo-local seed lists, and
 // whether one can be trusted to be current. Display API: the settings panel names
@@ -183,18 +194,22 @@ type repoLocalResolution struct {
 // Paused only, deliberately, not the whole of ComputeRunState's guard: an unstarted
 // instance has published nothing to be stale, so adding !Started() here would hide a
 // legitimate resolution from a session still mid-Start rather than fixing anything.
-func (i *Instance) RepoLocalSeeds() (carry, link []string, resolved bool) {
+func (i *Instance) RepoLocalSeeds() (seeds map[string][]string, resolved bool) {
 	// Read BEFORE this instance's lock is acquired: Paused takes it itself, and a
 	// nested RLock deadlocks once a writer is queued between the two.
 	if i.Paused() {
-		return nil, nil, false
+		return nil, false
 	}
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	if !i.repoSeedsKnown {
-		return nil, nil, false
+		return nil, false
 	}
-	return append([]string(nil), i.repoSeedCarry...), append([]string(nil), i.repoSeedLink...), true
+	out := make(map[string][]string, len(i.repoSeeds))
+	for k, v := range i.repoSeeds {
+		out[k] = append([]string(nil), v...)
+	}
+	return out, true
 }
 
 // setRepoSeeds publishes the resolution's seed lists. Called on every resolution,
@@ -202,10 +217,19 @@ func (i *Instance) RepoLocalSeeds() (carry, link []string, resolved bool) {
 // is still being swept, a revoked grant stops being advertised on the next tick
 // rather than lingering as the last answer that happened to be positive. A session
 // that is no longer swept at all is RepoLocalSeeds' problem, not this one's.
-func (i *Instance) setRepoSeeds(carry, link []string) {
+func (i *Instance) setRepoSeeds(seeds map[string][]string) {
+	// Normalize to the full key set at the single publish point, so "the published
+	// map carries exactly the layerable keys" holds after a REFUSAL too. Every
+	// refusal returns the zero resolution, whose Seeds is nil, and a partial map
+	// would put the burden of knowing which keys to expect back on the panel's
+	// producer — which is the copy this whole keyed path exists to remove.
+	full := repocfg.RepoLocalLayers(repocfg.RepoLocal{})
+	for k := range full {
+		full[k] = seeds[k]
+	}
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	i.repoSeedCarry, i.repoSeedLink, i.repoSeedsKnown = carry, link, true
+	i.repoSeeds, i.repoSeedsKnown = full, true
 }
 
 // ledgerKey is the repo's canonical trust identity, derived once per instance
@@ -261,7 +285,7 @@ func (i *Instance) repoLocalSeedResolver(worktreeDir string) (carry, link []stri
 		return nil, nil
 	}
 	res := i.routeRepoLocal(worktreeDir, i.configRepoPath())
-	return res.CarryFiles, res.LinkPaths
+	return res.carry(), res.link()
 }
 
 // configRepoPath is the repository the session's configuration is resolved
@@ -314,7 +338,7 @@ func (i *Instance) routeRepoLocal(dir, repoPath string) repoLocalResolution {
 	// Publish here rather than inside the body: every one of the body's refusal
 	// paths must leave the panel advertising nothing, and a per-return-site call
 	// is a guard eleven places can forget.
-	i.setRepoSeeds(res.CarryFiles, res.LinkPaths)
+	i.setRepoSeeds(res.Seeds)
 	return res
 }
 
@@ -445,7 +469,7 @@ func (i *Instance) resolveRepoLocal(dir, repoPath string) repoLocalResolution {
 	// script that runs" the same script, and it takes the seed lists down with it
 	// for the reason above. The index handed to ValidateOne is the entry's position
 	// in the FILE, so `repo_scripts[N]` in the message is the N the user can find.
-	res := repoLocalResolution{CarryFiles: parsed.CarryFiles, LinkPaths: parsed.LinkPaths}
+	res := repoLocalResolution{Seeds: repocfg.RepoLocalLayers(parsed)}
 	if len(parsed.Entries) > 0 {
 		entry := parsed.Entries[0]
 		script, problem := repocfg.ValidateOne(entry.Index, entry.RepoScript)

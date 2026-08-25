@@ -204,8 +204,10 @@ type RepoLayer struct {
 	// two bridge guards (schema row scopes ↔ RepoLocalLayerKeys ↔ repoLocalWire)
 	// both passed while a third layered key rendered no badge, no provenance line
 	// and no help entry, because the switch returned nil for anything outside its
-	// two cases. The render path now asks the row's scope whether to look here, so a
-	// key that reaches the schema reaches the panel.
+	// two cases. The render path asks the row's scope whether to look here now — and
+	// the map arrives from repocfg.RepoLocalLayers rather than being rebuilt key by
+	// key, which is the producer half. Both were needed: closing only the renderer
+	// left the producer omitting the key instead, one layer down.
 	Lists map[string][]string
 
 	// DepsIsolated says the session these lists were resolved for is

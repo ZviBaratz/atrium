@@ -355,3 +355,33 @@ func TestParseSeedListDedupes(t *testing.T) {
 	assert.Equal(t, []string{"2 carried files"}, RepoLocalSurfaces(rl),
 		"the count every consent surface prints must equal what actually applies")
 }
+
+// TestRepoLocalLayersCoversEveryLayerKey is the producer-side bridge guard, and it
+// is the half the two existing ones did not cover. They tied a row's scope to
+// RepoLocalLayerKeys to repoLocalWire's json tags — all consumer-side — while the
+// map actually handed to the settings panel was built from hardcoded keys somewhere
+// else entirely. A third layered key satisfied every one of them and still rendered
+// nothing.
+func TestRepoLocalLayersCoversEveryLayerKey(t *testing.T) {
+	for name, rl := range map[string]RepoLocal{
+		"populated": {CarryFiles: []string{".dev.vars"}, LinkPaths: []string{"node_modules"}},
+		"empty":     {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			layers := RepoLocalLayers(rl)
+			got := make([]string, 0, len(layers))
+			for k := range layers {
+				got = append(got, k)
+			}
+			assert.ElementsMatch(t, RepoLocalLayerKeys(), got,
+				"every layerable key must be PRESENT (nil where the file declares nothing), so a producer can forward this map whole")
+		})
+	}
+
+	// And the values are the file's, not swapped: the map is the one mapping from key
+	// to list, so a transposition here would mislabel both rows at once with nothing
+	// else to contradict it.
+	layers := RepoLocalLayers(RepoLocal{CarryFiles: []string{"c"}, LinkPaths: []string{"l"}})
+	assert.Equal(t, []string{"c"}, layers[KeyCarryFiles])
+	assert.Equal(t, []string{"l"}, layers[KeyLinkPaths])
+}

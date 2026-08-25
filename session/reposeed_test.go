@@ -10,6 +10,7 @@ package session
 
 import (
 	"context"
+	"github.com/ZviBaratz/atrium/repocfg"
 	"os"
 	"path/filepath"
 	"testing"
@@ -204,21 +205,26 @@ func TestRepoSeeds_PublishedForThePanel(t *testing.T) {
 	f := newSeedFixture(t, seedConfig, ".dev.vars", "node_modules")
 
 	fresh := &Instance{ident: identity{title: "unstarted"}, Path: f.repoPath}
-	_, _, resolved := fresh.RepoLocalSeeds()
+	_, resolved := fresh.RepoLocalSeeds()
 	assert.False(t, resolved, "an instance that never resolved must read as unknown, not as empty")
 
 	f.materialize(t, "cold")
-	carry, link, resolved := f.inst.RepoLocalSeeds()
+	seeds, resolved := f.inst.RepoLocalSeeds()
 	assert.True(t, resolved)
-	assert.Empty(t, carry, "an untrusted repo must not be advertised as contributing")
-	assert.Empty(t, link)
+	assert.Empty(t, seeds[repocfg.KeyCarryFiles], "an untrusted repo must not be advertised as contributing")
+	assert.Empty(t, seeds[repocfg.KeyLinkPaths])
+	// Every layer key is PRESENT even after a refusal, so the panel's producer can
+	// forward this map whole instead of naming the keys itself.
+	assert.ElementsMatch(t, repocfg.RepoLocalLayerKeys(), mapKeys(seeds),
+		"the published map must carry every layerable key, or a third one reaches the panel as a silent nil")
 
 	grantRepo(t, f.repoPath)
 	f.materialize(t, "warm")
-	carry, link, resolved = f.inst.RepoLocalSeeds()
+	seeds, resolved = f.inst.RepoLocalSeeds()
 	assert.True(t, resolved)
-	assert.Equal(t, []string{".dev.vars"}, carry)
-	assert.Equal(t, []string{"node_modules"}, link)
+	assert.Equal(t, []string{".dev.vars"}, seeds[repocfg.KeyCarryFiles])
+	assert.Equal(t, []string{"node_modules"}, seeds[repocfg.KeyLinkPaths])
+	assert.ElementsMatch(t, repocfg.RepoLocalLayerKeys(), mapKeys(seeds))
 }
 
 // TestRepoSeeds_PausedSessionReadsAsUnknown: the panel reads the last resolution
@@ -230,19 +236,30 @@ func TestRepoSeeds_PublishedForThePanel(t *testing.T) {
 // revoke took effect.
 func TestRepoSeeds_PausedSessionReadsAsUnknown(t *testing.T) {
 	inst := &Instance{ident: identity{title: "parked"}}
-	inst.setRepoSeeds([]string{".dev.vars"}, []string{"node_modules"})
+	inst.setRepoSeeds(map[string][]string{
+		repocfg.KeyCarryFiles: {".dev.vars"},
+		repocfg.KeyLinkPaths:  {"node_modules"},
+	})
 
-	carry, link, resolved := inst.RepoLocalSeeds()
+	seeds, resolved := inst.RepoLocalSeeds()
 	require.True(t, resolved, "the fixture must start resolved, or this tests nothing")
-	require.Equal(t, []string{".dev.vars"}, carry)
-	require.Equal(t, []string{"node_modules"}, link)
+	require.Equal(t, []string{".dev.vars"}, seeds[repocfg.KeyCarryFiles])
+	require.Equal(t, []string{"node_modules"}, seeds[repocfg.KeyLinkPaths])
 
 	inst.mu.Lock()
 	inst.status = Paused
 	inst.mu.Unlock()
 
-	carry, link, resolved = inst.RepoLocalSeeds()
+	seeds, resolved = inst.RepoLocalSeeds()
 	assert.False(t, resolved, "a paused session's last resolution is stale and nothing will refresh it")
-	assert.Empty(t, carry)
-	assert.Empty(t, link)
+	assert.Empty(t, seeds)
+}
+
+// mapKeys is the map's keys, for a set comparison against a vocabulary.
+func mapKeys(m map[string][]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
