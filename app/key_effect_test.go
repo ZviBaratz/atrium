@@ -47,7 +47,7 @@ var busyGateMutationExempt = map[keys.KeyName]string{
 	// instance record, with nothing but `atrium reset` to reap it.
 	//
 	// Blocking these keys would have closed only part of that — the part where the
-	// user is on preview or diff when the action begins. Two routes reach the shell
+	// user is on a non-terminal tab when the action begins. Two routes reach the shell
 	// with no keypress: an already-active terminal tab starts one from the capture
 	// chain, and the tab bar is clickable (TabAtZone -> SetActiveTab in app_msgs.go),
 	// which never consults the busy gate. So the SURFACE is what is gated —

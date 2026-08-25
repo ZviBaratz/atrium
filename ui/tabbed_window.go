@@ -603,9 +603,10 @@ func (w *TabbedWindow) String() string {
 	// of on the pane state behind them. That render is the one part of this method
 	// no hit can skip, and its cost depends on which tab is showing: ~1% of the
 	// method on the preview tab (where the 40%-of-a-frame-build figure was measured),
-	// materially more on the other two, since DiffPane re-colours the whole diff and
-	// TerminalPane takes a lock and rebuilds from its session map. The memo is worth
-	// most on the tab Atrium sits on by default, and less on the other two.
+	// materially more on the diff and terminal tabs, since DiffPane re-colours the
+	// whole diff and TerminalPane takes a lock and rebuilds from its session map
+	// (the inspector renders a constant). The memo is worth most on the tab Atrium
+	// sits on by default, and less elsewhere.
 	k := tabbedKey{
 		content:   w.activePaneContent(),
 		width:     w.width,

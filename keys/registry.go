@@ -425,8 +425,9 @@ var Registry = []Entry{
 		key.WithKeys("3"),
 		key.WithHelp("3", "terminal tab"),
 	)},
-	// The inspector tab renders session data already held in memory — nothing
-	// lazy starts on the way in, so unlike the terminal tab above it observes.
+	// The inspector tab renders a constant placeholder until #805 feeds it —
+	// nothing lazy starts on the way in, so unlike the terminal tab above it
+	// observes. Re-read this classification when the real content lands.
 	{Name: KeyTabInspector, Action: "tab_inspector", Effect: EffectObserve, Binding: key.NewBinding(
 		key.WithKeys("4"),
 		key.WithHelp("4", "inspector tab"),

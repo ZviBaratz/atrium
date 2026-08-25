@@ -390,7 +390,7 @@ in-app keymap and this section ever drift apart, so it stays complete.
 | `↑/k` `↓/j` | move selection |
 | `u` / `b` | jump to next unread / blocked session |
 | `tab` / `shift-tab` | next / prev pane |
-| `1` / `2` / `3` / `4` | jump to preview / diff / terminal / inspector |
+| `1` `2` `3` `4` | jump to preview / diff / terminal / inspector |
 | `shift-↑` `shift-↓` | scroll the active pane |
 | `<` / `>` | shrink / grow the session list (or drag the divider) |
 | `\` | cycle layout presets (monitor / default / review / focus) |

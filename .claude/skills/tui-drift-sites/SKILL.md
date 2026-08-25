@@ -24,7 +24,7 @@ grep -c '^func Test' app/dispatch_coverage_test.go   # the site-4 guards
 awk '/^type Config struct/,/^}/' config/types.go | grep -cE '`json:'   # Config fields
 ```
 
-The dispatch count is *lines*, and several cases carry two or three names
+The dispatch count is *lines*, and several cases carry more than one name
 (`case keys.KeyMoveUp, keys.KeyMoveDown:`), so it is always below the number of
 actions — that is expected, not a shortfall.
 
@@ -163,8 +163,9 @@ explains itself with the wrong one. A new chip-sized reason also belongs in
 `TestPaletteGateReasonsFitTheRow`'s list, which is hand-maintained.
 
 **Site 4 was the gap until #374 closed it.** The count mismatch is why nobody had
-written the obvious assertion: 63 entries against 52 case *lines* is not 11
-missing cases, because several cases carry two or three names at once, 3 entries
+written the obvious assertion: the entry count sitting above the case-line count
+(both stated and guarded at the top of the keybinding section) is not a tally of
+missing cases, because several cases carry more than one name at once, 3 entries
 are `DocOnly`, the screensaver is deliberately absent from the registry, and
 `space` is consumed by the multi-select handler rather than the switch — so
 "every entry has a case" would false-positive on all of them.
