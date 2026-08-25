@@ -72,12 +72,6 @@ linters:
     paths:
       - web
     rules:
-      # QF1003 ("could use tagged switch") is an opinionated quickfix, not a
-      # correctness issue; converting the Bubble Tea state if-chains to switches
-      # is a larger refactor tracked separately. Suppress just this check.
-      - linters:
-          - staticcheck
-        text: 'QF1003'
       # Tests use math/rand for fixtures (gosec G404) and other patterns that
       # are irrelevant to the shipped binary's threat surface.
       - linters:

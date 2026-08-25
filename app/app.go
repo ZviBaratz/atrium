@@ -326,10 +326,13 @@ const (
 	// esc closes.
 	stateImagePreview
 
-	// numStates counts the states above and must stay last. It exists so a test can
-	// walk the enum rather than hand-listing it: TestEveryBarHidingStateRestoresTheFrame
-	// requires every state that hides the hint bar to be driven or exempted, and a new
-	// state added without one fails there instead of shipping unchecked.
+	// numStates counts the states above and must stay last. Code and tests walk the
+	// enum to it rather than hand-listing states — and since #801 the constant is
+	// production-structural, not a test convenience: surfaceSpecs is an array of this
+	// length and updateHandleWindowSizeEvent's resize walk runs to it.
+	// TestEveryBarHidingStateRestoresTheFrame requires every state that hides the
+	// hint bar to be driven or exempted, and a new state added without one fails
+	// there instead of shipping unchecked.
 	numStates
 )
 
@@ -1125,76 +1128,12 @@ func (m *home) viewContent() string {
 	// without a seam. Production always uses zone.Scan.
 	mainView := m.frameCached(k)
 
-	if m.state == statePrompt {
-		if m.textInputOverlay == nil {
-			log.ErrorLog.Printf("text input overlay is nil")
-		}
-		return overlay.PlaceOverlay(0, 0, m.textInputOverlay.Render(), mainView, true)
-	} else if m.state == stateHelp || m.state == stateInfo {
-		if m.textOverlay == nil {
-			log.ErrorLog.Printf("text overlay is nil")
-		}
-		return overlay.PlaceOverlay(0, 0, m.textOverlay.Render(), mainView, true)
-	} else if m.state == stateConfirm {
-		if m.confirmationOverlay == nil {
-			log.ErrorLog.Printf("confirmation overlay is nil")
-		}
-		return overlay.PlaceOverlay(0, 0, m.confirmationOverlay.Render(), mainView, true)
-	} else if m.state == stateRename {
-		if m.renameOverlay == nil {
-			log.ErrorLog.Printf("rename overlay is nil")
-		}
-		return overlay.PlaceOverlay(0, 0, m.renameOverlay.Render(), mainView, true)
-	} else if m.state == stateQueue {
-		if m.queueOverlay == nil {
-			log.ErrorLog.Printf("queue overlay is nil")
-		}
-		return overlay.PlaceOverlay(0, 0, m.queueOverlay.Render(), mainView, true)
-	} else if m.state == stateHistory {
-		if m.promptHistoryOverlay == nil {
-			log.ErrorLog.Printf("prompt history overlay is nil")
-		}
-		return overlay.PlaceOverlay(0, 0, m.promptHistoryOverlay.Render(), mainView, true)
-	} else if m.state == stateCmdLog {
-		if m.cmdLogOverlay == nil {
-			log.ErrorLog.Printf("command-log overlay is nil")
-		}
-		return overlay.PlaceOverlay(0, 0, m.cmdLogOverlay.Render(), mainView, true)
-	} else if m.state == stateCheckpoints {
-		if m.checkpointOverlay == nil {
-			log.ErrorLog.Printf("checkpoint overlay is nil")
-		}
-		return overlay.PlaceOverlay(0, 0, m.checkpointOverlay.Render(), mainView, true)
-	} else if m.state == stateCommandPalette {
-		if m.commandPaletteOverlay == nil {
-			log.ErrorLog.Printf("command palette overlay is nil")
-		}
-		return overlay.PlaceOverlay(0, 0, m.commandPaletteOverlay.Render(), mainView, true)
-	} else if m.state == stateCustomCommands {
-		if m.customCommandsOverlay == nil {
-			log.ErrorLog.Printf("custom commands overlay is nil")
-		}
-		return overlay.PlaceOverlay(0, 0, m.customCommandsOverlay.Render(), mainView, true)
-	} else if m.state == stateSettings {
-		if m.settingsOverlay == nil {
-			log.ErrorLog.Printf("settings overlay is nil")
-		}
-		return overlay.PlaceOverlay(0, 0, m.settingsOverlay.Render(), mainView, true)
-	} else if m.state == stateWelcome {
-		if m.welcomeOverlay == nil {
-			log.ErrorLog.Printf("welcome overlay is nil")
-		}
-		return overlay.PlaceOverlay(0, 0, m.welcomeOverlay.Render(), mainView, true)
-	} else if m.state == stateAccounts {
-		if m.accountsOverlay == nil {
-			log.ErrorLog.Printf("accounts overlay is nil")
-		}
-		return overlay.PlaceOverlay(0, 0, m.accountsOverlay.Render(), mainView, true)
-	} else if m.state == stateImagePreview {
-		if m.imageOverlay == nil {
-			log.ErrorLog.Printf("image overlay is nil")
-		}
-		return overlay.PlaceOverlay(0, 0, m.imageOverlay.Render(), mainView, true)
+	// A modal state composites its overlay over the frame; its render closure in
+	// surfaceSpecs owns the content (and the nil-overlay breadcrumb). A state
+	// with no render — plain navigation and the inline interactions — IS the
+	// frame.
+	if render := surfaceSpecs[m.state].render; render != nil {
+		return overlay.PlaceOverlay(0, 0, render(m), mainView, true)
 	}
 
 	return mainView

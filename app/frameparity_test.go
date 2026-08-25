@@ -59,69 +59,82 @@ type frameState struct {
 // with TestStateMachine_BackgroundMessagesNeverPanic: two hand-maintained tables
 // would drift, and the one that drifts silently is the one that stops covering a
 // new state. TestFrameStatesCoverEveryState pins it to the enum.
+//
+// Identity is derived from the surface registry: each entry's name is
+// surfaceSpecs' fixture for its state, so a state cannot be paired with the
+// wrong golden here. This file keeps what only it can hold — the wire funcs,
+// and the presentation ORDER, which the two colour-fingerprint goldens encode
+// block-for-block. That order is a historical permutation of the enum, not the
+// enum's own order, so deriving it from the state-indexed registry would
+// rewrite both colour goldens wholesale; the ordered list below is the one
+// hand-kept column left, and TestFrameStatesCoverEveryState holds it to
+// exactly one entry per state.
 func frameStates() []frameState {
-	return []frameState{
-		{"default", stateDefault, nil},
-		{"prompt", statePrompt, func(h *home, _ *session.Instance) {
+	wired := []struct {
+		st   state
+		wire func(h *home, inst *session.Instance)
+	}{
+		{stateDefault, nil},
+		{statePrompt, func(h *home, _ *session.Instance) {
 			h.textInputOverlay = overlay.NewSessionCreateOverlay(
 				h.appConfig.GetProfiles(), h.appConfig.ClaudeAccounts, nil, h.program, nil)
 		}},
-		{"help", stateHelp, func(h *home, _ *session.Instance) {
+		{stateHelp, func(h *home, _ *session.Instance) {
 			h.textOverlay = overlay.NewTextOverlay("help")
 		}},
-		{"info", stateInfo, func(h *home, _ *session.Instance) {
+		{stateInfo, func(h *home, _ *session.Instance) {
 			h.textOverlay = overlay.NewTextOverlay("info")
 		}},
-		{"confirm", stateConfirm, func(h *home, _ *session.Instance) {
+		{stateConfirm, func(h *home, _ *session.Instance) {
 			h.confirmationOverlay = overlay.NewConfirmationOverlay("sure?")
 		}},
-		{"rename", stateRename, func(h *home, inst *session.Instance) {
+		{stateRename, func(h *home, inst *session.Instance) {
 			h.renameTarget = inst
 			h.renameOverlay = overlay.NewRenameOverlay("label", "", false)
 		}},
-		{"settings", stateSettings, func(h *home, _ *session.Instance) {
+		{stateSettings, func(h *home, _ *session.Instance) {
 			h.settingsOverlay = overlay.NewSettingsOverlay(h.appConfig)
 		}},
-		{"accounts", stateAccounts, func(h *home, _ *session.Instance) {
+		{stateAccounts, func(h *home, _ *session.Instance) {
 			h.accountsOverlay = overlay.NewAccountsOverlay(h.appConfig, h.appState)
 		}},
-		{"filter", stateFilter, nil},
-		{"hints", stateHints, nil},
-		{"visual", stateVisual, nil},
-		{"diffComment", stateDiffComment, func(h *home, _ *session.Instance) {
+		{stateFilter, nil},
+		{stateHints, nil},
+		{stateVisual, nil},
+		{stateDiffComment, func(h *home, _ *session.Instance) {
 			const diff = "diff --git a/foo.go b/foo.go\n@@ -1,2 +1,2 @@\n ctx\n+add\n"
 			h.tabbedWindow.SetDiffContent(diff)
 			h.tabbedWindow.EnterDiffComment()
 		}},
-		{"queue", stateQueue, func(h *home, inst *session.Instance) {
+		{stateQueue, func(h *home, inst *session.Instance) {
 			h.queueOverlay = overlay.NewQueueOverlay(inst.DisplayName())
 		}},
-		{"cmdlog", stateCmdLog, func(h *home, _ *session.Instance) {
+		{stateCmdLog, func(h *home, _ *session.Instance) {
 			seedCmdLog()
 			h.cmdLogOverlay = overlay.NewCmdLogOverlay("parity-session")
 		}},
-		{"welcome", stateWelcome, func(h *home, _ *session.Instance) {
+		{stateWelcome, func(h *home, _ *session.Instance) {
 			h.welcomeOverlay = overlay.NewWelcomeOverlay()
 		}},
-		{"history", stateHistory, func(h *home, _ *session.Instance) {
+		{stateHistory, func(h *home, _ *session.Instance) {
 			h.promptHistoryOverlay = overlay.NewPromptHistoryOverlay([]string{"remembered"})
 		}},
-		{"commandPalette", stateCommandPalette, func(h *home, _ *session.Instance) {
+		{stateCommandPalette, func(h *home, _ *session.Instance) {
 			// Through the opener, not by hand: the overlay and paletteRows must stay
 			// in step, and a half-armed palette renders a frame nothing produces.
 			h.openCommandPalette()
 		}},
-		{"screensaver", stateScreensaver, nil},
+		{stateScreensaver, nil},
 		// Appended last on purpose: the two colour fingerprints iterate this slice in
 		// order and write one block per state, so a new entry at the end appends a
 		// trailing block where one inserted mid-slice rewrites every block after it.
-		{"customCommands", stateCustomCommands, func(h *home, _ *session.Instance) {
+		{stateCustomCommands, func(h *home, _ *session.Instance) {
 			h.customCommands = parityCustomCommands()
 			// Through the opener, like the palette: the overlay and customCommandRows
 			// must stay in step, and the per-row gating only exists on that path.
 			h.openCustomCommands()
 		}},
-		{"checkpoints", stateCheckpoints, func(h *home, inst *session.Instance) {
+		{stateCheckpoints, func(h *home, inst *session.Instance) {
 			// The surface is claude-only, and the fixture session runs "echo", so the
 			// opener would refuse with a notice and never build the overlay.
 			inst.Program = "claude"
@@ -137,7 +150,7 @@ func frameStates() []frameState {
 				result: parityCheckpoints(),
 			})
 		}},
-		{"imagePreview", stateImagePreview, func(h *home, _ *session.Instance) {
+		{stateImagePreview, func(h *home, _ *session.Instance) {
 			// Through the opener, like the palette: it is what pairs the overlay
 			// with the render mode and the sizing, and assigning the field by hand
 			// would render a frame production never produces.
@@ -146,6 +159,11 @@ func frameStates() []frameState {
 			})
 		}},
 	}
+	states := make([]frameState, 0, len(wired))
+	for _, w := range wired {
+		states = append(states, frameState{name: surfaceSpecs[w.st].fixture, st: w.st, wire: w.wire})
+	}
+	return states
 }
 
 // parityImage is a FOUR-COLOUR picture, and the count is the point.

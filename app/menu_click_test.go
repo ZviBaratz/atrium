@@ -28,23 +28,55 @@ func TestSynthKeyMsg_RoundTrips(t *testing.T) {
 	require.False(t, ok)
 }
 
-// hintBarClickState gates hint-bar clicks to the states where the bar is the
-// live surface (default + the three modal bars); every other state has an
-// overlay (or a non-key progress bar) owning the screen, so a click on the
-// bar's stale zones must be ignored.
+// hintBarClickState is per-state code the surface registry deliberately does
+// not cover — clickability is judged from what the bar renders, not from
+// barVisible — so this walk over the whole enum is what forces a new state to
+// be classified here instead of landing in neither of two hand-kept lists,
+// which is how stateDiffComment's zone-marked bar came to click dead (#852).
 func TestHintBarClickState(t *testing.T) {
+	// Every state appears. The default reason a state refuses clicks is that an
+	// overlay owns the screen (or the bar shows non-key progress); rows where
+	// the answer is anything less obvious say so.
+	clickable := map[state]bool{
+		stateDefault: true, // the hint line's entries are the click targets
+		stateFilter:  true, // mode bar with live, zone-marked entries
+		stateHints:   true, // mode bar with live, zone-marked entries
+		stateVisual:  true, // mode bar with live, zone-marked entries
+		// The fourth mode bar renders the same zone-marked entries as the three
+		// above, but the gate refuses it and its clicks are dead. This row pins
+		// the current behavior so #852's fix is a deliberate flip, not drift.
+		stateDiffComment:    false,
+		statePrompt:         false,
+		stateHelp:           false,
+		stateConfirm:        false,
+		stateRename:         false,
+		stateQueue:          false,
+		stateCmdLog:         false,
+		stateInfo:           false,
+		stateSettings:       false,
+		stateWelcome:        false,
+		stateAccounts:       false,
+		stateScreensaver:    false, // the splash owns the whole frame
+		stateHistory:        false,
+		stateCommandPalette: false,
+		stateCustomCommands: false,
+		stateCheckpoints:    false,
+		stateImagePreview:   false,
+	}
 	h := &home{}
-	for _, s := range []state{stateDefault, stateFilter, stateHints, stateVisual} {
-		h.state = s
-		require.Truef(t, h.hintBarClickState(), "state %d should accept hint-bar clicks", s)
+	for st := stateDefault; st < numStates; st++ {
+		want, classified := clickable[st]
+		require.Truef(t, classified,
+			"state %d is unclassified — decide whether its bar accepts clicks and add the row", int(st))
+		h.state = st
+		require.Equalf(t, want, h.hintBarClickState(),
+			"state %d: hintBarClickState disagrees with the classification here", int(st))
 	}
-	for _, s := range []state{
-		statePrompt, stateHelp, stateConfirm, stateRename, stateQueue, stateInfo,
-		stateSettings, stateWelcome, stateAccounts, stateScreensaver,
-	} {
-		h.state = s
-		require.Falsef(t, h.hintBarClickState(), "state %d must ignore hint-bar clicks", s)
-	}
+	// The walk runs first so an added state fails on its own message above; once
+	// it passes, every live state has a row, and a size mismatch can only be
+	// surplus rows for states the enum no longer holds.
+	require.Len(t, clickable, int(numStates),
+		"the classification holds rows for states the enum does not — a removed state left a stale row")
 }
 
 // A left-click on a hint-bar entry performs the same action as pressing its
