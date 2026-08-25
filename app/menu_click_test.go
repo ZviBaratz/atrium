@@ -150,13 +150,15 @@ func TestEveryBarKeyIsSynthesizable(t *testing.T) {
 	for k := range keys.GlobalKeyStringsMap {
 		check(k)
 	}
-	// The mode bars (filter / hints / multi-select / diff-comment) render from
-	// their own tables and never enter the dispatch map, so the loop above
-	// cannot see them. Entries carrying no key are label-only ranges like
-	// "a–z" that map to no single action and stay inert by design.
+	// The mode bars (filter / hints / multi-select / diff-comment) and the
+	// pane-focus variant render from their own tables and never enter the
+	// dispatch map, so the loop above cannot see them. Entries carrying no key
+	// are label-only ranges like "a–z" that map to no single action and stay
+	// inert by design.
 	for _, table := range [][]key.Binding{
 		keys.FilterModeHints(), keys.HintModeHints(),
 		keys.VisualModeHints(), keys.DiffCommentModeHints(),
+		keys.PaneFocusHints(),
 	} {
 		for _, b := range table {
 			for _, k := range b.Keys() {

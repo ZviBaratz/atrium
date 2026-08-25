@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -28,18 +29,15 @@ func TestMenuBars_KeysExistInRegistry(t *testing.T) {
 	for _, b := range keys.GlobalKeyBindings {
 		known[b.Help().Key] = true
 	}
-	for _, table := range [][]key.Binding{keys.FilterModeHints(), keys.HintModeHints(), keys.VisualModeHints()} {
+	for _, table := range [][]key.Binding{keys.FilterModeHints(), keys.HintModeHints(), keys.VisualModeHints(), keys.PaneFocusHints()} {
 		for _, b := range table {
 			known[b.Help().Key] = true
 		}
 	}
 
-	for _, state := range []MenuState{StateDefault, StateEmpty, StateFilter, StateHints, StateVisual} {
-		m := NewMenu()
-		m.SetSize(400, 3) // wide, so truncation can't eat trailing segments
-		m.SetState(state)
+	scanBar := func(desc string, m *Menu) {
 		line := strings.TrimSpace(xansi.Strip(m.String()))
-		require.NotEmpty(t, line, "state %v renders no bar", state)
+		require.NotEmpty(t, line, "%s renders no bar", desc)
 
 		for _, seg := range strings.Split(line, separator) {
 			if seg == filterSyntaxHint {
@@ -47,8 +45,24 @@ func TestMenuBars_KeysExistInRegistry(t *testing.T) {
 			}
 			token, _, _ := strings.Cut(seg, " ")
 			require.Truef(t, known[token],
-				"state %v names key %q (segment %q), which no registry binding or mode hint table carries",
-				state, token, seg)
+				"%s names key %q (segment %q), which no registry binding or mode hint table carries",
+				desc, token, seg)
 		}
 	}
+
+	for _, state := range []MenuState{StateDefault, StateEmpty, StateFilter, StateHints, StateVisual} {
+		m := NewMenu()
+		m.SetSize(400, 3) // wide, so truncation can't eat trailing segments
+		m.SetState(state)
+		scanBar(fmt.Sprintf("state %v", state), m)
+	}
+
+	// The pane-focus variant swaps the default bar without a MenuState of its
+	// own — the app derives pane focus and pushes it per render — so the enum
+	// walk above never reaches it; scan it the same way.
+	m := NewMenu()
+	m.SetSize(400, 3)
+	m.SetState(StateDefault)
+	m.SetPaneFocus(true)
+	scanBar("pane-focus", m)
 }

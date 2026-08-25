@@ -52,6 +52,31 @@ func TestMenu_DefaultHintLine(t *testing.T) {
 	require.NotContains(t, m.String(), "scroll")
 }
 
+// While the tabbed panes hold keyboard focus, the default bar swaps to the
+// pane's nav vocabulary and drops the context hints; releasing focus restores
+// them. Exact-text pin like the mode bars above: the wording is a UX decision.
+// quiet blanks the variant with the rest of the default bar — chrome-free
+// users opted out, and the scrolled pane's own footer teaches the esc exit.
+func TestMenu_PaneFocusBar(t *testing.T) {
+	inst, err := session.NewInstance(session.InstanceOptions{Title: "t", Path: t.TempDir(), Program: "echo"})
+	require.NoError(t, err)
+	m := NewMenu()
+	m.SetSize(200, 3)
+	m.SetInstance(inst)
+
+	m.SetPaneFocus(true)
+	got := strings.TrimSpace(xansi.Strip(m.String()))
+	require.Equal(t, "↑/k/↓/j scroll · esc back to list", got, "pane-focus bar text")
+
+	m.SetPaneFocus(false)
+	require.Contains(t, m.String(), "open", "context hints must return when focus does")
+	require.NotContains(t, m.String(), "back to list")
+
+	m.SetPaneFocus(true)
+	m.SetQuiet(true)
+	require.Equal(t, "", strings.TrimSpace(xansi.Strip(m.String())), "quiet blanks the pane-focus bar too")
+}
+
 // With no sessions, the bar surfaces the create/help/quit keys instead.
 func TestMenu_EmptyHintLine(t *testing.T) {
 	m := NewMenu()

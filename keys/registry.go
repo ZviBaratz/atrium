@@ -499,9 +499,9 @@ var Registry = []Entry{
 		key.WithKeys("ctrl+pgup", "ctrl+pgdown"),
 		key.WithHelp("ctrl-pgup/pgdn", "cycle sessions"),
 	)},
-	// EffectView, not Observe, and the help text is why it reads wrong: esc has a
-	// THIRD role neither this desc nor keys.go's comment mentions. Its last branch
-	// in handleKeyPress (app/app_update.go) backs out of focus mode via
+	// EffectView, not Observe, and the help text is why it reads wrong: esc's
+	// roles are the app package's escLadder, and the desc names only the first
+	// and third rungs. The last rung backs out of the focus LAYOUT preset via
 	// exitFocusLayout -> applyLayoutPreset -> appState.SetLayout, which saves
 	// state.json — the same write that makes the layout and split keys EffectView.
 	// Classify the handler, not the label: reachable as layout-key-into-focus, then
@@ -676,6 +676,23 @@ func DiffCommentModeHints() []key.Binding {
 		key.NewBinding(key.WithHelp(extend, "extend")),
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "comment")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "exit")),
+	}
+}
+
+// PaneFocusHints teaches the bar while the tabbed panes hold keyboard focus
+// (today: the active pane is in scroll mode): the nav keys scroll the pane and
+// esc hands the keyboard back to the list. Unlike its siblings above this is
+// not a MenuState's vocabulary — the app derives pane focus from the pane
+// state and pushes it into the menu at render time (Menu.SetPaneFocus), so
+// the bar cannot outlive a scroll mode that exits inside the pane.
+//
+// The move label names the keys the focus router actually resolves
+// (routeFocusKey, app package); esc is reserved, so it needs no lookup.
+func PaneFocusHints() []key.Binding {
+	move := Label(append(keysOf(KeyUp), keysOf(KeyDown)...))
+	return []key.Binding{
+		key.NewBinding(key.WithHelp(move, "scroll")),
+		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back to list")),
 	}
 }
 

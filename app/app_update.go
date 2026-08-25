@@ -1061,37 +1061,13 @@ func (m *home) handleKeyPress(msg tea.KeyPressMsg) (mod tea.Model, cmd tea.Cmd) 
 		return handle(m, msg)
 	}
 
-	// Exit scrolling mode when ESC is pressed and preview pane is in scrolling mode
-	// Check if Escape key was pressed and we're not in the diff tab (meaning we're in preview tab)
-	// Always check for escape key first to ensure it doesn't get intercepted elsewhere
+	// Esc's contextual unwind — scroll exit, focus pop, filter clear, layout
+	// exit — is one ordered ladder, escLadder (focus.go). When no rung applies,
+	// esc falls through and dies at the dispatch lookup below like any other
+	// unregistered key.
 	if msg.Code == tea.KeyEsc {
-		// If in preview tab and in scroll mode, exit scroll mode
-		if m.tabbedWindow.IsInPreviewTab() && m.tabbedWindow.IsPreviewInScrollMode() {
-			// Use the selected instance from the list
-			selected := m.list.GetSelectedInstance()
-			err := m.tabbedWindow.ResetPreviewToNormalMode(selected)
-			if err != nil {
-				return m, m.handleError(err)
-			}
-			return m, m.instanceChanged()
-		}
-		// If in terminal tab and in scroll mode, exit scroll mode
-		if m.tabbedWindow.IsInTerminalTab() && m.tabbedWindow.IsTerminalInScrollMode() {
-			m.tabbedWindow.ResetTerminalToNormalMode()
-			return m, m.instanceChanged()
-		}
-		// A committed filter (typed with /, accepted with Enter) is still
-		// narrowing the list; Esc clears it, the expected escape hatch.
-		if m.list.FilterQuery() != "" {
-			m.list.ClearFilter()
-			return m, m.instanceChanged()
-		}
-		// Focus mode hides the list; Esc backs out to the preset that preceded it
-		// so focus is never a dead end (the layout key instead cycles onward). This
-		// is the last Esc branch: it only fires once scroll mode and any filter are
-		// already cleared, matching what a user expects a repeated Esc to unwind.
-		if m.listHidden() {
-			return m, m.exitFocusLayout()
+		if cmd, ok := m.escUnwind(); ok {
+			return m, cmd
 		}
 	}
 
@@ -1130,6 +1106,13 @@ func (m *home) handleKeyPress(msg tea.KeyPressMsg) (mod tea.Model, cmd tea.Cmd) 
 			notice = "busy — " + label
 		}
 		return m, m.handleInfoNotice(notice)
+	}
+
+	// While the tabs (or inspector) hold focus, the pane-local nav keys route
+	// there instead of dispatching; everything else still dispatches, so the
+	// whole global keymap keeps working under focus.
+	if cmd, handled := m.routeFocusKey(name); handled {
+		return m, cmd
 	}
 
 	return m.dispatchAction(name)

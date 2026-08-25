@@ -131,6 +131,14 @@ type Menu struct {
 	// are forced visible to teach a gesture or report progress even with the bar off.
 	quiet        bool
 	contextHints []keys.KeyName
+	// paneFocused is true while the tabbed panes hold keyboard focus (the
+	// app's focusTabs); the default-state bar then teaches the pane's nav
+	// vocabulary (keys.PaneFocusHints) instead of the context hints. Pushed by
+	// the app at render time, mirroring activeTab, because pane focus is
+	// derived state no imperative writer could keep current. quiet blanks this
+	// variant with the rest of the default bar: chrome-free users opted out,
+	// and the scrolled pane's own footer already teaches the esc exit.
+	paneFocused bool
 	// busy holds one progress line per owner. Two kinds of operation compete for
 	// this single row: a modal action (kill, push, resume) that also freezes the
 	// keyboard, and a background one (name generation, opening a PR) that does
@@ -307,6 +315,12 @@ func baseHintsFor(instance *session.Instance) []keys.KeyName {
 // (diff/terminal) add a scroll hint to the default bar.
 func (m *Menu) SetActiveTab(tab int) {
 	m.activeTab = tab
+}
+
+// SetPaneFocus records whether the tabbed panes hold keyboard focus — see the
+// paneFocused field for why the app pushes it per render.
+func (m *Menu) SetPaneFocus(focused bool) {
+	m.paneFocused = focused
 }
 
 // SetNotice shows transient feedback in place of the hints. Newlines are
@@ -493,6 +507,14 @@ func (m *Menu) String() string {
 	case StateEmpty:
 		line = m.renderHintLine(emptyHintKeys)
 	default: // StateDefault
+		// While the panes hold keyboard focus, the bar teaches the pane's nav
+		// vocabulary. The context hints below (and their scroll-entry append)
+		// return when focus does — they advertise entering scroll mode, this
+		// covers being in it.
+		if m.paneFocused {
+			line = m.renderModeLine(keys.PaneFocusHints())
+			break
+		}
 		hints := m.contextHints
 		if hints == nil {
 			hints = defaultHintKeys
