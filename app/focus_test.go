@@ -252,9 +252,9 @@ func TestFocusTabs_ExplicitFocusDownOnLivePaneIsInert(t *testing.T) {
 		"down under explicit pane focus must not move the list selection")
 }
 
-// focusInspector routes nothing until an inspector pane exists: nav keys fall
-// through to global dispatch (the list moves), and esc pops the focus like any
-// explicit target.
+// focusInspector routes nothing while the inspector is a scroll-less skeleton
+// (#805 lands its content): nav keys fall through to global dispatch (the list
+// moves), and esc pops the focus like any explicit target.
 func TestFocusInspector_NavFallsThroughAndEscPops(t *testing.T) {
 	h := newPresetHome(t)
 	h.focus = focusInspector
@@ -262,7 +262,7 @@ func TestFocusInspector_NavFallsThroughAndEscPops(t *testing.T) {
 
 	h.Update(keyMsg("down"))
 	require.NotSame(t, selected, h.list.GetSelectedInstance(),
-		"inspector focus must not consume nav keys while no inspector exists")
+		"inspector focus must not consume nav keys the skeleton cannot use")
 
 	h.Update(keyMsg("esc"))
 	require.Equal(t, focusList, h.focus, "esc must pop inspector focus")

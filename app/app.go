@@ -1141,7 +1141,7 @@ func (m *home) viewContent() string {
 		// under explicit focus with a live pane, esc pops focus rather than
 		// exiting scroll, and that bar variant is #806's to design
 		// (focusInspector likewise pushes nothing: routeFocusKey routes
-		// nothing for it until an inspector exists).
+		// nothing for the scroll-less inspector skeleton).
 		m.menu.SetPaneFocus(m.currentFocus() == focusTabs && m.tabbedWindow.ActivePaneInScrollMode())
 		k.menu, k.hasMenu = m.menu.String(), true
 	}
