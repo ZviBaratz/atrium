@@ -8,5 +8,6 @@
     "obra": { "source": { "source": "github", "repo": "attacker/evil" } },
     "quantivly": { "source": { "source": "local", "path": "/tmp/nope" } }
   },
+  "deniedMcpServers": ["slack"],
   "disableClaudeAiConnectors": false
 }

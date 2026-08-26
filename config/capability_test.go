@@ -592,6 +592,62 @@ func TestStateCoversEveryDimension(t *testing.T) {
 	if caps.State(DimensionUnspecified).Measured {
 		t.Error("the unspecified dimension reported a measured state")
 	}
+
+	// The denial axis is wired to a field but deliberately left out of Dimensions():
+	// a generic name diff over a denial list answers the wrong question, so its
+	// comparison is a separate pass. Both halves of that need holding — the field
+	// reachable through State, and the dimension absent from the generic walk.
+	denied := DirCapabilities{DeniedMCPServers: DimensionState{
+		Measured: true, Targets: map[string]string{"evil": ""},
+	}}
+	if !denied.State(DimensionDeniedMCPServer).Has("evil") {
+		t.Error("State(DimensionDeniedMCPServer) is not wired to DeniedMCPServers")
+	}
+	if seen[DimensionDeniedMCPServer] {
+		t.Error("Dimensions() lists the denial axis, which the generic name diff must not walk")
+	}
+}
+
+// deniedMcpServers is a per-dir key, not managed-settings-only: claude's own
+// allowManagedMcpServersOnly says the denylist "still merges from all sources, so
+// users can deny servers for themselves". It holds an array, so it needs its own
+// shape table — and an entry this build cannot read must make the whole list unknown,
+// because a denial it cannot honour reported as absent says the member allows a
+// server it blocks.
+func TestReadDirCapabilitiesDeniedMCPServers(t *testing.T) {
+	cases := []struct {
+		name     string
+		settings *string
+		local    *string
+		want     dimWant
+	}{
+		{"absent key", body(`{}`), nil, measured()},
+		{"null", body(`{"deniedMcpServers":null}`), nil, measured()},
+		{"a list of names", body(`{"deniedMcpServers":["evil","worse"]}`), nil, measured("evil", "worse")},
+		{"blanks skipped, duplicates collapsed", body(`{"deniedMcpServers":["evil","evil","","  "]}`), nil, measured("evil")},
+		{"a non-string entry makes the list unknown", body(`{"deniedMcpServers":["ok",7]}`), nil, unmeasured},
+		{"an object entry makes the list unknown", body(`{"deniedMcpServers":["ok",{"name":"x"}]}`), nil, unmeasured},
+		{"an object instead of a list is unknown", body(`{"deniedMcpServers":{"evil":true}}`), nil, unmeasured},
+		{"from settings.local.json", nil, body(`{"deniedMcpServers":["evil"]}`), measured("evil")},
+		// No settings file at all: the key's home is absent, so the answer is unknown
+		// rather than "denies nothing".
+		{"no settings file", nil, nil, unmeasured},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := capDirWith(t, map[string]*string{
+				"settings.json":       tc.settings,
+				"settings.local.json": tc.local,
+				// Keeps the dir answerable in the "no settings file" case.
+				".claude.json": body(`{}`),
+			})
+			got, ok := ReadDirCapabilities(dir)
+			if !ok {
+				t.Fatalf("dir did not read")
+			}
+			tc.want.check(t, "deniedMcpServers", got.DeniedMCPServers)
+		})
+	}
 }
 
 // ReadCapabilities resolves the account's own config_dir, and an inherit-env account

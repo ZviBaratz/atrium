@@ -219,7 +219,75 @@ func diffPool(pool string, members []parityMember) []ParityWarning {
 	for _, dim := range config.Dimensions() {
 		warns = append(warns, diffDimension(pool, dim, members)...)
 	}
+	warns = append(warns, diffDenials(pool, members)...)
 	return append(warns, diffConnectors(pool, members)...)
+}
+
+// diffDenials reports servers the pool configures that only some members allow.
+//
+// It is a separate pass rather than another config.Dimensions() entry because both
+// of its restrictions differ from a name diff, and both are load-bearing. It ranges
+// over the servers members actually CONFIGURE: built from the denial lists instead, a
+// member that denies nothing counted as having every server anyone denied, so two
+// members neither of which configured a server were reported as disagreeing about one,
+// and the only way to silence the line was to copy the denial into every member. And
+// per server it considers only the members that configure it: a member that simply
+// does not configure a server is not denying it, and that gap is the MCP-server
+// dimension's to report — saying it twice in two vocabularies is worse than once.
+func diffDenials(pool string, members []parityMember) []ParityWarning {
+	var measured []parityMember
+	var unreadable []string
+	for _, m := range members {
+		if m.caps.DeniedMCPServers.Measured && m.caps.MCPServers.Measured {
+			measured = append(measured, m)
+			continue
+		}
+		// A member whose SERVER list is what could not be read is already named by
+		// the MCP-server dimension; repeating it here would charge one absent file
+		// to two lines.
+		if !m.caps.DeniedMCPServers.Measured {
+			unreadable = append(unreadable, m.label)
+		}
+	}
+
+	var warns []ParityWarning
+	if len(unreadable) > 0 {
+		warns = append(warns, ParityWarning{
+			Pool: pool, Kind: ParityUnmeasured,
+			Dimension: config.DimensionDeniedMCPServer, Lack: unreadable,
+		})
+	}
+	if len(measured) < 2 {
+		return warns
+	}
+
+	configured := map[string]bool{}
+	for _, m := range measured {
+		for _, n := range m.caps.MCPServers.Names() {
+			configured[n] = true
+		}
+	}
+	for _, name := range sortedKeys(configured) {
+		var allow, deny []string
+		for _, m := range measured {
+			if !m.caps.MCPServers.Has(name) {
+				continue
+			}
+			if m.caps.DeniedMCPServers.Has(name) {
+				deny = append(deny, m.label)
+			} else {
+				allow = append(allow, m.label)
+			}
+		}
+		if len(allow) > 0 && len(deny) > 0 {
+			warns = append(warns, ParityWarning{
+				Pool: pool, Kind: ParityMissing,
+				Dimension: config.DimensionDeniedMCPServer,
+				Feature:   name, Have: allow, Lack: deny,
+			})
+		}
+	}
+	return warns
 }
 
 // diffDimension emits the unmeasured members of one dimension, then one warning per
@@ -386,9 +454,17 @@ func (w ParityWarning) line() string {
 		return fmt.Sprintf("capabilities unreadable for %s (%s) — it was left out of the comparison",
 			quotedList(w.Lack), w.Dir)
 	case ParityUnmeasured:
+		if w.Dimension == config.DimensionDeniedMCPServer {
+			return fmt.Sprintf("MCP server denials are unverified: %s %s not report a readable denial list",
+				quotedList(w.Lack), agrees(w.Lack, "does", "do"))
+		}
 		return fmt.Sprintf("%s parity is unverified: %s %s not report one, so nothing was compared",
 			w.Dimension.Noun(), quotedList(w.Lack), agrees(w.Lack, "does", "do"))
 	case ParityMissing:
+		if w.Dimension == config.DimensionDeniedMCPServer {
+			return fmt.Sprintf("%s %q is denied for %s but not for %s",
+				w.Dimension.Noun(), w.Feature, quotedList(w.Lack), quotedList(w.Have))
+		}
 		return fmt.Sprintf("%s %q: %s %s it, %s %s not",
 			w.Dimension.Noun(), w.Feature,
 			quotedList(w.Have), agrees(w.Have, "has", "have"),

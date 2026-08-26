@@ -57,10 +57,14 @@ package config
 // gate the servers a repo's own .mcp.json offers. They are a real per-dir difference,
 // but naming one means reading a file that belongs to the repo rather than to the
 // dir, and the same .mcp.json is shared by every member — so a difference there is
-// reported as neither present nor absent. deniedMcpServers and allowedMcpServers are
-// also unread: they are enterprise managed-settings policy holding URL patterns, not
-// per-dir settings.json keys holding server names. A machine-wide policy cannot
-// differ between two dirs in one pool, so it is not a parity axis at all.
+// reported as neither present nor absent.
+//
+// allowedMcpServers is unread. Its own description makes it an enterprise allowlist,
+// and the managed setting allowManagedMcpServersOnly can restrict it to managed
+// settings alone, so a per-dir value is not reliably the value in force. Its
+// counterpart deniedMcpServers IS read: the same description says the denylist
+// "still merges from all sources, so users can deny servers for themselves", which
+// makes it a genuine per-dir axis.
 
 import (
 	"bytes"
@@ -86,10 +90,19 @@ const (
 	// DimensionMCPServer is .claude.json's mcpServers, at the top level and under
 	// every projects.<path> scope.
 	DimensionMCPServer
+	// DimensionDeniedMCPServer is settings.json's deniedMcpServers. It is a denial
+	// rather than a capability, so a comparison along it ranges over the servers the
+	// pool actually CONFIGURES and asks which members block them — never over the
+	// denial lists themselves, which would credit a member with a server it never
+	// configured and report drift where neither member can run one.
+	DimensionDeniedMCPServer
 )
 
 // Dimensions is the fixed order a comparison walks, so a rendered report does not
 // reorder between runs on an unchanged config.
+// DimensionDeniedMCPServer is deliberately absent: it is a denial rather than a
+// capability, so a generic name diff over it answers the wrong question. Its
+// comparison is a separate pass.
 func Dimensions() []Dimension {
 	return []Dimension{DimensionPlugin, DimensionMarketplace, DimensionMCPServer}
 }
@@ -101,7 +114,7 @@ func (d Dimension) Noun() string {
 		return "plugin"
 	case DimensionMarketplace:
 		return "marketplace"
-	case DimensionMCPServer:
+	case DimensionMCPServer, DimensionDeniedMCPServer:
 		return "MCP server"
 	default:
 		return "capability"
@@ -179,6 +192,10 @@ type DirCapabilities struct {
 	Plugins      DimensionState
 	Marketplaces DimensionState
 	MCPServers   DimensionState
+	// DeniedMCPServers is the dir's own deniedMcpServers list. A server is available
+	// here only if it is configured AND not denied, so this is read alongside
+	// MCPServers rather than instead of it.
+	DeniedMCPServers DimensionState
 	// Connectors is stated as a tri-state rather than a bool for the same reason.
 	Connectors ConnectorState
 }
@@ -194,6 +211,8 @@ func (c DirCapabilities) State(d Dimension) DimensionState {
 		return c.Marketplaces
 	case DimensionMCPServer:
 		return c.MCPServers
+	case DimensionDeniedMCPServer:
+		return c.DeniedMCPServers
 	default:
 		return DimensionState{}
 	}
@@ -248,6 +267,7 @@ func ReadDirCapabilities(configDir string) (DirCapabilities, bool) {
 		merged := mergeObjects(settings, local)
 		caps.Plugins = pluginState(merged["enabledPlugins"])
 		caps.Marketplaces = namedObjectState(merged["extraKnownMarketplaces"])
+		caps.DeniedMCPServers = nameListState(merged["deniedMcpServers"])
 		caps.Connectors = connectorState(merged["disableClaudeAiConnectors"])
 	}
 	if claudeFound {
@@ -371,6 +391,34 @@ func collectNamedObjects(obj map[string]json.RawMessage, into map[string]string)
 		into[name] = fp
 	}
 	return true
+}
+
+// nameListState reads a field holding a JSON array of names, which is how
+// settings.json holds deniedMcpServers. An absent or null field is measured and
+// empty — the file was read and denies nothing. Any other shape, INCLUDING an array
+// with a element that is not a string, makes the dimension unmeasured: an entry this
+// build cannot read is an entry whose denial it cannot honour, and reporting the rest
+// of the list as the whole list would report a member as allowing a server it blocks.
+func nameListState(raw json.RawMessage) DimensionState {
+	if len(raw) == 0 || isJSONNull(raw) {
+		return DimensionState{Measured: true, Targets: map[string]string{}}
+	}
+	var entries []json.RawMessage
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return DimensionState{}
+	}
+	targets := map[string]string{}
+	for _, entry := range entries {
+		var name string
+		if err := json.Unmarshal(entry, &name); err != nil {
+			return DimensionState{}
+		}
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		targets[name] = ""
+	}
+	return DimensionState{Measured: true, Targets: targets}
 }
 
 // mcpServerState reads .claude.json's MCP servers.

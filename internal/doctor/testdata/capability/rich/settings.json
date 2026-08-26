@@ -8,5 +8,6 @@
     "obra": { "source": { "source": "github", "repo": "obra/superpowers" } },
     "quantivly": { "source": { "source": "github", "repo": "quantivly/conventions" } }
   },
+  "deniedMcpServers": ["sketchy"],
   "disableClaudeAiConnectors": false
 }
