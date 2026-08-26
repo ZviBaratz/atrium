@@ -904,3 +904,459 @@ func TestCopilotApprovalAndTrustGateDoNotCrossMatch(t *testing.T) {
 		})
 	}
 }
+
+const copilotWorkingW20Pane = `  Current  →
+
+   939             ┃
+   940             ┃
+   941             ┃
+   942             ┃
+   943             ┃
+   944             ┃
+   945             ┃
+   946             ┃
+   947             ┃
+   948             ┃
+   949             ┃
+   950             ┃
+   951             ┃
+   952             ┃
+   953             ┃
+   954             ┃
+   955             ┃
+   956             ┃
+   957             ┃
+   958             ┃
+   959             ┃
+   960             ┃
+   961             ┃
+   962             ┃
+   963             ┃
+   9               ┃
+                   ┃
+ /tmp/.../repo
+ [⎇ main]
+ Session: 0 AIC
+ used
+────────────────────
+❯
+────────────────────
+ ◎    · 3.8 esc
+ WorkiKiB   interr
+ ng         upt
+ GPT-5.3-Codex`
+
+const copilotWorkingW24Pane = `  Current   Sessions  →
+
+   850                 ┃
+   851                 ┃
+   852                 ┃
+   853                 ┃
+   854                 ┃
+   855                 ┃
+   856                 ┃
+   857                 ┃
+   858                 ┃
+   859                 ┃
+   860                 ┃
+   861                 ┃
+   862                 ┃
+   863                 ┃
+   864                 ┃
+   865                 ┃
+   866                 ┃
+   867                 ┃
+   868                 ┃
+   869                 ┃
+   870                 ┃
+   871                 ┃
+   872                 ┃
+   873                 ┃
+   874                 ┃
+   875                 ┃
+   876                 ┃
+                       ┃
+ /tmp/.../repo
+ [⎇ main]
+ Session: 0 AIC used
+────────────────────────
+❯
+────────────────────────
+ ◉     · 3.4  esc
+ WorkinKiB    interrup
+ g            t
+ GPT-5.3-Codex`
+
+const copilotWorkingW26Pane = `  Current   Sessions  →
+
+   720                   ┃
+   721                   ┃
+   722                   ┃
+   723                   ┃
+   724                   ┃
+   725                   ┃
+   726                   ┃
+   727                   ┃
+   728                   ┃
+   729                   ┃
+   730                   ┃
+   731                   ┃
+   732                   ┃
+   733                   ┃
+   734                   ┃
+   735                   ┃
+   736                   ┃
+   737                   ┃
+   738                   ┃
+   739                   ┃
+   740                   ┃
+   741                   ┃
+   742                   ┃
+   743                   ┃
+   744                   ┃
+   745                   ┃
+   746                   ┃
+                         ┃
+ /tmp/.../repo
+ [⎇ main]
+ Session: 0 AIC used
+──────────────────────────
+❯
+──────────────────────────
+ ◎      · 2.9   esc
+ WorkingKiB     interrupt
+
+ GPT-5.3-Codex`
+
+const copilotWorkingW28Pane = `  Current   Sessions  →
+
+   601                     ┃
+   602                     ┃
+   603                     ┃
+   604                     ┃
+   605                     ┃
+   606                     ┃
+   607                     ┃
+   608                     ┃
+   609                     ┃
+   610                     ┃
+   611                     ┃
+   612                     ┃
+   613                     ┃
+   614                     ┃
+   615                     ┃
+   616                     ┃
+   617                     ┃
+   618                     ┃
+   619                     ┃
+   620                     ┃
+   621                     ┃
+   622                     ┃
+   623                     ┃
+   624                     ┃
+   625                     ┃
+   626                     ┃
+   6                       ┃
+                           ┃
+ /tmp/.../repo
+ [⎇ main]
+ Session: 0 AIC used
+────────────────────────────
+❯
+────────────────────────────
+ ◎      · 2.4    esc
+ WorkingKiB      interrupt
+
+ GPT-5.3-Codex`
+
+const copilotWorkingW34Pane = `  Current   Sessions   Issues  →
+
+   476                           ┃
+   477                           ┃
+   478                           ┃
+   479                           ┃
+   480                           ┃
+   481                           ┃
+   482                           ┃
+   483                           ┃
+   484                           ┃
+   485                           ┃
+   486                           ┃
+   487                           ┃
+   488                           ┃
+   489                           ┃
+   490                           ┃
+   491                           ┃
+   492                           ┃
+   493                           ┃
+   494                           ┃
+   495                           ┃
+   496                           ┃
+   497                           ┃
+   498                           ┃
+   499                           ┃
+   500                           ┃
+   501                           ┃
+   502                           ┃
+   503                           ┃
+   504                           ┃
+                                 ┃
+ /tmp/atrium-capture/.../repo
+ [⎇ main]     Session: 0 AIC used
+──────────────────────────────────
+❯
+──────────────────────────────────
+ ◉ Working· 1.9 KiB esc
+                    interrupt
+ GPT-5.3-Codex`
+
+const copilotWorkingW40Pane = `  Current   Sessions   Issues  →
+
+   351                                 ┃
+   352                                 ┃
+   353                                 ┃
+   354                                 ┃
+   355                                 ┃
+   356                                 ┃
+   357                                 ┃
+   358                                 ┃
+   359                                 ┃
+   360                                 ┃
+   361                                 ┃
+   362                                 ┃
+   363                                 ┃
+   364                                 ┃
+   365                                 ┃
+   366                                 ┃
+   367                                 ┃
+   368                                 ┃
+   369                                 ┃
+   370                                 ┃
+   371                                 ┃
+   372                                 ┃
+   373                                 ┃
+   374                                 ┃
+   375                                 ┃
+   376                                 ┃
+   377                                 ┃
+   378                                 ┃
+   379                                 ┃
+   380                                 ┃
+                                       ┃
+ /tmp/atrium-capture/copilot-busy/repo
+ [⎇ main]           Session: 0 AIC used
+────────────────────────────────────────
+❯
+────────────────────────────────────────
+ ◎ Working · 1.5 KiB esc interrupt
+ GPT-5.3-Codex`
+
+const copilotWorkingW60Pane = `  Current   Sessions   Issues   Pull requests   Gists
+
+   229                                                     ┃
+   230                                                     ┃
+   231                                                     ┃
+   232                                                     ┃
+   233                                                     ┃
+   234                                                     ┃
+   235                                                     ┃
+   236                                                     ┃
+   237                                                     ┃
+   238                                                     ┃
+   239                                                     ┃
+   240                                                     ┃
+   241                                                     ┃
+   242                                                     ┃
+   243                                                     ┃
+   244                                                     ┃
+   245                                                     ┃
+   246                                                     ┃
+   247                                                     ┃
+   248                                                     ┃
+   249                                                     ┃
+   250                                                     ┃
+   251                                                     ┃
+   252                                                     ┃
+   253                                                     ┃
+   254                                                     ┃
+   255                                                     ┃
+   256                                                     ┃
+   257                                                     ┃
+   258                                                     ┃
+   259                                                     ┃
+   2                                                       ┃
+                                                           ┃
+ /tmp/atrium-capture/.../repo [⎇ main]  Session: 0 AIC used
+────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────
+ ◉ Working · 1.0 KiB esc interrupt            GPT-5.3-Codex`
+
+// copilotBusyLadder is a live turn at every driven width the marker survives. The marker sits
+// in the status row that REPLACES the hint row below the composer, so MarkerWindow stays 0 and
+// footerRegion's below-the-box anchor finds it — claude's arrangement, not codex's or gemini's,
+// both of which render their status row ABOVE the composer and need a window instead.
+//
+// WHY THIS LADDER WAS DRIVEN TWICE. The first sweep ended its turn after the width-60 rung, so
+// six of its eight rungs captured an IDLE pane while looking like a measurement — an identical
+// credit figure across all six and the hint row where the status row belongs. A ladder is only
+// valid for a transient state if the state outlives the sweep. The invalid captures are kept
+// beside the run directory under captures-invalid-working-2026-08-26 rather than deleted,
+// because the design spec cites them as the evidence that they were invalid.
+//
+// WHAT MAKES THIS SWEEP VALID is not "the marker is present at every rung" — it is not, and
+// two rungs below live next door. It is the BYTE COUNTER, which grows at every one of the
+// eight: 544 B, then 1.0, 1.5, 1.9, 2.4, 2.9, 3.4 and 3.8 KiB. A paused turn can leave a
+// painted status row behind; it cannot advance a counter. That distinction is what separates a
+// missed rung from an invalid one, and it is the check the first sweep lacked.
+var copilotBusyLadder = []paneCapture{
+	{name: "copilotWorkingW26Pane", width: 26, note: "the floor; footer multi-column, marker on its own line", pane: copilotWorkingW26Pane},
+	{name: "copilotWorkingW28Pane", width: 28, note: "footer becomes multi-column", pane: copilotWorkingW28Pane},
+	{name: "copilotWorkingW34Pane", width: 34, note: "renders \"Working·\" with no space before the separator", pane: copilotWorkingW34Pane},
+	{name: "copilotWorkingW40Pane", width: 40, note: "narrowest rung the whole hint is still contiguous", pane: copilotWorkingW40Pane},
+	{name: "copilotWorkingW60Pane", width: 60, note: "", pane: copilotWorkingW60Pane},
+	{name: "copilotWorkingW120Pane", width: 120, note: "status row on one line", pane: copilotWorkingW120Pane},
+}
+
+// copilotBusyTruncatedRungs are the rungs where the multi-column footer splits "Working"
+// mid-word, so no substring survives and no window value could reach one. They are negative
+// evidence, not a windowing failure: the row is ON SCREEN and the phrase is not there.
+// This is the rung LiveSpinner exists for — the animating spinner is the only signal left —
+// and it is deliberately not a standalone latch, so a session here reports idle until the
+// spinner support lands.
+var copilotBusyTruncatedRungs = []paneCapture{
+	{name: "copilotWorkingW24Pane", width: 24, note: "marker split \"Workin\" / \"g\"", pane: copilotWorkingW24Pane},
+	{name: "copilotWorkingW20Pane", width: 20, note: "marker split \"Worki\" / \"ng\"", pane: copilotWorkingW20Pane},
+}
+
+// TestCopilotBusyMarkerFiresAtEveryDrivenWidth is the positive half.
+func TestCopilotBusyMarkerFiresAtEveryDrivenWidth(t *testing.T) {
+	for _, c := range copilotBusyLadder {
+		t.Run(c.label(), func(t *testing.T) {
+			require.True(t, copilot.HasBusyMarker(c.pane))
+		})
+	}
+}
+
+// TestCopilotBusyMarkerIsTruncatedAtTheNarrowestRungs records the two misses as measurements
+// rather than dropping them, the way geminiBusyTruncatedRungs does. The premise is asserted
+// alongside the verdict: without it this would say only "the marker misses here", which is
+// also what an idle pane says — and an idle pane is exactly what the first sweep of this
+// ladder produced. The growing byte counter is what tells the two apart, so it is what the
+// premise reads.
+func TestCopilotBusyMarkerIsTruncatedAtTheNarrowestRungs(t *testing.T) {
+	for _, c := range copilotBusyTruncatedRungs {
+		t.Run(c.label(), func(t *testing.T) {
+			require.Contains(t, c.pane, "KiB",
+				"the premise: the byte counter is on screen, so this is a LIVE turn and not "+
+					"the idle pane the first sweep of this ladder mistook for one")
+			require.NotContains(t, footerRegion(c.pane), "Working",
+				"the marker is split mid-word here, so no window reaches it")
+			require.False(t, copilot.HasBusyMarker(c.pane),
+				"recording the miss is the point; this rung is what LiveSpinner would be for")
+		})
+	}
+}
+
+// TestCopilotBusyMarkerCannotKeyOnTheInterruptHint is why BusyMarkers holds "Working" alone.
+// The status row reads "<spinner> Working · <N> B esc interrupt", so the byte counter sits
+// BETWEEN the two words and "Working esc interrupt" is never contiguous at any width — a fact
+// a wide capture alone would suggest is fine. And "esc interrupt" stops being contiguous below
+// 40, one rung ABOVE the width at which the footer goes multi-column, because the
+// single-column row wraps there first. Both halves are asserted against the driven panes
+// rather than described, over every rung including the two the marker misses — the hint's
+// reach is a fact about the row, not about whether this adapter can read it.
+func TestCopilotBusyMarkerCannotKeyOnTheInterruptHint(t *testing.T) {
+	all := append(append([]paneCapture{}, copilotBusyLadder...), copilotBusyTruncatedRungs...)
+	for _, c := range all {
+		t.Run(c.label(), func(t *testing.T) {
+			region := footerRegion(c.pane)
+			require.NotContains(t, region, "Working esc interrupt",
+				"the byte counter sits between the words at every width")
+			if c.width >= 40 {
+				require.Contains(t, region, "esc interrupt",
+					"the hint is contiguous while the single-column row still fits it")
+				return
+			}
+			require.NotContains(t, region, "esc interrupt",
+				"the row wraps its cells independently from here down, so a matcher keyed "+
+					"on this hint would miss every narrow pane")
+		})
+	}
+}
+
+// TestCopilotBusyPanesAreNeitherGateNorPrompt is the negative direction paneCoverage cannot
+// express (that table is positive-only). It uses the busy panes because a working pane is the
+// shape most likely to false-match: it is the one that actually renders a composer and a
+// footer, where both dialog matchers must stay silent. Both lists are walked, because a rung
+// the busy marker misses is still a rung the dialog matchers must not fire on.
+//
+// WHAT MAKES THEM SILENT IS THE ANCHOR, NOT THE LITERALS, and getting that backwards leads to
+// a mutation that cannot fail. flattenBottomBox is false on all eight of these panes — the
+// composer is delimited by horizontal rules, so nothing here presents a bottom border above
+// walled rows — and both matchers return early on that. Setting copilotTrustHeadline to
+// "Working" therefore leaves this green: the gate never reaches its literals at all. The first
+// assertion pins the anchor for that reason, so the mechanism is what is guarded rather than a
+// coincidence of which strings the footer happens not to contain.
+//
+// The last assertion is the one with teeth on the other axis. A copilot dialog reads as a
+// composer to InputBoxVisible, so that predicate cannot tell the two apart; what makes the
+// collision harmless is that GateUp and DetectPrompt disagree on these panes and agree on the
+// dialogs.
+func TestCopilotBusyPanesAreNeitherGateNorPrompt(t *testing.T) {
+	all := append(append([]paneCapture{}, copilotBusyLadder...), copilotBusyTruncatedRungs...)
+	for _, c := range all {
+		t.Run(c.label(), func(t *testing.T) {
+			_, boxed := flattenBottomBox(c.pane)
+			require.False(t, boxed,
+				"the mechanism: a live turn presents no anchored box, so both dialog matchers "+
+					"return before they ever look at a literal")
+
+			_, up := copilot.GateUp(c.pane)
+			require.False(t, up, "a live turn is not a startup gate")
+			_, ok := copilot.DetectPrompt(c.pane)
+			require.False(t, ok, "a live turn is not a blocking prompt")
+			require.True(t, copilot.InputBoxVisible(c.pane),
+				"and the composer IS readable here, which is what makes prompt delivery work")
+		})
+	}
+}
+
+// TestCopilotBusyMarkerSitsBelowTheComposer is what stands in for a guard on MarkerWindow, and
+// the first thing to say is that the field itself CANNOT be guarded by these panes. Setting it
+// to codex's 8 reddens nothing: the marker sits one to three non-empty lines from the bottom at
+// every rung, so a bottom-8 window is a strict SUPERSET of the region footerRegion picks. A
+// superset can add a false positive; it cannot produce a miss, so no driven pane here
+// distinguishes 0 from 8. The third assertion below records that as a fact rather than leaving
+// it as an unstated hole.
+//
+// What IS guardable is the PREMISE MarkerWindow 0 rests on — that copilot paints its status row
+// BELOW the composer, claude's arrangement. Both halves are asserted, because only the pair
+// says it: the marker is inside the below-box footer, and absent from the block ABOVE the box,
+// which is exactly where codex and gemini put theirs and why they need a window. A future build
+// that moved the row above the composer would leave HasBusyMarker green through the fallback
+// and redden this instead, which is the whole reason it is worth writing.
+func TestCopilotBusyMarkerSitsBelowTheComposer(t *testing.T) {
+	const marker = "Working" // copilot's only BusyMarkers entry
+
+	for _, c := range copilotBusyLadder {
+		t.Run(c.label(), func(t *testing.T) {
+			below, ok := footerBelowBox(c.pane)
+			require.True(t, ok, "the composer's bottom rule is the anchor footerRegion needs")
+			require.Contains(t, below, marker,
+				"the status row REPLACES the hint row below the composer, which is what makes "+
+					"MarkerWindow 0 the right value")
+
+			above, ok := aboveBoxBlock(c.pane)
+			require.True(t, ok, "the premise: there IS a live block above the box to look in")
+			require.NotContains(t, above, marker,
+				"and it is not codex's or gemini's arrangement — their status row is here, "+
+					"above the composer, which is why they need a window and copilot does not")
+
+			require.Contains(t, liveChromeLines(c.pane, 8), marker,
+				"disclosed, not asserted as a virtue: codex's window would ALSO find the "+
+					"marker here, so this ladder cannot falsify MarkerWindow 8. What rules it "+
+					"out is the arrangement above, not a failing rung")
+		})
+	}
+}

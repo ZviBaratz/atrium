@@ -257,6 +257,12 @@ var paneCoverage = map[string][]paneCapture{
 	// Eight rungs, all positive. This dialog's box fits the 40-row pane at every driven width,
 	// so unlike the gate's ladder nothing here is a height edge.
 	"copilot/prompt/approval": copilotApprovalLadder,
+	// The re-driven ladder, and SHORTER than the other two on this adapter by design. Its
+	// predecessor captured an idle pane at every rung below 60 — see copilotBusyLadder's own
+	// header for how that happened and where those captures went. The two rungs missing from
+	// the bottom are the ones where the multi-column footer splits "Working" mid-word; they
+	// are held next door as negative evidence, exactly as gemini's are, rather than dropped.
+	"copilot/busy": copilotBusyLadder,
 }
 
 // paneCoverageExempt is the other direction, and it exists because a `continue` on "no
@@ -382,6 +388,11 @@ var wantRungs = map[string][]int{
 	// fails at 20 is the TITLE, which no matcher here reads.
 	"copilot/gate/trust":      {20, 24, 26, 28, 34, 40, 60, 120},
 	"copilot/prompt/approval": {20, 24, 26, 28, 34, 40, 60, 120},
+	// Six rungs where eight were driven. The floor is 26 and it is a measured cliff, not a
+	// place driving stopped: 24 and 20 were driven, the turn was live at both (the byte
+	// counter grew), and the marker is split mid-word there.
+	// copilotBusyTruncatedRungs and TestCopilotBusyMarkerIsTruncatedAtTheNarrowestRungs.
+	"copilot/busy": {26, 28, 34, 40, 60, 120},
 }
 
 // keysWithNoRecordedCaptureWidth are covered by real captures whose provenance never wrote

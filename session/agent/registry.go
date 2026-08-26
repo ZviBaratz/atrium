@@ -1901,6 +1901,29 @@ var copilot = &Adapter{
 	// collides with both dialogs' selector, which is the hazard that field's doc describes
 	// for claude and agy — GateUp and DetectPrompt are what exclude those screens.
 
+	// "Working" alone, and the two words it is deliberately not paired with are the finding.
+	// The status row reads "<spinner> Working · <N> B esc interrupt": the byte counter sits
+	// BETWEEN "Working" and "esc interrupt", so that pair is never contiguous at any width,
+	// and below 40 columns the row wraps its cells independently so "esc interrupt" stops
+	// being contiguous on its own too.
+	// TestCopilotBusyMarkerCannotKeyOnTheInterruptHint asserts both halves per rung.
+	//
+	// Keying on the separator would fail too, and non-monotonically: 34 renders "Working·"
+	// with no space where 40 and every wider rung render "Working ·". "Working" alone is what
+	// survives, and only to 26 — at 24 and 20 the multi-column footer splits it mid-word and
+	// this adapter reports idle during a live turn. That is disclosed rather than papered
+	// over: copilotBusyTruncatedRungs holds those two as negative evidence, and LiveSpinner
+	// stays nil because one captured frame per rung cannot establish a spinner's frame set.
+	//
+	// The floor is a datum, not a sentence: copilotBusyLadder's widths feed wantRungs, which
+	// is where "the marker survives to N columns" is computed from real panes and real
+	// predicates rather than restated.
+	BusyMarkers: []string{"Working"},
+	// MarkerWindow deliberately 0. The status row REPLACES the hint row below the composer,
+	// so footerRegion's below-the-box anchor finds it. This is claude's arrangement; codex
+	// and gemini paint their status row above the composer, which is why they need a window,
+	// and copying one of theirs here would search past the row entirely.
+
 	Prompts: []PromptMatcher{
 		// The out-of-worktree path approval. NoAutoTap for a strictly worse reason than the
 		// one it carries on codex, where Enter approves a single command: this dialog's
