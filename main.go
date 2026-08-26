@@ -355,12 +355,13 @@ var (
 			"one login — the state in which sessions silently bill an account nobody routed them to.\n" +
 			"Account pool parity asks the third question those two cannot: whether members that are\n" +
 			"genuinely different logins are actually substitutes. It diffs the plugins, marketplaces\n" +
-			"and MCP servers each member's config dir is configured with — including two members that\n" +
-			"configure the same name to point somewhere different, and one that denies a server the\n" +
-			"other allows — because rotation never consults capability, so a session placed on a\n" +
-			"member lacking an integration just quietly goes without one. It reads files only, so it\n" +
-			"measures configuration and not what claude.ai has granted, and a member it could not\n" +
-			"measure is reported rather than counted as having nothing.\n" +
+			"and MCP servers each member's config dir declares, including two members that configure\n" +
+			"the same name to point somewhere different, because rotation never consults capability,\n" +
+			"so a session placed on a member lacking an integration just quietly goes without one. A\n" +
+			"config dir is claude's user settings source alone, so a checkout or a managed policy file\n" +
+			"can still change what a session runs under; it reads files only, so it measures\n" +
+			"configuration and not what claude.ai has granted; and a member it could not measure is\n" +
+			"reported rather than counted as having nothing.\n" +
 			"Terminal background detection reports which rung of the light/dark ladder can answer here,\n" +
 			"for anyone whose theme: auto did not adapt: it reads COLORFGBG, and names OSC 11 as the\n" +
 			"rung that outranks it but cannot be probed from a one-shot command — that query needs the\n" +
@@ -498,15 +499,16 @@ var (
 			// only one that can see two genuinely distinct logins that are not
 			// substitutes for each other. Identity catches one login wearing two
 			// names; pools catches two names on one dir; parity diffs what each
-			// member's dir is CONFIGURED with — plugins, marketplaces, MCP servers
-			// and the denials that block them — since rotation spends the pool's
-			// interchangeability promise on every
-			// unpinned session without ever checking it. Configuration is all it
-			// measures: grant state is in no file, so a pool whose members differ
-			// only in what claude.ai granted them reads as being in parity here.
-			// Local file reads, up to three per pooled dir (settings.json,
-			// settings.local.json, .claude.json) and no subprocess, so no probe
-			// budget — though like the two sections above it resolves config through
+			// member's dir DECLARES — plugins, marketplaces, and the MCP servers it
+			// can run once its own denials are taken out — since rotation spends the
+			// pool's interchangeability promise on every unpinned session without
+			// ever checking it. Two things bound the claim: a config dir is claude's
+			// user settings source alone, so a checkout or a policy file can still
+			// decide what a session runs under, and grant state is in no file, so a
+			// pool whose members differ only in what claude.ai granted them reads as
+			// being in parity here. Local file reads, up to two per pooled dir
+			// (settings.json, .claude.json) and no subprocess, so no probe budget —
+			// though like the two sections above it resolves config through
 			// config.LoadConfig, which SEEDS config.json when absent. The probe is
 			// read-only; `atrium doctor` as a whole is not.
 			if parity := doctor.RenderParity(doctor.CheckParityInstalled()); parity != "" {
