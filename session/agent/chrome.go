@@ -59,6 +59,50 @@ func flattenChrome(content string, n int) string {
 	return whiteSpaceRegex.ReplaceAllString(liveChromeLines(content, n), " ")
 }
 
+// flattenBottomBox returns the pane's bottom-most anchored box as one whitespace-normalized
+// line, with the interior rows' side walls removed first, and reports whether such a box was
+// on screen at all.
+//
+// It exists because a dialog drawn INSIDE box borders wraps its body rather than truncating
+// it, and the border runes and their padding then sit between a sentence's fragments:
+// copilot 1.0.80's folder-trust headline reconstructs through flattenChrome as
+// "…files in this │ │ folder?…", which no amount of newline collapsing can rejoin. Stripping
+// the walls before flattening recovers it, and that was measured at every driven rung rather
+// than reasoned about — see the copilot ladders in copilot_pane_test.go, whose narrowest is
+// the one flattenChrome cannot reach.
+//
+// IT DELIBERATELY SYNTHESISES ACROSS ROWS, which inverts bottomBoxBlock's own contract.
+// That function returns lines unjoined precisely so a caller matching a literal gets no
+// cross-line synthesis; here the synthesis IS the feature, and the difference that makes it
+// safe is the region. The trap it inverts (#713, gemini's trust gate) was flattening across
+// a bottom-N WINDOW, where the transcript scrolls through and any two neighbouring lines can
+// manufacture a phrase neither renders. Here the region is one anchored box's interior, so
+// the only text that can combine is text the dialog itself drew. A caller that needs the
+// unjoined form still has bottomBoxBlock.
+//
+// What it does NOT strip is a NESTED box's own borders. Copilot draws the path under review
+// inside a second box, and leaving those runes in place keeps them as separators, so a
+// literal cannot be manufactured across one. The outer walls are the only thing removed.
+//
+// ok=false means no box whose bottom border all but ends the pane — a composer frame, a bare
+// transcript, or a dismissed dialog with the composer redrawn below it. That is what keeps
+// the false-positive surface down to the one bottomBoxBlock already discloses (quoted box art
+// that ends the pane) rather than the whole pane's worth a stripped full-pane scan would take.
+//
+// Input must already be cleaned for detection (ANSI stripped), like every other predicate here.
+func flattenBottomBox(content string) (string, bool) {
+	block, ok := bottomBoxBlock(content)
+	if !ok {
+		return "", false
+	}
+	parts := make([]string, 0, len(block))
+	for _, line := range block {
+		parts = append(parts, stripBoxWalls(line))
+	}
+	flat := whiteSpaceRegex.ReplaceAllString(strings.Join(parts, " "), " ")
+	return strings.TrimSpace(flat), true
+}
+
 // isHorizontalRule reports whether line is a box-drawing horizontal border — the top or
 // bottom edge of claude's input box. Such a line is made only of horizontal dashes, box
 // corners/sides, and padding, and contains a real run of dashes (so a prose line with a
@@ -543,6 +587,23 @@ func isInputBoxLine(line string, prompts promptSet) bool {
 	return false
 }
 
+// stripBoxWalls removes a box interior line's left and right side walls and the whitespace
+// around them. It is the wall half of stripBoxInterior, split out because two callers now
+// need it and only one of them wants the composer glyph taken off as well: stripBoxInterior
+// reads back what a user typed into a composer, so the glyph must go (the signature it is
+// compared against does not carry one); flattenBottomBox reads a DIALOG's prose, where the
+// same glyph is the selection pointer on the highlighted row and carries meaning.
+//
+// One function knows what a wall looks like, so an agent that draws a different one is a
+// single edit rather than a hunt. Only the LIGHT wall is accepted, matching isBoxWallLine —
+// see its doc for why the heavy form was dead code the compiler could not see.
+func stripBoxWalls(line string) string {
+	s := strings.TrimSpace(line)
+	s = strings.TrimSpace(strings.TrimPrefix(s, "│")) // left border
+	s = strings.TrimSpace(strings.TrimSuffix(s, "│")) // right border
+	return s
+}
+
 // stripBoxInterior removes an input-box interior line's side borders, its leading prompt
 // glyph (one of prompts), and surrounding whitespace, leaving just the typed text. Used
 // to read back what the user (or a queued-prompt send) has entered into the composer.
@@ -551,9 +612,7 @@ func isInputBoxLine(line string, prompts promptSet) bool {
 // removed — a composer line opens with exactly one, and stripping a second would eat
 // real text on an agent whose glyph is a legal first character of user input.
 func stripBoxInterior(line string, prompts promptSet) string {
-	s := strings.TrimSpace(line)
-	s = strings.TrimSpace(strings.TrimPrefix(s, "│")) // left border
-	s = strings.TrimSpace(strings.TrimSuffix(s, "│")) // right border
+	s := stripBoxWalls(line)
 	for _, g := range prompts {
 		if rest, ok := strings.CutPrefix(s, g); ok {
 			return strings.TrimSpace(rest)
