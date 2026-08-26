@@ -257,11 +257,11 @@ var paneCoverage = map[string][]paneCapture{
 	// Eight rungs, all positive. This dialog's box fits the 40-row pane at every driven width,
 	// so unlike the gate's ladder nothing here is a height edge.
 	"copilot/prompt/approval": copilotApprovalLadder,
-	// The re-driven ladder, and SHORTER than the other two on this adapter by design. Its
-	// predecessor captured an idle pane at every rung below 60 — see copilotBusyLadder's own
-	// header for how that happened and where those captures went. The two rungs missing from
-	// the bottom are the ones where the multi-column footer splits "Working" mid-word; they
-	// are held next door as negative evidence, exactly as gemini's are, rather than dropped.
+	// The re-driven ladder: eight rungs, all positive. Its predecessor captured an idle pane at
+	// every rung below 60 — see copilotBusyLadder's own header for how that happened and where
+	// those captures went. An earlier draft of this entry was two rungs short, on the belief
+	// that the multi-column footer's mid-word split at 24 and 20 left nothing to match. It
+	// splits the WORD, not the row, and the marker keys on the prefix that survives it.
 	"copilot/busy": copilotBusyLadder,
 }
 
@@ -388,11 +388,12 @@ var wantRungs = map[string][]int{
 	// fails at 20 is the TITLE, which no matcher here reads.
 	"copilot/gate/trust":      {20, 24, 26, 28, 34, 40, 60, 120},
 	"copilot/prompt/approval": {20, 24, 26, 28, 34, 40, 60, 120},
-	// Six rungs where eight were driven. The floor is 26 and it is a measured cliff, not a
-	// place driving stopped: 24 and 20 were driven, the turn was live at both (the byte
-	// counter grew), and the marker is split mid-word there.
-	// copilotBusyTruncatedRungs and TestCopilotBusyMarkerIsTruncatedAtTheNarrowestRungs.
-	"copilot/busy": {26, 28, 34, 40, 60, 120},
+	// Eight rungs, and the floor is 20 — the narrowest pane Atrium's own layout can produce is
+	// covered, so this adapter's busy marker has no unmeasured band. It read {26, …} while the
+	// marker was the whole word "Working"; what moved the floor was not a new capture but
+	// reading the two narrowest ones properly. See
+	// TestCopilotBusyMarkerIsTheLongestSurvivingPrefix.
+	"copilot/busy": {20, 24, 26, 28, 34, 40, 60, 120},
 }
 
 // keysWithNoRecordedCaptureWidth are covered by real captures whose provenance never wrote

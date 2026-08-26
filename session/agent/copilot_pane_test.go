@@ -1,15 +1,30 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
 // Driven panes from GitHub Copilot CLI 1.0.80 (npm @github/copilot), Linux, captured
-// 2026-08-26 by scripts/drive-agent.sh in an isolated COPILOT_HOME with the work token
-// injected via ATR_CAP_ENV. Widths 120/60/40/34/28/26/24/20; the pane height is 40 at every
-// rung, which matters for the gate (see the height note on copilotTrustgateLadder).
+// 2026-08-26 in an isolated COPILOT_HOME (COPILOT_HOME and XDG_CONFIG_HOME pointed at a
+// scratch directory) with the organization's token injected through the environment, against a
+// git repo created for the sweep. Widths 120/60/40/34/28/26/24/20.
+//
+// THE HARNESS DID NOT DRIVE THESE. scripts/drive-agent.sh has no copilot support — it names no
+// copilot binary, no copilot trust write and no copilot resume row — so these were driven by
+// hand and this header used to credit the script anyway, which made the captures look
+// reproducible from the tree when they are not. Adding copilot to that harness is what would
+// make the credit true, and until then the isolation each rung depended on is the reader's to
+// reproduce: a driver that skips it writes a nonce trust record and an allowed-directory entry
+// into the real ~/.copilot, which is the same hazard the script's own trust-write disclosure
+// exists to state for the four agents it does drive.
+//
+// THE PANE HEIGHT IS 40 AT EVERY RUNG, which is a limit of this ladder and not a property of
+// copilot: a width ladder cannot see a height axis. What covers that axis instead is
+// TestCopilotNeverDeliversAPromptIntoADialog, which truncates each of these panes from the top
+// and holds the composed delivery predicate at every height it produces.
 //
 // Both of this adapter's dialogs are CLOSED round boxes whose bottom border is the last
 // non-empty line at every rung, with "│"-walled interior rows — gemini's shape, not codex's
@@ -20,8 +35,14 @@ import (
 // to invite copying: geminiTrustGateVisible vetoes a block containing an isInputBoxLine, on
 // the reasoning that a composer is not a dialog. Copilot's selector IS the composer glyph
 // "❯", and it sits on the dialog's highlighted option row, so that veto would return false on
-// every rung of both ladders below. TestCopilotDialogsAreAlsoComposersToTheBoxPredicate holds
-// the collision as a fact rather than leaving it as a trap.
+// every rung of both ladders below. TestCopilotDialogSelectorIsTheComposerGlyph holds the
+// collision as a fact rather than leaving it as a trap.
+//
+// The veto copilot DOES carry runs the other way round — ModalVeto, on the composer predicate
+// rather than inside the matchers — and the two must not be confused. One asks "is a composer
+// on screen, so this is not a dialog"; the other asks "is a dialog on screen, so this is not a
+// composer". The first is false here at every rung. The second is what stops a queued prompt
+// being typed into a dialog whose literals have scrolled off the top of a short pane.
 
 const copilotTrustgateW20Pane = `  Current  →
 
@@ -403,13 +424,17 @@ const copilotWorkingW120Pane = `  Current   Sessions   Issues   Pull requests   
 // floor from, so this is where "the floor is 20" stops being a sentence.
 //
 // THE 20 RUNG IS A HEIGHT FINDING, not just a width one. At 20 columns the dialog's box grows
-// taller than the 40-row pane, so its TOP border and the title row scroll off — the title
-// "Confirm folder trust" is present at 24 and simply absent at 20, not truncated. Every
-// literal this matcher keys on therefore sits LOW in the dialog; a title-keyed matcher would
-// miss a gate that is plainly on screen. TestCopilotTrustGateTitleIsGoneAtWidth20 pins it.
+// taller than the 40-row pane, so its TOP border scrolls off and the title goes with it — but
+// only PARTLY. The title wraps to two rows there and the pane keeps the second: the box's first
+// visible row is "trust". So it is head-truncated, not absent, and the lesson is sharper than
+// "do not key on a title" — a matcher keyed on a title SUFFIX would fire here, on a fragment
+// that is not the title. TestCopilotTrustGateTitleIsGoneAtWidth20 pins both halves.
+//
+// What that rung CANNOT show is what happens as the pane gets shorter still, because every
+// capture here is 40 rows. TestCopilotNeverDeliversAPromptIntoADialog covers that axis.
 var copilotTrustgateLadder = []paneCapture{
 	{name: "copilotTrustgateW20Pane", width: 20, note: "box outgrows the pane; title scrolled off", pane: copilotTrustgateW20Pane},
-	{name: "copilotTrustgateW24Pane", width: 24, note: "headline in two lines", pane: copilotTrustgateW24Pane},
+	{name: "copilotTrustgateW24Pane", width: 24, note: "headline in three lines", pane: copilotTrustgateW24Pane},
 	{name: "copilotTrustgateW26Pane", width: 26, note: "", pane: copilotTrustgateW26Pane},
 	{name: "copilotTrustgateW28Pane", width: 28, note: "raw flatten already fails here", pane: copilotTrustgateW28Pane},
 	{name: "copilotTrustgateW34Pane", width: 34, note: "", pane: copilotTrustgateW34Pane},
@@ -460,7 +485,10 @@ func TestCopilotTrustGateTitleIsGoneAtWidth20(t *testing.T) {
 	flat20, ok := flattenBottomBox(copilotTrustgateW20Pane)
 	require.True(t, ok)
 	require.NotContains(t, flat20, title,
-		"at 20 columns the box outgrows the pane and the title row scrolls off the top")
+		"at 20 columns the box outgrows the pane and the title's first row scrolls off the top")
+	require.Contains(t, flat20, "trust",
+		"HEAD-truncated, not absent: the title wrapped and the pane kept its second row, so a "+
+			"matcher keyed on a title suffix would fire here on a fragment that is not the title")
 
 	flat24, ok := flattenBottomBox(copilotTrustgateW24Pane)
 	require.True(t, ok)
@@ -468,20 +496,163 @@ func TestCopilotTrustGateTitleIsGoneAtWidth20(t *testing.T) {
 		"one rung up the box still fits, so the cliff is between these two and not below both")
 }
 
-// TestCopilotDialogsAreAlsoComposersToTheBoxPredicate holds the collision the adapter's
-// InputBoxPrompts comment describes: the gate's selector is the composer's own "❯", so
-// InputBoxVisible answers TRUE on a screen that consumes keystrokes. That is why GateUp and
-// DetectPrompt are the guards keeping a queued first prompt off this dialog — exactly as for
-// claude and agy — and it is why a gemini-style composer veto inside the matcher is wrong here.
-func TestCopilotDialogsAreAlsoComposersToTheBoxPredicate(t *testing.T) {
-	for _, c := range copilotTrustgateLadder {
-		t.Run(c.label(), func(t *testing.T) {
-			require.True(t, copilot.InputBoxVisible(c.pane),
-				"the dialog reads as a composer, which is the hazard GateUp exists to cover")
-			_, up := copilot.GateUp(c.pane)
-			require.True(t, up, "and GateUp is what actually covers it")
-		})
+// TestCopilotDialogSelectorIsTheComposerGlyph holds the collision the adapter's InputBoxPrompts
+// comment describes, at the level where it holds — the box PRIMITIVE. inputBoxText finds a
+// composer on every rung of both dialogs, because the selected option row opens with the
+// composer's own "❯". That is the fact that rules out a gemini-style veto inside the matchers.
+//
+// What the ADAPTER answers is the opposite, and that is ModalVeto doing its job: the same pane
+// that presents a composer to the primitive is refused by InputBoxVisible. Both are asserted
+// here so the two cannot drift apart — a future change that made the primitive stop seeing a
+// composer would make the veto look unnecessary, and this says why it is not.
+func TestCopilotDialogSelectorIsTheComposerGlyph(t *testing.T) {
+	for _, ladder := range [][]paneCapture{copilotTrustgateLadder, copilotApprovalLadder} {
+		for _, c := range ladder {
+			t.Run(c.label(), func(t *testing.T) {
+				_, seen := inputBoxText(c.pane, promptSet(copilot.InputBoxPrompts))
+				require.True(t, seen,
+					"the selected option row opens with the composer glyph, so the box "+
+						"primitive cannot tell this dialog from a composer")
+				require.False(t, copilot.InputBoxVisible(c.pane),
+					"and ModalVeto is what makes the adapter disagree with the primitive")
+			})
+		}
 	}
+}
+
+// TestCopilotNeverDeliversAPromptIntoADialog is the height axis no width ladder can reach, and
+// the reason ModalVeto is structural rather than another literal.
+//
+// It recomputes what session/tmux's AwaitingInput computes — !GateUp && !DetectPrompt &&
+// InputBoxVisible — because that composition is what decides whether a queued prompt is typed
+// into the pane, and no test in this package was asking the composed question. It then asks it
+// at every pane height each driven dialog can be reduced to, by dropping rows off the TOP: that
+// is what a pane shorter than the dialog renders, and copilotTrustgateW20Pane is already in
+// that state at 40 rows.
+//
+// The failure it exists to prevent is specific. Both matchers key on literals, so as the pane
+// shrinks the headline goes first and the matcher goes false while the selector, the option
+// rows and the whole navigation footer are still on screen. Without the veto there is a band of
+// 3 to 5 rows at every rung where the dialog is plainly up, GateUp and DetectPrompt are both
+// false, and InputBoxVisible is true — so SendPrompt types the queued prompt and presses Enter,
+// which on the approval dialog selects the pre-highlighted "Yes, and add these directories to
+// the allowed list". NoAutoTap does not cover it: that flag is read only after DetectPrompt has
+// fired.
+//
+// The second half is the anti-vacuity check, and it is not optional. If the matchers happened to
+// hold at every height, the first half would pass with the veto deleted and this test would be
+// asserting nothing. So it also requires that a blind band EXISTS — heights where the literals
+// are gone and only the veto is holding the line.
+func TestCopilotNeverDeliversAPromptIntoADialog(t *testing.T) {
+	awaitingInput := func(pane string) bool {
+		if _, up := copilot.GateUp(pane); up {
+			return false
+		}
+		if _, prompted := copilot.DetectPrompt(pane); prompted {
+			return false
+		}
+		return copilot.InputBoxVisible(pane)
+	}
+
+	for _, ladder := range [][]paneCapture{copilotTrustgateLadder, copilotApprovalLadder} {
+		for _, c := range ladder {
+			t.Run(c.label(), func(t *testing.T) {
+				lines := strings.Split(c.pane, "\n")
+				blind := 0
+				for drop := 0; drop < len(lines); drop++ {
+					short := strings.Join(lines[drop:], "\n")
+					if !copilotModalUp(short) {
+						// The box's own bottom border has gone: this is no longer a pane
+						// showing a dialog, so there is nothing left to protect.
+						break
+					}
+					require.Falsef(t, awaitingInput(short),
+						"%s truncated to %d rows: the dialog is still on screen and a queued "+
+							"prompt would be typed into it",
+						c.name, len(lines)-drop)
+
+					_, gated := copilot.GateUp(short)
+					_, prompted := copilot.DetectPrompt(short)
+					if !gated && !prompted {
+						blind++
+					}
+				}
+				require.Positivef(t, blind,
+					"%s: no truncation of this pane left the matchers blind, so the assertion "+
+						"above would also pass with ModalVeto deleted — it must not be read as "+
+						"evidence that the veto works", c.name)
+			})
+		}
+	}
+}
+
+// TestCopilotTrustGateNeedsBothLiterals and its approval sibling are the only shapes that can
+// tell this matcher's AND from an OR. Every driven pane agrees with both, because the two
+// dialogs differ in BOTH literals — so a ladder of real captures cannot falsify the conjunction,
+// and changing "&&" to "||" in copilotDialogVisible left the whole package green.
+//
+// The panes are therefore built rather than driven, and they are built minimally: a box, one
+// literal, no other. That is a real screen shape — a session printing this file's own consts,
+// or an agent quoting one dialog's headline while discussing it — and under an OR each one
+// gates. A gated session holds its queued first prompt forever.
+func TestCopilotTrustGateNeedsBothLiterals(t *testing.T) {
+	_, up := copilot.GateUp(boxedPane(copilotTrustHeadline))
+	require.False(t, up, "the headline alone is ordinary English and must not gate")
+	_, up = copilot.GateUp(boxedPane(copilotTrustOption))
+	require.False(t, up, "the option label alone must not gate either")
+	_, up = copilot.GateUp(boxedPane(copilotTrustHeadline, copilotTrustOption))
+	require.True(t, up, "and the pair must, or this test is measuring the wrong thing")
+}
+
+func TestCopilotApprovalNeedsBothLiterals(t *testing.T) {
+	_, ok := copilot.DetectPrompt(boxedPane(copilotApprovalHeadline))
+	require.False(t, ok, "the headline alone must not read as the approval dialog")
+	_, ok = copilot.DetectPrompt(boxedPane(copilotApprovalOption))
+	require.False(t, ok, "the option label alone must not either")
+	_, ok = copilot.DetectPrompt(boxedPane(copilotApprovalHeadline, copilotApprovalOption))
+	require.True(t, ok, "and the pair must")
+}
+
+// boxedPane renders lines inside a round box that ends the pane — the minimum shape
+// bottomBoxBlock anchors on. Each line gets its own row, so a caller passing two literals is
+// testing a conjunction across rows, which is what flattenBottomBox exists to rejoin.
+func boxedPane(lines ...string) string {
+	width := 0
+	for _, l := range lines {
+		if len(l) > width {
+			width = len(l)
+		}
+	}
+	out := []string{" transcript row above the box", "╭" + strings.Repeat("─", width+2) + "╮"}
+	for _, l := range lines {
+		out = append(out, "│ "+l+strings.Repeat(" ", width-len(l))+" │")
+	}
+	return strings.Join(append(out, "╰"+strings.Repeat("─", width+2)+"╯"), "\n")
+}
+
+// TestCopilotComposerRejectsThePlainAngleBracket is why InputBoxPrompts is narrowed to "❯"
+// rather than left nil. defaultPrompts also holds ">", which this CLI never opens a composer
+// with, and inputBoxText anchors on the BOTTOM-MOST prompt-glyph line in its window — so under
+// the default set a ">"-opening transcript row below the real composer becomes the composer.
+// The pane here is that shape: copilot's own composer, with one quoted line under it.
+func TestCopilotComposerRejectsThePlainAngleBracket(t *testing.T) {
+	pane := strings.Join([]string{
+		"────────────────────────",
+		"❯ the real composer",
+		"────────────────────────",
+		"> quoted output below it",
+	}, "\n")
+
+	_, seen := inputBoxText(pane, defaultPrompts)
+	require.True(t, seen, "the premise: the default set reads the quoted row as a composer")
+	text, _ := inputBoxText(pane, defaultPrompts)
+	require.Equal(t, "quoted output below it", text,
+		"and it reads the wrong line, which is the fail-open this narrowing closes")
+
+	text, seen = copilot.InputBoxText(pane)
+	require.True(t, seen)
+	require.Equal(t, "the real composer", text,
+		"narrowed to copilot's own glyph, the anchor lands on the composer")
 }
 
 const copilotApprovalW20Pane = `  Current  →
@@ -817,7 +988,7 @@ const copilotApprovalW120Pane = `  Current   Sessions   Issues   Pull requests  
 // screen at all eight — so its title survives too. That is box height rather than a property
 // of titles, and the matcher keys on the headline and the option label regardless.
 var copilotApprovalLadder = []paneCapture{
-	{name: "copilotApprovalW20Pane", width: 20, note: "option label in four lines", pane: copilotApprovalW20Pane},
+	{name: "copilotApprovalW20Pane", width: 20, note: "option label in five lines", pane: copilotApprovalW20Pane},
 	{name: "copilotApprovalW24Pane", width: 24, note: "", pane: copilotApprovalW24Pane},
 	{name: "copilotApprovalW26Pane", width: 26, note: "", pane: copilotApprovalW26Pane},
 	{name: "copilotApprovalW28Pane", width: 28, note: "the widest rung raw flatten fails at", pane: copilotApprovalW28Pane},
@@ -1192,10 +1363,15 @@ const copilotWorkingW60Pane = `  Current   Sessions   Issues   Pull requests   G
 ────────────────────────────────────────────────────────────
  ◉ Working · 1.0 KiB esc interrupt            GPT-5.3-Codex`
 
-// copilotBusyLadder is a live turn at every driven width the marker survives. The marker sits
-// in the status row that REPLACES the hint row below the composer, so MarkerWindow stays 0 and
-// footerRegion's below-the-box anchor finds it — claude's arrangement, not codex's or gemini's,
-// both of which render their status row ABOVE the composer and need a window instead.
+// copilotBusyLadder is a live turn at every driven width. The marker sits in the status row
+// that REPLACES the hint row below the composer, so MarkerWindow stays 0 and footerRegion's
+// below-the-box anchor finds it — claude's arrangement, not codex's or gemini's, both of which
+// render their status row ABOVE the composer and need a window instead.
+//
+// EIGHT RUNGS, ALL POSITIVE. An earlier draft split the two narrowest off into a separate
+// "truncated" list on the belief that no substring survived them. It does: the footer splits
+// the WORD, not the row, and "Worki" is on screen at every one of the eight.
+// TestCopilotBusyMarkerIsTheLongestSurvivingPrefix reads the prefix ladder off these panes.
 //
 // WHY THIS LADDER WAS DRIVEN TWICE. The first sweep ended its turn after the width-60 rung, so
 // six of its eight rungs captured an IDLE pane while looking like a measurement — an identical
@@ -1204,32 +1380,85 @@ const copilotWorkingW60Pane = `  Current   Sessions   Issues   Pull requests   G
 // beside the run directory under captures-invalid-working-2026-08-26 rather than deleted,
 // because the design spec cites them as the evidence that they were invalid.
 //
-// WHAT MAKES THIS SWEEP VALID is not "the marker is present at every rung" — it is not, and
-// two rungs below live next door. It is the BYTE COUNTER, which grows at every one of the
-// eight: 544 B, then 1.0, 1.5, 1.9, 2.4, 2.9, 3.4 and 3.8 KiB. A paused turn can leave a
-// painted status row behind; it cannot advance a counter. That distinction is what separates a
-// missed rung from an invalid one, and it is the check the first sweep lacked.
+// WHAT MAKES THIS SWEEP VALID is the BYTE COUNTER: a paused turn can leave a painted status row
+// behind, but it cannot advance a counter. Marker presence cannot do that job — the first sweep
+// would have partly satisfied it too. So the counter is not described here, it is a table:
+// copilotBusyCounters carries the eight readings and TestCopilotBusyLadderCounterGrows holds
+// them to the panes and to each other. That test is the validity check the first sweep lacked,
+// and a re-drive that again caught an idle pane at some rung reddens it.
 var copilotBusyLadder = []paneCapture{
-	{name: "copilotWorkingW26Pane", width: 26, note: "the floor; footer multi-column, marker on its own line", pane: copilotWorkingW26Pane},
-	{name: "copilotWorkingW28Pane", width: 28, note: "footer becomes multi-column", pane: copilotWorkingW28Pane},
-	{name: "copilotWorkingW34Pane", width: 34, note: "renders \"Working·\" with no space before the separator", pane: copilotWorkingW34Pane},
-	{name: "copilotWorkingW40Pane", width: 40, note: "narrowest rung the whole hint is still contiguous", pane: copilotWorkingW40Pane},
+	{name: "copilotWorkingW20Pane", width: 20, note: "\"Working\" splits into \"Worki\" / \"ng\"; the marker's floor is read off this rung", pane: copilotWorkingW20Pane},
+	{name: "copilotWorkingW24Pane", width: 24, note: "\"Working\" splits into \"Workin\" / \"g\"", pane: copilotWorkingW24Pane},
+	{name: "copilotWorkingW26Pane", width: 26, note: "the Working cell wraps whole to the second row, jammed against \"KiB\"", pane: copilotWorkingW26Pane},
+	{name: "copilotWorkingW28Pane", width: 28, note: "same shape as 26, one column wider", pane: copilotWorkingW28Pane},
+	{name: "copilotWorkingW34Pane", width: 34, note: "first rung the row wraps at all: \"interrupt\" breaks into its column, and \"Working·\" loses the space before the separator", pane: copilotWorkingW34Pane},
+	{name: "copilotWorkingW40Pane", width: 40, note: "narrowest rung the whole row is still one line", pane: copilotWorkingW40Pane},
 	{name: "copilotWorkingW60Pane", width: 60, note: "", pane: copilotWorkingW60Pane},
-	{name: "copilotWorkingW120Pane", width: 120, note: "status row on one line", pane: copilotWorkingW120Pane},
+	{name: "copilotWorkingW120Pane", width: 120, note: "", pane: copilotWorkingW120Pane},
 }
 
-// copilotBusyTruncatedRungs are the rungs where the multi-column footer splits "Working"
-// mid-word, so no substring survives and no window value could reach one. They are negative
-// evidence, not a windowing failure: the row is ON SCREEN and the phrase is not there.
-// This is the rung LiveSpinner exists for — the animating spinner is the only signal left —
-// and it is deliberately not a standalone latch, so a session here reports idle until the
-// spinner support lands.
-var copilotBusyTruncatedRungs = []paneCapture{
-	{name: "copilotWorkingW24Pane", width: 24, note: "marker split \"Workin\" / \"g\"", pane: copilotWorkingW24Pane},
-	{name: "copilotWorkingW20Pane", width: 20, note: "marker split \"Worki\" / \"ng\"", pane: copilotWorkingW20Pane},
+// copilotBusySplitWordRungs are the two rungs where the footer's column grid splits "Working"
+// mid-word. They are not misses — the marker is found at both, which is the point of keying on
+// the surviving prefix — they are where the prefix's floor comes from.
+var copilotBusySplitWordRungs = []paneCapture{
+	{name: "copilotWorkingW24Pane", width: 24, note: "\"Workin\" / \"g\"", pane: copilotWorkingW24Pane},
+	{name: "copilotWorkingW20Pane", width: 20, note: "\"Worki\" / \"ng\"", pane: copilotWorkingW20Pane},
 }
 
-// TestCopilotBusyMarkerFiresAtEveryDrivenWidth is the positive half.
+// copilotBusyCounters is the byte counter this ladder's validity rests on, as a table so it can
+// be checked instead of read. Order is the order the sweep drove — widest pane first — which is
+// the order the counter must grow in; digits are what the pane renders beside the separator,
+// and bytes is that reading normalized so the growth is computable rather than eyeballed.
+//
+// It exists because the invalid first sweep was caught by a human noticing an identical credit
+// figure across six rungs. That is not a check, it is a coincidence of attention, and the
+// remedy for it is a value a test can read.
+var copilotBusyCounters = []struct {
+	name   string
+	digits string
+	bytes  float64
+}{
+	{"copilotWorkingW120Pane", "544", 544},
+	{"copilotWorkingW60Pane", "1.0", 1.0 * 1024},
+	{"copilotWorkingW40Pane", "1.5", 1.5 * 1024},
+	{"copilotWorkingW34Pane", "1.9", 1.9 * 1024},
+	{"copilotWorkingW28Pane", "2.4", 2.4 * 1024},
+	{"copilotWorkingW26Pane", "2.9", 2.9 * 1024},
+	{"copilotWorkingW24Pane", "3.4", 3.4 * 1024},
+	{"copilotWorkingW20Pane", "3.8", 3.8 * 1024},
+}
+
+// TestCopilotBusyLadderCounterGrows is the ladder's validity check: every rung shows the
+// counter reading recorded for it, and the readings grow strictly across the sweep. A rung
+// re-captured from a paused turn repeats its neighbour's figure and reddens the second half; a
+// rung whose recorded figure was mistyped reddens the first.
+//
+// It also holds the table to the ladder in both directions, because a counter table that has
+// silently stopped covering a rung is the same defect one step removed.
+func TestCopilotBusyLadderCounterGrows(t *testing.T) {
+	byName := map[string]paneCapture{}
+	for _, c := range copilotBusyLadder {
+		byName[c.name] = c
+	}
+	require.Len(t, copilotBusyCounters, len(copilotBusyLadder),
+		"every rung's counter is what makes that rung evidence, so the table covers the ladder")
+
+	for i, cnt := range copilotBusyCounters {
+		c, ok := byName[cnt.name]
+		require.Truef(t, ok, "%s is not a rung of copilotBusyLadder", cnt.name)
+		require.Containsf(t, footerRegion(c.pane), "· "+cnt.digits,
+			"%s: the counter reading recorded for this rung is not the one the pane renders", c.label())
+		if i > 0 {
+			require.Greaterf(t, cnt.bytes, copilotBusyCounters[i-1].bytes,
+				"the sweep drove widest-first, so the turn's byte counter must have advanced "+
+					"between %s and %s — equal or falling figures are what an idle pane produces",
+				copilotBusyCounters[i-1].name, cnt.name)
+		}
+	}
+}
+
+// TestCopilotBusyMarkerFiresAtEveryDrivenWidth is the positive half. paneCoverage asserts the
+// same thing generically; this exists so a failure names the rung in this file's own terms.
 func TestCopilotBusyMarkerFiresAtEveryDrivenWidth(t *testing.T) {
 	for _, c := range copilotBusyLadder {
 		t.Run(c.label(), func(t *testing.T) {
@@ -1238,44 +1467,63 @@ func TestCopilotBusyMarkerFiresAtEveryDrivenWidth(t *testing.T) {
 	}
 }
 
-// TestCopilotBusyMarkerIsTruncatedAtTheNarrowestRungs records the two misses as measurements
-// rather than dropping them, the way geminiBusyTruncatedRungs does. The premise is asserted
-// alongside the verdict: without it this would say only "the marker misses here", which is
-// also what an idle pane says — and an idle pane is exactly what the first sweep of this
-// ladder produced. The growing byte counter is what tells the two apart, so it is what the
-// premise reads.
-func TestCopilotBusyMarkerIsTruncatedAtTheNarrowestRungs(t *testing.T) {
-	for _, c := range copilotBusyTruncatedRungs {
+// TestCopilotBusyMarkerIsTheLongestSurvivingPrefix is why BusyMarkers holds "Worki" and not the
+// whole word, and it is the test that replaced a claim its own fixtures disproved: the earlier
+// entry keyed on "Working", called the two narrowest rungs unreachable, and said no substring
+// survived them. "Worki" survives all eight.
+//
+// Both halves are needed and they pull in opposite directions. The first says the marker Atrium
+// ships is on screen at every rung — that is the floor holding. The second says one character
+// MORE is not, at the narrowest rung, which is what makes this prefix the longest one available
+// rather than an arbitrarily short string that happens to work: shortening a marker widens what
+// it can false-match, so the shortest sufficient form is not automatically the right one, and
+// the case for stopping here is that stopping one character later misses.
+//
+// The stakes are why the miss mattered. A non-empty BusyMarkers is what disables the
+// content-change fallback (session/tmux/poll.go), and copilot has no hook record, so a marker
+// that misses is not a stale Working that decays — the session never reports working at all.
+func TestCopilotBusyMarkerIsTheLongestSurvivingPrefix(t *testing.T) {
+	require.Equal(t, []string{"Worki"}, copilot.BusyMarkers,
+		"this test measures the marker copilot actually ships; if that changed, so must this")
+
+	for _, c := range copilotBusyLadder {
 		t.Run(c.label(), func(t *testing.T) {
-			require.Contains(t, c.pane, "KiB",
-				"the premise: the byte counter is on screen, so this is a LIVE turn and not "+
-					"the idle pane the first sweep of this ladder mistook for one")
-			require.NotContains(t, footerRegion(c.pane), "Working",
-				"the marker is split mid-word here, so no window reaches it")
-			require.False(t, copilot.HasBusyMarker(c.pane),
-				"recording the miss is the point; this rung is what LiveSpinner would be for")
+			require.Contains(t, footerRegion(c.pane), "Worki",
+				"the shipped marker must be in the marker region at every driven rung")
+			require.True(t, copilot.HasBusyMarker(c.pane))
 		})
 	}
+
+	for _, c := range copilotBusySplitWordRungs {
+		t.Run(c.label(), func(t *testing.T) {
+			require.NotContains(t, footerRegion(c.pane), "Working",
+				"the premise: the column grid splits the word here, which is why the whole "+
+					"word cannot be the marker")
+		})
+	}
+
+	require.NotContains(t, footerRegion(copilotWorkingW20Pane), "Workin",
+		"one character past the shipped marker misses at the narrowest rung, which is what "+
+			"makes \"Worki\" the longest prefix this ladder supports rather than merely a short one")
 }
 
-// TestCopilotBusyMarkerCannotKeyOnTheInterruptHint is why BusyMarkers holds "Working" alone.
-// The status row reads "<spinner> Working · <N> B esc interrupt", so the byte counter sits
-// BETWEEN the two words and "Working esc interrupt" is never contiguous at any width — a fact
-// a wide capture alone would suggest is fine. And "esc interrupt" stops being contiguous below
-// 40, one rung ABOVE the width at which the footer goes multi-column, because the
-// single-column row wraps there first. Both halves are asserted against the driven panes
-// rather than described, over every rung including the two the marker misses — the hint's
-// reach is a fact about the row, not about whether this adapter can read it.
+// TestCopilotBusyMarkerCannotKeyOnTheInterruptHint is why the marker is a word from the status
+// row's HEAD rather than its tail. The row reads "<spinner> Working · <N> B esc interrupt", so
+// the byte counter sits BETWEEN the two words and "Working esc interrupt" is never contiguous at
+// any width — a fact a wide capture alone would suggest is fine. And "esc interrupt" stops being
+// contiguous below 40, which is where the row first wraps at all; what each rung's footer
+// actually looks like is recorded per rung in copilotBusyLadder's notes rather than narrated as
+// one onset here, because the row loses its cells to the wrap in stages and a single sentence
+// about "where it goes multi-column" has been wrong twice.
 func TestCopilotBusyMarkerCannotKeyOnTheInterruptHint(t *testing.T) {
-	all := append(append([]paneCapture{}, copilotBusyLadder...), copilotBusyTruncatedRungs...)
-	for _, c := range all {
+	for _, c := range copilotBusyLadder {
 		t.Run(c.label(), func(t *testing.T) {
 			region := footerRegion(c.pane)
 			require.NotContains(t, region, "Working esc interrupt",
 				"the byte counter sits between the words at every width")
 			if c.width >= 40 {
 				require.Contains(t, region, "esc interrupt",
-					"the hint is contiguous while the single-column row still fits it")
+					"the hint is contiguous while the row is still one line")
 				return
 			}
 			require.NotContains(t, region, "esc interrupt",
@@ -1288,24 +1536,17 @@ func TestCopilotBusyMarkerCannotKeyOnTheInterruptHint(t *testing.T) {
 // TestCopilotBusyPanesAreNeitherGateNorPrompt is the negative direction paneCoverage cannot
 // express (that table is positive-only). It uses the busy panes because a working pane is the
 // shape most likely to false-match: it is the one that actually renders a composer and a
-// footer, where both dialog matchers must stay silent. Both lists are walked, because a rung
-// the busy marker misses is still a rung the dialog matchers must not fire on.
+// footer, where both dialog matchers must stay silent.
 //
 // WHAT MAKES THEM SILENT IS THE ANCHOR, NOT THE LITERALS, and getting that backwards leads to
 // a mutation that cannot fail. flattenBottomBox is false on all eight of these panes — the
 // composer is delimited by horizontal rules, so nothing here presents a bottom border above
 // walled rows — and both matchers return early on that. Setting copilotTrustHeadline to
-// "Working" therefore leaves this green: the gate never reaches its literals at all. The first
+// "Worki" therefore leaves this green: the gate never reaches its literals at all. The first
 // assertion pins the anchor for that reason, so the mechanism is what is guarded rather than a
 // coincidence of which strings the footer happens not to contain.
-//
-// The last assertion is the one with teeth on the other axis. A copilot dialog reads as a
-// composer to InputBoxVisible, so that predicate cannot tell the two apart; what makes the
-// collision harmless is that GateUp and DetectPrompt disagree on these panes and agree on the
-// dialogs.
 func TestCopilotBusyPanesAreNeitherGateNorPrompt(t *testing.T) {
-	all := append(append([]paneCapture{}, copilotBusyLadder...), copilotBusyTruncatedRungs...)
-	for _, c := range all {
+	for _, c := range copilotBusyLadder {
 		t.Run(c.label(), func(t *testing.T) {
 			_, boxed := flattenBottomBox(c.pane)
 			require.False(t, boxed,
@@ -1316,6 +1557,20 @@ func TestCopilotBusyPanesAreNeitherGateNorPrompt(t *testing.T) {
 			require.False(t, up, "a live turn is not a startup gate")
 			_, ok := copilot.DetectPrompt(c.pane)
 			require.False(t, ok, "a live turn is not a blocking prompt")
+		})
+	}
+}
+
+// TestCopilotBusyPanesStayDeliverable is ModalVeto's other direction, and the one that would
+// break prompt delivery outright if the veto were wrong. copilotModalUp reads no literal, so
+// nothing about WHICH screen is up constrains it — the only thing keeping it off a live
+// composer is that copilot's composer is borderless. If a future build boxed the composer, this
+// reddens, and it reddens before a user finds out by having a queued prompt silently held.
+func TestCopilotBusyPanesStayDeliverable(t *testing.T) {
+	for _, c := range copilotBusyLadder {
+		t.Run(c.label(), func(t *testing.T) {
+			require.False(t, copilotModalUp(c.pane),
+				"a live turn is not a modal, so the veto must not fire on it")
 			require.True(t, copilot.InputBoxVisible(c.pane),
 				"and the composer IS readable here, which is what makes prompt delivery work")
 		})
@@ -1327,17 +1582,21 @@ func TestCopilotBusyPanesAreNeitherGateNorPrompt(t *testing.T) {
 // to codex's 8 reddens nothing: the marker sits one to three non-empty lines from the bottom at
 // every rung, so a bottom-8 window is a strict SUPERSET of the region footerRegion picks. A
 // superset can add a false positive; it cannot produce a miss, so no driven pane here
-// distinguishes 0 from 8. The third assertion below records that as a fact rather than leaving
-// it as an unstated hole.
+// distinguishes 0 from 8. The last assertion records that as a fact rather than leaving it as an
+// unstated hole.
 //
 // What IS guardable is the PREMISE MarkerWindow 0 rests on — that copilot paints its status row
-// BELOW the composer, claude's arrangement. Both halves are asserted, because only the pair
-// says it: the marker is inside the below-box footer, and absent from the block ABOVE the box,
-// which is exactly where codex and gemini put theirs and why they need a window. A future build
-// that moved the row above the composer would leave HasBusyMarker green through the fallback
-// and redden this instead, which is the whole reason it is worth writing.
+// BELOW the composer, claude's arrangement, where codex and gemini paint theirs ABOVE it. Both
+// halves are asserted, and the negative half is deliberately BOUNDED to the rows immediately
+// above the composer's top rule, which is where the arrangement being ruled out puts the row.
+// An earlier draft asked aboveBoxBlock instead: that walk is delimited by a blank line, copilot
+// draws a scrollbar rune in the last column of every transcript row, and so it returned 31 to 34
+// lines of scrolled-back transcript on these panes. Against that region the assertion said only
+// "this fixture's transcript does not happen to contain the marker" — it would redden on a
+// session that narrated "Working on the parser" and stay green on the build it was written to
+// catch.
 func TestCopilotBusyMarkerSitsBelowTheComposer(t *testing.T) {
-	const marker = "Working" // copilot's only BusyMarkers entry
+	const marker = "Worki" // copilot's only BusyMarkers entry
 
 	for _, c := range copilotBusyLadder {
 		t.Run(c.label(), func(t *testing.T) {
@@ -1347,11 +1606,9 @@ func TestCopilotBusyMarkerSitsBelowTheComposer(t *testing.T) {
 				"the status row REPLACES the hint row below the composer, which is what makes "+
 					"MarkerWindow 0 the right value")
 
-			above, ok := aboveBoxBlock(c.pane)
-			require.True(t, ok, "the premise: there IS a live block above the box to look in")
-			require.NotContains(t, above, marker,
-				"and it is not codex's or gemini's arrangement — their status row is here, "+
-					"above the composer, which is why they need a window and copilot does not")
+			require.NotContains(t, composerHeadroom(t, c.pane), marker,
+				"and it is not codex's or gemini's arrangement — their status row sits here, "+
+					"in the rows just above the composer, which is why they need a window")
 
 			require.Contains(t, liveChromeLines(c.pane, 8), marker,
 				"disclosed, not asserted as a virtue: codex's window would ALSO find the "+
@@ -1359,4 +1616,67 @@ func TestCopilotBusyMarkerSitsBelowTheComposer(t *testing.T) {
 					"out is the arrangement above, not a failing rung")
 		})
 	}
+}
+
+// composerHeadroom returns the few pane rows immediately ABOVE the composer's top rule — the
+// band codex and gemini paint their status row into. Bounded on purpose: the question is where
+// THIS agent puts its status row, and any wider region answers a question about the transcript
+// instead. It fails the test rather than returning "" when the composer's rules are not where
+// this adapter's shape says they are, so a restructured pane cannot make the negative vacuous.
+func composerHeadroom(t *testing.T, pane string) string {
+	t.Helper()
+	const headroom = 3
+	lines := strings.Split(pane, "\n")
+	first := -1
+	for i, l := range lines {
+		if isHorizontalRule(l) {
+			first = i
+			break
+		}
+	}
+	require.GreaterOrEqual(t, first, headroom,
+		"copilot's composer sits between two horizontal rules with a transcript above it; "+
+			"no rule found with room above it means this pane is not that shape")
+	return strings.Join(lines[first-headroom:first], "\n")
+}
+
+// TestCopilotPasteCollapsed pins the predicate against copilot's two placeholder shapes, both
+// read off the vendor bundle at 1.0.80 rather than off a screenshot: the composer replaces a
+// paste over the line threshold with "[Paste #N - L lines]", and one over the byte threshold is
+// written to the workspace and replaced with "[Saved pasted content to workspace (<file>)
+// id=N]". The vendor's own detector makes the " - L lines" clause optional, which is why the
+// bare-index form is here as a case rather than as an oversight.
+//
+// The negative cases are the ones that matter for the delivery path. A chip means "the paste
+// landed", so a predicate that fires on ordinary typed text would confirm a prompt that never
+// arrived and submit an empty composer.
+func TestCopilotPasteCollapsed(t *testing.T) {
+	for _, box := range []string{
+		"[Paste #1 - 29 lines]",
+		"[Paste #12 - 1 line]",
+		"[Paste #3]",
+		"before [Paste #2 - 40 lines] after",
+		"[Saved pasted content to workspace (paste-2.txt) id=2]",
+	} {
+		t.Run("collapsed: "+box, func(t *testing.T) {
+			require.True(t, copilotPasteCollapsed(box))
+		})
+	}
+
+	for _, box := range []string{
+		"",
+		"refactor the parser and add a regression test",
+		"explain how bracketed paste works",
+		"[Pasted text #1 +29 lines]", // claude's chip, not copilot's
+		"[Paste #]",
+		"[Saved pasted content to workspace () id=]",
+	} {
+		t.Run("plain: "+box, func(t *testing.T) {
+			require.False(t, copilotPasteCollapsed(box))
+		})
+	}
+
+	require.NotNil(t, Resolve("copilot").PasteCollapsed,
+		"and the adapter must actually wire it, or every queued prompt over ten lines is "+
+			"pasted and never submitted")
 }

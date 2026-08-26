@@ -12,7 +12,13 @@ import (
 // The input is expected to be cleaned for detection already (ANSI stripped,
 // trailing whitespace trimmed — see tmux's cleanForDetection).
 
-var whiteSpaceRegex = regexp.MustCompile(`\s+`)
+// whiteSpaceRegex is the run-of-whitespace every flattening pass collapses. It is NOT `\s+`:
+// Go's \s is [\t\n\f\r ], so a NO-BREAK SPACE (U+00A0) is not whitespace to it, and an agent
+// that pads with one leaves a rune sitting inside a phrase a matcher is about to look for.
+// Copilot 1.0.80 emits them — 56 in the driven captures, e.g. "● Executing \u00a0cat
+// /etc/hostname\u00a0 now." — so this is measured rather than defensive.
+// TestFlatteningNormalizesNoBreakSpace.
+var whiteSpaceRegex = regexp.MustCompile("[\\s\u00a0]+")
 
 // pasteChipRegex matches claude's collapsed-paste placeholder in an input-box readback, e.g.
 // "[Pasted text #1 +29 lines]" — the readback of a ≥4-line bracketed paste (claude renders it
@@ -73,21 +79,40 @@ func flattenChrome(content string, n int) string {
 //
 // IT DELIBERATELY SYNTHESISES ACROSS ROWS, which inverts bottomBoxBlock's own contract.
 // That function returns lines unjoined precisely so a caller matching a literal gets no
-// cross-line synthesis; here the synthesis IS the feature, and the difference that makes it
-// safe is the region. The trap it inverts (#713, gemini's trust gate) was flattening across
-// a bottom-N WINDOW, where the transcript scrolls through and any two neighbouring lines can
-// manufacture a phrase neither renders. Here the region is one anchored box's interior, so
-// the only text that can combine is text the dialog itself drew. A caller that needs the
-// unjoined form still has bottomBoxBlock.
+// cross-line synthesis; here the synthesis IS the feature. The trap it inverts (#713,
+// gemini's trust gate) was flattening across a bottom-N WINDOW, where the transcript scrolls
+// through and any two neighbouring lines can manufacture a phrase neither renders. Confining
+// it to one box's interior is a NARROWING of that surface, and an earlier draft of this doc
+// claimed it was a closure — "the only text that can combine is text the dialog itself drew".
+// It is not, in two measured ways, and both are held by
+// TestFlattenBottomBoxSynthesisSurface rather than described here:
+//
+//   - A BLANK interior row used to be a zero-width joiner. It strips to "" and the collapse
+//     folded it away, so four rows reading "Do you trust the" / "" / "files in this" /
+//     "folder?" flattened to exactly copilotTrustHeadline — a phrase spliced across a
+//     paragraph break that no paragraph rendered. It is now boxRowGap, a separator no literal
+//     can span, which is what makes the nested-box paragraph below true of blank rows too.
+//   - The wall run walks up until a row is not box interior, and what normally stops it is
+//     the box's TOP border, which isBoxWallLine rejects. On a pane shorter than the box that
+//     border has scrolled off — copilotTrustgateW20Pane is already in that state — so the
+//     walk continues into whatever sits above, and walled transcript rows join the interior.
+//     That direction manufactures a dialog that is not there, which fails CLOSED (a queued
+//     prompt is held, never mis-delivered) and is the direction GateUp's own doc records as
+//     acceptable. Closing it needs a top-border requirement, which bottomBoxBlock measured
+//     and rejected for a better reason — see its HEIGHT case.
 //
 // What it does NOT strip is a NESTED box's own borders. Copilot draws the path under review
 // inside a second box, and leaving those runes in place keeps them as separators, so a
-// literal cannot be manufactured across one. The outer walls are the only thing removed.
+// literal cannot be manufactured across one. The outer walls are the only thing removed, and
+// TestStripBoxWallsKeepsANestedBoxWall holds that on a real doubly-walled path row rather
+// than on the nested box's corners, which no wall-stripping implementation would touch.
 //
-// ok=false means no box whose bottom border all but ends the pane — a composer frame, a bare
-// transcript, or a dismissed dialog with the composer redrawn below it. That is what keeps
-// the false-positive surface down to the one bottomBoxBlock already discloses (quoted box art
-// that ends the pane) rather than the whole pane's worth a stripped full-pane scan would take.
+// ok=false means no box whose bottom border all but ends the pane. For THIS adapter that is
+// the composer frame, because copilot's composer is borderless between two horizontal rules;
+// it is not a general claim about composers, and the sentence here used to make one. gemini's
+// composer is itself a round-bordered box, so flattenBottomBox returns ok=TRUE on its idle
+// pane — TestFlattenBottomBoxIsTrueOnABoxDrawnComposer. Any adapter reading liveness off this
+// predicate must first know which shape its own composer is.
 //
 // Input must already be cleaned for detection (ANSI stripped), like every other predicate here.
 func flattenBottomBox(content string) (string, bool) {
@@ -97,11 +122,26 @@ func flattenBottomBox(content string) (string, bool) {
 	}
 	parts := make([]string, 0, len(block))
 	for _, line := range block {
-		parts = append(parts, stripBoxWalls(line))
+		if interior := stripBoxWalls(line); interior != "" {
+			parts = append(parts, interior)
+			continue
+		}
+		parts = append(parts, boxRowGap)
 	}
 	flat := whiteSpaceRegex.ReplaceAllString(strings.Join(parts, " "), " ")
-	return strings.TrimSpace(flat), true
+	return strings.Trim(flat, " "+boxRowGap), true
 }
+
+// boxRowGap is what flattenBottomBox writes where a box interior row is BLANK — a padding row,
+// or the blank line a dialog puts between its headline and its options.
+//
+// It is a separator, and it has to be one that cannot be part of any literal a caller matches,
+// because the whole point is that a phrase must not be reconstructed ACROSS a paragraph break.
+// A space would be folded into the collapse and rejoin the fragments; a printable rune could in
+// principle be one an agent draws. NUL is neither: tmux capture-pane yields the pane's rendered
+// text and cleanForDetection strips the escape sequences, so no captured pane carries one —
+// TestNoPaneFixtureCarriesTheRowGap reads every committed fixture in this package and holds it.
+const boxRowGap = "\x00"
 
 // isHorizontalRule reports whether line is a box-drawing horizontal border — the top or
 // bottom edge of claude's input box. Such a line is made only of horizontal dashes, box
@@ -117,8 +157,12 @@ func isHorizontalRule(line string) bool {
 		switch r {
 		case '─':
 			dashes++
-		case '╭', '╮', '╰', '╯', '│', '┌', '┐', '└', '┘', '├', '┤', ' ':
-			// box corners/sides and interior padding are allowed
+		case '╭', '╮', '╰', '╯', '│', '┌', '┐', '└', '┘', '├', '┤', ' ', '\u00a0':
+			// box corners/sides and interior padding are allowed. A NO-BREAK SPACE is padding
+			// too: rejecting one costs the whole box anchor, so a single U+00A0 in a border row
+			// would take bottomBoxBlock down and report "no dialog on screen" — the
+			// fail-dangerous direction, on the surface that renders a command and a path.
+			// Copilot 1.0.80 emits NBSP; TestHorizontalRuleAcceptsNoBreakSpacePadding.
 		default:
 			return false
 		}

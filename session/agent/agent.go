@@ -297,6 +297,35 @@ type Adapter struct {
 	// its "> You are in <dir>" header both read as a composer under the default set.
 	InputBoxPrompts []string
 
+	// ModalVeto reports that the pane's bottom chrome is a MODAL the agent drew, not its
+	// live composer, even though a composer glyph is on screen. When it fires,
+	// InputBoxVisible is false and prompt delivery is held.
+	//
+	// It exists because the composer glyph is not always the composer's. Several agents draw
+	// their dialog's selected row with the same glyph, which InputBoxVisible's own doc records
+	// as unfixable ON THAT LINE'S SHAPE — and the pairing it prescribes instead (GateUp and
+	// DetectPrompt) is a LITERAL match, so it holds only while the dialog's literals are on
+	// screen. A pane shorter than the dialog scrolls the headline off while leaving the
+	// selector, the option rows and the whole nav footer visible: the literals go, the glyph
+	// stays, and AwaitingInput (!GateUp && !DetectPrompt && InputBoxVisible) goes TRUE on a
+	// modal. A queued prompt is then typed into it and Enter selects the highlighted option.
+	// Copilot's is "Yes, and add these directories to the allowed list", so the convenience
+	// feature widens the agent's filesystem reach. NoAutoTap cannot help: it is consulted
+	// only once DetectPrompt has already fired.
+	//
+	// So this is deliberately STRUCTURAL, never a literal: it must hold at a pane height where
+	// no literal is left to read. copilotModalUp is the worked example — an anchored box whose
+	// bottom border all but ends the pane, which copilot's borderless composer never is.
+	// TestCopilotNeverDeliversAPromptIntoADialog measures the composed triple at every pane
+	// height of every driven rung; TestCopilotBusyPanesStayDeliverable holds the other
+	// direction, that the veto has not simply killed delivery.
+	//
+	// nil for agents whose dialogs the literal pairing already covers at every reachable pane
+	// height. It is NOT a substitute for Gates/Prompts: a vetoed pane reports no needs-input,
+	// so the prompt is held rather than surfaced — fail-closed, which is the direction GateUp's
+	// own doc records as acceptable, and strictly better than delivery onto a dialog.
+	ModalVeto func(content string) bool
+
 	// Gates are the startup screens this agent can show.
 	Gates []Gate
 	// GateWindow overrides how many non-empty lines from the bottom GateUp flattens
@@ -515,7 +544,14 @@ func (a *Adapter) InputBoxText(content string) (string, bool) {
 // does — additionally presents a box line on a frame whose composer an overlay has replaced.
 // So the caller must pair this with GateUp and DetectPrompt, which is what excludes those
 // screens; on codex's trust gate at narrow widths that pairing is what GateWindow protects.
+//
+// That pairing is a LITERAL match, so it covers only the pane heights where the dialog's
+// literals are still on screen. ModalVeto is the structural half for an agent whose dialog
+// outgrows the pane and takes its headline with it; see that field.
 func (a *Adapter) InputBoxVisible(content string) bool {
+	if a.ModalVeto != nil && a.ModalVeto(content) {
+		return false
+	}
 	_, ok := inputBoxText(content, a.inputBoxPrompts())
 	return ok
 }
