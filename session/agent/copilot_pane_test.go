@@ -533,7 +533,7 @@ func TestCopilotDialogSelectorIsTheComposerGlyph(t *testing.T) {
 // The failure it exists to prevent is specific. Both matchers key on literals, so as the pane
 // shrinks the headline goes first and the matcher goes false while the selector, the option
 // rows and the whole navigation footer are still on screen. Without the veto there is a band of
-// 3 to 5 rows at every rung where the dialog is plainly up, GateUp and DetectPrompt are both
+// heights at every rung where the dialog is plainly up, GateUp and DetectPrompt are both
 // false, and InputBoxVisible is true — so SendPrompt types the queued prompt and presses Enter,
 // which on the approval dialog selects the pre-highlighted "Yes, and add these directories to
 // the allowed list". NoAutoTap does not cover it: that flag is read only after DetectPrompt has
@@ -544,8 +544,8 @@ func TestCopilotDialogSelectorIsTheComposerGlyph(t *testing.T) {
 // asserting nothing. So it also counts the heights that WOULD have been deliverable without the
 // veto — matchers blind, and the box primitive still reporting a composer — and requires that
 // band to be non-empty at every rung. That count is the finding as a number, kept in the test
-// rather than in a sentence: prose put it at "3 to 5 rows" from one arithmetic and this measures
-// it per rung from the panes.
+// rather than in a sentence: the first attempt at that sentence gave a figure from one
+// arithmetic, and the count belongs to the panes.
 func TestCopilotNeverDeliversAPromptIntoADialog(t *testing.T) {
 	awaitingInput := func(pane string) bool {
 		if _, up := copilot.GateUp(pane); up {
