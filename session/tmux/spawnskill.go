@@ -3,12 +3,14 @@ package tmux
 import (
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync/atomic"
 
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session/agent"
 )
 
@@ -112,12 +114,18 @@ func agentPluginRoot() (string, error) {
 	return filepath.Join(dir, "plugin"), nil
 }
 
-// claudeSupportsPluginDir reports whether the claude binary accepts --plugin-dir, probed
-// once per process through the shared help-probe cache. Like every capability gate here it
-// probes the literal `claude` binary rather than the configured program, whose wrapper
-// side effects must not run on a probe.
-func claudeSupportsPluginDir() bool {
-	return binHelpContains(string(agent.KeyClaude), pluginDirFlag)
+// claudeSupportsPluginDir reports whether the claude the session will run accepts
+// --plugin-dir, probed once per process through the shared help-probe cache.
+//
+// probeTarget picks what is probed, for the reason it documents: a claude at an absolute
+// path outside PATH answers `--help` under its own name and not under `claude`, so probing
+// the bare name would report "no such flag" for the very binary the session runs — and a
+// wrapper, whose side effects must not run on a probe, falls back to the canonical name.
+// binHelpContains cannot tell an exec failure from a --help that lacks the needle (it
+// caches the empty output either way), which is why the decision of WHAT to probe is the
+// only defence against that misreading.
+func claudeSupportsPluginDir(program string) bool {
+	return binHelpContains(probeTarget(program, agent.KeyClaude), pluginDirFlag)
 }
 
 // ensureAgentPlugin materializes the plugin and returns the directory to pass to
@@ -127,7 +135,7 @@ func claudeSupportsPluginDir() bool {
 // proceeds — ensureHookSettings' stance, for ensureHookSettings' reason. Nothing about
 // this feature is worth a session that will not start.
 func ensureAgentPlugin(program string) (string, error) {
-	if !isClaude(program) || agentSkillsDisabled.Load() || !claudeSupportsPluginDir() {
+	if !isClaude(program) || agentSkillsDisabled.Load() || !claudeSupportsPluginDir(program) {
 		return "", nil
 	}
 	manifest, err := json.MarshalIndent(pluginManifest{
@@ -149,18 +157,57 @@ func ensureAgentPlugin(program string) (string, error) {
 	// replaced by an atomic rename, so a concurrent reader sees the old bytes or the new
 	// ones, never a half-written manifest, and two sessions racing to materialize write
 	// identical content.
-	for _, f := range []struct {
-		path string
-		data []byte
-	}{
-		{filepath.Join(root, ".claude-plugin", "plugin.json"), manifest},
-		{filepath.Join(root, "skills", spawnSkillDir, "SKILL.md"), []byte(spawnSkillDoc)},
-	} {
-		if err := writeFileIfChanged(f.path, f.data); err != nil {
+	if err := writeFileIfChanged(filepath.Join(root, ".claude-plugin", "plugin.json"), manifest); err != nil {
+		return "", err
+	}
+	skills := filepath.Join(root, "skills")
+	for name, doc := range shippedSkills() {
+		if err := writeFileIfChanged(filepath.Join(skills, name, "SKILL.md"), doc); err != nil {
 			return "", err
 		}
 	}
+	sweepStaleSkills(skills)
 	return root, nil
+}
+
+// shippedSkills is every skill this Atrium writes, keyed by the directory it lands in —
+// and therefore also the whole of what belongs under skills/, which is what lets
+// sweepStaleSkills recognize a predecessor's. One list, two readers.
+func shippedSkills() map[string][]byte {
+	return map[string][]byte{spawnSkillDir: []byte(spawnSkillDoc)}
+}
+
+// sweepStaleSkills removes anything under the skills/ tree this Atrium does not ship.
+//
+// Rewriting in place keeps each individual file current, but says nothing about a file
+// whose name is no longer written at all: rename spawnSkillDir, or split this skill in two
+// and later drop one, and the predecessor stays on disk under a --plugin-dir that still
+// names the same root — so claude loads both, the current skill and one advertising flag
+// advice that may no longer parse. freezeHookName sweeps a superseded hook directory
+// for the same reason.
+//
+// Best-effort by design, and the direction matters: a sweep that returned its error would
+// cost the session its skill over a stale sibling, which is the worse of the two outcomes
+// and the opposite of every other gate here. Logged instead, so it is diagnosable without
+// being fatal.
+func sweepStaleSkills(skills string) {
+	entries, err := os.ReadDir(skills)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.WarningLog.Printf("could not read %s to sweep stale skills: %v", skills, err)
+		}
+		return
+	}
+	shipped := shippedSkills()
+	for _, e := range entries {
+		if _, ok := shipped[e.Name()]; ok {
+			continue
+		}
+		stale := filepath.Join(skills, e.Name())
+		if err := os.RemoveAll(stale); err != nil {
+			log.WarningLog.Printf("could not remove stale skill %s: %v", stale, err)
+		}
+	}
 }
 
 // writeFileIfChanged writes data to path unless it is already exactly there, creating
@@ -205,12 +252,67 @@ func SpawnSkillInvocation() string {
 	return fmt.Sprintf("/%s:%s", agentPluginName, spawnSkillDir)
 }
 
+// SpawnSkillDoc is the shipped skill's text, for a guard that has to hold its prose to
+// something this package cannot import. The skill's worked commands are `atrium new` lines
+// an agent copies verbatim, so the flags and subcommands it names have to be held to the
+// ones the CLI registers — and the CLI lives in package main, which imports this one.
+func SpawnSkillDoc() string { return spawnSkillDoc }
+
 // ClaudeSupportsPluginDir is the exported form of the capability probe, for `atrium
 // doctor`. Exported rather than duplicated so the report and the launch gate can only ever
-// agree.
-func ClaudeSupportsPluginDir() bool { return claudeSupportsPluginDir() }
+// agree — including on which binary is probed, which is why it takes the program the
+// report is about rather than assuming the one on PATH.
+func ClaudeSupportsPluginDir(program string) bool { return claudeSupportsPluginDir(program) }
 
-// AgentPluginDir is the directory sessions are pointed at, resolved without creating
-// anything — the read-only half of ensureAgentPlugin, for a reporter that must not have
-// side effects.
-func AgentPluginDir() (string, error) { return agentPluginRoot() }
+// AgentPluginTarget resolves that directory and reports whether the plugin's files could
+// actually be written there, for `atrium doctor`.
+//
+// Writability is the one gate a read-only check cannot see, and the one the launch path
+// hides best: writeFileIfChanged's failure is logged and the session starts without the
+// skill, so a read-only mode ("~/.atrium/plugin" resolved, therefore fine) reports a
+// working feature to someone who has none.
+//
+// Probed with a temp file created and removed in each directory a plugin file lands in,
+// rather than by writing the plugin itself. Materializing from here would let a doctor run
+// on a newer binary than the running TUI rewrite the plugin under a session that is
+// reading it — the one window the write path is arranged to avoid. Creating the
+// directories is not that: it is what the next launch does anyway, and this is only
+// reached once the gates before it have passed.
+func AgentPluginTarget() (string, error) {
+	root, err := agentPluginRoot()
+	if err != nil {
+		return "", err
+	}
+	dirs := []string{filepath.Join(root, ".claude-plugin")}
+	for name := range shippedSkills() {
+		dirs = append(dirs, filepath.Join(root, "skills", name))
+	}
+	for _, dir := range dirs {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return root, writeProbeErr(dir, err)
+		}
+		probe, err := os.CreateTemp(dir, ".probe-*")
+		if err != nil {
+			return root, writeProbeErr(dir, err)
+		}
+		if err := probe.Close(); err != nil {
+			_ = os.Remove(probe.Name())
+			return root, writeProbeErr(dir, err)
+		}
+		if err := os.Remove(probe.Name()); err != nil {
+			return root, writeProbeErr(dir, err)
+		}
+	}
+	return root, nil
+}
+
+// writeProbeErr states a failed write probe as a fact about the directory. The error from
+// the probe names the temp file, which is a path the reader has never seen and cannot act
+// on; what they can act on is which directory refused, and what it said.
+func writeProbeErr(dir string, err error) error {
+	var perr *os.PathError
+	if errors.As(err, &perr) {
+		return fmt.Errorf("%s: %w", dir, perr.Err)
+	}
+	return fmt.Errorf("%s: %w", dir, err)
+}

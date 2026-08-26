@@ -359,10 +359,12 @@ say. It is reached as `/atrium:spawn`. The plugin is materialized under the data
 never in the worktree (an untracked skill in the agent's own tree is one it could commit)
 and never in the user's claude config directory.
 
-Its gates are the settings file's, plus two. `agent_skills` turns it off; the claude
-binary's `--help` must advertise `--plugin-dir`, so an older CLI is skipped rather than
-handed a flag that would kill the launch; and every failure under the data directory
-degrades to "no skill" with the session still starting. One refusal is deliberately *not*
+Its gates are the settings file's, plus two. `agent_skills` turns it off; the session's
+own claude binary must advertise `--plugin-dir` in its `--help`, so a CLI that does not
+know the flag is skipped rather than handed one that would kill the launch (the probe
+follows the configured program, because a claude installed at an absolute path outside
+`PATH` answers only under that path); and every failure under the data directory degrades
+to "no skill" with the session still starting. One refusal is deliberately *not*
 predicted: an organization's managed settings can set `disableSideloadFlags`, which makes
 claude reject the flag at startup. That policy is resolved from whichever managed tier the
 organization uses — server-managed settings, an MDM plist, a Windows registry key, or

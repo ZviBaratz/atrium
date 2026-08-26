@@ -459,17 +459,16 @@ var (
 			// Agent skills: whether a claude session launched now would be handed
 			// Atrium's own /atrium:spawn skill. Every gate around the injection is
 			// fail-open, so the state where it silently declines is invisible without a
-			// report that asks. A config read plus the cached `claude --help` probe; it
-			// resolves the plugin directory without creating it, so it stays safe beside
-			// a live TUI.
+			// report that asks. A config read, the cached `--help` probe against the
+			// binary the configured program actually runs, and a temp file created and
+			// removed where the plugin's files go — it never writes the plugin itself,
+			// so it cannot rewrite one a live session is reading.
 			fmt.Println()
-			pluginDir, err := tmux.AgentPluginDir()
-			if err != nil {
-				pluginDir = ""
-			}
+			skillsCfg := config.LoadConfig()
 			fmt.Print(doctor.RenderAgentSkills(doctor.CheckAgentSkills(
-				config.LoadConfig().GetAgentSkills(), tmux.ClaudeSupportsPluginDir(),
-				tmux.SpawnSkillInvocation(), pluginDir)))
+				skillsCfg.GetAgentSkills(),
+				tmux.ClaudeSupportsPluginDir(skillsCfg.GetProgram()),
+				tmux.SpawnSkillInvocation(), tmux.AgentPluginTarget)))
 
 			// Orphaned tmux servers: servers Atrium started that outlived their run,
 			// including the ones no socket lookup can reach because the socket file went

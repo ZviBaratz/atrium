@@ -40,8 +40,12 @@ tokens; one that thought too little costs a re-run and your review.
 
 | Value | When |
 |---|---|
-| `plan` | Design work, review work, unclear scope, anything where the approach is not already settled. This is the default. |
+| `plan` | Design work, review work, unclear scope, anything where the approach is not already settled. Start here, and pass it explicitly. |
 | `acceptEdits` | A written plan or spec already exists *and* tests guard the change, so the work is execution rather than judgment. |
+
+Pass the flag. Omitting it does not mean `plan` — it means claude's own `default`
+mode, which can edit — so the session you meant to gate behind a plan runs
+unfettered.
 
 **Effort — by how hard the problem is.**
 
@@ -52,13 +56,20 @@ tokens; one that thought too little costs a re-run and your review.
 | `high` | The floor for anything that changes behaviour. |
 | `medium`, `low` | Mechanical, fully specified, test-guarded work only. |
 
-**Model — `opus` unless the task is both genuinely mechanical and fully
-specified**, in which case `sonnet`. If you cannot tell which it is, it is not
-mechanical.
+**Model — by how much judgment the task needs.**
 
-Only `claude` takes these flags. A session that would run codex, gemini or aider
-is refused rather than quietly unpinned, so drop the pins or pick a claude
-profile for it.
+| Value | When |
+|---|---|
+| `opus` | Everything, unless the row below is unambiguously true. If you cannot tell which of the two it is, it is not mechanical. |
+| `sonnet` | The task is both genuinely mechanical *and* fully specified. |
+
+Only `claude` takes these flags, and what happens to a non-claude session depends
+on the company it keeps. The pins are refused only when *nothing* being created
+runs claude — one codex session, or a fan-out of nothing but codex and gemini. A
+*mixed* fan-out is accepted: the pins land on its claude members and the others
+are left untouched, with no warning. So a bake-off spanning agents compares a
+pinned claude against a default codex, which measures the pins and the agents at
+once. Fan out across claude alone, or pin nothing.
 
 ## 3. Confirm in one question
 
@@ -104,6 +115,12 @@ Atrium is running but attached to a session, in which case the request waits for
 a detach rather than failing. Report that as what it is. Never call a queued
 request a created session.
 
+**A `--wait` that runs out exits non-zero, and the request survives it.** The
+deadline is yours, not the queue's: the spooled request is still there and still
+lands when something drains it. So a non-zero exit here is not a failed handoff,
+and spawning again on the strength of it is how one handoff becomes two sessions.
+Say the request is queued and unconfirmed, and let the person decide.
+
 ## Other flags worth knowing
 
 - `--account <name>` pins which configured Claude account the session runs on, by
@@ -116,7 +133,9 @@ request a created session.
   commits and the comparison measures the wrong thing.
 - A title is a branch. The branch and tmux names derive from it, a title whose
   names are taken is refused rather than suffixed, and an over-long one is
-  refused with the limit named. Keep it short and imperative.
+  refused with the limit named. Keep it short and imperative. `--variants` is the
+  exception: there the title is a stem, and each member is named from it with a
+  numeric suffix, so report the names the members actually got.
 
 `atrium new --help` is the authority on all of it, including exactly when a
 queued create lands.

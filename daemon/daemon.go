@@ -21,6 +21,7 @@ import (
 	"github.com/ZviBaratz/atrium/internal/parkreport"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/tmux"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -163,6 +164,17 @@ func RunDaemon(ctx context.Context, cfg *config.Config) error {
 	// the same disclosed gap the effectivePollInterval call above sits in. What a
 	// test can reach is PendingWatchdogOverride itself, in config.
 	session.SetPendingWatchdog(cfg.PendingWatchdogOverride())
+
+	// Same reason, one layer down, and this one is not a cap but a launch flag. The load
+	// above relaunches the agent of every session whose tmux session is gone, so the
+	// daemon reaches tmux.start() and its --plugin-dir append — in a process that has
+	// never called SetAgentSkills. That switch is deliberately inverted so an unwired
+	// process still injects (the safe default for an unconfigured Atrium), which is
+	// exactly what makes the missing wire dangerous here rather than merely wrong: an
+	// organization whose managed settings refuse sideloaded plugins is told to set
+	// agent_skills false, the TUI honours it, and a headless relaunch would hand every
+	// recovered session the flag claude is configured to reject and kill it at launch.
+	tmux.SetAgentSkills(cfg.GetAgentSkills())
 
 	// If we get an error for a session, it's likely that we'll keep getting the error. Log every 30 seconds.
 	everyN := log.NewEvery(60 * time.Second)
