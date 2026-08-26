@@ -14,7 +14,10 @@ func TestTabbedWindow_ToggleReverse(t *testing.T) {
 	require.Equal(t, PreviewTab, w.GetActiveTab(), "starts on Preview")
 
 	w.ToggleReverse()
-	require.Equal(t, TerminalTab, w.GetActiveTab(), "reverse from Preview wraps to Terminal")
+	require.Equal(t, InspectorTab, w.GetActiveTab(), "reverse from Preview wraps to Inspector")
+
+	w.ToggleReverse()
+	require.Equal(t, TerminalTab, w.GetActiveTab(), "reverse from Inspector lands on Terminal")
 
 	w.ToggleReverse()
 	require.Equal(t, DiffTab, w.GetActiveTab(), "reverse from Terminal lands on Diff")

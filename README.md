@@ -390,7 +390,7 @@ in-app keymap and this section ever drift apart, so it stays complete.
 | `↑/k` `↓/j` | move selection |
 | `u` / `b` | jump to next unread / blocked session |
 | `tab` / `shift-tab` | next / prev pane |
-| `1` / `2` / `3` | jump to preview / diff / terminal |
+| `1` `2` `3` `4` | jump to preview / diff / terminal / inspector |
 | `shift-↑` `shift-↓` | scroll the active pane |
 | `<` / `>` | shrink / grow the session list (or drag the divider) |
 | `\` | cycle layout presets (monitor / default / review / focus) |
@@ -523,36 +523,37 @@ but tmux's own prefix.
 
 | Action | Default | Action | Default |
 |--------|---------|--------|---------|
-| `accounts` | `@` | `mute` | `M` |
-| `approve` | `a` | `new` | `n` |
-| `attach_toggle` | `ctrl-q` | `new_pick_project` | `N` |
-| `auto_name` | `A` | `next_blocked` | `b` |
-| `checkpoints` | `H` | `next_tab` | `tab` |
-| `collapse_all` | `Z` | `next_unread` | `u` |
-| `collapse_group` | `←` | `open` | `↵/o` |
-| `command_log` | `L` | `open_pr` | `w` |
-| `command_palette` | `ctrl-k` | `pause` | `p` |
-| `copy_branch` | `y` | `pause_all` | `ctrl-p` |
-| `copy_content` | `Y` | `prev_tab` | `shift-tab` |
-| `create_pr` | `c` | `push_branch` | `P` |
-| `custom_commands` | `!` | `queue` | `Q` |
-| `diff_comment` | `C` | `quit` | `q` |
-| `down` | `↓/j` | `rename` | `R` |
-| `expand_group` | `→` | `resume` | `r` |
-| `filter` | `/` | `resume_all` | `ctrl-r` |
-| `grow_list` | `>` | `run_command` | `d` |
-| `help` | `?` | `scroll_down` | `shift-↓` |
-| `hints` | `f` | `scroll_up` | `shift-↑` |
-| `kill` | `ctrl-x` | `send` | `s` |
-| `layout_preset` | `\` | `settings` | `,` |
-| `merge_pr` | `m` | `shrink_list` | `<` |
-| `move_account_down` | `]` | `smart_new` | `i` |
-| `move_account_up` | `[` | `tab_diff` | `2` |
+| `accounts` | `@` | `new` | `n` |
+| `approve` | `a` | `new_pick_project` | `N` |
+| `attach_toggle` | `ctrl-q` | `next_blocked` | `b` |
+| `auto_name` | `A` | `next_tab` | `tab` |
+| `checkpoints` | `H` | `next_unread` | `u` |
+| `collapse_all` | `Z` | `open` | `↵/o` |
+| `collapse_group` | `←` | `open_pr` | `w` |
+| `command_log` | `L` | `pause` | `p` |
+| `command_palette` | `ctrl-k` | `pause_all` | `ctrl-p` |
+| `copy_branch` | `y` | `prev_tab` | `shift-tab` |
+| `copy_content` | `Y` | `push_branch` | `P` |
+| `create_pr` | `c` | `queue` | `Q` |
+| `custom_commands` | `!` | `quit` | `q` |
+| `diff_comment` | `C` | `rename` | `R` |
+| `down` | `↓/j` | `resume` | `r` |
+| `expand_group` | `→` | `resume_all` | `ctrl-r` |
+| `filter` | `/` | `run_command` | `d` |
+| `grow_list` | `>` | `scroll_down` | `shift-↓` |
+| `help` | `?` | `scroll_up` | `shift-↑` |
+| `hints` | `f` | `send` | `s` |
+| `kill` | `ctrl-x` | `settings` | `,` |
+| `layout_preset` | `\` | `shrink_list` | `<` |
+| `merge_pr` | `m` | `smart_new` | `i` |
+| `move_account_down` | `]` | `tab_diff` | `2` |
+| `move_account_up` | `[` | `tab_inspector` | `4` |
 | `move_down` | `J` | `tab_preview` | `1` |
 | `move_group_down` | `}` | `tab_terminal` | `3` |
 | `move_group_up` | `{` | `toggle_mark` | `space` |
 | `move_up` | `K` | `undo_kill` | `U` |
 | `multi_select` | `v` | `up` | `↑/k` |
+| `mute` | `M` | | |
 
 
 

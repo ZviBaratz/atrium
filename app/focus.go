@@ -32,11 +32,12 @@ const (
 	// can hold it explicitly (nothing sets that yet — the seam for review-mode
 	// file navigation).
 	focusTabs
-	// focusInspector is declared for the inspector surface (#804/#805), which
-	// does not exist yet. routeFocusKey deliberately routes nothing for it —
-	// scrolling the tabbed panes on behalf of a pane the name does not point
-	// at would be worse than falling through — so until an inspector lands,
-	// only the esc pop (escLadder) acts on it. Nothing can reach it today.
+	// focusInspector is declared for the inspector surface — #804's skeleton
+	// tab, a constant placeholder until #805 lands its content. routeFocusKey
+	// deliberately routes nothing for it: the skeleton has nothing to scroll,
+	// and scrolling the tabbed panes on behalf of a surface the name does not
+	// point at would be worse than falling through — so only the esc pop
+	// (escLadder) acts on it. Nothing can reach it today.
 	focusInspector
 )
 
@@ -109,9 +110,10 @@ func (m *home) routeFocusKey(name keys.KeyName) (tea.Cmd, bool) {
 			return m.instanceChanged(), true
 		}
 	case focusInspector:
-		// No inspector pane exists yet (#804/#805): route nothing, so its nav
-		// keys fall through to dispatch instead of scrolling a pane the focus
-		// name does not point at. See the focusInspector const.
+		// The inspector tab is a skeleton whose constant placeholder has
+		// nothing to scroll (#805 lands the content): route nothing, so its
+		// nav keys fall through to dispatch instead of scrolling a pane the
+		// focus name does not point at. See the focusInspector const.
 	}
 	return nil, false
 }

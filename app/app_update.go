@@ -1110,8 +1110,8 @@ func (m *home) handleKeyPress(msg tea.KeyPressMsg) (mod tea.Model, cmd tea.Cmd) 
 
 	// While the tabs hold focus, the pane-local nav keys route there instead
 	// of dispatching; everything else still dispatches, so the whole global
-	// keymap keeps working under focus. (Inspector focus routes nothing until
-	// an inspector pane exists — see routeFocusKey.)
+	// keymap keeps working under focus. (Inspector focus routes nothing — the
+	// skeleton has nothing to scroll; see routeFocusKey.)
 	if cmd, handled := m.routeFocusKey(name); handled {
 		return m, cmd
 	}
@@ -1236,10 +1236,11 @@ func (m *home) dispatchAction(name keys.KeyName) (tea.Model, tea.Cmd) {
 	case keys.KeyShiftTab:
 		m.tabbedWindow.ToggleReverse()
 		return m, m.tabChanged()
-	case keys.KeyTabPreview, keys.KeyTabDiff, keys.KeyTabTerminal:
+	case keys.KeyTabPreview, keys.KeyTabDiff, keys.KeyTabTerminal, keys.KeyTabInspector:
 		// Direct tab jump by number, complementing Tab/Shift+Tab cycling. The
-		// three KeyNames are consecutive, so the offset from KeyTabPreview is the
-		// tab index (PreviewTab/DiffTab/TerminalTab are likewise 0/1/2).
+		// four KeyNames are consecutive, so the offset from KeyTabPreview is the
+		// tab index (PreviewTab through InspectorTab are likewise 0..3);
+		// TestTabJumpKeys holds the two runs to each other.
 		m.tabbedWindow.SetActiveTab(int(name - keys.KeyTabPreview))
 		return m, m.tabChanged()
 	case keys.KeyKill:
@@ -1422,6 +1423,7 @@ func keyAllowedWhileBusy(name keys.KeyName) bool {
 		keys.KeyShiftUp, keys.KeyShiftDown, keys.KeyShrinkList, keys.KeyGrowList,
 		keys.KeyLayoutPreset,
 		keys.KeyTab, keys.KeyShiftTab, keys.KeyTabPreview, keys.KeyTabDiff, keys.KeyTabTerminal,
+		keys.KeyTabInspector,
 		keys.KeyCollapse, keys.KeyExpand, keys.KeyCollapseAll,
 		// Copying reads cached content and writes the clipboard; it mutates no
 		// session state, so there is nothing for an in-flight action to race.

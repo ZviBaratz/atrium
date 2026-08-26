@@ -425,6 +425,13 @@ var Registry = []Entry{
 		key.WithKeys("3"),
 		key.WithHelp("3", "terminal tab"),
 	)},
+	// The inspector tab renders a constant placeholder until #805 feeds it —
+	// nothing lazy starts on the way in, so unlike the terminal tab above it
+	// observes. Re-read this classification when the real content lands.
+	{Name: KeyTabInspector, Action: "tab_inspector", Effect: EffectObserve, Binding: key.NewBinding(
+		key.WithKeys("4"),
+		key.WithHelp("4", "inspector tab"),
+	)},
 	// Both panels write config.json, which is why neither is EffectView: what they
 	// change is the configuration, not the arrangement of the view.
 	{Name: KeySettings, Action: "settings", Effect: EffectMutate, Binding: key.NewBinding(

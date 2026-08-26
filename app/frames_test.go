@@ -376,7 +376,7 @@ func TestTickPaths_LaunchNoSubprocessOnTheUpdateThread(t *testing.T) {
 	for _, tab := range []struct {
 		name string
 		idx  int
-	}{{"preview", ui.PreviewTab}, {"diff", ui.DiffTab}, {"terminal", ui.TerminalTab}} {
+	}{{"preview", ui.PreviewTab}, {"diff", ui.DiffTab}, {"terminal", ui.TerminalTab}, {"inspector", ui.InspectorTab}} {
 		for _, c := range cases {
 			t.Run(tab.name+"/"+c.name, func(t *testing.T) {
 				spy := newFrameSpy("agent output")

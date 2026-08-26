@@ -104,11 +104,15 @@ const (
 	KeyShrinkList
 	KeyGrowList
 
-	// KeyTabPreview/KeyTabDiff/KeyTabTerminal jump straight to a tab by number,
-	// complementing Tab/Shift+Tab cycling.
+	// KeyTabPreview through KeyTabInspector jump straight to a tab by number,
+	// complementing Tab/Shift+Tab cycling. The four names must stay consecutive
+	// and in the tabs' display order: dispatchAction turns a key's offset from
+	// KeyTabPreview into the tab index, and app's TestTabJumpKeys is what fails
+	// when a name moves out of the run.
 	KeyTabPreview
 	KeyTabDiff
 	KeyTabTerminal
+	KeyTabInspector
 
 	KeySettings // Open the settings panel to view and edit the configuration
 
