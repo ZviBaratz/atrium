@@ -31,8 +31,8 @@
 //     session starts untrusted and says so, and `atrium trust allow` is the
 //     headless grant.
 //   - WHAT UNTRUSTED DOES: nothing, visibly. The whole FILE is inert — the
-//     entry's script, run command and environment, and the carry_files /
-//     link_paths it layers over the user's own lists (#815) — and resolution
+//     entry's script, run command and environment, and the carry_files it
+//     layers over the user's own list (#815) — and resolution
 //     falls back to the user's own config.json. The refusal is surfaced, never
 //     silent. Enforcement lives in session/repoconfig.go's routeRepoLocal, the
 //     front door of the single resolution funnel (routeRepoScript), below the
@@ -107,12 +107,17 @@ var ErrCorrupt = errors.New("repo-trust ledger is not decodable")
 // GrantVersionSeeds is the first grant version whose prompt described the seed
 // lists. It exists because the hash alone cannot answer "was this allowed?" once
 // the set of things a grant CONFERS has grown: repoLocalWire tolerated
-// carry_files/link_paths as unknown keys before #815 read them, and invited repos
-// to ship them early, so a repo's file could carry both lists while the dialog
-// that granted it described only the setup script. The bytes are identical
-// afterwards, so a hash comparison would silently extend that grant to two powers
-// nobody was asked about. A record below this version covers the entry alone; a
-// file declaring seed lists re-prompts, saying that is why.
+// carry_files as an unknown key before #815 read it, and invited repos to ship it
+// early, so a repo's file could carry the list while the dialog that granted it
+// described only the setup script. The bytes are identical afterwards, so a hash
+// comparison would silently extend that grant to a power nobody was asked about.
+//
+// A record below this version does not cover a file that declares the list, and
+// the file is then refused WHOLE — not narrowed to the parts the old prompt did
+// describe. That is deliberate (a repo-local file applies whole or not at all)
+// but it is the upgrade path's real cost: on a file carrying both repo_scripts
+// and carry_files, an existing grant stops running the setup script too, until
+// the user re-allows. routeRepoLocal's report says so in those words.
 const GrantVersionSeeds = 2
 
 // currentGrantVersion is stamped on every grant written now.
@@ -133,8 +138,8 @@ type Record struct {
 }
 
 // CoversSeeds reports whether this grant was made by a prompt that described the
-// repo's carry_files/link_paths. False for every pre-#815 record, which is what
-// makes a repo's seed lists re-prompt on upgrade instead of activating silently.
+// repo's carry_files. False for every pre-#815 record, which is what makes a
+// repo's seed list re-prompt on upgrade instead of activating silently.
 func (r Record) CoversSeeds() bool { return r.GrantVersion >= GrantVersionSeeds }
 
 // Ledger is the on-disk artifact: every granted repo, keyed by canonical root.
@@ -156,9 +161,11 @@ type Ledger struct {
 // scope a required argument means a caller that has not thought about it cannot
 // compile.
 type GrantScope struct {
-	// Seeds is set by a caller that is about to apply the file's carry_files /
-	// link_paths (#815). A record written before GrantVersionSeeds does not cover
-	// them however well its hash matches.
+	// Seeds is set by a caller that is about to apply what the file layers over the
+	// user's own lists (#815) — today carry_files alone. Derive it with
+	// repocfg.DeclaresLayers rather than testing a field, so a new layer key widens
+	// the scope with it. A record written before GrantVersionSeeds does not cover
+	// those lists however well its hash matches.
 	Seeds bool
 }
 

@@ -145,10 +145,10 @@ func (i *Instance) setRepoConfig(state RepoConfigState, report string) {
 
 // repoLocalResolution is one repo-local file's whole contribution to a session,
 // as routeRepoLocal resolved it: the repo_scripts entry (when it declared and
-// earned one) and the two seed lists (#815). The three travel together because
-// they come out of ONE read, ONE hash and ONE ledger check — a second entry point
-// for the seed lists could reach a different verdict about the same file, which is
-// the divergence the single funnel exists to make impossible.
+// earned one) and what it layers over the user's own lists (#815). They travel
+// together because they come out of ONE read, ONE hash and ONE ledger check — a
+// second entry point for the seed lists could reach a different verdict about the
+// same file, which is the divergence the single funnel exists to make impossible.
 //
 // The zero value is what every refusal returns: nothing applies, and the caller
 // falls back to the user's global config.
@@ -244,7 +244,7 @@ func (i *Instance) setRepoSeeds(seeds map[string][]string) {
 // pinning one transient failure for the life of the instance would read every
 // later resolution as untrusted while `atrium trust status` — deriving the key
 // itself, successfully — insists the repo is current. The failing side still
-// refuses (repotrust.Ledger.Granted rejects the empty key); it just also
+// refuses (repotrust.Ledger.GrantedFor rejects the empty key); it just also
 // retries, at the cost of one extra fork per resolution only while broken.
 func (i *Instance) ledgerKey(repoPath string) string {
 	i.mu.RLock()

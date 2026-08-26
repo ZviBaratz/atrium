@@ -220,10 +220,13 @@ func TestRepoLayerRowsRenderInTheFrame(t *testing.T) {
 	}
 }
 
-// TestRepoLayerIsReachableOnEveryLayeredRow closes the hole every other test in this
-// file had: they park on link_paths, whose default value is "(none)" and never
-// truncates — so contextLine's truncated-value clause, which outranks the provenance
-// clause, was never reached. carry_files has a long default list and truncates at
+// TestRepoLayerIsReachableOnEveryLayeredRow sweeps every layerable row at every
+// width, rather than trusting one row at one size.
+//
+// The clause it exists to reach is contextLine's truncated-value one, which outranks
+// the provenance clause: a row whose default value is short never reaches it, so a
+// sweep parked on such a row would report the provenance line as always present.
+// carry_files has a long default list and truncates at
 // every width the panel supports, which is the correlated case: a long list is both
 // why the value truncates and why the layer is worth saying.
 //

@@ -131,7 +131,9 @@ func (t applyTiming) badge() string {
 type settingScope int
 
 const (
-	// scopeGlobal: config.json is the only source. Every row but the seed lists.
+	// scopeGlobal: config.json is the only source. Every row but the ones
+	// repocfg.RepoLocalLayerKeys names — which is NOT "the seed lists": link_paths
+	// is a seed list and is scopeGlobal, because a repo cannot layer it yet.
 	scopeGlobal settingScope = iota
 	// scopeRepoLayered: a repository's own trusted .atrium.json can add to this
 	// key for sessions in that repo (#815). The row still edits the global value —

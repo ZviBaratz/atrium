@@ -91,8 +91,10 @@ type Worktree struct {
 	// (test literals) has it off, reproducing the shared-link behavior.
 	isolateDeps bool
 	// repoLocalSeeds, when set, answers what THIS repo's own trusted .atrium.json
-	// adds to the two seed lists (#815). It is a callback rather than a captured
-	// pair of lists for two reasons that pull the same way: the answer depends on
+	// adds to the seed lists (#815). The signature carries both halves, but only the
+	// carry half has a production producer today — see SetRepoLocalSeeds. It is a
+	// callback rather than a captured pair of lists for two reasons that pull the
+	// same way: the answer depends on
 	// bytes that exist only once this Setup has checked the worktree out, and the
 	// trust check behind it lives in package session (internal/repotrust imports
 	// session/git, so the dependency cannot run the other way). Pushed in by the
@@ -320,7 +322,14 @@ func (g *Worktree) IsolateDeps() bool {
 }
 
 // SetRepoLocalSeeds installs the resolver seedLocalPaths asks what this repo's own
-// trusted .atrium.json contributes to carry_files and link_paths (#815). fn is
+// trusted .atrium.json contributes to the seed lists (#815).
+//
+// The link return is part of the seam, not a live capability: link_paths is not a
+// repo-layerable key (repocfg.RepoLocalLayerKeys), so package session's resolver
+// always returns nil for it and only this package's own tests exercise that half.
+// Keeping the parameter is deliberate — it is what the deferred half plugs into.
+//
+// fn is
 // called once per Setup, AFTER the worktree is checked out and before anything is
 // seeded, with the materialized worktree path — because the bytes that decide the
 // answer are that worktree's own, which is what closes the gap between the trust

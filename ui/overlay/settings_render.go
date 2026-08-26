@@ -640,8 +640,9 @@ func (s *SettingsOverlay) rowValueAndBadge(i, width, labelW int, inert string) (
 // The count is the whole payload, so every rung keeps it and only the words go: a
 // bare "+2" still tells the user their list is not the effective list here, which
 // is the one thing this chip exists to say. Which repo, and which entries, is the
-// help pane's job (contextLine) — that is the surface a narrow pane cannot take
-// away.
+// `?` view's job (expandedHelpContent) — the surface a narrow pane cannot take
+// away. NOT contextLine, which ranks the provenance below a truncated value and so
+// is absent in exactly the correlated case; see rowValueAndBadge's own note.
 func repoLayerBadgeCandidates(n int) []string {
 	return []string{
 		fmt.Sprintf("+%d from %s", n, repocfg.RepoLocalFileName),
@@ -1010,9 +1011,11 @@ func (s *SettingsOverlay) contextLine(width int) string {
 // It leads with the file and the repo and trails with the entries, because
 // contextLine truncates from the right: the entries are recoverable (they are in
 // that file, and the row's own value is not what changed), while "which repo" is
-// the part that makes the badge's count mean anything. Below roughly sixty columns
-// even the repo path is cut, which is the reason expandedHelpContent carries this
-// too rather than relying on the one line.
+// the part that makes the badge's count mean anything. What makes the `?` view
+// carry this too, rather than relying on the one line, is not path truncation but
+// the RANKING: contextLine yields the whole line to a truncated value, and a row
+// whose value truncates is exactly a row whose list is long enough for the layer to
+// matter. TestRepoLayerContextLineNamesTheRepo pins that yielding case.
 func (s *SettingsOverlay) repoLayerFor(i int) string {
 	entries := s.repoLayerEntries(i)
 	if len(entries) == 0 {

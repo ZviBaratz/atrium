@@ -63,15 +63,19 @@ import (
 // is the correct behaviour and a later settings edit must not reach it. That is why it
 // rides the Worktree (pushed in by the Instance) while the lists are read here.
 //
-// The repository's own trusted .atrium.json layers over both lists (#815), through
-// the repoLocalSeeds resolver the Instance installed. Its entries come FIRST and the
-// union is deduplicated on the canonical spelling, which matters only where the two
-// sides name the same path: the never-clobber guards below make the first entry to
-// materialize the one that wins, so ordering is how "the repo knows its own layout"
-// is expressed. Union rather than replacement is the recorded #815 decision — these
-// values are sets of independent paths, so a repo declaring its dependency tree must
-// not silently drop the user's personal carry (the default .claude/settings.local.json)
-// in that one repo. What overrides a repo's additions is revoking its trust grant.
+// The repository's own trusted .atrium.json layers over carry_files (#815), through
+// the repoLocalSeeds resolver the Instance installed. The resolver's link half is
+// part of the seam but production supplies nothing for it — link_paths is not a
+// repo-layerable key yet, see repocfg.RepoLocalLayerKeys — so today only the carry
+// union has a repo side. Repo entries come FIRST and the union is deduplicated on
+// the canonical spelling, which matters only where the two sides name the same path:
+// the never-clobber guards below make the first entry to materialize the one that
+// wins, so ordering is how "the repo knows its own layout" is expressed. Union
+// rather than replacement is the recorded #815 decision — these values are sets of
+// independent paths, so a repo naming the local-config files its developers already
+// name must not silently drop the user's personal carry (the default
+// .claude/settings.local.json) in that one repo. What overrides a repo's additions
+// is revoking its trust grant.
 func (g *Worktree) seedLocalPaths() {
 	cfg := config.LoadConfig()
 	repoCarry, repoLink := g.resolveRepoLocalSeeds()
@@ -123,9 +127,12 @@ type seedEntry struct {
 // An entry the canonical rule refuses is kept, keyed by its raw text: it must reach
 // its own leaf function to be warned about there, in the one place that names why.
 // Only the repo side can be pre-canonicalized — repocfg did it at parse time — so
-// this is the global list's first canonicalization, and it is used for the dedupe
-// key alone; the raw spelling is what travels, so every warning quotes what the user
-// actually wrote.
+// this is the global list's first canonicalization. It feeds the dedupe key AND the
+// user-set below, which decides provenance and so decides whether seedSourceEscapes
+// judges an entry at all — it is not inert, and a reader who trusts an older
+// "dedupe key alone" here would take a security-bearing value for a scratch one.
+// The raw spelling is what travels, so every warning quotes what the user actually
+// wrote.
 func unionSeedEntries(repo, global []string, key string) []seedEntry {
 	out := make([]seedEntry, 0, len(repo)+len(global))
 	seen := make(map[string]bool, len(repo)+len(global))
@@ -171,7 +178,9 @@ func unionSeedEntries(repo, global []string, key string) []seedEntry {
 // skips the link with only a log line — a repo's `carry_files: ["node_modules/.x"]`
 // silently costs the user their whole linked node_modules, in every session in that
 // repo, which is exactly the suppression union semantics exist to prevent ("your
-// entries are never replaced", in the README and both settings rows). Linking first
+// entries are never replaced", in the README and on the carry_files settings row —
+// the link_paths row lost that sentence when the key stopped being repo-layerable).
+// Linking first
 // is worse: the carry would then write THROUGH the symlink into the user's own
 // checkout.
 //

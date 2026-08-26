@@ -72,8 +72,8 @@ const repoTrustSeedWidth = 46
 // repoTrustPathWidth bounds the repo path the body names. The path is the user's
 // own, not repo-authored, so it needs no sanitizing — but it is unbounded, and a
 // deep worktree path is routinely long enough to wrap the header to six rows. That
-// cost the dialog its bottom border once #815's two seed lines took the last of
-// the height margin. Truncated from the LEFT, because the distinctive part of a
+// cost the dialog its bottom border once #815's seed line took part of the height
+// margin. Truncated from the LEFT, because the distinctive part of a
 // path is its tail.
 const repoTrustPathWidth = 46
 
@@ -165,22 +165,24 @@ func (m *home) confirmRepoTrust(plan spawnPlan, a repotrust.Assessment) tea.Cmd 
 // what a grant means. The verbs live in the key hint (see repoTrustConfirmLabel),
 // per the voice rule in app_feedback.go.
 //
-// It says "runs" only when something runs. A file declaring nothing but
-// carry_files/link_paths (#815) executes no command, and describing it as setup the
-// user is about to run misstates the decision in BOTH directions: someone who
-// declines because they will not run a stranger's script has actually declined a
-// file copy they would have allowed, and someone who accepts thinks they approved
-// one script when they approved the repo choosing which of their own gitignored
-// files an agent reads and which of their trees it may write through. Those are
-// different grants and the sentence has to be the one the file earns.
+// It says "runs" only when something runs. A file declaring nothing but carry_files
+// (#815) executes no command, and describing it as setup the user is about to run
+// misstates the decision in BOTH directions: someone who declines because they will
+// not run a stranger's script has actually declined a file copy they would have
+// allowed, and someone who accepts thinks they approved one script when they
+// approved the repo choosing which of their own gitignored files an agent reads.
+// Those are different grants and the sentence has to be the one the file earns.
+//
+// What counts as "runs" is repoTrustRuns, and session_env is in it: it reaches the
+// agent through `tmux new-session -e` with no script in the file at all.
 func repoTrustMessage(a repotrust.Assessment) string {
 	what := strings.Join(repoTrustDeclares(a), " and ")
 	const untilFile = "every new worktree of this repo until the file changes."
 	switch {
 	case a.ScopeUpgrade:
 		// NOT "changed": the bytes match the grant exactly. What changed is this
-		// atrium, which now reads two keys the prompt that granted it could not
-		// describe. Saying the file changed would send the reader to `git log` for an
+		// atrium, which now reads more of the file than the prompt that granted it
+		// could describe. Saying the file changed would send the reader to `git log` for an
 		// edit nobody made.
 		return fmt.Sprintf(
 			"%s's %s is the file you trusted, but it also declares %s — which the version of atrium you trusted it on ignored:\n\n%s\n\n%s",
@@ -224,10 +226,9 @@ func repoTrustRuns(a repotrust.Assessment) bool {
 }
 
 // repoTrustSeeds reports whether granting this file would let the repo decide which
-// of the user's own gitignored files are copied into a worktree and which of their
-// trees it may write through (#815). Independent of repoTrustRuns: a file can do
-// both, and the mixed case is the one a binary got wrong — it named the script and
-// left the seeding unmentioned.
+// of the user's own gitignored files are copied into a worktree (#815). Independent
+// of repoTrustRuns: a file can do both, and the mixed case is the one a binary got
+// wrong — it named the script and left the seeding unmentioned.
 func repoTrustSeeds(a repotrust.Assessment) bool {
 	return len(a.Local.CarryFiles) > 0
 }
@@ -256,10 +257,11 @@ func repoTrustDeclares(a repotrust.Assessment) []string {
 	return out
 }
 
-// repoTrustSeedClause names the seeding half of a grant, and only the halves this
-// file actually has. The verbs say the direction that matters: a copy is private to
-// the session, a link is the user's own tree under another name, writable by the
-// agent and shared with every sibling session at once.
+// repoTrustSeedClause names the seeding half of a grant, and only what this file
+// actually declares. The verb says the direction that matters: a copy is private to
+// the session, so what it risks is the agent READING a file of the user's — not the
+// agent writing through a name into the user's own tree, which is what the deferred
+// link half would have added.
 func repoTrustSeedClause(a repotrust.Assessment) string {
 	var parts []string
 	if len(a.Local.CarryFiles) > 0 {
@@ -294,8 +296,9 @@ func repoTrustConsequence(a repotrust.Assessment, tail string) string {
 	case seeds != "":
 		return "Trusting lets it copy those files into " + tail
 	}
-	// An entry declaring only port_range/session_env: withheld with the rest (#814),
-	// but nothing executes, so neither "runs" nor "copies" is the true verb.
+	// An entry declaring only port_range: withheld with the rest (#814), but nothing
+	// executes, so neither "runs" nor "copies" is the true verb. session_env does NOT
+	// land here — it is execution (repoTrustRuns) and takes the "runs" branch above.
 	return "Trusting applies it to " + tail
 }
 
@@ -332,8 +335,8 @@ func repoTrustConfirmLabel(a repotrust.Assessment) string {
 }
 
 // repoTrustSummary renders what the file declares: the entry's name and the
-// surfaces it configures, the first line of its setup script, and the two seed
-// lists (#815). The surface names come from repocfg.RepoLocalSurfaces — the same
+// surfaces it configures, the first line of its setup script, and the seed list
+// (#815). The surface names come from repocfg.RepoLocalSurfaces — the same
 // list `atrium trust allow` prints and enforcement requires non-empty, so the
 // dialog cannot describe a file the gate would treat as absent, nor stay silent
 // about a half of it the grant would apply.
@@ -382,9 +385,9 @@ func repoTrustSummary(a repotrust.Assessment) string {
 
 // repoTrustSeedLine spells out one seed list, bounded in both directions: each
 // entry sanitized and width-capped, and the list itself truncated to
-// repoTrustSeedPreview with the remainder counted rather than dropped. The verbs
-// say the direction that matters — a copy is private to the session, a link is
-// the user's own tree under another name, writable by the agent.
+// repoTrustSeedPreview with the remainder counted rather than dropped. It takes the
+// verb as an argument rather than deriving one, so the caller owns the direction it
+// is describing; today the only caller passes "copies in".
 func repoTrustSeedLine(verb string, entries []string) string {
 	if len(entries) == 0 {
 		return ""

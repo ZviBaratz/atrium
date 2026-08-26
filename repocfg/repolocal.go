@@ -31,8 +31,9 @@ const MaxRepoLocalBytes = 1 << 20
 // declare. It bounds work, not bytes, and that is why the byte
 // cap above does not subsume it: every entry that is actually PRESENT in the
 // origin checkout costs a `git check-ignore` fork inside the session's worktree
-// (session/git's carryLocalFile and linkLocalPath each run one, after their own
-// absence check, so an entry naming nothing costs none), each time a worktree is
+// (session/git's carryLocalFile runs one, after its own absence check, so an entry
+// naming nothing costs none — linkLocalPath runs one too, but no repo-authored
+// entry reaches it while link_paths is not layerable), each time a worktree is
 // materialized — a create, and a resume that has to recreate one. A few thousand
 // entries fit comfortably under a megabyte and would fork git a few thousand
 // times for such a session. Sixty-four is
@@ -42,9 +43,9 @@ const MaxRepoLocalBytes = 1 << 20
 const MaxRepoLocalSeedEntries = 64
 
 // RepoLocal is a parsed .atrium.json: the repo_scripts entry that survived the
-// structural rules (at most one — ParseRepoLocal's one-entry rule), the two
-// path lists it layers over the user's own (#815), or the refusal that kept the
-// entry out. The entry lists are mutually exclusive here, unlike Validate's over
+// structural rules (at most one — ParseRepoLocal's one-entry rule), the path list
+// it layers over the user's own (#815 — carry_files; link_paths is deferred, see
+// RepoLocalLayerKeys), or the refusal that kept the entry out. The entry lists are mutually exclusive here, unlike Validate's over
 // the global config: with one entry there is no sibling for a Problem to sit
 // beside.
 type RepoLocal struct {
@@ -275,8 +276,8 @@ func plural(n int) string {
 // a trust prompt only to be refused after the grant.
 //
 // A MALFORMED SEED ENTRY refuses the whole file too, for the sibling reason:
-// the two lists are seeded as a set, the trust prompt describes them by count,
-// and dropping one silently would seed a set the user was never shown. It is
+// a layer list is seeded as a set, the trust prompt describes it by count, and
+// dropping one entry silently would seed a set the user was never shown. It is
 // also the only refusal a repo can act on — the message names the entry, the fix
 // changes the file's content, and the fixed content re-prompts. That is why
 // these are an error rather than a Problem: a Problem beside a surviving entry
@@ -378,8 +379,8 @@ func parseSeedList(section string, raw []string) ([]string, error) {
 //     answer and it keeps the count the dialog shows equal to what applies.
 //   - A backslash. filepath.ToSlash is the identity on POSIX, so a Windows-authored
 //     "node_modules\\.bin" parses as one legal segment on Linux and macOS: every
-//     surface then advertises it, and at seed time os.Lstat simply misses and
-//     linkLocalPath returns on its silent absence path. Nothing ever says the entry
+//     surface then advertises it, and at seed time the stat simply misses and
+//     carryLocalFile returns on its silent absence path. Nothing ever says the entry
 //     did not apply. Refusing it names the real problem to the person who can fix
 //     it, in the file they can fix.
 //

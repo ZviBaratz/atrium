@@ -416,8 +416,9 @@ func TestRepoLocal_DecoyEntriesRefuseTheWholeFile(t *testing.T) {
 // row, no modal, and no remedy pointing at `atrium trust allow`, which would
 // refuse it ("nothing to trust"). The counter-case lives in
 // TestRepoSeeds_UntrustedNeverMaterialize and in repotrust's
-// TestAssessRepo_SeedLists: a file declaring only carry_files/link_paths DOES
-// declare something, so it is grantable and reads untrusted until granted.
+// TestAssessRepo_SeedLists: a file declaring only carry_files DOES declare
+// something, so it is grantable and reads untrusted until granted. link_paths is
+// on THIS side of the boundary, not that one — an unread key declares nothing.
 func TestRepoLocal_NothingDeclaredIsSilent(t *testing.T) {
 	for name, content := range map[string]string{
 		"an empty object":       `{}`,

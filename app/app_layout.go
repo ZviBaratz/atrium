@@ -113,7 +113,7 @@ func (m *home) refreshSettingsClusteringGate() {
 //
 // The selected session is what "this repo" means while browsing the list, and its
 // resolution is one the poll sweep has already done — so this reads a mutex-guarded
-// pair of slices and forks nothing. That matters twice over: the panel's render path
+// map of lists (copied under the lock) and forks nothing. That matters twice over: the panel's render path
 // may not touch the filesystem, and a fresh assessment here would be git on the
 // update thread, which is the debt #857 already tracks for the create path.
 //

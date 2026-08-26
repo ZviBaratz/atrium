@@ -449,13 +449,23 @@ func longSeedList(n int, stem string) []string {
 	return out
 }
 
-// TestRepoTrustDialogHoldsTheFloorWithEverything is the margin guard, and the margin
-// is now zero: #815's two seed lines cost the box two rows, so at the 80×24 floor a
-// file declaring a script AND both lists puts the dialog's top border on the tab-bar
-// row. That is what a modal does, and everything the user needs is still there — but
-// the next line added to this dialog is the one that pushes an answer off the frame,
-// and nothing else would say so. Overlay geometry at tight heights is F2's (#802);
-// this only refuses to lose ground silently.
+// TestRepoTrustDialogHoldsTheFloorWithEverything is the margin guard: at the 80×24
+// floor, a file declaring a script AND a seed list must still render an answerable
+// box. #815's seed line spends part of that margin, and nothing else here would say
+// when the rest is gone. Overlay geometry at tight heights is F2's (#802); this only
+// refuses to lose ground silently.
+//
+// It does NOT pin how much margin is left. An earlier version claimed the margin was
+// "now zero" and that the next line added would push an answer off the frame; that
+// was measured wrong — injected rows showed several to spare — and a number here
+// would have to be re-measured on every copy edit to stay true. The assertion is the
+// property (the box holds), and the failure message is what tells you the margin
+// went.
+//
+// The fixture is also narrower than the name: it declares a setup_script and
+// carry_files, not the maximal surfaces line (run command, session env and port
+// range are what repoTrustSummary can also name). That combination is measured
+// nowhere.
 func TestRepoTrustDialogHoldsTheFloorWithEverything(t *testing.T) {
 	repo := gitInitRepo(t)
 	commitRepoLocal(t, repo, `{
@@ -586,8 +596,8 @@ func flattenFrame(view string) string {
 // above could not be: its fixture takes whatever short path t.TempDir() hands out,
 // and the repo path is interpolated into the body uncapped. A real Atrium worktree
 // path is long — the data dir, "worktrees", a user prefix, a session name, a hash —
-// and a header that wraps to six rows was what actually spent the last of the 80x24
-// height margin once #815's two seed lines took their two.
+// and a header that wraps to six rows is what actually spends the 80x24 height
+// margin, on top of what #815's seed line already takes.
 //
 // It asserts the box's own bottom border, because that is the edge that goes first
 // and the decline hint sits just above it: a confirmation whose "create without it"

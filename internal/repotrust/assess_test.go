@@ -223,10 +223,11 @@ func TestAssessRepo(t *testing.T) {
 }
 
 // TestAssessRepo_SeedLists covers #815's half of the prompt decision: a file whose
-// only content is carry_files/link_paths declares something, so it is grantable and
-// asks — it executes nothing, but it decides which of the user's own gitignored
-// files are copied in front of an agent and which of their trees it may write
-// through, which is the recorded reason both halves ride one grant.
+// only content is carry_files declares something, so it is grantable and asks — it
+// executes nothing, but it decides which of the user's own gitignored files are
+// copied in front of an agent, which is the recorded reason it rides the same grant
+// as a script. A file whose only content is link_paths is the opposite case and is
+// silent (repocfg's TestLinkPathsIsNotReadYet).
 func TestAssessRepo_SeedLists(t *testing.T) {
 	t.Run("a seed-only file wants a prompt", func(t *testing.T) {
 		repo := gitRepo(t)

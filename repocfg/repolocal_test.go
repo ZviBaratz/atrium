@@ -31,8 +31,10 @@ func TestParseRepoLocal(t *testing.T) {
 	t.Run("unknown top-level keys are tolerated", func(t *testing.T) {
 		// A key a newer atrium reads must be committable to a repo before every user
 		// has upgraded; an older atrium ignores it rather than refusing the file.
-		// carry_files and link_paths shipped under this tolerance and are now read
-		// (#815), so the fixture names a key nothing reads.
+		// carry_files shipped under this tolerance and is now read (#815);
+		// link_paths still rides it (TestLinkPathsIsNotReadYet). The fixture names a
+		// third key nothing reads at all, so it measures the tolerance itself rather
+		// than one key's current status.
 		got, err := ParseRepoLocal([]byte(`{
 			"session_defaults": {"model": "opus"},
 			"repo_scripts": [{"setup_script": "make deps"}]
@@ -385,8 +387,13 @@ func TestRepoLocalLayersCoversEveryLayerKey(t *testing.T) {
 // in this release — the write direction ships separately, see RepoLocal.CarryFiles —
 // and the danger is a fixture or a repo that assumes otherwise: an ignored key
 // declares nothing, so a file carrying only link_paths is SILENT, not grantable.
-// Several tests in this file used it as their fixture key and silently stopped
-// asserting anything when it stopped being read.
+//
+// Tests elsewhere used it as a fixture key and stopped asserting anything when it
+// stopped being read — app's composed-frame test parked its cursor on the
+// link_paths row and so measured a frame with no provenance in it, and two sweeps
+// carried a link_paths entry no loop body ever looked at. This file's own
+// link_paths fixtures would all have failed loudly instead, which is why the
+// vacuous ones were the ones in other packages.
 func TestLinkPathsIsNotReadYet(t *testing.T) {
 	got, err := ParseRepoLocal([]byte(`{"link_paths": ["node_modules", "../escape"]}`))
 	require.NoError(t, err, "an unread key cannot refuse the file, not even for a bad entry")

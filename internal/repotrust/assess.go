@@ -47,8 +47,8 @@ type Assessment struct {
 	Hash string
 	// Local is the parsed file: the usable repo_scripts entry it declares, if any
 	// (at most one — repocfg's one-entry rule — carrying its position in the file),
-	// the refused one as a Problem, and the two seed lists it layers over the
-	// user's own (#815). One field rather than a spread of them so every asking
+	// the refused one as a Problem, and what it layers over the user's own lists
+	// (#815). One field rather than a spread of them so every asking
 	// surface can describe the file through repocfg.RepoLocalSurfaces and none can
 	// describe half of it. Templates are NOT compiled here — content is still
 	// untrusted at assessment time.
@@ -94,11 +94,10 @@ type Assessment struct {
 // gate would treat as absent, or stay silent about one it would apply. Since the
 // parse refuses configures-nothing entries in compile's own words and refuses an
 // unusable seed list whole, everything the list names is something enforcement
-// could actually act on. Note that a seed-only file (carry_files / link_paths,
-// no repo_scripts) prompts: it executes nothing, but it decides which of the
-// user's own gitignored files are copied in front of an agent and which of their
-// trees it may write through, which is #815's recorded reason for gating both
-// halves behind one grant.
+// could actually act on. Note that a seed-only file (carry_files, no repo_scripts)
+// prompts: it executes nothing, but it decides which of the user's own gitignored
+// files are copied in front of an agent, which is #815's recorded reason for
+// gating it behind the same grant as the script.
 func (a Assessment) WantsPrompt() bool {
 	return a.Present && len(repocfg.RepoLocalSurfaces(a.Local)) > 0 && !a.Granted
 }

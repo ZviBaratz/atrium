@@ -1005,11 +1005,6 @@ after a pause. On Windows, creating a symlink requires Developer Mode or an
 elevated process; without it the entry is skipped with a warning and the session
 still starts.
 
-As with carried files, a repository can add entries of its own through a
-[`.atrium.json` you have trusted](#repo-local-config-and-trust) — added to this
-list, never replacing it. A dependency-isolated session gets none of them either:
-isolation is a choice about that session and it outranks the repo's.
-
 Unlike a carried file, a linked path is **shared and writable, not a per-session
 copy** — it is the original checkout's tree under another name. Writes through it
 land in your own working copy and are visible to every other session at once, so
@@ -1181,7 +1176,7 @@ genuinely yours. What overrides a repo's additions is withdrawing its grant, whi
 already per-repo — there is no per-repo section in `config.json` and no environment
 escape hatch.
 
-Each list carries at most 64 entries. That bound is on work rather than size: every
+The list carries at most 64 entries. That bound is on work rather than size: every
 entry that actually exists costs a `git check-ignore` probe inside each worktree of
 that repo, every time one is materialized, and a file past the cap is refused whole
 rather than truncated. Entries are slash-separated on every platform and must stay
@@ -1191,11 +1186,12 @@ did not describe. Duplicate spellings of one path (`node_modules`,
 `./node_modules/`) count once.
 
 **Nothing in this file applies until you trust the repo.** Repo config is
-repo-authored content: `setup_script` is arbitrary code running as you, and the two
-path lists decide which of *your* gitignored files are copied in front of an agent
-and which of your trees it may write through. So the first session you create from a
-repo whose committed `.atrium.json` declares anything usable opens a prompt naming
-what it declares — all of it, both halves. Trust is for the file as a whole,
+repo-authored content: `setup_script` is arbitrary code running as you, `session_env`
+reaches the agent's environment (so `NODE_OPTIONS` or `GIT_SSH_COMMAND` is execution
+too, with no script in the file at all), and `carry_files` decides which of *your*
+gitignored files are copied in front of an agent. So the first session you create
+from a repo whose committed `.atrium.json` declares anything usable opens a prompt
+naming what it declares — all of it. Trust is for the file as a whole,
 direnv-style, not per field or per key. Trusting records a grant for the file's
 **exact content**; declining still creates the session, just with the repo's config
 inert. Headless creates (`atrium new`) never prompt: they start untrusted and say so,
@@ -1215,9 +1211,13 @@ The grant is direnv-shaped, and its edges are deliberate:
   grant made before Atrium read `carry_files` does not silently start applying it
   when you upgrade — even though the bytes are unchanged. Such a repo asks once more,
   saying that the file is the one you trusted and what it also declares, and
-  re-allowing settles it. The check is made where it counts: a worktree is seeded
-  only if the ledger covers what the file declares, so an unanswered prompt, a
-  declined one, or a resume that never prompts all leave the lists inert.
+  re-allowing settles it. The check is made where it counts: a worktree applies the
+  file only if the ledger covers what that file declares, so an unanswered prompt, a
+  declined one, or a resume that never prompts all leave it inert. Note what "inert"
+  means on this path — the file is refused **whole**, as it is for every other
+  refusal here. On a file carrying both a script and `carry_files`, an older grant
+  stops running the script too until you re-allow, rather than narrowing to the part
+  the original prompt did describe.
 - **Only committed content counts — at the ref your session will start from.**
   A worktree checks out the session's *base*: with `update_base_on_create` (the
   default) that is origin's tip whenever it is ahead of your local branch, and
