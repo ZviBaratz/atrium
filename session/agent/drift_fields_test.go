@@ -33,10 +33,14 @@ func TestAdaptersExposesSeededVersions(t *testing.T) {
 		KeyCodex:  {"0.147.0", GranularityMinor, nil},
 		KeyAider:  {"0.86.2", GranularityMinor, nil},
 		KeyAgy:    {"1.1.11", GranularityMinor, nil},
+		// Driven at 1.0.80 across three surfaces, each with its own verbatim width ladder:
+		// the folder-trust gate, the approval prompt and the busy marker. registry.go's
+		// copilot header enumerates them; this row only pins the version they were driven at.
+		KeyCopilot: {"1.0.80", GranularityMinor, nil},
 	}
 	got := Adapters()
-	if len(got) != 5 {
-		t.Fatalf("Adapters() returned %d adapters, want 5", len(got))
+	if len(got) != 6 {
+		t.Fatalf("Adapters() returned %d adapters, want 6", len(got))
 	}
 	for _, a := range got {
 		w, ok := want[a.Key]

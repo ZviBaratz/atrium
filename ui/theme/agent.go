@@ -27,6 +27,14 @@ import (
 // at all. agy's "✜" is a plus-shaped cross; the nearest thing the row draws is
 // prCheckGlyph's failing-CI "✗" (ui/row.go), a saltire rather than a plus. A star was
 // the other candidate for agy and would have read as a second gemini.
+//
+// copilot's "⎈" (U+2388 HELM SYMBOL) is a pilot's wheel. The neighbour it was checked
+// against is Branch's "⎇" (U+2387) — one codepoint below it, so a font rendering one
+// renders the other, and they share a FRAME (the agent glyph is pinned to the far right
+// of the row's first line, the branch chip sits on its second). They do not share a
+// shape: ⎇ is an alternate-key fork, ⎈ is a spoked wheel. The circle family was ruled
+// out first — Ready "●", ReadySeen "○" and AcctAvailable "●" have it — and the diamond
+// family second, for the reason codex's entry already records about "◆".
 func plainAgentGlyphs() map[string]string {
 	return map[string]string{
 		"claude":  "✻", // claude code's own spinner glyph
@@ -34,6 +42,7 @@ func plainAgentGlyphs() map[string]string {
 		"gemini":  "✦",
 		"aider":   "≡",
 		"agy":     "✜", // a plus-cross; see the note above on what that was checked against
+		"copilot": "⎈", // U+2388 HELM SYMBOL — a pilot's wheel; see above on the neighbour it was checked against
 		"generic": "•",
 	}
 }
@@ -72,6 +81,7 @@ func plainAgentGlyphs() map[string]string {
 //	aider   A  free — aider has been in this table since #67, so it keeps the letter
 //	agy     N  a and g are claimed and Y is Branch, which exhausts the key: fall to the
 //	           product name, a(n)tigravity
+//	copilot P  c is claude's and o is ReadySeen, so co(p)ilot
 //	generic .  not a name. The quietest 7-bit mark there is, standing in for "•" — the
 //	           unknown-agent marker should recede, not announce itself
 //
@@ -88,6 +98,7 @@ func asciiAgentGlyphs() map[string]string {
 	g["gemini"] = "G"
 	g["aider"] = "A"
 	g["agy"] = "N"
+	g["copilot"] = "P"
 	g["generic"] = "."
 	return g
 }

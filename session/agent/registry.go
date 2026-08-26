@@ -1850,6 +1850,103 @@ var agy = &Adapter{
 	HeadlessNamer: true,
 }
 
+// GitHub Copilot CLI (github/copilot-cli, npm @github/copilot). DRIVEN at 1.0.80 on Linux,
+// 2026-08-26, in an isolated COPILOT_HOME against a scratch git repo with the organization's
+// token injected via ATR_CAP_ENV — three surfaces, each with a verbatim width ladder in
+// copilot_pane_test.go: the folder-trust Gate, the approval PromptMatcher, and the busy
+// marker. The design record is docs/superpowers/specs/2026-08-26-copilot-cli-integration-design.md.
+//
+// WHAT SHAPE THIS ADAPTER IS. Its two dialogs are closed round boxes whose bottom border is
+// the last non-empty line at every driven rung — gemini's shape, so both matchers anchor on
+// bottomBoxBlock. Its composer and busy row are claude's arrangement: a borderless composer
+// between two horizontal rules, with the status row replacing the hint row BELOW it, so
+// MarkerWindow stays 0 and the footer anchor finds the marker. Two vendors' shapes in one
+// CLI, which is why neither codex's GateWindow nor gemini's composer veto transfers.
+//
+// WHY NOT GateWindow, since codex's trust gate looks like the same problem. Codex draws its
+// overlay with no border at all, so its headline is intact and merely pushed out of a
+// line-count budget, and a wider window reaches it. Copilot's headline is DESTROYED — the
+// border runes and their padding sit between its fragments — so no window reaches it and
+// flattenBottomBox is the remedy instead. TestCopilotTrustGateNeedsTheWallStrippingScan
+// measures the difference at every rung.
+//
+// WHY NOT a composer veto inside the matchers, since geminiTrustGateVisible has one. Copilot's
+// selector IS the composer glyph "❯" and it sits on the dialog's highlighted row, so the veto
+// would return false on every rung of both ladders.
+// TestCopilotDialogsAreAlsoComposersToTheBoxPredicate holds that collision.
+//
+// HookSupport is deliberately FALSE even though copilot has hooks and they fire. The
+// invocation schema is claude-compatible, keyed by camelCase event names; the OUTPUT schema is
+// not. Claude's nested hookSpecificOutput.additionalContext fires and delivers nothing, while
+// a flat {"additionalContext": …} works — both driven. The field routes through claude's
+// emitter, so setting it here ships a brief that is registered, documented and dead, which is
+// the #773 failure mode verbatim. #773 replaces the bool with a capability that can say which
+// schema; this adapter waits for it.
+//
+// Resume is deliberately NIL. `--continue` and `-r, --resume` are both in --help (VENDOR at
+// 1.0.80), but ResumeProbe's needle must pin the listing rather than the bare word and that
+// has not been chosen, and the behaviour in a directory with nothing to resume has not been
+// driven. A nil Resume relaunches blank, which is the adapter's safe mode; a needle guessed
+// off a help line is the failure mode ResumeProbe exists to prevent.
+var copilot = &Adapter{
+	Key:         KeyCopilot,
+	DisplayName: "Copilot CLI",
+	aliases:     []string{"copilot"},
+
+	VerifiedVersion:  "1.0.80",
+	DriftGranularity: GranularityMinor,
+
+	// InputBoxPrompts deliberately nil: the composer glyph is "❯" (U+276F), byte-verified
+	// with cat -vet against the driven panes, and defaultPrompts already accepts it. It
+	// collides with both dialogs' selector, which is the hazard that field's doc describes
+	// for claude and agy — GateUp and DetectPrompt are what exclude those screens.
+
+	Gates: []Gate{
+		// The folder-trust screen. A conjunction through Match, not Contains: the headline
+		// alone is a plausible sentence for a session to print while discussing this file,
+		// and Contains would read a flat bottom-N window that cannot reconstruct it below 60
+		// columns anyway. Both literals sit LOW in the dialog because at 20 columns the box
+		// outgrows the pane and its title scrolls off the top —
+		// TestCopilotTrustGateTitleIsGoneAtWidth20.
+		{Name: "trust", Match: copilotTrustGateVisible},
+	},
+}
+
+// copilotTrustHeadline and copilotTrustOption are the folder-trust gate's two literals, as
+// consts so the guards measure against the symbol the matcher reads rather than restating a
+// string. Both survive every driven rung; the title does not, which is why neither is it.
+//
+// THEY ARE NOT GUARDED ALIKE, and saying so is the point. Shortening either one keeps the
+// ladder green — a conjunction only narrows as its terms lengthen — so what the guards hold
+// is that both are REACHABLE at every rung, not that either is the shortest sufficient form.
+// Lengthening one past what the narrowest rung renders is what reddens the ladder.
+const (
+	copilotTrustHeadline = "Do you trust the files in this folder?"
+	copilotTrustOption   = "Yes, and remember this folder for future sessions"
+)
+
+// copilotTrustGateVisible reports copilot's folder-trust screen: both literals inside the
+// bottom-most anchored box, read through flattenBottomBox so a headline hard-wrapped across
+// the box's own borders still reconstructs.
+//
+// Two clauses doing different jobs, the way geminiTrustGateVisible's do. The box says the
+// dialog is LIVE — a dismissed one is replaced by the composer, which is not an anchored box,
+// so this goes false; and it is what keeps the wall-stripping scan off the whole pane. The
+// literal pair says WHICH dialog, and both terms are needed: the headline is ordinary English
+// and the option label is the specific half.
+//
+// What the box clause narrows and does not close is bottomBoxBlock's own disclosed exposure —
+// quoted box art that ends the pane. A transcript quoting this dialog and stopping exactly at
+// its bottom border does fire this. That direction fails CLOSED (a queued prompt is held,
+// never mis-delivered), which GateUp's own doc records as the acceptable one.
+func copilotTrustGateVisible(content string) bool {
+	flat, ok := flattenBottomBox(content)
+	if !ok {
+		return false
+	}
+	return strings.Contains(flat, copilotTrustHeadline) && strings.Contains(flat, copilotTrustOption)
+}
+
 // Generic is the adapter for programs no table entry recognizes: no markers
 // (content-change fallback), no prompt or gate detection, no resume. Strictly
 // the pre-adapter behavior for an unknown agent — except that unknown agents no
@@ -1861,7 +1958,7 @@ var Generic = &Adapter{
 
 // registry is ordered; Resolve returns the first alias match. Aliases are
 // disjoint today, so order is cosmetic.
-var registry = []*Adapter{claude, codex, gemini, aider, agy}
+var registry = []*Adapter{claude, codex, gemini, aider, agy, copilot}
 
 // Resolve maps a program string to its adapter, or Generic when no entry
 // matches; it never returns nil. The program's first token is basenamed and

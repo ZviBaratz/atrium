@@ -37,6 +37,7 @@ const (
 	KeyGemini  Key = "gemini"
 	KeyAider   Key = "aider"
 	KeyAgy     Key = "agy"
+	KeyCopilot Key = "copilot"
 	KeyGeneric Key = "generic"
 )
 

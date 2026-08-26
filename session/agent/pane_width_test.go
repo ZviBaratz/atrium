@@ -247,6 +247,13 @@ var paneCoverage = map[string][]paneCapture{
 		{name: "agyConfirmSubHintPane", width: 24, note: "hint cut to \"tab Ame\"", pane: agyConfirmSubHintPane},
 		{name: "agyConfirmFloorPane", width: 20, note: "hint ends exactly at the literal", pane: agyConfirmFloorPane},
 	},
+
+	// copilot's gate is one Match over a ladder driven at every rung from 120 to 20. The 20
+	// rung is included on purpose even though it is where the dialog's title disappears: the
+	// matcher keys on the headline and an option label, both of which survive, so this is a
+	// rung the predicate FIRES on rather than a miss. Contrast gemini, whose 20 rung is a real
+	// cliff and lives outside its ladder.
+	"copilot/gate/trust": copilotTrustgateLadder,
 }
 
 // paneCoverageExempt is the other direction, and it exists because a `continue` on "no
@@ -366,6 +373,11 @@ var wantRungs = map[string][]int{
 	"agy/gate/trust":          {24, 28, 120},
 	"agy/busy":                {20, 24, 28, 40, 120, 120},
 	"agy/prompt/confirmation": {20, 24, 28, 40, 120},
+
+	// Eight rungs, one per driven width, and the floor really is 20 rather than "20 is simply
+	// where driving stopped": the narrowest rung was driven and the gate fires there. What
+	// fails at 20 is the TITLE, which no matcher here reads.
+	"copilot/gate/trust": {20, 24, 26, 28, 34, 40, 60, 120},
 }
 
 // keysWithNoRecordedCaptureWidth are covered by real captures whose provenance never wrote

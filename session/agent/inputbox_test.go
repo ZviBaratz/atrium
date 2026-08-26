@@ -256,6 +256,12 @@ var composerPanes = map[Key]string{
 	KeyGemini: geminiIdlePane,
 	KeyAider:  aiderIdlePane,
 	KeyAgy:    agyIdlePane,
+	// A DRIVEN live-turn pane, not an idle one, and the difference is nil: copilot's composer
+	// is the same empty "❯" between two horizontal rules whether a turn is running or not —
+	// what a turn changes is the status row BELOW it. Using the widest busy rung means this
+	// entry cites a capture the busy ladder already holds rather than a second one nothing
+	// else reads.
+	KeyCopilot: copilotWorkingW120Pane,
 }
 
 func TestAdapterInputBoxVisible(t *testing.T) {
