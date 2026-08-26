@@ -1,7 +1,9 @@
 # GitHub Copilot CLI Integration
 
 **Date:** 2026-08-26
-**Status:** Stage 0 measurement complete; Stage 1 not started
+**Status:** Stage 0 measurement complete for the two dialogs; the busy-marker ladder below
+60 columns is invalid and Stage 1 re-drives it. Stage 1 design settled (2026-08-26): the
+wall-stripping scan is anchored on `bottomBoxBlock`, not on the whole pane.
 **Driven against:** GitHub Copilot CLI **1.0.80** (npm `@github/copilot`), Linux
 
 ## Motivation
@@ -231,20 +233,27 @@ animates through at least `◎ ◉ ○ ●` and the byte counter grows during th
 counter sits *between* the two words, so `Working esc interrupt` is never a contiguous
 literal at any width — a fact a wide capture alone would suggest is fine.
 
-Below about 34 columns the footer becomes a multi-column layout whose cells wrap
-independently, which breaks the literals in a way flattening cannot repair:
+**The busy marker below 60 columns is NOT MEASURED, and an earlier draft of this section
+said otherwise.** That draft carried a width table giving the footer at 40, 28 and 20, and
+concluded a floor of 20 with `Working` splitting mid-word there. No preserved capture holds
+any of it. Of the eight `working-*` panes in the run directory, `Working` appears in exactly
+two — 120 and 60. Both read `Session: 1.52 AIC used`; 40, 34, 28, 26, 24 and 20 all read
+`2.7` and all show the hint row where the status row would be. Identical credit figure and
+the hint row from 40 down means one thing: those six rungs captured an IDLE pane.
 
-| width | footer |
-|---|---|
-| 40 | `◉ Working · 287 B esc interrupt` |
-| 28 | `◉  · 237 Besc` / `Working   interrupt` |
-| 20 | `● · 161 esc` / `Worki B interru` / `ng   pt` |
+That is the measurement artifact this section records three paragraphs below, still in the
+artifacts after the correction was written down. The corrected re-drive's narrow panes were
+not preserved — not in `captures/`, `cat-A/`, `prod/` or `fixtures.go.txt`, all four of
+which derive from the one invalid run. So the numbers above were real readings of a pane
+that was not working, or readings of a run nothing kept; either way nothing can cite them,
+and a floor no artifact backs is the defect this spec's evidence tiers exist to refuse.
 
-So `esc interrupt` fails from 28 down, and `Working` survives to 24 but splits mid-word at
-20. `BusyMarkers` therefore keys on `Working` alone, with a floor at 20 columns that a test
-must pin as a value rather than describe — the bound is the thing that rots. The animating
-spinner is the only signal left at 20, which is what `LiveSpinner` is for; it is
-deliberately not a standalone latch.
+What survives is what two rungs can carry: `MarkerWindow` 0 is confirmed at 120 and 60, and
+`Working` is present at both. Whether `esc interrupt` breaks at 28, whether `Working` splits
+at 20, and therefore whether `LiveSpinner` is needed at all, are open. Stage 1 re-drives the
+ladder over all eight widths in one turn long enough to outlive the sweep, and asserts
+`Working` present at EVERY rung plus a monotonically growing byte counter — so the fixtures
+themselves refuse an invalid ladder rather than encoding one.
 
 **Folder-trust gate.** Headline `Do you trust the files in this folder?`, title
 `Confirm folder trust`, options `1. Yes` / `2. Yes, and remember this folder for future
@@ -257,16 +266,38 @@ codex's overlay, this dialog is drawn *inside* box borders, and its body wraps r
 truncating. So a wrapped headline reconstructs as `…files in this │ │ folder?…`: the border
 runes and their padding sit between the fragments, and `flattenChrome` — which collapses
 newlines to spaces — can never rejoin them. Raw matching of the headline fails from 40
-down; the title survives to 24 and wraps at 20; and at 28 the title already sits deeper
-than codex's `GateWindow`. Widening the window is the codex remedy and it does not
-transfer.
+down; the title survives to 24 and is unrecoverable at 20 (it wraps, and its first fragment
+then scrolls off the top of the pane — see the height cliff below); and at 28 the title
+already sits deeper than codex's `GateWindow`. Widening the window is the codex remedy and
+it does not transfer.
 
-What does work, at every driven rung, is stripping the box-drawing runes before
-flattening. That is a new primitive the package does not have, and both matchers below
-need it, so it belongs beside `flattenChrome` rather than inside either adapter. Its cost
-is that a stripped whole-pane scan can match the same sentence quoted in the transcript;
-per `GateUp`'s own reasoning that fails closed — a queued prompt is held, never
-mis-delivered — which is the acceptable direction.
+What does work, at every driven rung, is stripping the box walls before flattening. That is
+a new primitive the package does not have, and both matchers below need it, so it belongs
+beside `flattenChrome` rather than inside either adapter.
+
+**Where that scan is anchored, and why it is not the whole pane.** An earlier draft of this
+paragraph proposed a stripped WHOLE-PANE scan and accepted its cost — that it can match the
+same sentence quoted in the transcript, failing closed per `GateUp`'s own reasoning. That
+cost does not have to be paid, because this dialog is not the shape that draft assumed.
+Measured on all sixteen dialog captures: both dialogs are CLOSED round boxes whose bottom
+border is the last non-empty line at every rung, with `│`-walled interior rows throughout —
+gemini's shape, not codex's. So `bottomBoxBlock`, the liveness anchor already in
+`chrome.go`, anchors both, and the primitive reduces to "strip the walls off that block's
+lines, join, flatten". `bottomBoxBlock` returns false on all eight `working-*` panes, so
+"no gate" is an anchored answer rather than a scan of transcript, and the exposure narrows
+to the one `bottomBoxBlock` already discloses: quoted box art that ends the pane.
+
+The primitive deliberately synthesises phrases across rows, which inverts
+`bottomBoxBlock`'s own line-wise contract. That is the point here and the doc comment must
+say so: the synthesis is bounded to one anchored box's interior, whereas the trap that
+contract was written against (#713) was flattening across a WINDOW.
+
+**A height cliff the width ladder hides.** At 20 columns the gate's box is taller than the
+pane, so its top rows — including the title `Confirm folder trust` — scroll off. The title
+is present at 24 and absent at 20, and it is not truncated, it is gone. Every literal a
+matcher keys on must therefore sit LOW in the dialog: the headline and the option labels do,
+the title does not. `Do you trust the files in this folder?` and `Yes, and remember this
+folder for future sessions` both survive all eight rungs.
 
 **Approval prompt, and the reason it must never be auto-tapped.** An action outside the
 trusted directory raises a dialog reading `This action may read or write the following
@@ -285,10 +316,23 @@ which is a sandbox widening performed by a convenience feature. `NoAutoTap` is t
 mandatory, and for a strictly worse reason than the one it carries on codex, where Enter
 approves a single command.
 
-Its literals wrap inside borders exactly as the gate's do — the headline fails from 28
-down, the option label from 40 down — and the same border-stripping scan recovers both at
-every rung. `No (Esc)` and the `↑/↓ to navigate · enter to select · esc to cancel` footer
-survive every width but are shared with the trust gate, so neither can discriminate.
+Its literals wrap inside borders exactly as the gate's do — raw matching of the headline
+fails from 28 down, the option label from 40 down — and the same wall-stripping scan
+recovers both at every rung. `No (Esc)` and the `↑/↓ to navigate · enter to select · esc to
+cancel` footer survive every width but are shared with the trust gate, so neither can
+discriminate.
+
+The option label is the specific one, and it must be keyed WITHOUT the selector. The space
+between selector and number is not stable and not monotonic in width: `❯ 2.` at 120, 60, 34
+and 28, `❯2.` at 40, 26, 24 and 20. So `Yes, and add these directories to the allowed list`
+is the literal and the `❯ 2. ` prefix is not — and a matcher that included the prefix would
+have passed a 120-column check and failed at 40 while passing again at 34, which is the
+shape of drift a single wide capture cannot see.
+
+Unlike the gate, this dialog's box fits the pane at every driven rung — its top border is on
+screen at all eight, where the gate's is gone at 20 — so its title `Allow directory access`
+survives too. That is box height rather than a property of titles, so the matcher keys on
+the headline and the option label regardless.
 
 **`session.usage_checkpoint` is not an account total, and must never be shown as one.**
 Summing the event stream under one `COPILOT_HOME` gave 10.91 credits for the drive while
@@ -308,14 +352,26 @@ a live AI-credit reading, and the footer carries the resolved model name. Both a
 scrapeable without opening the session store, which is worth knowing before building a
 reader for either.
 
-**A measurement artifact worth recording.** The first working-state ladder appeared to
-show the busy marker vanishing below 40 columns. It had not: the turn ended partway
-through the ladder, and the narrow rungs captured an idle pane. A ladder is only valid for
-a transient state if the state outlives the sweep; the corrected method restarts a turn at
-each width. The wrong reading was the more interesting-looking one.
+**A measurement artifact worth recording, and the artifacts still carry it.** The first
+working-state ladder appeared to show the busy marker vanishing below 40 columns. It had
+not: the turn ended partway through the ladder, and the narrow rungs captured an idle pane.
+A ladder is only valid for a transient state if the state outlives the sweep; the corrected
+method restarts a turn at each width. The wrong reading was the more
+interesting-looking one.
+
+Writing that down did not remove it. The run directory still holds the invalid ladder and
+nothing else — see the busy-marker section above, which is what discovered it — so the
+lesson was recorded while the artifact it condemns stayed the only evidence on disk. A
+correction in prose beside an uncorrected capture is worse than no correction, because the
+next reader trusts the prose and cites the capture.
 
 ## NOT MEASURED
 
+- **The busy marker below 60 columns**, and therefore its width floor, whether
+  `esc interrupt` breaks at 28, whether `Working` splits mid-word at 20, and whether
+  `LiveSpinner` is needed at all. The ladder on disk captured an idle pane at every rung
+  below 60; see the busy-marker section above for how that was established. This is the one
+  entry Stage 1 closes before it writes a fixture rather than after.
 - **`ResumeProbe`'s needle.** `--continue` and `-r, --resume` both appear in `--help`, but
   the needle must be pinned to the listing rather than the bare word, and that has not
   been chosen.
@@ -500,15 +556,22 @@ Stage 0 is complete. Every prerequisite is satisfied: the organization's CLI pol
 enabled, its AI-credits budget is raised off zero, the intended account holds a seat, and
 the injected token is proven to be the credential in use.
 
-Stage 1 can now be written from the driven captures. Three things it must carry that were
-not obvious before driving:
+Stage 1 can be written from the driven captures for the two dialogs. The busy marker needs
+one more drive first — the ladder on disk is the invalid one, and Stage 1 re-drives all
+eight rungs rather than encoding a table nothing can cite.
 
-1. A border-stripping scan beside `flattenChrome`, since both the gate and the approval
-   matcher need it and neither works without it below 40 columns.
+Four things it must carry that were not obvious before driving:
+
+1. A wall-stripping scan beside `flattenChrome`, anchored on `bottomBoxBlock` rather than
+   the whole pane, since both the gate and the approval matcher need it and neither works
+   without it below 40 columns.
 2. `NoAutoTap` on the approval matcher, because its pre-selected option widens the
    allowed-path list rather than approving one action.
-3. A pinned width floor for the busy marker, as a value a test reads rather than a
-   sentence prose repeats.
+3. Literals taken from LOW in each dialog. At 20 columns the gate's box outgrows the pane
+   and its title scrolls off, so a title-keyed matcher misses a gate that is on screen.
+4. A pinned width floor for the busy marker, as a value a test reads rather than a
+   sentence prose repeats — and pinned to the re-driven ladder, not to the table this
+   spec used to carry.
 
 Remaining before Stage 1 is finished, not before it starts: the paste-chip capture, the
 `resume` drive and its `RESUME_TABLE` row, and a `ResumeProbe` needle chosen against the
