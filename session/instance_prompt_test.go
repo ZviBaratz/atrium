@@ -54,9 +54,16 @@ type fakeAgentPane struct {
 	noLand   bool   // drop typed/pasted text on the floor (simulate a send that doesn't land)
 	collapse bool   // render a ≥4-line paste as claude's "[Pasted text +N lines]" chip, not the text
 
-	typed  []string // recorded send-keys -l payloads
-	pasted []string // recorded paste-buffer applications
-	enters int      // recorded submitting Enter taps
+	// gateAfterCaptures raises the gate on the Nth capture-pane call and every one after it
+	// (0 = never), so that capture itself already shows the dialog. It models a dialog
+	// appearing DURING delivery: SendPrompt reads the pane several times, and each read is a
+	// separate moment.
+	gateAfterCaptures int
+
+	typed    []string // recorded send-keys -l payloads
+	pasted   []string // recorded paste-buffer applications
+	enters   int      // recorded submitting Enter taps
+	captures int      // recorded capture-pane calls
 }
 
 func (f *fakeAgentPane) render() string {
@@ -118,6 +125,10 @@ func (f *fakeAgentPane) exec() cmd_test.MockCmdExec {
 			case strings.Contains(args, "list-panes"):
 				return []byte("%7\n"), nil
 			case strings.Contains(args, "capture-pane"):
+				f.captures++
+				if f.gateAfterCaptures > 0 && f.captures >= f.gateAfterCaptures {
+					f.gate = true
+				}
 				return []byte(f.render()), nil
 			default:
 				return []byte("%7\n"), nil
@@ -253,4 +264,59 @@ func TestSendPrompt_NotStartedErrorsHard(t *testing.T) {
 	err := inst.SendPrompt("x")
 	require.Error(t, err)
 	assert.False(t, IsSoftPromptError(err), "an unstarted instance is a hard error, not a retryable soft one")
+}
+
+// Readiness is re-asserted at every point that sends keystrokes, not only at entry.
+//
+// SendPrompt reads the pane several times, and each read is a separate moment: the entry
+// AwaitingInput check describes the pane as it was then, not as it is when the keystrokes go
+// out. A dialog that rises in one of those gaps is where a queued prompt gets typed into a
+// modal, or where Enter lands on the modal's pre-highlighted option — for copilot that option
+// is "Yes, and add these directories to the allowed list", so the miss widens the agent's
+// filesystem reach rather than merely losing the prompt.
+//
+// gateAfterCaptures raises the gate after the entry check has already passed, which is the
+// shape a single entry gate cannot cover. Both cases must come back soft (retry next tick)
+// having sent nothing.
+func TestSendPrompt_ReAssertsReadinessBeforeActing(t *testing.T) {
+	prev := promptVerifyInterval
+	promptVerifyInterval = 0
+	defer func() { promptVerifyInterval = prev }()
+
+	t.Run("a gate that rises before typing types nothing", func(t *testing.T) {
+		// Captures: 1 the entry check, 2 the boxHoldsPrompt readback, 3 the pre-typing check.
+		fake := &fakeAgentPane{gateAfterCaptures: 3}
+		inst := newPromptInstance(t, "gate-before-typing", fake)
+
+		err := inst.SendPrompt("do the thing")
+		require.ErrorIs(t, err, errPromptNotReady, "a gate mid-delivery is a soft retry")
+		require.True(t, IsSoftPromptError(err))
+		require.Empty(t, fake.typed, "nothing may be typed into a dialog")
+		require.Empty(t, fake.pasted)
+		require.Zero(t, fake.enters, "and nothing may be submitted")
+	})
+
+	t.Run("a gate that rises before Enter submits nothing", func(t *testing.T) {
+		// The box already holds the prompt from an earlier attempt whose submission was not
+		// confirmed, so typing is skipped and the very next act is TapEnter. Captures: 1 the
+		// entry check, 2 the readback that finds it already staged, 3 the pre-Enter check.
+		fake := &fakeAgentPane{box: "do the thing", gateAfterCaptures: 3}
+		inst := newPromptInstance(t, "gate-before-enter", fake)
+
+		err := inst.SendPrompt("do the thing")
+		require.ErrorIs(t, err, errPromptNotReady)
+		require.Zero(t, fake.enters,
+			"Enter must not be tapped on a screen that replaced the composer — that is the tap "+
+				"that selects a dialog's highlighted option")
+		require.Empty(t, fake.typed, "and the staged text must not be retyped")
+	})
+
+	t.Run("an unbroken delivery still goes through", func(t *testing.T) {
+		// The other direction: the extra checks must not have made delivery impossible.
+		fake := &fakeAgentPane{}
+		inst := newPromptInstance(t, "no-gate", fake)
+		require.NoError(t, inst.SendPrompt("do the thing"))
+		require.Equal(t, []string{"do the thing"}, fake.typed)
+		require.Equal(t, 1, fake.enters)
+	})
 }

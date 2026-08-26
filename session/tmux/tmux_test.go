@@ -2048,6 +2048,15 @@ func TestPollClassifiesAHeadlessCopilotDialogAsGate(t *testing.T) {
 			"a dialog whose headline has scrolled off is still a dialog, not an idle pane")
 	})
 
+	// PollNow re-implements the same precedence for the post-detach sweep, so it needs the
+	// same branch. This is the detach case specifically: the user attached, copilot raised
+	// the dialog, the pane scrolled, and the one-shot refresh on the way back must not
+	// re-baseline the monitor to idle.
+	t.Run("and the post-detach refresh agrees", func(t *testing.T) {
+		require.Equal(t, PaneGate, s.PollNow(),
+			"the detach sweep classifies a headline-less dialog too")
+	})
+
 	t.Run("and the composer is not offered for delivery", func(t *testing.T) {
 		require.False(t, s.adapter.InputBoxVisible(cleaned),
 			"the dialog's selector row must not read as a composer")
