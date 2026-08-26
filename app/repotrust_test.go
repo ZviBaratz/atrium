@@ -462,14 +462,21 @@ func longSeedList(n int, stem string) []string {
 // property (the box holds), and the failure message is what tells you the margin
 // went.
 //
-// The fixture is also narrower than the name: it declares a setup_script and
-// carry_files, not the maximal surfaces line (run command, session env and port
-// range are what repoTrustSummary can also name). That combination is measured
-// nowhere.
+// The fixture declares every surface repoTrustSummary can name — setup script, run
+// command, session env, port range, and a carry list — because the surfaces line is
+// the one part of this dialog allowed to wrap, so the maximal line is the one that
+// actually spends the margin. It shipped for a release declaring only a script and
+// a list, which is a narrower dialog than the name promises.
 func TestRepoTrustDialogHoldsTheFloorWithEverything(t *testing.T) {
 	repo := gitInitRepo(t)
+	// Every surface repoTrustSummary can name, not just a script and a list: the
+	// surfaces line is the part that is allowed to wrap, and run_command,
+	// session_env and port_range are what make it longest. A fixture short of
+	// them measures a narrower dialog than the one the name promises.
 	commitRepoLocal(t, repo, `{
-		"repo_scripts":[{"name":"web","setup_script":"npm ci && npm run db:migrate"}],
+		"repo_scripts":[{"name":"web","setup_script":"npm ci && npm run db:migrate",
+			"run_command":"npm run dev","session_env":{"NODE_ENV":"development"},
+			"port_range":"3000-3010"}],
 		"carry_files":[".dev.vars",".claude/settings.local.json",".env.local",".x"]
 	}`)
 	h := newCreateFormHome(t)
@@ -480,6 +487,14 @@ func TestRepoTrustDialogHoldsTheFloorWithEverything(t *testing.T) {
 	view := xansi.Strip(h.View().Content)
 	lines := strings.Split(view, "\n")
 	assert.LessOrEqual(t, len(lines), 24)
+
+	// The fixture really did reach the maximal surfaces line. Without this the four
+	// extra fields could be silently dropped by a parse rule and the test would go
+	// back to measuring the narrow dialog while claiming otherwise.
+	for _, surface := range []string{"setup script", "run command", "session env", "port range"} {
+		assert.Containsf(t, view, surface,
+			"the surfaces line must name %q, or this is not the WithEverything case", surface)
+	}
 
 	// Both answers, and the box's own bottom edge: a clipped box means the content
 	// below the clip is gone, and the decline is the answer that must never vanish.
