@@ -225,15 +225,21 @@ func diffPool(pool string, members []parityMember) []ParityWarning {
 
 // diffDenials reports servers the pool configures that only some members allow.
 //
-// It is a separate pass rather than another config.Dimensions() entry because both
-// of its restrictions differ from a name diff, and both are load-bearing. It ranges
-// over the servers members actually CONFIGURE: built from the denial lists instead, a
-// member that denies nothing counted as having every server anyone denied, so two
-// members neither of which configured a server were reported as disagreeing about one,
-// and the only way to silence the line was to copy the denial into every member. And
-// per server it considers only the members that configure it: a member that simply
-// does not configure a server is not denying it, and that gap is the MCP-server
-// dimension's to report — saying it twice in two vocabularies is worse than once.
+// It is a separate pass rather than another config.Dimensions() entry because a
+// generic name diff over a denial list answers the wrong question, which is what the
+// earlier shape got wrong: its union came from the denial lists and a member that
+// denied nothing counted as HAVING every server anyone denied, so two members neither
+// of which configured a server were reported as disagreeing about one, and the only
+// way to silence the line was to copy the denial into every member.
+//
+// What fixes that is the per-server filter: only the members that CONFIGURE a server
+// are bucketed, because a member that does not configure one is not denying it — that
+// gap belongs to the MCP-server dimension, and charging it here too would say one
+// thing in two vocabularies. The walk below ranges over the configured servers
+// because that is how the question is posed, but with the filter in place the two
+// choices cannot disagree: a name nobody configures buckets no member either way.
+// Swapping the walk back to the denial lists is behaviour-preserving, and no test
+// claims otherwise.
 func diffDenials(pool string, members []parityMember) []ParityWarning {
 	var measured []parityMember
 	var unreadable []string

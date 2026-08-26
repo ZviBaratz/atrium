@@ -356,7 +356,8 @@ var (
 			"Account pool parity asks the third question those two cannot: whether members that are\n" +
 			"genuinely different logins are actually substitutes. It diffs the plugins, marketplaces\n" +
 			"and MCP servers each member's config dir is configured with — including two members that\n" +
-			"configure the same name to point somewhere different — because rotation never consults\n" +
+			"configure the same name to point somewhere different, and one that denies a server the\n" +
+			"other allows — because rotation never consults\n" +
 			"capability, so a session placed on a member lacking an integration just quietly goes\n" +
 			"without one. It reads files only, so it measures configuration and not what claude.ai has\n" +
 			"granted, and a member it could not measure is reported rather than counted as having\n" +
@@ -498,8 +499,9 @@ var (
 			// only one that can see two genuinely distinct logins that are not
 			// substitutes for each other. Identity catches one login wearing two
 			// names; pools catches two names on one dir; parity diffs what each
-			// member's dir is CONFIGURED with — plugins, marketplaces, MCP servers —
-			// since rotation spends the pool's interchangeability promise on every
+			// member's dir is CONFIGURED with — plugins, marketplaces, MCP servers
+			// and the denials that block them — since rotation spends the pool's
+			// interchangeability promise on every
 			// unpinned session without ever checking it. Configuration is all it
 			// measures: grant state is in no file, so a pool whose members differ
 			// only in what claude.ai granted them reads as being in parity here.

@@ -423,9 +423,11 @@ func nameListState(raw json.RawMessage) DimensionState {
 
 // mcpServerState reads .claude.json's MCP servers.
 //
-// They are recorded per project, under projects.<path>.mcpServers, which is what
-// `claude mcp add` writes by default; a top-level mcpServers key is read too but is
-// absent from real onboarded dirs. The result is the union across scopes, so a
+// They are recorded per project, under projects.<path>.mcpServers — measured on a
+// live onboarded dir, where the top-level mcpServers key was absent and every
+// projects entry carried one. The top-level key is read too, since claude's scopes
+// (local, user, project) are not all per-project and only the local one was
+// observed. The result is the union across scopes, so a
 // difference means one dir configures the server SOMEWHERE and the other configures
 // it nowhere. Two dirs that both have it, under different project paths, compare
 // equal — the union deliberately does not claim per-project availability, because

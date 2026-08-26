@@ -1503,8 +1503,9 @@ instead of pinning every session in a repo to one account:
   will keep placing sessions on it, because routing does not consult capability.
   `atrium doctor`'s **Account pool parity** section reads each member's
   `settings.json`, `settings.local.json` and `.claude.json` and names what one has
-  that another lacks — and, when both have the same name, whether it points at the
-  same marketplace repo, MCP URL or command in both. Two limits worth knowing. It
+  that another lacks — whether a name they share points at the same marketplace repo,
+  MCP URL or command in both, and whether one of them blocks with `deniedMcpServers`
+  a server the other allows. Two limits worth knowing. It
   reads files only — no network call and no token — so it measures what the dirs are
   *configured* with, never what claude.ai has **granted** them; a pool differing only
   in its grants reads as being in parity. And anything it could not measure gets a
