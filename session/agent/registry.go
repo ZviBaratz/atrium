@@ -1901,6 +1901,17 @@ var copilot = &Adapter{
 	// collides with both dialogs' selector, which is the hazard that field's doc describes
 	// for claude and agy — GateUp and DetectPrompt are what exclude those screens.
 
+	Prompts: []PromptMatcher{
+		// The out-of-worktree path approval. NoAutoTap for a strictly worse reason than the
+		// one it carries on codex, where Enter approves a single command: this dialog's
+		// pre-selected option is the SECOND one, "Yes, and add these directories to the
+		// allowed list", so Enter widens the session's allowed-path list rather than
+		// approving one action. An autoyes tap would silently extend a copilot agent's
+		// filesystem reach past its worktree for the rest of the session — a sandbox
+		// widening performed by a convenience feature.
+		{Name: "approval", NoAutoTap: true, Match: copilotApprovalVisible},
+	},
+
 	Gates: []Gate{
 		// The folder-trust screen. A conjunction through Match, not Contains: the headline
 		// alone is a plausible sentence for a session to print while discussing this file,
@@ -1945,6 +1956,40 @@ func copilotTrustGateVisible(content string) bool {
 		return false
 	}
 	return strings.Contains(flat, copilotTrustHeadline) && strings.Contains(flat, copilotTrustOption)
+}
+
+// copilotApprovalHeadline and copilotApprovalOption are the approval dialog's two literals.
+// The option label deliberately starts at "Yes," and not at the selector: the space between
+// "❯" and "2." is not stable and not monotonic in width, so including it would pass a wide
+// check and fail at a narrower one while passing again narrower still.
+// TestCopilotApprovalOptionExcludesTheSelector carries the eight readings.
+//
+// Neither the decline row "3. No (Esc)" nor the "↑/↓ to navigate · enter to select · esc to
+// cancel" footer appears here, though both survive every width: the folder-trust dialog
+// renders them identically, so neither can discriminate.
+const (
+	copilotApprovalHeadline = "Do you want to allow this?"
+	copilotApprovalOption   = "Yes, and add these directories to the allowed list"
+)
+
+// copilotApprovalVisible reports copilot's out-of-worktree path approval: both literals inside
+// the bottom-most anchored box, read through flattenBottomBox. Same two clauses as
+// copilotTrustGateVisible — the box says the dialog is live, the pair says which dialog — and
+// the pair matters more here than there, because this adapter's two dialogs share their
+// decline row and their entire navigation footer.
+//
+// It carries NoAutoTap on the matcher rather than relying on this predicate's precision, and
+// that is not belt-and-braces: bottomBoxBlock's disclosed exposure is quoted box art that ends
+// the pane, and a session reading this very file could produce it. What NoAutoTap costs is a
+// needs-input on a working session; what it buys is that nothing Atrium does can widen the
+// agent's allowed-path list.
+func copilotApprovalVisible(content string) bool {
+	flat, ok := flattenBottomBox(content)
+	if !ok {
+		return false
+	}
+	return strings.Contains(flat, copilotApprovalHeadline) &&
+		strings.Contains(flat, copilotApprovalOption)
 }
 
 // Generic is the adapter for programs no table entry recognizes: no markers

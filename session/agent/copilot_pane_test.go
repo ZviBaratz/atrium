@@ -483,3 +483,424 @@ func TestCopilotDialogsAreAlsoComposersToTheBoxPredicate(t *testing.T) {
 		})
 	}
 }
+
+const copilotApprovalW20Pane = `  Current  →
+
+   /etc/hostname   ┃
+   now.            ┃
+                   ┃
+ $ Shell Show… 41s ┃
+   cat /etc/hostn… ┃
+                   ┃
+╭──────────────────╮
+│ Allow directory  │
+│ access           │
+│ ──────────────── │
+│ This action may  │
+│ read or write    │
+│ the following    │
+│ path outside     │
+│ your allowed     │
+│ directory list.  │
+│                  │
+│ ╭──────────────╮ │
+│ │ /etc/        │ │
+│ │ hostname     │ │
+│ ╰──────────────╯ │
+│                  │
+│ Do you want to   │
+│ allow this?      │
+│                  │
+│   1. Yes         │
+│ ❯2. Yes, and add │
+│   these          │
+│  directories to  │
+│  the allowed     │
+│  list            │
+│   3. No (Esc)    │
+│                  │
+│ ↑/↓ to navigate  │
+│ · enter to       │
+│ select · esc to  │
+│ cancel           │
+╰──────────────────╯`
+
+const copilotApprovalW24Pane = `  Current   Sessions  →
+
+   exact shell         ┃
+   command: cat        ┃
+   /etc/hostname       ┃
+                       ┃
+ ● Executing  cat      ┃
+   /etc/hostname  now. ┃
+                       ┃
+ $ Shell Show sys… 40s ┃
+   cat /etc/hostname   ┃
+                       ┃
+╭──────────────────────╮
+│ Allow directory      │
+│ access               │
+│ ──────────────────── │
+│ This action may read │
+│  or write the        │
+│ following path       │
+│ outside your allowed │
+│  directory list.     │
+│                      │
+│ ╭──────────────────╮ │
+│ │ /etc/hostname    │ │
+│ ╰──────────────────╯ │
+│                      │
+│ Do you want to allow │
+│  this?               │
+│                      │
+│   1. Yes             │
+│ ❯2. Yes, and add     │
+│  these directories   │
+│  to the allowed list │
+│                      │
+│   3. No (Esc)        │
+│                      │
+│ ↑/↓ to navigate ·    │
+│ enter to select ·    │
+│ esc to cancel        │
+╰──────────────────────╯`
+
+const copilotApprovalW26Pane = `  Current   Sessions  →
+
+                         ┃
+ ❯ Run this exact  15:39 ┃
+   shell command:        ┃
+   cat                   ┃
+   /etc/hostname         ┃
+                         ┃
+ ● Executing  cat        ┃
+   /etc/hostname  now.   ┃
+                         ┃
+ $ Shell Show syste… 38s ┃
+   cat /etc/hostname     ┃
+                         ┃
+╭────────────────────────╮
+│ Allow directory access │
+│ ────────────────────── │
+│ This action may read   │
+│ or write the following │
+│  path outside your     │
+│ allowed directory      │
+│ list.                  │
+│                        │
+│ ╭────────────────────╮ │
+│ │ /etc/hostname      │ │
+│ ╰────────────────────╯ │
+│                        │
+│ Do you want to allow   │
+│ this?                  │
+│                        │
+│   1. Yes               │
+│ ❯2. Yes, and add these │
+│   directories to the   │
+│  allowed list          │
+│   3. No (Esc)          │
+│                        │
+│ ↑/↓ to navigate ·      │
+│ enter to select · esc  │
+│ to cancel              │
+╰────────────────────────╯`
+
+const copilotApprovalW28Pane = `  Current   Sessions  →
+
+   20 Aug 26 15:32         ┃
+   README.md               ┃
+                           ┃
+ ❯ Run this exact    15:39 ┃
+   shell command:          ┃
+   cat /etc/hostname       ┃
+                           ┃
+ ● Executing  cat          ┃
+   /etc/hostname  now.     ┃
+                           ┃
+ $ Shell Show system … 37s ┃
+   cat /etc/hostname       ┃
+                           ┃
+╭──────────────────────────╮
+│ Allow directory access   │
+│ ──────────────────────── │
+│ This action may read or  │
+│ write the following path │
+│  outside your allowed    │
+│ directory list.          │
+│                          │
+│ ╭──────────────────────╮ │
+│ │ /etc/hostname        │ │
+│ ╰──────────────────────╯ │
+│                          │
+│ Do you want to allow     │
+│ this?                    │
+│                          │
+│   1. Yes                 │
+│ ❯ 2. Yes, and add these  │
+│   directories to the     │
+│   allowed list           │
+│   3. No (Esc)            │
+│                          │
+│ ↑/↓ to navigate · enter  │
+│ to select · esc to       │
+│ cancel                   │
+╰──────────────────────────╯`
+
+const copilotApprovalW34Pane = `  Current   Sessions   Issues  →
+
+   26 15:32 ..                   ┃
+   drwxrwxr-x 7 zvi zvi 240 Aug  ┃
+   26 15:32 .git                 ┃
+   -rw-rw-r-- 1 zvi zvi  20 Aug  ┃
+   26 15:32 README.md            ┃
+                                 ┃
+ ❯ Run this exact shell    15:39 ┃
+   command: cat                  ┃
+   /etc/hostname                 ┃
+                                 ┃
+ ● Executing  cat /etc/hostname  ┃
+    now.                         ┃
+                                 ┃
+ $ Shell Show system hostna… 35s ┃
+   cat /etc/hostname             ┃
+                                 ┃
+╭────────────────────────────────╮
+│ Allow directory access         │
+│ ────────────────────────────── │
+│ This action may read or write  │
+│ the following path outside     │
+│ your allowed directory list.   │
+│                                │
+│ ╭────────────────────────────╮ │
+│ │ /etc/hostname              │ │
+│ ╰────────────────────────────╯ │
+│                                │
+│ Do you want to allow this?     │
+│                                │
+│   1. Yes                       │
+│ ❯ 2. Yes, and add these        │
+│   directories to the allowed   │
+│   list                         │
+│   3. No (Esc)                  │
+│                                │
+│ ↑/↓ to navigate · enter to     │
+│ select · esc to cancel         │
+╰────────────────────────────────╯`
+
+const copilotApprovalW40Pane = `  Current   Sessions   Issues  →
+
+   drwxrwxr-x 3 zvi zvi  80 Aug 26     ┃
+   15:32 .                             ┃
+   drwxrwxr-x 5 zvi zvi 180 Aug 26     ┃
+   15:32 ..                            ┃
+   drwxrwxr-x 7 zvi zvi 240 Aug 26     ┃
+   15:32 .git                          ┃
+   -rw-rw-r-- 1 zvi zvi  20 Aug 26     ┃
+   15:32 README.md                     ┃
+                                       ┃
+ ❯ Run this exact shell command: 15:39 ┃
+   cat /etc/hostname                   ┃
+                                       ┃
+ ● Executing  cat /etc/hostname  now.  ┃
+                                       ┃
+ $ Shell Show system hostname      34s ┃
+   cat /etc/hostname                   ┃
+                                       ┃
+╭──────────────────────────────────────╮
+│ Allow directory access               │
+│ ──────────────────────────────────── │
+│ This action may read or write the    │
+│ following path outside your allowed  │
+│ directory list.                      │
+│                                      │
+│ ╭──────────────────────────────────╮ │
+│ │ /etc/hostname                    │ │
+│ ╰──────────────────────────────────╯ │
+│                                      │
+│ Do you want to allow this?           │
+│                                      │
+│   1. Yes                             │
+│ ❯2. Yes, and add these directories   │
+│  to the allowed list                 │
+│   3. No (Esc)                        │
+│                                      │
+│ ↑/↓ to navigate · enter to select ·  │
+│ esc to cancel                        │
+╰──────────────────────────────────────╯`
+
+const copilotApprovalW60Pane = `  Current   Sessions   Issues   Pull requests   Gists
+
+ │ Preparing to run shell command                          ┃
+                                                           ┃
+ ● Running  ls -la  in the current directory now.          ┃
+                                                           ┃
+ $ Shell List all files with details 6 lines…              ┃
+   ls -la                                                  ┃
+                                                           ┃
+ ● total 4                                                 ┃
+   drwxrwxr-x 3 zvi zvi  80 Aug 26 15:32 .                 ┃
+   drwxrwxr-x 5 zvi zvi 180 Aug 26 15:32 ..                ┃
+   drwxrwxr-x 7 zvi zvi 240 Aug 26 15:32 .git              ┃
+   -rw-rw-r-- 1 zvi zvi  20 Aug 26 15:32 README.md         ┃
+                                                           ┃
+ ❯ Run this exact shell command: cat /etc/hostname   15:39 ┃
+                                                           ┃
+ ● Executing  cat /etc/hostname  now.                      ┃
+                                                           ┃
+ $ Shell Show system hostname                          32s ┃
+   cat /etc/hostname                                       ┃
+                                                           ┃
+╭──────────────────────────────────────────────────────────╮
+│ Allow directory access                                   │
+│ ──────────────────────────────────────────────────────── │
+│ This action may read or write the following path outside │
+│  your allowed directory list.                            │
+│                                                          │
+│ ╭──────────────────────────────────────────────────────╮ │
+│ │ /etc/hostname                                        │ │
+│ ╰──────────────────────────────────────────────────────╯ │
+│                                                          │
+│ Do you want to allow this?                               │
+│                                                          │
+│   1. Yes                                                 │
+│ ❯ 2. Yes, and add these directories to the allowed list  │
+│   3. No (Esc)                                            │
+│                                                          │
+│ ↑/↓ to navigate · enter to select · esc to cancel        │
+╰──────────────────────────────────────────────────────────╯`
+
+const copilotApprovalW120Pane = `  Current   Sessions   Issues   Pull requests   Gists
+
+ ⌄ Thought for 1s                                                                                                      ┃
+ │ Preparing to run shell command                                                                                      ┃
+                                                                                                                       ┃
+ ● Running  ls -la  in the current directory now.                                                                      ┃
+                                                                                                                       ┃
+ $ Shell List all files with details 6 lines…                                                                          ┃
+   ls -la                                                                                                              ┃
+                                                                                                                       ┃
+ ● total 4                                                                                                             ┃
+   drwxrwxr-x 3 zvi zvi  80 Aug 26 15:32 .                                                                             ┃
+   drwxrwxr-x 5 zvi zvi 180 Aug 26 15:32 ..                                                                            ┃
+   drwxrwxr-x 7 zvi zvi 240 Aug 26 15:32 .git                                                                          ┃
+   -rw-rw-r-- 1 zvi zvi  20 Aug 26 15:32 README.md                                                                     ┃
+                                                                                                                       ┃
+ ❯ Run this exact shell command: cat /etc/hostname                                                               15:39 ┃
+                                                                                                                       ┃
+ ● Executing  cat /etc/hostname  now.                                                                                  ┃
+                                                                                                                       ┃
+ $ Shell Show system hostname                                                                                      30s ┃
+   cat /etc/hostname                                                                                                   ┃
+                                                                                                                       ┃
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Allow directory access                                                                                               │
+│ ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │
+│ This action may read or write the following path outside your allowed directory list.                                │
+│                                                                                                                      │
+│ ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮ │
+│ │ /etc/hostname                                                                                                    │ │
+│ ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯ │
+│                                                                                                                      │
+│ Do you want to allow this?                                                                                           │
+│                                                                                                                      │
+│   1. Yes                                                                                                             │
+│ ❯ 2. Yes, and add these directories to the allowed list                                                              │
+│   3. No (Esc)                                                                                                        │
+│                                                                                                                      │
+│ ↑/↓ to navigate · enter to select · esc to cancel                                                                    │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯`
+
+// copilotApprovalLadder is the out-of-worktree path approval at every driven width. Unlike
+// the trust gate's box, this one FITS the 40-row pane at every rung — its top border is on
+// screen at all eight — so its title survives too. That is box height rather than a property
+// of titles, and the matcher keys on the headline and the option label regardless.
+var copilotApprovalLadder = []paneCapture{
+	{name: "copilotApprovalW20Pane", width: 20, note: "option label in four lines", pane: copilotApprovalW20Pane},
+	{name: "copilotApprovalW24Pane", width: 24, note: "", pane: copilotApprovalW24Pane},
+	{name: "copilotApprovalW26Pane", width: 26, note: "", pane: copilotApprovalW26Pane},
+	{name: "copilotApprovalW28Pane", width: 28, note: "the widest rung raw flatten fails at", pane: copilotApprovalW28Pane},
+	{name: "copilotApprovalW34Pane", width: 34, note: "", pane: copilotApprovalW34Pane},
+	{name: "copilotApprovalW40Pane", width: 40, note: "selector renders \"❯2.\" with no space", pane: copilotApprovalW40Pane},
+	{name: "copilotApprovalW60Pane", width: 60, note: "", pane: copilotApprovalW60Pane},
+	{name: "copilotApprovalW120Pane", width: 120, note: "everything on one line", pane: copilotApprovalW120Pane},
+}
+
+// TestCopilotApprovalFiresAtEveryDrivenWidth is the positive half, and it also asserts the
+// matcher's NoAutoTap, because that flag is the load-bearing part of this entry: the dialog's
+// pre-selected option WIDENS the allowed-path list rather than approving one action.
+func TestCopilotApprovalFiresAtEveryDrivenWidth(t *testing.T) {
+	for _, c := range copilotApprovalLadder {
+		t.Run(c.label(), func(t *testing.T) {
+			m, ok := copilot.DetectPrompt(c.pane)
+			require.True(t, ok, "the approval dialog must be detected")
+			require.Equal(t, "approval", m.Name)
+			require.True(t, m.NoAutoTap,
+				"Enter here selects \"Yes, and add these directories to the allowed list\", "+
+					"which extends the agent's filesystem reach past its worktree for the session")
+		})
+	}
+}
+
+// TestCopilotApprovalNeedsTheWallStrippingScan is the approval half of the same measurement
+// the gate carries: raw flattening reaches this headline down to 34 and no further.
+func TestCopilotApprovalNeedsTheWallStrippingScan(t *testing.T) {
+	for _, c := range copilotApprovalLadder {
+		flat := flattenChrome(c.pane, WindowPrompt)
+		if c.width >= 34 {
+			require.Containsf(t, flat, copilotApprovalHeadline,
+				"%s: the headline is on one line here", c.label())
+			continue
+		}
+		require.NotContainsf(t, flat, copilotApprovalHeadline,
+			"%s: the headline wraps inside the borders here, so the flat window must NOT "+
+				"reconstruct it", c.label())
+	}
+}
+
+// TestCopilotApprovalOptionExcludesTheSelector is why copilotApprovalOption starts at "Yes,"
+// rather than at "❯ 2.". The gap between selector and number is not stable and NOT MONOTONIC
+// in width: "❯ 2." at 120, 60, 34 and 28, "❯2." at 40, 26, 24 and 20. A matcher including the
+// prefix would have passed a 120-column check, failed at 40, and passed again at 34 — the
+// shape of drift a single wide capture cannot see.
+func TestCopilotApprovalOptionExcludesTheSelector(t *testing.T) {
+	spaced := map[int]bool{120: true, 60: true, 34: true, 28: true}
+	for _, c := range copilotApprovalLadder {
+		t.Run(c.label(), func(t *testing.T) {
+			flat, ok := flattenBottomBox(c.pane)
+			require.True(t, ok)
+			require.Contains(t, flat, copilotApprovalOption,
+				"the label without the selector reaches every rung")
+
+			want := "❯2. " + copilotApprovalOption
+			if spaced[c.width] {
+				want = "❯ 2. " + copilotApprovalOption
+			}
+			require.Containsf(t, flat, want,
+				"this rung renders the selector %q; the OTHER spelling is what a "+
+					"prefix-bearing literal would have missed", want[:len(want)-len(copilotApprovalOption)])
+		})
+	}
+}
+
+// TestCopilotApprovalAndTrustGateDoNotCrossMatch is the discriminator, and it is needed
+// because the two dialogs share their decline row ("3. No (Esc)") and their whole navigation
+// footer ("↑/↓ to navigate · enter to select · esc to cancel"). Neither shared string can tell
+// them apart, so each matcher's literals must be the ones only its own dialog renders. A
+// crossing failure would surface as a trust gate reported on a live approval, which holds the
+// queued prompt forever, or as an approval reported on a startup gate, which is worse.
+func TestCopilotApprovalAndTrustGateDoNotCrossMatch(t *testing.T) {
+	for _, c := range copilotApprovalLadder {
+		t.Run("approval pane is not a gate: "+c.label(), func(t *testing.T) {
+			_, up := copilot.GateUp(c.pane)
+			require.False(t, up)
+		})
+	}
+	for _, c := range copilotTrustgateLadder {
+		t.Run("gate pane is not an approval: "+c.label(), func(t *testing.T) {
+			_, ok := copilot.DetectPrompt(c.pane)
+			require.False(t, ok)
+		})
+	}
+}

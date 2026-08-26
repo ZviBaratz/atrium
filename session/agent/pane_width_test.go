@@ -254,6 +254,9 @@ var paneCoverage = map[string][]paneCapture{
 	// rung the predicate FIRES on rather than a miss. Contrast gemini, whose 20 rung is a real
 	// cliff and lives outside its ladder.
 	"copilot/gate/trust": copilotTrustgateLadder,
+	// Eight rungs, all positive. This dialog's box fits the 40-row pane at every driven width,
+	// so unlike the gate's ladder nothing here is a height edge.
+	"copilot/prompt/approval": copilotApprovalLadder,
 }
 
 // paneCoverageExempt is the other direction, and it exists because a `continue` on "no
@@ -377,7 +380,8 @@ var wantRungs = map[string][]int{
 	// Eight rungs, one per driven width, and the floor really is 20 rather than "20 is simply
 	// where driving stopped": the narrowest rung was driven and the gate fires there. What
 	// fails at 20 is the TITLE, which no matcher here reads.
-	"copilot/gate/trust": {20, 24, 26, 28, 34, 40, 60, 120},
+	"copilot/gate/trust":      {20, 24, 26, 28, 34, 40, 60, 120},
+	"copilot/prompt/approval": {20, 24, 26, 28, 34, 40, 60, 120},
 }
 
 // keysWithNoRecordedCaptureWidth are covered by real captures whose provenance never wrote
