@@ -85,11 +85,19 @@ func Check(ctx context.Context, adapters []*agent.Adapter, r Runner) []Result {
 		case err != nil:
 			res.Status = StatusUnknown
 		case a.VersionMarker != "" && !strings.Contains(out, a.VersionMarker):
-			// Reported BEFORE the version is parsed, because parsing it is what produced the
-			// wrong answer: AWS Copilot CLI's --version parses cleanly, so `copilot` used to
-			// be classified as this adapter drifting past 1.0.80 — a drift warning naming a
+			// Classified BEFORE the version is compared, because comparing it is what produced
+			// the wrong answer: AWS Copilot CLI's --version parses cleanly, so `copilot` used
+			// to be reported as this adapter drifting past 1.0.80 — a drift warning naming a
 			// CLI that is not installed.
+			//
+			// The version is still PARSED and reported, though it is the other CLI's. Leaving
+			// Installed empty renders as "-" (see Render), which is the cell a not-installed
+			// agent gets — so the row would say "nothing is here" and "something else is here"
+			// at the same time, and withhold the one datum that makes the status actionable:
+			// which CLI you actually have. Unparseable output leaves it empty, which is then
+			// "-" meaning genuinely unknown.
 			res.Status = StatusForeign
+			res.Installed, _ = parseVersion(out)
 		default:
 			res.Status, res.Installed = classify(out, a)
 		}

@@ -1,13 +1,9 @@
 package config
 
 import (
-	"context"
 	"os/exec"
 	"strings"
-	"sync"
-	"time"
 
-	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session/agent"
 )
 
@@ -36,87 +32,6 @@ func KnownAgentBins() []string {
 	return bins
 }
 
-// identityProbeTimeout bounds the `--version` probe below. It matches doctor.ProbeTimeout, and
-// duplicating the value rather than importing it is forced: internal/doctor imports this package.
-//
-// It is deliberately generous, because the probe FAILS CLOSED — a timeout means "not this agent",
-// so a budget shorter than the binary's cold start makes a legitimately installed CLI vanish from
-// detection with no error. Measured cold on 1.0.80: 2.6s. A 5s budget looked like plenty against
-// that and is one slow disk away from dropping the agent it exists to find.
-const identityProbeTimeout = 10 * time.Second
-
-// agentIdentityOK reports whether the installed binary really is the agent whose name it
-// carries, by checking the adapter's VersionMarker against `<program> --version`. An adapter
-// with no marker is not contested and is accepted without exec'ing anything, which is every
-// adapter but copilot.
-//
-// FAIL-CLOSED on a probe that does not answer: a binary that cannot be run, times out, or
-// prints something without the vendor string is not this agent. The cost of that direction is a
-// missing profile the user can add by hand; the cost of the other is a profile whose sessions
-// die on launch, and an `atrium doctor` line about the wrong CLI's version.
-//
-// THE PROBE IS EXPENSIVE AND NOT SIDE-EFFECT-FREE, which is why only
-// DetectAgentProfilesVerified runs it. `copilot --version` measured 2.6s against a cold HOME and
-// 0.7s warm, and it creates ~/.cache/copilot/pkg on the way — a version flag that unpacks a
-// platform package. So this is a diagnostic-grade operation, not a startup one.
-//
-// MEMOIZED per process for the same reason, since a verified detection can legitimately be asked
-// for more than once in a session. The cache is cleared by RefreshAgentIdentities, which the two
-// USER-INITIATED re-probes call: that is the case a process cache would otherwise get wrong —
-// install the CLI while the TUI is running, press detect, and a stale "not that vendor" answer
-// would keep hiding it.
-//
-// A var so tests can say what is installed without depending on the machine.
-var agentIdentityOK = func(a *agent.Adapter, program string) bool {
-	if a.VersionMarker == "" {
-		return true
-	}
-	cmd := ProgramCommand(program)
-	if cmd == "" {
-		return false
-	}
-
-	key := string(a.Key) + "\x00" + cmd
-	identityMu.Lock()
-	defer identityMu.Unlock()
-	if ok, seen := identityCache[key]; seen {
-		return ok
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), identityProbeTimeout)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, cmd, "--version").Output()
-	ok := err == nil && strings.Contains(string(out), a.VersionMarker)
-	identityCache[key] = ok
-
-	// Both failures are logged, and they are different failures. The point is that this function
-	// SKIPS an agent silently: without a line here, "the CLI I installed is not in the picker"
-	// has no evidence anywhere on the machine.
-	switch {
-	case err != nil:
-		log.WarningLog.Printf("identity probe for %q failed (%v); not offering it as %s",
-			cmd, err, a.Key)
-	case !ok:
-		log.WarningLog.Printf("%q does not report %q, so it is another vendor's CLI under that "+
-			"name; not offering it as %s", cmd, a.VersionMarker, a.Key)
-	}
-	return ok
-}
-
-var (
-	identityMu    sync.Mutex
-	identityCache = map[string]bool{}
-)
-
-// RefreshAgentIdentities discards the memoized identity probes so the next detection re-runs
-// them. Call it before a detection the USER asked for — otherwise installing an agent while
-// Atrium is running cannot be picked up by pressing detect.
-func RefreshAgentIdentities() {
-	identityMu.Lock()
-	defer identityMu.Unlock()
-	identityCache = map[string]bool{}
-}
-
 // detectAgentCommand resolves an agent binary name to a runnable program
 // string, or an error when it is not installed. claude keeps the
 // shell-profile-aware probe (its installer commonly defines an alias rather
@@ -139,35 +54,24 @@ var detectAgentCommand = func(bin string) (string, error) {
 // DetectAgentProfiles probes for the known agent CLIs and returns one profile per installed
 // binary, in picker order. Missing binaries are skipped silently.
 //
-// It does NOT check that a binary is the agent whose name it carries — DetectAgentProfilesVerified
-// does, and the split is deliberate. Verifying means running `<bin> --version`, and for at least
-// one agent that is not a cheap read: copilot 1.0.80 takes ~2.6s on a cold cache and unpacks its
-// platform package into ~/.cache/copilot on the way. This function is LoadConfig's fallback and
-// is re-derived by loadStoredConfig (cli_session) on every poll of `atrium new --wait`, so a probe
-// here is seconds of latency and a filesystem write per poll — measured, by four root-package
-// tests that went from 1.9s to 53s when this did verify.
-func DetectAgentProfiles() []Profile {
-	return detectProfiles(false)
-}
-
-// DetectAgentProfilesVerified is DetectAgentProfiles plus the identity check: a binary installed
-// under an agent's name that is not that agent is skipped. See agentIdentityOK for what that
-// costs and why it is not the default.
+// It reports what is INSTALLED UNDER each agent's name, and deliberately does not check that the
+// binary is that agent. One name is contested — `copilot` is also the AWS Copilot CLI — and the
+// check for it is `<bin> --version`, which for copilot 1.0.80 costs ~1.4s warm (2.6s on a cold
+// cache) and unpacks a platform package into ~/.cache/copilot on the way. Every caller of this
+// function needs a config in hand, several of them synchronously before the first frame is
+// painted, so a third-party exec here is the wrong altitude: it was measured turning `atrium
+// debug` on a fresh HOME from instant into 1.4s, and four root-package tests from 1.9s to 53s.
 //
-// Use it where the user ASKED to detect (`atrium profiles detect`, the Settings panel, the
-// first-run seed that writes a config), never on a path that merely needs a config in memory.
-func DetectAgentProfilesVerified() []Profile {
-	return detectProfiles(true)
-}
-
-func detectProfiles(verify bool) []Profile {
+// The contested name is answered where the cost is already being paid and the user is asking a
+// diagnostic question: `atrium doctor` runs `--version` for every agent regardless, so it
+// compares the output against Adapter.VersionMarker and reports doctor.StatusForeign. That is
+// the surface for "the copilot on my PATH is not GitHub's" — detection cannot tell you, and a
+// session created from a foreign binary dies at launch with doctor holding the reason.
+func DetectAgentProfiles() []Profile {
 	var profiles []Profile
 	for _, bin := range KnownAgentBins() {
 		program, err := detectAgentCommand(bin)
 		if err != nil {
-			continue
-		}
-		if verify && !agentIdentityOK(agent.Resolve(bin), program) {
 			continue
 		}
 		profiles = append(profiles, Profile{Name: bin, Program: program})

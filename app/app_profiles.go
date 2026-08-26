@@ -19,13 +19,8 @@ type profilesDetectedMsg struct {
 // `atrium profiles detect` can never probe differently; the merge half is
 // config.MergeDetectedProfiles, which runs when the result lands. Running it inline would block
 // every session's poll for the claude probe's ten-second shell timeout.
-//
-// It discards the memoized agent-identity probes first, because this is the D the user pressed:
-// the TUI is a long-lived process, so without that a CLI installed since startup would keep
-// answering from a cache taken before it existed.
 func (m *home) detectProfilesCmd() tea.Cmd {
 	return func() tea.Msg {
-		config.RefreshAgentIdentities()
 		return profilesDetectedMsg{detected: detectAgents()}
 	}
 }

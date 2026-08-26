@@ -194,21 +194,30 @@ type Adapter struct {
 	VerifiedGates []VerifiedGate
 	// VersionMarker is a substring the binary's `--version` output must contain for that
 	// binary to be this agent's CLI. Empty (every adapter but copilot) means the name is not
-	// contested and the probe is skipped.
+	// contested.
 	//
 	// It exists because a binary NAME is not an identity. "copilot" is also the AWS Copilot
-	// CLI's binary name, and detection is an exec.LookPath — so on a machine with that one
-	// installed, Atrium seeds a profile whose program prints deployment help and exits, and
-	// Resolve hands it this adapter's folder-trust gate and busy marker. The discriminator was
-	// already driven and written into the spec ("GitHub Copilot CLI 1.0.80"); this is what
-	// reads it. config.DetectAgentProfiles skips a binary that fails the check, and
-	// doctor.Check reports it as a foreign CLI rather than as this agent having drifted.
+	// CLI's binary name, so on a machine with that one installed Atrium offers a profile whose
+	// program prints deployment help and exits, and Resolve hands it this adapter's
+	// folder-trust gate and busy marker. The discriminator was driven and written into the spec
+	// ("GitHub Copilot CLI 1.0.80"); this is what reads it.
+	//
+	// ONE CONSUMER, and that is the design rather than an oversight: doctor.Check, which
+	// reports a mismatch as StatusForeign instead of as this agent having drifted past its pin.
+	// Detection does NOT read it. Checking a marker means running `<bin> --version`, which for
+	// copilot 1.0.80 costs ~1.4s warm and unpacks a platform package into ~/.cache/copilot,
+	// and config detection is reached synchronously from every path that needs a config in
+	// hand; wiring it there was measured and reverted (see config.DetectAgentProfiles).
+	// doctor already runs `--version` for every agent, so it answers the question for free.
+	//
+	// The cost of that is a real hole, stated rather than papered over: `atrium new --profile
+	// copilot` on such a machine still creates a session, and it dies at launch. What the user
+	// gets is `atrium doctor` naming the reason, not prevention.
 	//
 	// A MARKER, not a version parse: the question is whose CLI this is, which is answered by
-	// the vendor string and not by the digits. It is deliberately not consulted by
-	// agent.Resolve, which is a pure function over a program string and cannot exec anything —
-	// so a hand-written profile pointing at the wrong copilot still resolves here, and what
-	// tells the user is doctor.
+	// the vendor string and not by the digits. agent.Resolve deliberately does not consult it
+	// either — it is a pure function over a program string and cannot exec anything — so a
+	// hand-written profile pointing at the wrong copilot still resolves here.
 	VersionMarker string
 
 	// aliases are lowercased substrings matched against the basename of the

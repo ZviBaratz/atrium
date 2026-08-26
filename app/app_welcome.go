@@ -13,12 +13,7 @@ import (
 
 // detectAgents is the agent-detection seam. A package var (matching the app's
 // checkForUpdate/cleanupTerminalForInstance idiom) so tests inject a fake PATH.
-//
-// The VERIFIED detector, because every caller of this seam is a detection the user is waiting
-// on — the first-run welcome, the startup agent check, and the Settings panel's detect key — and
-// all three run it off the update loop as a tea.Cmd. That is what makes the identity probe
-// affordable here and not on a config-load path; see config.DetectAgentProfilesVerified.
-var detectAgents = config.DetectAgentProfilesVerified
+var detectAgents = config.DetectAgentProfiles
 
 // agentsDetectedMsg carries the result of async agent detection back to Update.
 type agentsDetectedMsg struct {
