@@ -249,14 +249,24 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// PanePrompt would tap whatever dialog is up now. The post-detach sweep
 		// re-polls everything, so nothing is lost — but the tick must still re-arm.
 		var cmds []tea.Cmd
-		// Deliver anything `atrium send` spooled since the last tick, and create
-		// anything `atrium new` asked for. Outside the attachGen guard on purpose:
-		// neither is a pane observation, so an attach having happened gives no
-		// reason to drop them.
+		// Deliver anything `atrium send` spooled since the last tick, create anything
+		// `atrium new` asked for, and retire anything `atrium kill` or `atrium pause`
+		// asked for. Outside the attachGen guard on purpose: none is a pane
+		// observation, so an attach having happened gives no reason to drop them.
+		//
+		// The retire drain runs last of the three, and the order is load-bearing in one
+		// direction only. It dispatches a teardown behind beginAsyncAction, which sets
+		// actionInFlight — and createDrainHeld reads that, so a retirement dispatched
+		// first would hold the create drain for the length of its I/O. Running it last
+		// lets both spools make progress on the same tick, and costs the retirement
+		// nothing: it is retried every tick and its record is durable.
 		if cmd := m.drainOutbox(); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 		if cmd := m.drainCreateRequests(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		if cmd := m.drainRetireRequests(); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 		if msg.attachGen == m.attachGen {

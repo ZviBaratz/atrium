@@ -8,6 +8,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/ZviBaratz/atrium/internal/undo"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
 
@@ -15,7 +16,8 @@ import (
 )
 
 var (
-	lsJSONFlag bool
+	lsJSONFlag   bool
+	lsKilledFlag bool
 
 	lsCmd = &cobra.Command{
 		Use:   "ls",
@@ -28,12 +30,17 @@ var (
 			"while no TUI is running.\n\n" +
 			"For how long a session has held its status, subtract status_changed_at — not\n" +
 			"updated_at, which is one shared instant dating the snapshot, nor created_at,\n" +
-			"which is the age of the worktree.",
+			"which is the age of the worktree.\n\n" +
+			"--killed lists killed sessions still on the undo journal instead of live ones,\n" +
+			"newest first: what each was, and whether restoring it brings everything back.\n" +
+			"It is a strictly wider view than the TUI's undo key, which offers only the most\n" +
+			"recent kill. Restoring is still a TUI action; this only says what there is to\n" +
+			"restore, and it never deletes a journal entry, however old.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			log.Initialize(logDir(), false)
 			defer log.Close()
-			return runLs(cmd.OutOrStdout(), lsJSONFlag)
+			return runLs(cmd.OutOrStdout(), lsJSONFlag, lsKilledFlag)
 		},
 	}
 )
@@ -105,7 +112,10 @@ type diffJSON struct {
 
 // runLs writes the session list to w, as JSON when jsonOut is set and as a
 // human-readable table otherwise.
-func runLs(w io.Writer, jsonOut bool) error {
+func runLs(w io.Writer, jsonOut, killed bool) error {
+	if killed {
+		return runLsKilled(w, jsonOut)
+	}
 	instances, err := loadStoredInstances()
 	if err != nil {
 		return err
@@ -250,4 +260,118 @@ func shortAgo(at, now time.Time) string {
 	default:
 		return fmt.Sprintf("%dd", int(d.Hours()/24))
 	}
+}
+
+// killedJSON is the published shape of `atrium ls --killed --json`: one killed
+// session still restorable from the undo journal.
+//
+// A separate type from undo.Entry for sessionJSON's reason. The stored entry carries
+// the retention refname, the full instance snapshot the restore rebuilds from, and
+// the Superseded bookkeeping flag — none of which is anyone's business outside the
+// package that writes it, and all of which would become part of this contract by
+// being marshalled.
+//
+// UncommittedWorkLost is derived rather than published raw as Dirty and Committed,
+// because the fact a reader wants is the conjunction and the conjunction is the part
+// that is easy to get backwards: work was at risk AND the teardown failed to save
+// it. Dirty alone is the common, harmless case — a session with uncommitted changes
+// whose kill folded them into the retained commits restores intact.
+type killedJSON struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	DisplayName string `json:"display_name"`
+	Path        string `json:"path"`
+	Branch      string `json:"branch,omitempty"`
+	// Direct marks a killed direct (non-git) session, which had no branch or worktree.
+	Direct   bool      `json:"direct"`
+	KilledAt time.Time `json:"killed_at"`
+	// UncommittedWorkLost reports that this session's uncommitted changes are gone for
+	// good: they were there when it was killed and the teardown could not commit them,
+	// so `git worktree remove -f` destroyed work the retained commits do not hold. A
+	// restore of this entry comes back incomplete.
+	UncommittedWorkLost bool `json:"uncommitted_work_lost"`
+}
+
+// runLsKilled reports the killed sessions the undo journal can still restore.
+//
+// Read-only, and that is a requirement rather than an accident. It filters on
+// undo.Entry.Restorable and never calls undo.Sweep: a sweep runs `git update-ref -d`
+// inside the user's repositories, which internal/undo's package doc rules out for a
+// headless process, and an entry past the horizon must be omitted by being filtered
+// rather than by being destroyed — this command runs beside a live TUI as a matter of
+// routine, and the TUI is what owns that decision.
+//
+// It exists because the TUI's undo key offers only the newest restorable batch
+// (undo.LatestBatch). That was sized for a human who kills a session and immediately
+// regrets it; once agents can retire sessions, a human coming back to several
+// retirements could undo one and had no surface that so much as named the others.
+func runLsKilled(w io.Writer, jsonOut bool) error {
+	entries, err := undo.Load()
+	if err != nil {
+		return fmt.Errorf("failed to read the undo journal: %w", err)
+	}
+	now := time.Now()
+	// Newest first, which is the reverse of the journal's own order: the kill somebody
+	// is asking about is almost always the one that just happened.
+	rows := make([]killedJSON, 0, len(entries))
+	for i := len(entries) - 1; i >= 0; i-- {
+		if e := entries[i]; e.Restorable(now) {
+			rows = append(rows, toKilledJSON(e))
+		}
+	}
+	if jsonOut {
+		return writeKilledJSON(w, rows)
+	}
+	return writeKilledTable(w, rows)
+}
+
+func toKilledJSON(e undo.Entry) killedJSON {
+	display := e.Display
+	if display == "" {
+		display = e.Title // mirrors Instance.DisplayName's fallback, as toSessionJSON does
+	}
+	return killedJSON{
+		ID:                  e.ID,
+		Title:               e.Title,
+		DisplayName:         display,
+		Path:                e.Path,
+		Branch:              e.Branch,
+		Direct:              e.Direct,
+		KilledAt:            e.At,
+		UncommittedWorkLost: e.Dirty && !e.Committed,
+	}
+}
+
+func writeKilledJSON(w io.Writer, rows []killedJSON) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(rows); err != nil {
+		return fmt.Errorf("failed to encode killed sessions: %w", err)
+	}
+	return nil
+}
+
+func writeKilledTable(w io.Writer, rows []killedJSON) error {
+	if len(rows) == 0 {
+		// Said outright rather than left as a bare header, which reads like a failure.
+		_, err := fmt.Fprintf(w, "no killed sessions are still restorable\n")
+		return err
+	}
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	_, _ = fmt.Fprintln(tw, "SESSION\tBRANCH\tKILLED\tRESTORE")
+	for _, r := range rows {
+		restore := "complete"
+		if r.UncommittedWorkLost {
+			// Names the loss rather than grading it: this entry restores, but its
+			// uncommitted changes are not coming back with it.
+			restore = "without uncommitted changes"
+		}
+		branch := r.Branch
+		if branch == "" {
+			branch = "—" // a direct session had none
+		}
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", r.DisplayName, branch,
+			r.KilledAt.Local().Format("2006-01-02 15:04"), restore)
+	}
+	return tw.Flush()
 }

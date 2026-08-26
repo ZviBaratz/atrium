@@ -14,7 +14,7 @@ import (
 func lsJSON(t *testing.T) []map[string]any {
 	t.Helper()
 	var buf bytes.Buffer
-	require.NoError(t, runLs(&buf, true))
+	require.NoError(t, runLs(&buf, true, false))
 
 	var got []map[string]any
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &got), "output was: %s", buf.String())
@@ -28,7 +28,7 @@ func TestLsJSONEmptyIsArrayNotNull(t *testing.T) {
 	sandboxDataDir(t)
 
 	var buf bytes.Buffer
-	require.NoError(t, runLs(&buf, true))
+	require.NoError(t, runLs(&buf, true, false))
 	assert.Equal(t, "[]", string(bytes.TrimSpace(buf.Bytes())))
 }
 
@@ -212,7 +212,7 @@ func TestLsHumanTable(t *testing.T) {
 	seedInstances(t, d)
 
 	var buf bytes.Buffer
-	require.NoError(t, runLs(&buf, false))
+	require.NoError(t, runLs(&buf, false, false))
 	out := buf.String()
 
 	assert.Contains(t, out, "TITLE")
@@ -228,7 +228,7 @@ func TestLsHumanEmpty(t *testing.T) {
 	sandboxDataDir(t)
 
 	var buf bytes.Buffer
-	require.NoError(t, runLs(&buf, false))
+	require.NoError(t, runLs(&buf, false, false))
 	assert.Contains(t, buf.String(), "No sessions")
 }
 

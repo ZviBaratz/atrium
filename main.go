@@ -736,6 +736,8 @@ func init() {
 	hookEventCmd.Flags().StringVar(&hookBrief.WorktreesRoot, "worktrees-root", "", "worktrees root (internal)")
 
 	lsCmd.Flags().BoolVar(&lsJSONFlag, "json", false, "Emit machine-readable JSON instead of a table")
+	lsCmd.Flags().BoolVar(&lsKilledFlag, "killed", false,
+		"List killed sessions still restorable from the undo journal, instead of live ones")
 
 	peekCmd.Flags().IntVar(&peekLinesFlag, "lines", 0,
 		"Number of lines to print, reaching into scrollback (default: the visible pane)")
@@ -745,6 +747,14 @@ func init() {
 	sendCmd.Flags().DurationVar(&sendWaitFlag, "wait", 0,
 		"Block until a running Atrium has queued the prompt, e.g. --wait 10s")
 	sendCmd.Flags().StringVar(&sendPathFlag, "path", "", "Repo path, to disambiguate a title used in more than one repo")
+
+	killCmd.Flags().DurationVar(&killWaitFlag, "wait", 0,
+		"Block until a running Atrium has retired the session, e.g. --wait 30s")
+	killCmd.Flags().StringVar(&killPathFlag, "path", "", "Repo path, to disambiguate a title used in more than one repo")
+
+	pauseCmd.Flags().DurationVar(&pauseWaitFlag, "wait", 0,
+		"Block until a running Atrium has parked the session, e.g. --wait 30s")
+	pauseCmd.Flags().StringVar(&pausePathFlag, "path", "", "Repo path, to disambiguate a title used in more than one repo")
 
 	newCmd.Flags().StringVar(&newPathFlag, "path", "", "Repo to create the session in (default: the current directory)")
 	newCmd.Flags().StringVar(&newProgramFlag, "program", "", "Program to run in the session (default: Atrium's configured program)")
@@ -770,6 +780,8 @@ func init() {
 	rootCmd.AddCommand(peekCmd)
 	rootCmd.AddCommand(sendCmd)
 	rootCmd.AddCommand(newCmd)
+	rootCmd.AddCommand(killCmd)
+	rootCmd.AddCommand(pauseCmd)
 	rootCmd.AddCommand(guideCmd)
 	rootCmd.AddCommand(debugCmd)
 	rootCmd.AddCommand(versionCmd)

@@ -936,7 +936,34 @@ func pauseConfirmMessage(kind string, n int) string {
 // for the reason killInstances' and resumeInstances' are: pauseAll and pauseMarked
 // are reached by different keys.
 func (m *home) pauseInstances(insts []*session.Instance, message, altConfirmKey string) tea.Cmd {
-	action := func() tea.Msg {
+	action := pauseIOCmd(insts)
+	label := fmt.Sprintf("pausing %d session%s…", len(insts), plural(len(insts)))
+	cmd := m.confirmAction(message, busyLabel(label), action)
+	// The hint names the action rather than saying "confirm" (#399). Set here, in the
+	// shared core, so both entry points get the same label from the same count
+	// (confirmAction created m.confirmationOverlay synchronously above).
+	m.confirmationOverlay.SetConfirmLabel(fmt.Sprintf("pause %d session%s", len(insts), plural(len(insts))))
+	m.armDoubleTap(altConfirmKey)
+	return cmd
+}
+
+// pauseIOCmd is the goroutine half of a pause: Instance.Pause for each of insts,
+// collected into the message the Update loop applies. It touches no model state, so
+// it is safe off the update thread — which it must be, because pause() is a
+// kill-session, two git queries, possibly a WIP commit and a recursive worktree
+// removal per instance.
+//
+// Named and shared for killIOCmd's reason. It has two callers with nothing else in
+// common — the pause confirmation and the retire drain (#835) — and a park reachable
+// by one path but not the other would be the worse kind of surprise. What it
+// deliberately does NOT own is the busy gate: every caller must wrap it in
+// beginAsyncAction, because pause() writes SetStatus(Paused) only after the pane is
+// already dead, and nothing marks a pausing instance retiring (that mark covers
+// kills) — so without actionInFlight the metadata sweep sees a dead pane on a Running
+// row and parks or relaunches it underneath the park in progress. See
+// recoverLostInstances.
+func pauseIOCmd(insts []*session.Instance) tea.Cmd {
+	return func() tea.Msg {
 		var res batchPauseDoneMsg
 		for _, inst := range insts {
 			if err := inst.Pause(); err != nil {
@@ -955,14 +982,6 @@ func (m *home) pauseInstances(insts []*session.Instance, message, altConfirmKey 
 		// goroutine — the batchPauseDoneMsg handler persists when paused > 0.
 		return res
 	}
-	label := fmt.Sprintf("pausing %d session%s…", len(insts), plural(len(insts)))
-	cmd := m.confirmAction(message, busyLabel(label), action)
-	// The hint names the action rather than saying "confirm" (#399). Set here, in the
-	// shared core, so both entry points get the same label from the same count
-	// (confirmAction created m.confirmationOverlay synchronously above).
-	m.confirmationOverlay.SetConfirmLabel(fmt.Sprintf("pause %d session%s", len(insts), plural(len(insts))))
-	m.armDoubleTap(altConfirmKey)
-	return cmd
 }
 
 // killFailure records one instance that could not be killed during a batch kill,
