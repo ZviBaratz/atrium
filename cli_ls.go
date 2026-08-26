@@ -8,6 +8,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/ZviBaratz/atrium/internal/undo"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
 
@@ -15,7 +16,8 @@ import (
 )
 
 var (
-	lsJSONFlag bool
+	lsJSONFlag   bool
+	lsKilledFlag bool
 
 	lsCmd = &cobra.Command{
 		Use:   "ls",
@@ -28,12 +30,17 @@ var (
 			"while no TUI is running.\n\n" +
 			"For how long a session has held its status, subtract status_changed_at — not\n" +
 			"updated_at, which is one shared instant dating the snapshot, nor created_at,\n" +
-			"which is the age of the worktree.",
+			"which is the age of the worktree.\n\n" +
+			"--killed lists killed sessions still on the undo journal instead of live ones,\n" +
+			"newest first: what each was, and whether restoring it brings everything back.\n" +
+			"It is a strictly wider view than the TUI's undo key, which offers only the most\n" +
+			"recent kill. Restoring is still a TUI action; this only says what there is to\n" +
+			"restore, and it never deletes a journal entry, however old.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			log.Initialize(logDir(), false)
 			defer log.Close()
-			return runLs(cmd.OutOrStdout(), lsJSONFlag)
+			return runLs(cmd.OutOrStdout(), lsJSONFlag, lsKilledFlag)
 		},
 	}
 )
@@ -105,7 +112,10 @@ type diffJSON struct {
 
 // runLs writes the session list to w, as JSON when jsonOut is set and as a
 // human-readable table otherwise.
-func runLs(w io.Writer, jsonOut bool) error {
+func runLs(w io.Writer, jsonOut, killed bool) error {
+	if killed {
+		return runLsKilled(w, jsonOut)
+	}
 	instances, err := loadStoredInstances()
 	if err != nil {
 		return err
@@ -250,4 +260,148 @@ func shortAgo(at, now time.Time) string {
 	default:
 		return fmt.Sprintf("%dd", int(d.Hours()/24))
 	}
+}
+
+// killedJSON is the published shape of `atrium ls --killed --json`: one killed
+// session still restorable from the undo journal.
+//
+// A separate type from undo.Entry for sessionJSON's reason. The stored entry carries
+// the retention refname, the full instance snapshot the restore rebuilds from, and
+// the Superseded bookkeeping flag — none of which is anyone's business outside the
+// package that writes it, and all of which would become part of this contract by
+// being marshalled.
+//
+// UncommittedWorkLost is derived rather than published raw as Dirty and Committed,
+// because the fact a reader wants is the conjunction and the conjunction is the part
+// that is easy to get backwards: work was at risk AND the teardown failed to save
+// it. Dirty alone is the common, harmless case — a session with uncommitted changes
+// whose kill folded them into the retained commits restores intact.
+type killedJSON struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	DisplayName string `json:"display_name"`
+	Path        string `json:"path"`
+	// Branch is plain rather than omitempty, as sessionJSON's is and for its reason: a
+	// direct session's branch has to arrive as "" rather than as an absent key, or a
+	// consumer testing for one gets "null" from jq and a `select(.branch == "")` that
+	// matches nothing. omitempty here is reserved for genuinely optional attributes.
+	Branch string `json:"branch"`
+	// Direct marks a killed direct (non-git) session, which had no branch or worktree.
+	Direct bool `json:"direct"`
+	// BatchID groups the entries one kill produced, and it is published because the
+	// TUI's undo key restores a BATCH (undo.LatestBatch), not an entry: a visual-mode
+	// kill of four sessions comes back as four. Without it a reader cannot tell which
+	// rows return together from which are separate kills.
+	//
+	// Present for a kill that went through the BATCH path — visual-mode `x` and the
+	// marked-set kill — and absent for the single-session one, which journals with no
+	// batch at all. Those are not the same as "more than one session": killMarked mints
+	// a batch for a single marked row too, and one entry sharing nothing is still a
+	// batch of one. Absent rather than empty, which is a different fact from belonging
+	// to an unnamed batch.
+	BatchID  string    `json:"batch_id,omitempty"`
+	KilledAt time.Time `json:"killed_at"`
+	// UncommittedWorkLost reports that this session's uncommitted changes are gone for
+	// good: they were there when it was killed, nothing committed them, and
+	// `git worktree remove -f` then destroyed work the retained commits do not hold. A
+	// restore of this entry comes back incomplete.
+	//
+	// Two ways to get here and only one is a failure. The auto-commit can fail — a full
+	// disk, a hook that refuses — and PrepareUndo also declines to commit at all when
+	// the session was adopted onto a branch the USER owns, on the reasoning that Atrium
+	// should not write to such a branch uninvited. The worktree is still removed either
+	// way, so for an adopted-branch session this flag is the ORDINARY outcome of a dirty
+	// kill rather than a sign anything went wrong.
+	UncommittedWorkLost bool `json:"uncommitted_work_lost"`
+}
+
+// runLsKilled reports the killed sessions the undo journal can still restore.
+//
+// Read-only, and that is a requirement rather than an accident. It filters on
+// undo.Entry.Restorable and never calls undo.Sweep: a sweep runs `git update-ref -d`
+// inside the user's repositories, which internal/undo's package doc rules out for a
+// headless process, and an entry past the horizon must be omitted by being filtered
+// rather than by being destroyed — this command runs beside a live TUI as a matter of
+// routine, and the TUI is what owns that decision.
+//
+// It exists because the TUI's undo key offers only the newest restorable batch
+// (undo.LatestBatch). That was sized for a human who kills a session and immediately
+// regrets it; once agents can retire sessions, a human coming back to several
+// retirements could undo one and had no surface that so much as named the others.
+func runLsKilled(w io.Writer, jsonOut bool) error {
+	entries, err := undo.Load()
+	if err != nil {
+		return fmt.Errorf("failed to read the undo journal: %w", err)
+	}
+	now := time.Now()
+	// Newest first, which is the reverse of the journal's own order: the kill somebody
+	// is asking about is almost always the one that just happened.
+	rows := make([]killedJSON, 0, len(entries))
+	for i := len(entries) - 1; i >= 0; i-- {
+		if e := entries[i]; e.Restorable(now) {
+			rows = append(rows, toKilledJSON(e))
+		}
+	}
+	if jsonOut {
+		return writeKilledJSON(w, rows)
+	}
+	return writeKilledTable(w, rows)
+}
+
+func toKilledJSON(e undo.Entry) killedJSON {
+	display := e.Display
+	if display == "" {
+		display = e.Title // mirrors Instance.DisplayName's fallback, as toSessionJSON does
+	}
+	return killedJSON{
+		ID:                  e.ID,
+		Title:               e.Title,
+		DisplayName:         display,
+		Path:                e.Path,
+		Branch:              e.Branch,
+		Direct:              e.Direct,
+		BatchID:             e.BatchID,
+		KilledAt:            e.At,
+		UncommittedWorkLost: e.Dirty && !e.Committed,
+	}
+}
+
+func writeKilledJSON(w io.Writer, rows []killedJSON) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(rows); err != nil {
+		return fmt.Errorf("failed to encode killed sessions: %w", err)
+	}
+	return nil
+}
+
+func writeKilledTable(w io.Writer, rows []killedJSON) error {
+	if len(rows) == 0 {
+		// Said outright rather than left as a bare header, which reads like a failure.
+		_, err := fmt.Fprintf(w, "no killed sessions are still restorable\n")
+		return err
+	}
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	// The same two identity columns the live table leads with, for the reason that one
+	// has them: a title is unique only within a repo group, so TITLE alone cannot tell
+	// the killed `web` of one repo from the killed `web` of another — and every row here
+	// is a candidate for a restore somebody has to pick. TITLE rather than the display
+	// label for the second half of that: the label is cosmetic and freely mutable, and
+	// resolveSessionNamed will not accept one back, so printing it would name a session
+	// by the one name no command answers to.
+	_, _ = fmt.Fprintln(tw, "TITLE\tREPO\tBRANCH\tKILLED\tRESTORE")
+	for _, r := range rows {
+		restore := "complete"
+		if r.UncommittedWorkLost {
+			// Names the loss rather than grading it: this entry restores, but its
+			// uncommitted changes are not coming back with it.
+			restore = "without uncommitted changes"
+		}
+		// orDash, like every other table here — a direct session has no branch, and one
+		// glyph for "nothing" beats two.
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", orDash(r.Title),
+			orDash(filepath.Base(r.Path)), orDash(r.Branch),
+			r.KilledAt.Local().Format("2006-01-02 15:04"), restore)
+	}
+	return tw.Flush()
 }

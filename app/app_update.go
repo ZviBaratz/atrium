@@ -249,10 +249,10 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// PanePrompt would tap whatever dialog is up now. The post-detach sweep
 		// re-polls everything, so nothing is lost — but the tick must still re-arm.
 		var cmds []tea.Cmd
-		// Deliver anything `atrium send` spooled since the last tick, and create
-		// anything `atrium new` asked for. Outside the attachGen guard on purpose:
-		// neither is a pane observation, so an attach having happened gives no
-		// reason to drop them.
+		// Deliver anything `atrium send` spooled since the last tick and create anything
+		// `atrium new` asked for. Outside the attachGen guard on purpose: neither is a
+		// pane observation, so an attach having happened gives no reason to drop them.
+		// The retire drain is not in that company — see where it runs, below.
 		if cmd := m.drainOutbox(); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
@@ -285,6 +285,24 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, m.surfaceLostRecoveries(recoveries))
 			}
 			cmds = append(cmds, m.applyMetadataResults(msg.results, true)...)
+			// Retire anything `atrium kill` or `atrium pause` asked for. Inside the guard
+			// and after the results are applied, unlike the two drains above, because
+			// this one re-judges the target's tree and reads that judgement off the
+			// model — so it must not run on a tick whose observations were dropped.
+			// Stale results are discarded rather than applied, which leaves the model
+			// holding whatever snapshot preceded the attach: a session clean and idle
+			// when an agent spooled the kill, dirty by the time a person detaches an
+			// hour later, would clear the gate on the hour-old numbers and take the
+			// work with it. Skipping such a tick costs the retirement nothing — the
+			// record is durable and the next tick judges fresh numbers.
+			//
+			// Last of the three either way, and that ordering is load-bearing in one
+			// direction only: it dispatches a teardown behind beginAsyncAction, which
+			// sets actionInFlight, and createDrainHeld reads that — so a retirement
+			// dispatched first would hold the create drain for the length of its I/O.
+			if cmd := m.drainRetireRequests(); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
 			// Surface the fleet in the OS chrome once per tick; a session DEATH this tick
 			// shows the taskbar error state, cleared next tick. A blank relaunch is not
 			// one: the session is running, and painting the error state for it would
@@ -531,26 +549,53 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				log.WarningLog.Printf("batch resume: failed to persist resumed instances: %v", err)
 			}
 		}
-		return m, m.finishBatch(nil, len(msg.failures) > 0,
+		return m, m.finishBatch(nil, len(msg.failures) > 0, false,
 			fmt.Sprintf("resumed %d session%s", msg.resumed, plural(msg.resumed)),
 			msg.summary())
 	case batchPauseDoneMsg:
 		// A confirmed "pause all" finished off the UI thread. Tear down each parked
 		// session's preview terminal on the main loop, then persist here on the Update
 		// loop (the action ran in a goroutine and must not read m.list). All-success gets
-		// a transient notice; any failures go to a persistent modal naming which sessions
-		// didn't park and why. Either way, refresh the list so the now-Paused rows reflect
-		// the park.
+		// a transient notice; failures go to a persistent modal naming which sessions
+		// didn't park and why — unless the batch was one the retire drain dispatched, in
+		// which case they get a notice too (see drained below). Either way, refresh the
+		// list so the now-Paused rows reflect the park.
 		//
 		// A failed pause is skipped by finishBatch — it never entered pausedInstances —
 		// yet most of pause()'s failing branches removed the worktree first, stranding the
 		// shell in it (#707). Reap those here rather than folding them into the cleanup
 		// slice: that slice also drives forgetInstance, which is a separate decision about
 		// a session that did not park cleanly.
+		drained := false
 		for _, f := range msg.failures {
 			m.reapStrandedShell(f.inst, f.worktreeGone)
+			// A pause the retire spool asked for that reported an error. Whether its
+			// record is answered with a receipt or an unlink turns on the MEASURED
+			// outcome, not on the error: pause() parks the session on most of its
+			// failing arms and says so through the status, so an error usually means
+			// "parked, with something left behind" rather than "still running". This is
+			// the same reading applyKillDone gives an incomplete teardown, and reading
+			// it off err instead told `atrium pause --wait` that a session whose agent
+			// is already dead was refused — so an orchestrator kept polling a dead pane.
+			// A no-op for every instance the drain did not dispatch, which is all of
+			// them when the batch came from the key.
+			settled := false
+			if f.parked {
+				settled = m.settleRetirement(f.inst, nil)
+			} else {
+				settled = m.settleRetirement(f.inst, f.err)
+			}
+			drained = drained || settled
 		}
-		cmd := m.finishBatch(msg.pausedInstances, len(msg.failures) > 0,
+		for _, inst := range msg.pausedInstances {
+			m.settleRetirement(inst, nil)
+		}
+		// drained routes this batch's failures to a notice instead of the modal. The
+		// drain dispatches one instance at a time, so a batch it owns is that one
+		// session: nobody at the keyboard asked for the retirement, and its producer
+		// already has the reason in a receipt. applyKillDone makes the same choice on
+		// the kill side.
+		cmd := m.finishBatch(msg.pausedInstances, len(msg.failures) > 0, drained,
 			fmt.Sprintf("paused %d session%s", msg.paused, plural(msg.paused)),
 			msg.summary())
 		// After both reaps, not before, which is the order single-session pause has always
@@ -576,7 +621,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// report. All-success gets a transient notice; any failures go to a persistent
 		// modal naming which sessions survived and why.
 		msg = m.applyBatchKill(msg)
-		return m, m.finishBatch(msg.killedInstances, len(msg.failures) > 0,
+		return m, m.finishBatch(msg.killedInstances, len(msg.failures) > 0, false,
 			batchKilledNotice(msg.killed, msg.undoable),
 			msg.summary())
 	case undoDoneMsg:
@@ -587,13 +632,9 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// An off-UI-thread action (see beginAsyncAction) finished. Clear the
 		// in-flight state and progress row on the main loop, then feed the inner
 		// result back through the runtime so its own case handles it (a success
-		// message, an error, or a harmless nil).
-		m.actionInFlight = false
-		// ClearBusy, not SetState: a background operation may still be running, and
-		// its line should come back rather than being wiped by the action that was
-		// covering it. (SetInstance corrects to Empty if the list emptied.)
-		m.menu.ClearBusy(ui.BusyAction)
-		m.recomputeLayout() // the progress row gave up its line; panes reclaim it
+		// message, an error, or a harmless nil). (SetInstance corrects to Empty if
+		// the list emptied.)
+		m.endAsyncAction()
 		result := msg.result
 		return m, func() tea.Msg { return result }
 	case backgroundActionDoneMsg:
@@ -726,16 +767,25 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // finishBatch renders the shared Update-side outcome of a batch resume/pause/kill.
 // It tears down the preview terminal of each torn-down session (cleanup is empty
 // for resume, which only flips in-memory status and must keep its preview
-// terminal), then either flashes the all-success notice or raises the failure
-// modal, and always refreshes the list. notice and summary are precomputed by the
-// caller so the three distinct summary() verbs stay intact.
-func (m *home) finishBatch(cleanup []*session.Instance, hasFailures bool, notice, summary string) tea.Cmd {
+// terminal), then flashes the all-success notice, raises the failure modal, or — see
+// quietFailures — flashes the failure instead, and always refreshes the list. notice and
+// summary are precomputed by the caller so the three distinct summary() verbs stay
+// intact.
+//
+// quietFailures downgrades the failure modal to a transient error notice. It is for a
+// batch nobody at the keyboard started — the retire drain dispatches one — whose
+// producer is already owed the reason through its spool receipt. A modal there covers
+// the frame to report an operation the person in front of it never asked for.
+func (m *home) finishBatch(cleanup []*session.Instance, hasFailures, quietFailures bool, notice, summary string) tea.Cmd {
 	for _, inst := range cleanup {
 		cleanupTerminalForInstance(m.tabbedWindow, inst)
 		m.forgetInstance(inst) // drop the removed session's notify/recovery bookkeeping
 	}
-	if !hasFailures {
+	switch {
+	case !hasFailures:
 		return tea.Batch(m.handleInfoNotice(notice), m.instanceChanged())
+	case quietFailures:
+		return tea.Batch(m.flashNotice(summary, ui.NoticeError), m.instanceChanged())
 	}
 	return tea.Batch(m.showInfo(summary), m.instanceChanged())
 }

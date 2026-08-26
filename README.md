@@ -92,6 +92,8 @@ if one is missing from this table.
 | `peek` | Print what a session's pane is showing, without attaching |
 | `send` | Queue a prompt for a session |
 | `new` | Create one or more sessions without a TUI |
+| `kill` | Retire a session whose work is provably safe to discard |
+| `pause` | Park a session: stop its agent, free its worktree, keep the branch |
 | `guide` | Print what an agent running inside a session can do |
 | `doctor` | Check core dependencies (tmux, git, gh) and agent CLI heuristic versions |
 | `reap` | List tmux servers Atrium left behind, and stop them on request |
@@ -127,10 +129,10 @@ Global flags:
 
 #### Scripting Atrium
 
-`ls`, `peek`, `send` and `new` are the headless surface: four primitives — list
-the fleet, read a screen, send a message, create a session — that let a script or
-an orchestrator agent drive Atrium without a TTY. None of them start the TUI, hold
-its lock, or need a terminal.
+`ls`, `peek`, `send`, `new`, `kill` and `pause` are the headless surface: list the
+fleet, read a screen, send a message, create a session, retire one — the primitives
+that let a script or an orchestrator agent drive Atrium without a TTY. None of them
+start the TUI, hold its lock, or need a terminal.
 
 **`atrium ls`** prints a table; `--json` emits an array for `jq`. It reads stored
 state and never touches tmux, so it works with no tmux server running at all.
@@ -166,6 +168,32 @@ To ask how long a session has held its status, subtract `status_changed_at` — 
 | `diff` | `added`, `removed`, `files_changed`, `commits`, `behind`, `dirty`, and `unpushed` (`null` when not yet computed) |
 
 The schema evolves additively: fields may be added, never removed or repurposed.
+
+**`atrium ls --killed`** switches `ls` to the other list: sessions that have been
+killed and are still restorable from the undo journal, newest first. It is a
+strictly wider view than the TUI's undo key, which offers only the most recent
+*batch* — the entries one kill produced — so a human returning to several
+agent-initiated retirements can see all of them rather than only the last kill.
+
+```bash
+atrium ls --killed
+atrium ls --killed --json | jq -r '.[] | select(.uncommitted_work_lost) | .title'
+```
+
+| Field | Notes |
+|-------|-------|
+| `id` | The journal entry, which is what identifies one killed session |
+| `title`, `display_name`, `path`, `branch` | What the session was; `branch` is empty for a direct session |
+| `direct` | It was a direct (non-git) session, so it had no branch or worktree |
+| `batch_id` | The kill this entry belonged to, present when it came from a batch kill (visual-mode `x` or the marked set) and absent for a single-session kill. The undo key restores a whole batch, so entries sharing one come back together |
+| `killed_at` | RFC 3339 |
+| `uncommitted_work_lost` | Restoring this entry comes back **incomplete**: it had uncommitted changes, nothing committed them, and removing the worktree took them with it. False for the usual dirty kill, where the teardown folds that work into the retained commits — but **true by design** for a session adopted onto a branch you own (`--branch <existing>`), which the teardown deliberately does not commit to |
+
+Restoring is still a TUI action; this only says what there is to restore. It never
+deletes a journal entry, however old — an entry past the retention horizon is
+omitted from the listing, not swept, because sweeping means running
+`git update-ref -d` inside your repositories and that is the TUI's call, not a
+headless command's.
 
 **`atrium peek`** captures a session's pane. It is read-only — it never attaches,
 sends keys, or otherwise disturbs the session — but it does need a live tmux
@@ -285,7 +313,94 @@ Without it the command is honestly fire-and-forget: it prints what it queued, an
 *result* — a request the drain refuses leaves no session and no row, and the refusal is
 written as a receipt that only `--wait` reads.
 
-Both spools are drained by the TUI's poll loop, which is **suspended while you
+**`atrium kill`** and **`atrium pause`** retire a session, which is the other end
+of the lifecycle `new` opens ([#835](https://github.com/ZviBaratz/atrium/issues/835)).
+Without them an orchestrator agent could open sessions indefinitely and close none,
+and the cost of never closing one is not just a row in a list. Every Atrium start
+brings every stored non-paused session back online: one whose tmux pane survived is
+reattached, and one whose pane did not has its agent launched again. After anything
+that takes the tmux server down — a reboot, `reap --kill` — that is the whole fleet
+relaunching at once, and the rationing that would otherwise stage it applies only
+when `max_sessions` is unset, so an explicit value (including an explicit unlimited)
+opts out of it.
+
+```bash
+atrium kill fix-auth              # refuses unless the tree is provably safe
+atrium kill fix-auth --wait 60s   # block on the outcome, not on the dispatch
+atrium pause fix-auth             # park it instead: branch kept, nothing discarded
+```
+
+`kill` runs the same teardown as the TUI's kill key — worktree removed, branch
+deleted, undo journal written — and refuses unless safety is **established** rather
+than merely un-contradicted. The tree is recomputed at call time and must report no
+uncommitted changes and no unpushed commits, and the agent must be idle. That
+distinction is the whole gate: the figures involved have no way to say "I don't know",
+so a session whose stats were never computed decodes as clean, and nothing refreshes
+them while no TUI is running — which is exactly the condition an agent-driven kill
+runs under. Recomputing is not on its own enough for that, either: git's own
+best-effort counters leave a failed measurement at zero rather than reporting it, so a
+worktree whose repository has moved reads exactly like a clean one. A session whose
+numbers cannot be *established* — as opposed to established and found clean — is
+therefore refused, which is also why a paused, starting or direct session is refused:
+none of them has a worktree to read.
+
+The idle half has the same shape and one more consequence. Atrium reads "a turn is
+running" off the pane, using the busy marker or live spinner its agent's adapter
+declares — and aider declares neither, as does the `Generic` adapter any program
+Atrium does not recognise falls back to. For those, "no marker" means "there was
+never anything to look for" rather than "nothing is happening", so `kill` refuses
+them outright instead of reading an absent signal as idleness. Use `pause`, or the
+TUI. The refusal names the condition that failed, in every case.
+
+There is no `--force`. Nothing can distinguish a human who has looked from an agent
+that has not, so a flag meaning "I looked" is a flag agents would pass; the TUI is
+where a person overrides the gate.
+
+Both verbs also address a session more strictly than the read-only commands do. `peek`
+and `send` fall back to a substring of the title or of the display label when no
+exact name matches, which is a good trade when a wrong answer costs a misdirected
+message; here it deletes a branch, so only the names that *identify* a session resolve —
+its title, its tmux session name, or either of those in any case. `atrium kill fix` does
+not find `fix-auth`. And neither verb will retire the session it is being run from: an
+agent that tears down its own pane cannot report what happened, and a `--wait` dies with
+the pane, so the outcome would reach nobody.
+
+`pause` is deliberately **not** gated, because nothing git tracks is at risk: it stops
+the agent and frees the worktree while keeping the branch, committing whatever was
+uncommitted as a marker Atrium unwinds on resume. That makes it the verb to reach
+for when a kill is refused — an orchestrator whose worker has unpushed work can
+still reclaim it.
+
+It is not free, and the gate's absence is not a claim that it is. Freeing the worktree
+deletes the directory, so files git ignores that lived in it are gone for good — a local
+`.env`, a build cache, a session's installed dependencies — and resume rebuilds the
+worktree without them (only the paths named by `carry_files` and `link_paths` are
+re-seeded, the latter unless the session was created dependency-isolated). This is the same loss
+the TUI's pause dialog warns about, and `atrium pause` prints it too. It does refuse what a park cannot do: an already-paused session,
+a direct session, which runs in your own checkout with no worktree to free, and one
+whose startup is still in flight, where the park would race the setup it is removing.
+
+Neither verb is scoped to sessions the caller created. What makes a teardown
+destructive is the *target's* tree state, not the caller's relation to it — a
+caller's own worker can be sitting on unpushed commits while a stranger's session is
+provably clean — so the gate is on the axis that correlates with harm rather than on
+parentage.
+
+Both are producers on the same terms as `send` and `new`: `state.json` has one
+writer, so retiring a session is spooled to `outbox/retire/` and executed by the
+running Atrium through the same path the kill and pause keys reach. Every check is
+re-run there before the teardown — the tree gate and the lifecycle one both — because
+at least a poll tick passes in between and the target keeps living through it: a
+session that was clean when the command looked can be dirty, parked or restarting by
+the time the teardown runs.
+
+`--wait` blocks on the *outcome* rather than on the dispatch: the queued request is
+answered when the teardown reports back, so a kill the TUI turns down — its branch is
+checked out in your main repo, say — comes back as a non-zero exit carrying that reason
+rather than as a success. Without `--wait` the command is honestly fire-and-forget and
+says so; `atrium ls` is what shows whether the session is gone.
+
+Every spool is drained by the TUI's poll loop, which is **suspended while you
 are attached to a session** — Atrium has handed the terminal to tmux and its
 event loop is parked until you detach. Nothing is lost, and the wait is bounded by
 that one attach rather than by a relaunch: the drain runs on the first poll tick
@@ -302,35 +417,35 @@ deliberately: the warning goes to the pane of the session that ran the command, 
 an agent in session B handing off while you watch session A prints where nobody is
 looking.
 
-None of the four holds Atrium's lock or writes `state.json`, so running them on a
-loop alongside a live Atrium is safe. `ls` and `peek` only read it; `send` and `new`
-add one file each — the request they spool — and then read `tui.lock` and
-`handover.lock` to work out what to warn you about: whether a TUI is there at all,
+None of them holds Atrium's lock or writes `state.json`, so running them on a
+loop alongside a live Atrium is safe. `ls` and `peek` only read it; the producers —
+`send`, `new`, `kill` and `pause` — add one file each, the request they spool, and
+then read `tui.lock` and `handover.lock` to work out what to warn you about: whether a TUI is there at all,
 and whether the one that is has its terminal handed to a session. Both probes ask
 for a *shared* lock, briefly and without blocking, and neither creates the file it
 reads — so a held lock changes the warning rather than the outcome, and two of these
-running at once cannot mistake each other for Atrium. All four append to the shared,
-rotating `atrium.log` in the data directory.
+running at once cannot mistake each other for Atrium. All of them append to the
+shared, rotating `atrium.log` in the data directory.
 
-A queued request is state, so `atrium reset` discards both spools along with
+A queued request is state, so `atrium reset` discards every spool along with
 everything else it wipes. Without that, a create request made before the reset
 would still be there afterwards, and — with no session left for its title to
 collide with — the next Atrium would build it. Each discarded request leaves the
 same rejection receipt any other refusal would, so a `--wait` blocked on one is
 told the reset took it rather than reading the file's disappearance as success.
 
-If a title exists in more than one repo, `peek` and `send` will report the
-ambiguity and list the candidates; `--path <repo>` picks one. (`ls` takes no title
+If a title exists in more than one repo, `peek`, `send`, `kill` and `pause` will
+report the ambiguity and list the candidates; `--path <repo>` picks one. (`ls` takes no title
 at all — it lists every session, so it has nothing to disambiguate. `new` takes
 `--path`, but to choose where the session is created, not to disambiguate.)
 
-All four exit 0 on success and 1 on failure, with the reason on stderr.
+All of them exit 0 on success and 1 on failure, with the reason on stderr.
 
-**`atrium guide`** is the fifth, and the only one written for a reader rather than a
-script: it prints what an agent running *inside* a session can do — the four commands
-above, the rule that Atrium owns the worktree and reclaims it, how to hand off to the
-next session, and which commands belong to the person at the keyboard rather than to
-the agent. It is static text, takes no locks and reads no state.
+**`atrium guide`** is the odd one out, and the only one written for a reader rather
+than a script: it prints what an agent running *inside* a session can do — the
+commands above, the rule that Atrium owns the worktree and reclaims it, how to hand
+off to the next session, and which commands belong to the person at the keyboard
+rather than to the agent. It is static text, takes no locks and reads no state.
 
 It exists because the surface above was undiscoverable to the agents it was built for.
 The `SessionStart` brief Atrium injects into a session (`sessionBriefTemplate`) spends

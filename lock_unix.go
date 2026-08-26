@@ -43,10 +43,12 @@ func acquireTUILock(path string) (release func(), err error) {
 //
 // The answer is advisory and inherently racy: a TUI can start or exit the
 // instant after this returns. Callers must therefore use it only to phrase a
-// message, never to decide whether an operation is safe. Both callers — `atrium
-// send` and `atrium new` — are safe either way, and for the same reason: neither
-// writes state.json, each only spools, and each has already spooled by the time it
-// asks. What the answer changes is whether a warning is printed, never what was done.
+// message, never to decide whether an operation is safe. Every caller — the producers
+// `atrium send`, `atrium new`, `atrium kill` and `atrium pause` — is safe either way,
+// and for the same reason: none writes state.json, each only spools, and each has
+// already spooled by the time it asks. What the answer changes is whether a warning is
+// printed, never what was done. A new caller has to hold to that same rule; this is not
+// a list of the ones that happen to.
 //
 // known is false when the question could not be answered at all — an unresolvable data
 // dir, or a lock that cannot be opened — so a caller can stay silent rather than assert

@@ -74,6 +74,13 @@ func (t *Session) markerWorking(content string) bool {
 // substring matches are not split by SGR codes embedded mid-text.
 var ansiRegex = regexp.MustCompile("\x1b\\[[0-9;?]*[a-zA-Z]")
 
+// CleanForDetection is cleanForDetection, exported for the one caller outside this
+// package that has to classify a pane the same way Poll does: `atrium kill`'s idle
+// probe (cli_retire.go). The adapter matchers in session/agent are all documented
+// against the cleaned pane, so a caller that skipped this would be a second, subtly
+// different classification wearing the same adapter.
+func CleanForDetection(content string) string { return cleanForDetection(content) }
+
 // cleanForDetection strips ANSI escapes and trailing whitespace per line, yielding the
 // stable text used for hashing and substring matching in Poll.
 func cleanForDetection(content string) string {
@@ -410,7 +417,7 @@ func (t *Session) Poll() PaneState {
 	// back to working once it has settled to idle. Two bounded signals below can also hold or
 	// raise working without the marker — the animation-gated live spinner (#308) and a fresh
 	// hook heartbeat (#311) — each guarded so it self-heals to idle instead of latching stuck.
-	hasMarker := len(t.adapter.BusyMarkers) > 0 || t.adapter.LiveSpinner != nil
+	hasMarker := t.adapter.CanDetectBusy()
 	if len(t.adapter.BusyMarkers) > 0 && t.markerWorking(content) {
 		t.monitor.idleStreak = 0
 		t.monitor.lastReported = PaneWorking
@@ -682,7 +689,7 @@ func (t *Session) PollNow() PaneState {
 		t.monitor.logSignal(name, "refresh spinner → working")
 		return PaneWorking
 	}
-	if len(t.adapter.BusyMarkers) == 0 && t.adapter.LiveSpinner == nil {
+	if !t.adapter.CanDetectBusy() {
 		// No level signal and no hook file; defer to the tick loop's content-change path.
 		return PaneUnknown
 	}

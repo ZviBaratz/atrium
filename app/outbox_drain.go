@@ -25,17 +25,20 @@ import (
 // successive ticks instead of blocking the UI goroutine on one of them.
 const outboxDrainBudget = 50
 
-// rejectionSweepInterval is how often the terminal-file GC actually walks the spools. The
-// horizon it enforces is 24 hours, so running it on every ~500ms metadata tick — and three
-// times per tick, since receipts are swept in both spools and disclosures in the create one
-// — spends around half a million directory reads a day (2/s × 3 walks × 86400) to delete a
-// file that may sit an extra minute (#546 is the standing reason idle work in this loop is
-// worth a constant).
+// rejectionSweepInterval is how often the terminal-file GC actually walks the spools.
+//
+// The horizon it enforces is 24 hours, so running it on every ~500ms metadata tick would
+// spend hundreds of thousands of directory reads a day to delete a file that may instead
+// sit an extra minute. And it is several walks per run rather than one — SweepRejections
+// visits every spool's receipts and SweepDisclosures the create spool's other terminal
+// kind — so the count grows with the spools while the horizon does not. Those two
+// functions own the enumeration; this constant only has to be much larger than a tick
+// (#546 is the standing reason idle work in this loop is worth a constant).
 const rejectionSweepInterval = time.Minute
 
 // sweepRejectionsOccasionally runs the terminal-file GC at most once per
-// rejectionSweepInterval — receipts in both spools, and create disclosures in the create
-// one. The zero lastRejectionSweep makes the first tick after launch sweep, which is the
+// rejectionSweepInterval: every spool's receipts, plus the create spool's disclosures. The
+// zero lastRejectionSweep makes the first tick after launch sweep, which is the
 // one that matters: it is where a receipt left by a previous run, for a producer that never
 // came back to read it, is finally collected.
 func (m *home) sweepRejectionsOccasionally(now time.Time) {
@@ -162,8 +165,9 @@ func (m *home) drainOutbox() tea.Cmd {
 // once per launch, which is the lesser of the two.
 func (m *home) discardSpoolFile(path string, remove func() error) {
 	if err := remove(); err != nil {
-		// "record", not "message": both spools come through here, and a create request
-		// reported as a message sends whoever reads the log to the wrong directory.
+		// "record", not "message": every spool comes through here, and a create request
+		// or a retirement reported as a message sends whoever reads the log to the wrong
+		// directory.
 		log.ErrorLog.Printf("could not clear a drained outbox record, ignoring it for the rest of this run: %v", err)
 		if m.outboxPoisoned == nil {
 			m.outboxPoisoned = make(map[string]bool)

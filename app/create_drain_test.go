@@ -1547,6 +1547,15 @@ func TestBackgroundCreateLeavesTheHintBarAlone(t *testing.T) {
 // walking past a leaf that really starts a session.
 func TestBackgroundCreateAsksForNoResize(t *testing.T) {
 	h := drainHome(t)
+	// Auto-attach off, and that is the difference between a control and a coin flip.
+	// handleInstanceStarted returns attachExec for a session shouldAutoOpen approves —
+	// a command that carries no resize — and shouldAutoOpen ends in TmuxAlive(), which
+	// for a session running `echo` is a race against `echo` exiting. With auto-attach
+	// on (the default) the interactive control below therefore failed whenever the
+	// session happened to still be up, which under coverage instrumentation is often
+	// enough to break a CI run. Auto-attach is a third behaviour this test is not about.
+	noAutoAttach := false
+	h.appConfig.AutoAttach = &noAutoAttach
 	inst, spawned, err := h.startNewSession("fix-auth", t.TempDir(), true, false, "echo", "", "", nil, spawnBackground, nil)
 	require.NoError(t, err)
 	assert.False(t, requestsWindowSize(spawned), "startNewSession asked for a resize")

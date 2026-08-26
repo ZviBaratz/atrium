@@ -375,6 +375,23 @@ func Adapters() []*Adapter {
 	return registry
 }
 
+// CanDetectBusy reports whether this adapter has any way to recognise a turn in
+// flight from a single pane capture — a busy marker, or a live spinner.
+//
+// It matters because HasBusyMarker's false is overloaded. For claude or codex it means
+// "no marker is showing, so no turn is running"; for aider or Generic, which declare
+// neither signal, it means "there was never anything to look for" — and a caller that
+// cannot tell those apart reads "I have no way to know" as "nothing is happening". The
+// poll loop can afford the ambiguity because it falls back to content-change detection
+// across ticks (PaneUnknown); a one-shot caller has no such fallback and must refuse
+// instead. `atrium kill`'s gate is that caller.
+//
+// Here rather than as an expression at each site, so the two signals that count stay
+// one list: poll.go's own gate reads this too.
+func (a *Adapter) CanDetectBusy() bool {
+	return len(a.BusyMarkers) > 0 || a.LiveSpinner != nil
+}
+
 // HasBusyMarker reports whether a busy marker is present in the live marker
 // region of content (the cleaned full pane). The region is confined per
 // MarkerWindow so the same strings in the scrolled-back transcript don't count.

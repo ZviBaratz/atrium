@@ -146,3 +146,48 @@ func TestNoteAutoPauseUnwind_DropsUnpushedWithCommits(t *testing.T) {
 	require.Equal(t, 0, j.GetDiffStats().Commits)
 	require.Equal(t, 0, j.GetDiffStats().Unpushed)
 }
+
+// TestFromInstanceData_LegacyStateIsNotTreatedAsMeasured is the same back-compat rule for
+// the field that says whether the numbers were TAKEN at all. It matters because the retire
+// gate reads it: a git.DiffStats whose subprocesses failed is field-for-field identical to
+// one describing a clean tree, and BranchStatsMeasured is the only thing separating them.
+//
+// Absent must therefore resolve to false. Reading it as true would clear a teardown on
+// numbers nobody took.
+func TestFromInstanceData_LegacyStateIsNotTreatedAsMeasured(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	data := unpushedTestData(t, `{"added": 5, "removed": 0, "files_changed": 1, "commits": 2, "dirty": false}`)
+	require.Nil(t, data.DiffStats.BranchStatsMeasured, "fixture must exercise the absent-key case")
+
+	inst, err := FromInstanceData(context.Background(), data, "zvi/")
+	require.NoError(t, err)
+
+	stats := inst.GetDiffStats()
+	require.NotNil(t, stats)
+	require.False(t, stats.BranchStatsMeasured,
+		"legacy state never recorded whether the numbers were taken, so they were not")
+}
+
+// TestInstanceData_BranchStatsMeasuredRoundTrips is the field's whole reason for existing
+// in the serialized shape. Leaving it out made EVERY rehydrated instance read as
+// unmeasured, so the retire drain refused a kill an agent had spooled while no TUI was up
+// — terminally, with a receipt saying the tree state could not be established. That is
+// the headline case for `atrium kill`, and it failed on the first tick after launch.
+func TestInstanceData_BranchStatsMeasuredRoundTrips(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, measured := range []bool{true, false} {
+		data := unpushedTestData(t, `{"added": 0, "removed": 0, "commits": 0, "dirty": false}`)
+		inst, err := FromInstanceData(context.Background(), data, "zvi/")
+		require.NoError(t, err)
+		inst.SetDiffStats(&git.DiffStats{BranchStatsMeasured: measured})
+
+		out := inst.ToInstanceData()
+		require.NotNil(t, out.DiffStats.BranchStatsMeasured, "every save from here on carries the key")
+		require.Equal(t, measured, *out.DiffStats.BranchStatsMeasured)
+
+		// And back again, which is the direction the gate reads.
+		again, err := FromInstanceData(context.Background(), out, "zvi/")
+		require.NoError(t, err)
+		require.Equal(t, measured, again.GetDiffStats().BranchStatsMeasured)
+	}
+}

@@ -802,13 +802,14 @@ func waitForCreate(out io.Writer, path, title, repo string, timeout time.Duratio
 	}); err != nil {
 		return err
 	}
-	// The record's absence is necessary evidence, not sufficient. Reject writes the
-	// receipt first but unlinks the record even when that write fails (outbox.Reject),
-	// so "gone, no receipt" is reachable without a session ever existing — on a full or
-	// read-only data dir, which is exactly when the receipt cannot be written. Read the
-	// row back and require it: the drain holds the record until persistInstances has
-	// returned, so a session that really was created is in state.json by now, and the
-	// alternative is printing `created` and exiting 0 for one that is not.
+	// The record's absence is necessary evidence, not sufficient. Success is signalled by
+	// the absence itself — settleCreateRequest discards the record and writes no receipt
+	// — so this side cannot tell a fulfilled create from any other reason the file
+	// stopped being there. Read the row back and require it, because the row is the only
+	// positive evidence there is: the drain discards the record only after
+	// persistInstances has returned, so a session that really was created is in
+	// state.json by now, and the alternative is printing `created` and exiting 0 for one
+	// that is not.
 	d, err := storedSession(title, repo)
 	if err != nil {
 		return err

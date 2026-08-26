@@ -192,7 +192,8 @@ func TestGuideNamesOnlyRegisteredCommands(t *testing.T) {
 		names[c.Name()] = true
 	}
 
-	for _, name := range []string{"guide", "ls", "peek", "send", "new", "reset", "reap", "update"} {
+	for _, name := range []string{"guide", "ls", "peek", "send", "new", "kill", "pause",
+		"reset", "reap", "update"} {
 		require.Contains(t, guidePage, "atrium "+name, "the page is expected to mention %q", name)
 		require.True(t, names[name], "the page names `atrium %s`, which rootCmd does not register", name)
 	}
@@ -289,6 +290,29 @@ func TestGuideDelegationTargetsDocumentTheirFlag(t *testing.T) {
 		"the page must name the owner of the --variants rules it declines to state")
 	require.Contains(t, newCmd.Long, "--variants",
 		"the page defers the --variants rules to `atrium new --help`, which does not state them")
+}
+
+// TestGuideStatesTheConditionsOnKill is the one guard on this page's newest hazard.
+// `kill` is the first DESTRUCTIVE command listed under WHAT YOU CAN RUN, a section
+// whose closing sentence generalises to "anything here is yours" — so the page has to
+// carry the conditions with it. An agent told it owns a teardown and not told what the
+// teardown refuses will aim it at dirty sessions and read the refusals as breakage.
+//
+// It asserts the load-bearing clauses, not the wording: that the two conditions on the
+// tree are named, that the alternative when they fail is named, and that neither verb
+// is presented as immediate.
+func TestGuideStatesTheConditionsOnKill(t *testing.T) {
+	section := guideSection(t, "RETIRING A SESSION", "NOT YOURS TO RUN")
+
+	require.Contains(t, section, "uncommitted", "the page must name the uncommitted-changes condition")
+	require.Contains(t, section, "unpushed", "and the unpushed-commits condition")
+	require.Contains(t, section, "idle", "and that a working agent is not killed")
+	require.Contains(t, section, "`pause`", "and what to reach for when kill refuses")
+	// Deferred, not described — the same discipline TestGuideDefersTheTimingRules
+	// enforces for `new`. A retirement is spooled, so when it actually lands has the
+	// parked-TUI case that only a live lock probe answers, and killCmd's Long owns it.
+	require.Contains(t, section, "atrium kill --help",
+		"and must point at the help that owns when a queued retirement lands")
 }
 
 // TestSpawnSkillNamesOnlyRegisteredCommandsAndFlags is TestGuideAdvertisesRegisteredFlags

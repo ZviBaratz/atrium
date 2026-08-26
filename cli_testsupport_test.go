@@ -18,6 +18,15 @@ import (
 func sandboxDataDir(t *testing.T) string {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
+	// The self-retirement guard reads all three of these out of the ambient environment,
+	// and `go test` run from inside tmux — or from inside an Atrium session, which is
+	// where this repo gets worked on — inherits real values for every one. A test would
+	// then be answering about the developer's own pane. Blanked here so "not inside any
+	// session" is the floor every CLI test starts from and each one opts in by name; a
+	// t.Setenv in the test body runs after this and still wins.
+	for _, k := range []string{tmuxServerEnv, paneIDEnv, sessionNameEnv} {
+		t.Setenv(k, "")
+	}
 	dir, err := config.GetConfigDir()
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(dir, 0o755))

@@ -80,6 +80,28 @@ type DiffStats struct {
 	// Error holds any error that occurred during diff computation
 	// This allows propagating setup errors (like missing base commit) without breaking the flow
 	Error error
+	// BranchStatsMeasured reports that Commits, Behind, Unpushed and Dirty were all
+	// actually established — that both git commands behind them either ran and were
+	// parsed, or were served from a cache that only ever holds successful results.
+	//
+	// It exists because Error cannot answer this. Error carries the failures that stop
+	// computation before it starts (an unset base commit), while computeRepoStats is
+	// best-effort by design and leaves a failed counter at its zero value without
+	// reporting anything — so `git status` timing out on a cold mount, or the whole
+	// repository having been moved out from under the worktree, yields a DiffStats
+	// that is byte-identical in every field a reader consults to one describing a
+	// genuinely clean, fully pushed tree.
+	//
+	// A cosmetic reader can live with that; the pencil glyph flickering off for a tick
+	// is not worth blanking a row over, which is why applyDiffStats still ignores this
+	// and why nothing in ui/ reads it. A reader deciding whether to delete a branch
+	// cannot: for it, "I could not measure" and "there is nothing there" are opposite
+	// answers. internal/retire.Gate is that reader.
+	//
+	// The polarity is deliberate. False is the zero value, so a DiffStats built by
+	// hand, or by any path that does not run the measurements, says "not established"
+	// rather than "all clear" — the one direction in which a missing field is safe.
+	BranchStatsMeasured bool
 }
 
 // IsEmpty reports whether the diff has no changes at all (no added or removed
@@ -254,8 +276,12 @@ func (g *Worktree) untrackedPathsToIntentAdd(wt string) []string {
 }
 
 // computeRepoStats fills in the commit/behind/dirty fields on stats. It is
-// best-effort: any failure leaves the corresponding field at its zero value and
-// never sets stats.Error, so a hiccup in a cosmetic counter can't blank the diff.
+// best-effort about the VALUES: any failure leaves the corresponding field at its zero
+// value and never sets stats.Error, so a hiccup in a cosmetic counter can't blank the
+// diff. What it is not best-effort about is saying so — it sets
+// stats.BranchStatsMeasured only when both halves succeeded, which is the only way a
+// caller that must not read a failure as a clean tree can tell the two apart. See that
+// field's own comment for why Error could not carry this.
 // wt is the worktree path snapshotted by the caller under the read lock; baseRef and
 // baseCommitSHA are not mutated by Rename, so they need no g.mu — revListCounts reads
 // them through baseMu (their getters) instead, which guards the setup-time writes.
@@ -265,12 +291,19 @@ func (g *Worktree) untrackedPathsToIntentAdd(wt string) []string {
 // large histories. The dirty flag (git status --porcelain) is cached for the shorter
 // dirtyCacheTTL — a 1-second window halves subprocess count at the 500ms tick.
 func (g *Worktree) computeRepoStats(stats *DiffStats, wt string) {
+	// Both halves have to have landed for the branch numbers to count as established:
+	// the gate reads Unpushed from the first and Dirty from the second, so one
+	// succeeding tells it nothing about the other. A cache hit counts as measured —
+	// only successful results are ever stored, per the two comments below.
+	var revListOK, dirtyOK bool
+
 	// Serve rev-list from cache when fresh; otherwise re-run and update.
 	g.statsCacheMu.Lock()
 	if cacheFresh(g.statsCache.computedAt, revListCacheTTL) {
 		stats.Commits = g.statsCache.commits
 		stats.Behind = g.statsCache.behind
 		stats.Unpushed = g.statsCache.unpushed
+		revListOK = true
 		g.statsCacheMu.Unlock()
 	} else {
 		g.statsCacheMu.Unlock()
@@ -282,6 +315,7 @@ func (g *Worktree) computeRepoStats(stats *DiffStats, wt string) {
 			stats.Commits = commits
 			stats.Behind = behind
 			stats.Unpushed = unpushed
+			revListOK = true
 
 			// Update only the rev-list fields: a whole-struct replace would wipe
 			// the dirty cache, forcing a redundant git status on the next tick.
@@ -302,18 +336,22 @@ func (g *Worktree) computeRepoStats(stats *DiffStats, wt string) {
 	g.statsCacheMu.Lock()
 	if cacheFresh(g.statsCache.dirtyComputedAt, dirtyCacheTTL) {
 		stats.Dirty = g.statsCache.dirty
+		dirtyOK = true
 		g.statsCacheMu.Unlock()
 	} else {
 		g.statsCacheMu.Unlock()
 		if out, err := g.runGitCommand(wt, "status", "--porcelain"); err == nil {
 			dirty := len(out) > 0
 			stats.Dirty = dirty
+			dirtyOK = true
 			g.statsCacheMu.Lock()
 			g.statsCache.dirty = dirty
 			g.statsCache.dirtyComputedAt = time.Now()
 			g.statsCacheMu.Unlock()
 		}
 	}
+
+	stats.BranchStatsMeasured = revListOK && dirtyOK
 }
 
 // revListCounts returns the session's commits-ahead, commits-behind (when the base

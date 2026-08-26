@@ -740,15 +740,17 @@ func (i *Instance) ToInstanceData() InstanceData {
 		// Copy to a local before taking its address: &i.diffStats.Unpushed would
 		// alias the live struct the poll keeps mutating into the serialized data.
 		unpushed := i.diffStats.Unpushed
+		measured := i.diffStats.BranchStatsMeasured
 		data.DiffStats = DiffStatsData{
-			Added:        i.diffStats.Added,
-			Removed:      i.diffStats.Removed,
-			Content:      i.diffStats.Content,
-			FilesChanged: i.diffStats.FilesChanged,
-			Commits:      i.diffStats.Commits,
-			Behind:       i.diffStats.Behind,
-			Unpushed:     &unpushed,
-			Dirty:        i.diffStats.Dirty,
+			Added:               i.diffStats.Added,
+			Removed:             i.diffStats.Removed,
+			Content:             i.diffStats.Content,
+			FilesChanged:        i.diffStats.FilesChanged,
+			Commits:             i.diffStats.Commits,
+			Behind:              i.diffStats.Behind,
+			Unpushed:            &unpushed,
+			Dirty:               i.diffStats.Dirty,
+			BranchStatsMeasured: &measured,
 		}
 	}
 
@@ -871,15 +873,19 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 		if data.DiffStats.Unpushed != nil {
 			unpushed = *data.DiffStats.Unpushed
 		}
+		// Absent means nobody recorded whether the numbers were taken, which the gate
+		// must read as "not taken" rather than assume: see DiffStatsData.
+		measured := data.DiffStats.BranchStatsMeasured != nil && *data.DiffStats.BranchStatsMeasured
 		instance.diffStats = &git.DiffStats{
-			Added:        data.DiffStats.Added,
-			Removed:      data.DiffStats.Removed,
-			Content:      data.DiffStats.Content,
-			FilesChanged: data.DiffStats.FilesChanged,
-			Commits:      data.DiffStats.Commits,
-			Behind:       data.DiffStats.Behind,
-			Unpushed:     unpushed,
-			Dirty:        data.DiffStats.Dirty,
+			Added:               data.DiffStats.Added,
+			Removed:             data.DiffStats.Removed,
+			Content:             data.DiffStats.Content,
+			FilesChanged:        data.DiffStats.FilesChanged,
+			Commits:             data.DiffStats.Commits,
+			Behind:              data.DiffStats.Behind,
+			Unpushed:            unpushed,
+			Dirty:               data.DiffStats.Dirty,
+			BranchStatsMeasured: measured,
 		}
 	}
 
