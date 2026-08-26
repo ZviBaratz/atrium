@@ -1,6 +1,6 @@
 # Atrium [![Website](https://img.shields.io/badge/website-zvibaratz.github.io%2Fatrium-2ea44f)](https://zvibaratz.github.io/atrium/) [![CI](https://github.com/ZviBaratz/atrium/actions/workflows/build.yml/badge.svg)](https://github.com/ZviBaratz/atrium/actions/workflows/build.yml) [![GitHub Release](https://img.shields.io/github/v/release/ZviBaratz/atrium)](https://github.com/ZviBaratz/atrium/releases/latest) [![Go Report Card](https://goreportcard.com/badge/github.com/ZviBaratz/atrium)](https://goreportcard.com/report/github.com/ZviBaratz/atrium) [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE.md) [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/ZviBaratz/atrium/badge)](https://securityscorecards.dev/viewer/?uri=github.com/ZviBaratz/atrium)
 
-Atrium is a terminal command center for orchestrating multiple AI coding agents — [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [Antigravity](https://antigravity.google/docs/cli/reference), [Gemini](https://github.com/google-gemini/gemini-cli), and other local agents including [Aider](https://github.com/Aider-AI/aider) — each in its own isolated git worktree, so you can drive several tasks at once from a single panel.
+Atrium is a terminal command center for orchestrating multiple AI coding agents — [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [GitHub Copilot CLI](https://github.com/github/copilot-cli), [Antigravity](https://antigravity.google/docs/cli/reference), [Gemini](https://github.com/google-gemini/gemini-cli), and other local agents including [Aider](https://github.com/Aider-AI/aider) — each in its own isolated git worktree, so you can drive several tasks at once from a single panel.
 
 ![Atrium Screenshot](assets/screenshot.png)
 
@@ -118,11 +118,13 @@ Global flags:
 
 <b>Using Atrium with other AI assistants:</b>
 - For [Codex](https://github.com/openai/codex): Set your API key with `export OPENAI_API_KEY=<your_key>`
+- For [GitHub Copilot CLI](https://github.com/github/copilot-cli): run `copilot login` once and the credential is shared across sessions, so Atrium needs no per-session setup. Where it is stored is conditional, and the fallback matters on the hosts Atrium is usually run on: the CLI stores the token in the system credential store when it finds one, and **in a plain-text file under `~/.copilot/` when it does not** (it asks first — "System keychain unavailable. Store token in plaintext config file? (y/N)"), which is what a headless server, a container, or a box with no gnome-keyring/kwallet will hit. For those, prefer a token in the environment — `COPILOT_GITHUB_TOKEN`, then `GH_TOKEN`, then `GITHUB_TOKEN`, checked in that order — which is the path the CLI documents for automation. If a session reports `unauthorized: not authorized to use this Copilot feature`, check in this order, cheapest and most decisive first: the organization's AI-credits budget (a zero budget with blocking denies the *included* allowance too, immediately), then its Copilot **CLI** policy (separate from the IDE policy, and unset by default), then the seat, then the token.
 - Launch with specific assistants:
    - Codex: `atrium -p "codex"`
    - Aider: `atrium -p "aider ..."`
    - Gemini: `atrium -p "gemini"`
    - Antigravity: `atrium -p "agy"`
+   - GitHub Copilot CLI: `atrium -p "copilot"`
 - Make this the default, by modifying the config file (locate with `atrium debug`)
 
 <br />
@@ -1043,7 +1045,7 @@ Profiles let you define multiple named program configurations and switch between
 
 Profiles are edited in the Settings panel (`,` → **Profiles**): `n` adds one, `e` or `↵` edits the highlighted record, `d` deletes it, and `D` probes for installed agent CLIs and appends any that are missing. A profile named by `default_program` cannot be deleted until that setting points elsewhere; renaming it carries the setting along.
 
-On first run, Atrium probes for installed agent CLIs (`claude`, `codex`, `gemini`, `aider`, `agy`) and seeds a profile for each one it finds. After installing a new agent, press `D` in the panel's Profiles category, or run:
+On first run, Atrium probes for installed agent CLIs (`claude`, `codex`, `gemini`, `aider`, `agy`, `copilot`) and seeds a profile for each one it finds. After installing a new agent, press `D` in the panel's Profiles category, or run:
 
 ```bash
 atrium profiles detect

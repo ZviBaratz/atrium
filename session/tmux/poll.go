@@ -41,7 +41,8 @@ const (
 	// PaneDead session for lost-session recovery. Runtime-only, never persisted.
 	PaneDead
 	// PaneGate means a one-time startup/trust screen is up (claude's folder-trust or
-	// new-MCP prompt, codex/gemini/agy folder-trust, aider's first-run docs prompt). It
+	// new-MCP prompt, codex/gemini/agy/copilot folder-trust, aider's first-run docs
+	// prompt — every adapter declaring Gates, which is all six of them). It
 	// consumes keystrokes until a human dismisses it, so a queued first prompt must be
 	// held; callers surface it as needs-input rather than tapping. Runtime-only, never
 	// persisted.
@@ -377,6 +378,25 @@ func (t *Session) Poll() PaneState {
 		return PaneGate
 	}
 
+	// A modal the literal matchers can no longer see is still a modal. GateUp and DetectPrompt
+	// above match literals in the bottom window, so on a pane too short to hold the dialog's
+	// headline they both go blind while the dialog is still on screen and still blocking — and
+	// a dialog pane has no busy marker either (its own bottom border is the last horizontal
+	// rule, so footerRegion is empty), so without this it falls all the way through to idle and
+	// the row reads Ready on a turn that is waiting for an answer. ModalVeto is the structural
+	// signal for exactly that band; see agent.Adapter.ModalVeto.
+	//
+	// Ranked with the gate rather than below the busy marker for the same reason the gate is: a
+	// blocked session that reads Ready fires the completion ding and hands over a queued prompt,
+	// which is the worse direction. It reports PaneGate rather than PanePrompt because there is
+	// no matcher to name and nothing may auto-tap it — ApplyPaneState maps both to NeedsInput.
+	if t.adapter.ModalVeto != nil && t.adapter.ModalVeto(content) {
+		t.monitor.idleStreak = 0
+		t.monitor.lastReported = PaneGate
+		t.monitor.logSignal(name, "modal → needs-input")
+		return PaneGate
+	}
+
 	// A prompt awaiting an answer takes precedence over "working": when an agent stops to
 	// ask, it is not processing, and this is the state a caller most needs to surface.
 	//
@@ -635,6 +655,13 @@ func (t *Session) PollNow() PaneState {
 	if _, gated := t.adapter.GateUp(content); gated {
 		t.monitor.lastReported = PaneGate
 		t.monitor.logSignal(name, "gate → needs-input")
+		return PaneGate
+	}
+	// Same reason as Poll's veto branch: a short pane hides the dialog's literals, not the
+	// dialog.
+	if t.adapter.ModalVeto != nil && t.adapter.ModalVeto(content) {
+		t.monitor.lastReported = PaneGate
+		t.monitor.logSignal(name, "modal → needs-input")
 		return PaneGate
 	}
 	if matcher, ok := t.adapter.DetectPrompt(content); ok {

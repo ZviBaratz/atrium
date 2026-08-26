@@ -212,3 +212,141 @@ func TestCheck_BadVerifiedVersionIsUnknown(t *testing.T) {
 		t.Errorf("claude status = %v, want StatusUnknown when VerifiedVersion is invalid semver", s)
 	}
 }
+
+// TestCheckSeparatesAForeignCLIFromDrift is the AWS Copilot CLI case. That tool installs a
+// binary called exactly `copilot`, prints a parseable version, and so used to be classified as
+// this adapter drifting past its pin — a drift warning about a CLI the user does not have,
+// telling them to re-verify matcher strings against a deployment tool.
+//
+// Three rows, because what makes StatusForeign worth its own value is that it is none of the
+// other three: the vendor's own output is OK, a foreign version is Foreign rather than Drifted
+// or Unknown, and an absent binary is still NotInstalled. An adapter with no VersionMarker must
+// be unaffected, which the gemini row holds — otherwise the marker check would quietly become a
+// requirement every adapter has to satisfy.
+func TestCheckSeparatesAForeignCLIFromDrift(t *testing.T) {
+	adapters := agent.Adapters()
+
+	t.Run("the vendor's own CLI passes", func(t *testing.T) {
+		r := fakeRunner{out: map[string]string{"copilot": "GitHub Copilot CLI 1.0.80\n"}}
+		if got := statusFor(Check(context.Background(), adapters, r), agent.KeyCopilot); got != StatusOK {
+			t.Errorf("status = %v, want StatusOK", got)
+		}
+	})
+
+	t.Run("another vendor's CLI under the same name is foreign, not drifted", func(t *testing.T) {
+		// AWS Copilot CLI's shape: a clean semver with no "GitHub Copilot" in it, and ahead of
+		// the pin, so the drift branch is the one it would otherwise take.
+		r := fakeRunner{out: map[string]string{"copilot": "copilot version: v1.34.1\n"}}
+		results := Check(context.Background(), adapters, r)
+		if got := statusFor(results, agent.KeyCopilot); got != StatusForeign {
+			t.Errorf("status = %v, want StatusForeign", got)
+		}
+		// And the foreign CLI's own version is reported. An empty Installed renders as "-",
+		// the not-installed cell, so the row would deny that anything is there while the
+		// label says something else owns the name — and drop the datum that tells the user
+		// WHICH CLI they have.
+		if got := installedFor(results, agent.KeyCopilot); got != "1.34.1" {
+			t.Errorf("installed = %q, want the foreign CLI's version 1.34.1", got)
+		}
+	})
+
+	t.Run("a foreign CLI whose version is unparseable stays blank", func(t *testing.T) {
+		// The other direction: "-" must keep meaning "cannot say", so nothing is invented
+		// when there is no version to report.
+		r := fakeRunner{out: map[string]string{"copilot": "some other tool, no version here\n"}}
+		results := Check(context.Background(), adapters, r)
+		if got := statusFor(results, agent.KeyCopilot); got != StatusForeign {
+			t.Errorf("status = %v, want StatusForeign", got)
+		}
+		if got := installedFor(results, agent.KeyCopilot); got != "" {
+			t.Errorf("installed = %q, want empty for unparseable output", got)
+		}
+	})
+
+	t.Run("an adapter with no marker is unaffected", func(t *testing.T) {
+		r := fakeRunner{out: map[string]string{"gemini": geminiWithinPin}}
+		requireWithinPin(t, agent.KeyGemini, geminiWithinPin)
+		if got := statusFor(Check(context.Background(), adapters, r), agent.KeyGemini); got != StatusOK {
+			t.Errorf("status = %v, want StatusOK", got)
+		}
+	})
+}
+
+// TestForeignStatusHasItsOwnLabel: label()'s default arm returns "unknown", so a status added
+// without a case of its own is silently indistinguishable in the rendered table.
+//
+// Checked against EVERY other status rather than a hand-picked pair. Drifted is the one that
+// matters most and was the one missing: reporting a foreign CLI as drift is the exact confusion
+// StatusForeign was added to end, so a test that let those two share a label would pass on the
+// defect it is named for.
+func TestForeignStatusHasItsOwnLabel(t *testing.T) {
+	others := map[string]Status{
+		"StatusOK":           StatusOK,
+		"StatusDrifted":      StatusDrifted,
+		"StatusUnknown":      StatusUnknown,
+		"StatusNotInstalled": StatusNotInstalled,
+	}
+	label := StatusForeign.label()
+	for name, s := range others {
+		if label == s.label() {
+			t.Errorf("StatusForeign renders as %q, which is %s's label", label, name)
+		}
+	}
+}
+
+// installedFor is statusFor's sibling: the Installed cell for one agent.
+func installedFor(results []Result, key agent.Key) string {
+	for _, r := range results {
+		if r.Key == key {
+			return r.Installed
+		}
+	}
+	return ""
+}
+
+// TestDoctorIsWhereAContestedNameIsAnswered holds the two halves of one decision together.
+//
+// `copilot` is also the AWS Copilot CLI's binary. Settling that in config detection was tried
+// and reverted — detection is reached synchronously from every path that needs a config, so a
+// `--version` exec there cost 1.4s on a fresh `atrium debug` and took four root-package tests
+// from 1.9s to 53s, invisibly to CI (no runner has copilot installed). Doctor already runs
+// `--version` for every agent, so it is where the question is answered for free.
+//
+// The halves live in different packages and neither test could see both: config cannot import
+// internal/doctor (that is the direction of the dependency). This one can import config, so it
+// is the pairing test, in the spirit of drive_agent_drift_test.go holding MIN_TMUX.
+func TestDoctorIsWhereAContestedNameIsAnswered(t *testing.T) {
+	const foreign = "copilot version: v1.34.1\n"
+
+	t.Run("copilot's contested name is reported here", func(t *testing.T) {
+		r := fakeRunner{out: map[string]string{"copilot": foreign}}
+		results := Check(context.Background(), agent.Adapters(), r)
+		if got := statusFor(results, agent.KeyCopilot); got != StatusForeign {
+			t.Errorf("status = %v, want StatusForeign — doctor is the only surface that "+
+				"reports a contested name, so if it stops, nothing does", got)
+		}
+	})
+
+	// The invariant rather than the instance: any adapter that declares a VersionMarker is
+	// declaring its name contested, and doctor is where that gets answered. A second one
+	// added later must be covered here without anyone remembering to extend this file.
+	t.Run("every adapter that declares a marker is covered", func(t *testing.T) {
+		marked := 0
+		for _, a := range agent.Adapters() {
+			if a.VersionMarker == "" {
+				continue
+			}
+			marked++
+			// Output that is a clean, parseable version but carries no marker: the shape
+			// that used to be misreported as this adapter drifting.
+			r := fakeRunner{out: map[string]string{string(a.Key): "some-other-tool 9.9.9\n"}}
+			if got := statusFor(Check(context.Background(), agent.Adapters(), r), a.Key); got != StatusForeign {
+				t.Errorf("%s declares VersionMarker %q but a foreign binary under its name "+
+					"classifies as %v, not StatusForeign", a.Key, a.VersionMarker, got)
+			}
+		}
+		if marked == 0 {
+			t.Fatal("no adapter declares a VersionMarker, so the loop above asserted nothing")
+		}
+	})
+}

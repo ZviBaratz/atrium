@@ -58,10 +58,14 @@ import (
 // A Match matcher IS exercised at every width it has captures for, because fires() runs the
 // production predicate; read the rungs off paneCoverage rather than from a list here, which is
 // what #666 had to correct when it drove claudeGateVisible below 28. What cannot be enumerated
-// is its individual literals: they live inside the func (claudeGateVisible,
-// claudeFetchPermissionVisible, claudeNetworkPermissionVisible, claudeSelectionFooterVisible,
-// claudeLocalPermissionVisible, aiderConfirmVisible and the token helpers they call), so the
-// alternatives ledger below skips them. Beyond that, the width-bearing surfaces outside
+// is its individual literals: they live inside the func, along with the token helpers it calls,
+// so the alternatives ledger below skips them.
+//
+// There was a count of those predicates here. It has now been wrong twice and the correction
+// offered for it was wrong a third time — `grep -n "Match: "` and `grep -n "Match: [a-z]"` both
+// over-count, because a doc comment in registry.go contains the phrase. Two failed corrections
+// say the sentence does not want stating, so the number is gone rather than restated: what
+// matters is that the literals are unenumerable from here, not how many funcs hold them. Beyond that, the width-bearing surfaces outside
 // Prompts/Gates/BusyMarkers — PermissionMode's footer markers, LiveSpinner, SuggestionVisible,
 // PasteCollapsed, BackgroundWork — have no coverage here at all.
 //
@@ -247,6 +251,24 @@ var paneCoverage = map[string][]paneCapture{
 		{name: "agyConfirmSubHintPane", width: 24, note: "hint cut to \"tab Ame\"", pane: agyConfirmSubHintPane},
 		{name: "agyConfirmFloorPane", width: 20, note: "hint ends exactly at the literal", pane: agyConfirmFloorPane},
 	},
+
+	// copilot's gate is one Match over a ladder driven at every rung from 120 to 20. The 20
+	// rung is included on purpose even though it is where the dialog's title disappears: the
+	// matcher keys on the headline and an option label, both of which survive, so this is a
+	// rung the predicate FIRES on rather than a miss. Contrast gemini, whose 20 rung is a real
+	// cliff and lives outside its ladder.
+	"copilot/gate/trust": copilotTrustgateLadder,
+	// Eight rungs, all positive. This dialog's box fits the 40-row pane at every driven width,
+	// so unlike the gate's ladder nothing here is a height edge.
+	"copilot/prompt/approval": copilotApprovalLadder,
+	// The re-driven ladder: eight rungs, all positive. Its predecessor captured an idle pane at
+	// every rung below 60 — see copilotBusyLadder's own header for how that happened and where
+	// those captures went. An earlier draft of this entry was two rungs short, on the belief
+	// that the multi-column footer's mid-word split at 24 and 20 left nothing to match. It
+	// splits the WORD, not the row, and the marker keys on the prefix that survives it.
+	// The busy ladder is two tables: the original 20-and-up sweep plus the sub-20 band driven
+	// after paneCoverage was found asserting a floor that does not exist.
+	"copilot/busy": append(append([]paneCapture{}, copilotBusyNarrowLadder...), copilotBusyLadder...),
 }
 
 // paneCoverageExempt is the other direction, and it exists because a `continue` on "no
@@ -366,6 +388,28 @@ var wantRungs = map[string][]int{
 	"agy/gate/trust":          {24, 28, 120},
 	"agy/busy":                {20, 24, 28, 40, 120, 120},
 	"agy/prompt/confirmation": {20, 24, 28, 40, 120},
+
+	// Eight rungs each, 20 the narrowest DRIVEN width rather than a floor — nothing clamps the
+	// preview pane's width (see this file's header). What fails at 20 is the TITLE, which no
+	// matcher here reads.
+	"copilot/gate/trust":      {20, 24, 26, 28, 34, 40, 60, 120},
+	"copilot/prompt/approval": {20, 24, 26, 28, 34, 40, 60, 120},
+
+	// Twelve rungs, and the band below 20 is DRIVEN rather than argued about. This entry read
+	// "the floor is 20 — the narrowest pane Atrium's own layout can produce is covered, so this
+	// adapter's busy marker has no unmeasured band", which contradicted the header above and
+	// registry.go's agy entry: the list may take maxListRatio = 0.60 of the terminal and the
+	// remainder is not clamped, so there is no such narrowest pane. Driving 12/14/16/18 settled
+	// it — "Worki" survives on one row at every one, and at 12 the footer renders " Worki inte"
+	// with "ng" below, so five characters is exactly what fits rather than merely enough.
+	// TestCopilotBusyMarkerSurvivesBelowTwenty and
+	// TestCopilotBusyMarkerIsExactlyWhatFitsAtTwelve.
+	"copilot/busy": {12, 14, 16, 18, 20, 24, 26, 28, 34, 40, 60, 120},
+
+	// The driven IDLE ladder is deliberately NOT here: this table is keyed by matcher kind and
+	// asserts a matcher FIRES at every captured width, and an idle pane's property is the
+	// inverse of that (no gate, no prompt, no busy marker). It is iterated directly by
+	// TestCopilotIdleComposerIsNotABox and its two siblings, the way composerPanes is.
 }
 
 // keysWithNoRecordedCaptureWidth are covered by real captures whose provenance never wrote

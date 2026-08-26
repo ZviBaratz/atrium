@@ -2,6 +2,7 @@ package agent
 
 import (
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -1232,13 +1233,28 @@ var gemini = &Adapter{
 // prompt was typed into a RadioButtonSelect whose highlighted default is "Yes", the #512 class
 // rather than this gate's milder one.
 //
-// Width. The headline is UNREPAIRABLE as an anchor once it wraps: gemini draws the dialog in
-// a rounded box, so a wrapped headline has the box's own "│" between its halves, and
-// flattenChrome joins on whitespace only. Measured on residue-free captures, it is
-// unreachable at 40, 24 and 20 at every GateWindow up to 200 — more lines than any of those
-// panes has. Codex wraps WITHOUT a box, which is why widening its window worked there and why
-// #713's guess that the same "would also work at width 40" does not hold here.
+// Width. The headline is unreachable THROUGH A FLAT WINDOW once it wraps: gemini draws the
+// dialog in a rounded box, so a wrapped headline has the box's own "│" between its halves, and
+// flattenChrome joins on whitespace only. Measured on residue-free captures, it is unreachable
+// at 40, 24 and 20 at every GateWindow up to 200 — more lines than any of those panes has.
+// Codex wraps WITHOUT a box, which is why widening its window worked there and why #713's guess
+// that the same "would also work at width 40" does not hold here.
 // TestGeminiTrustGateHeadlineIsUnreachableOnceItWraps pins it.
+//
+// THAT IS A LIMIT OF THE WINDOW, NOT OF THE HEADLINE, and this said "UNREPAIRABLE" until
+// flattenBottomBox existed to disprove it. The wall-stripping scan reaches the headline on every
+// wrapped capture where the headline is actually ON the pane — including the rung this gate
+// MISSES. The qualifier is load-bearing and this comment did not have it: the overflow captures
+// are too SHORT to hold the whole dialog, so the headline's first half has scrolled off the top
+// and no scan reaches what is not on screen. Writing it as a flat "at 40, 24 AND 20" was a
+// second unguarded number in the slot the first one had to be retracted from, which is why
+// TestGeminiTrustGateHeadlineIsReachableByWallStripping now derives the premise per capture
+// rather than restating a width list — and it is what found the exception.
+//
+// So the repair exists and is deliberately not applied here: switching this matcher to it is a
+// change to gemini's false-positive surface (a stripped box interior, and this gate has a
+// composer veto reasoning about unstripped lines), which wants its own driven pass rather than a
+// ride on copilot's.
 //
 // The option rows truncate from the right rather than wrapping, so "Trust folder" survives as
 // a left-anchored prefix however long the directory name is — until the row itself is cut,
@@ -1850,6 +1866,300 @@ var agy = &Adapter{
 	HeadlessNamer: true,
 }
 
+// GitHub Copilot CLI (github/copilot-cli, npm @github/copilot). DRIVEN at 1.0.80 on Linux,
+// 2026-08-26, in an isolated COPILOT_HOME against a scratch git repo with the organization's
+// token injected via ATR_CAP_ENV — three surfaces, each with a verbatim width ladder in
+// copilot_pane_test.go: the folder-trust Gate, the approval PromptMatcher, and the busy
+// marker. The design record is docs/superpowers/specs/2026-08-26-copilot-cli-integration-design.md.
+//
+// WHAT SHAPE THIS ADAPTER IS. Its two dialogs are closed round boxes whose bottom border is
+// the last non-empty line at every driven rung — gemini's shape, so both matchers anchor on
+// bottomBoxBlock. Its composer and busy row are claude's arrangement: a borderless composer
+// between two horizontal rules, with the status row replacing the hint row BELOW it, so
+// MarkerWindow stays 0 and the footer anchor finds the marker. Two vendors' shapes in one
+// CLI, which is why neither codex's GateWindow nor gemini's composer veto transfers.
+//
+// THE TWO SHAPES ARE THE DISCRIMINATOR, and that is what ModalVeto is built on. A dialog is
+// an anchored box; the composer never is. So "a box ends the pane" separates them without
+// reading a single literal, which is the only kind of test that still works at a pane height
+// where the dialog's own headline has scrolled off. See ModalVeto's own doc for the delivery
+// hole that needs — the matchers below are literal matches, so they cover only the heights
+// where their literals are on screen, and that is a band, not the whole axis.
+//
+// WHY NOT GateWindow, since codex's trust gate looks like the same problem. Codex draws its
+// overlay with no border at all, so its headline is intact and merely pushed out of a
+// line-count budget, and a wider window reaches it. Copilot's headline is DESTROYED — the
+// border runes and their padding sit between its fragments — so no window reaches it and
+// flattenBottomBox is the remedy instead. TestCopilotTrustGateNeedsTheWallStrippingScan
+// measures the difference at every rung.
+//
+// WHY NOT a composer veto INSIDE the matchers, the way geminiTrustGateVisible has one.
+// Copilot's selector IS the composer glyph "❯" and it sits on the dialog's highlighted row,
+// so a matcher that went false whenever a composer glyph was on screen would go false on
+// every rung of both ladders — TestCopilotDialogSelectorIsTheComposerGlyph holds that
+// collision. The veto therefore runs in the other direction, on the composer predicate
+// rather than inside the matchers: ModalVeto, wired to copilotModalUp.
+//
+// HookSupport is deliberately FALSE even though copilot has hooks and they fire. The
+// invocation schema is claude-compatible, keyed by camelCase event names; the OUTPUT schema is
+// not. Claude's nested hookSpecificOutput.additionalContext fires and delivers nothing, while
+// a flat {"additionalContext": …} works — both driven. The field routes through claude's
+// emitter, so setting it here ships a brief that is registered, documented and dead, which is
+// the #773 failure mode verbatim. #773 replaces the bool with a capability that can say which
+// schema; this adapter waits for it.
+//
+// Resume is deliberately NIL. `--continue` and `-r, --resume` are both in --help (VENDOR at
+// 1.0.80), but ResumeProbe's needle must pin the listing rather than the bare word and that
+// has not been chosen, and the behaviour in a directory with nothing to resume has not been
+// driven. A nil Resume relaunches blank, which is the adapter's safe mode; a needle guessed
+// off a help line is the failure mode ResumeProbe exists to prevent.
+//
+// HeadlessNamer is deliberately FALSE, and this entry exists because the field is otherwise
+// the one capability a reader cannot tell from an oversight. The CAPABILITY is present:
+// `-p, --prompt <text>` is in --help at 1.0.80 and --allow-all-tools is documented as
+// required alongside it. What is missing is the half the field's own doc requires — a
+// matching branch in session/naming.go, which needs the envelope copilot prints in that mode
+// to have been driven and parsed. It has not been. Setting the bool without that branch is
+// the registered-and-dead shape again, so it waits for a drive of its own.
+var copilot = &Adapter{
+	Key:         KeyCopilot,
+	DisplayName: "Copilot CLI",
+	aliases:     []string{"copilot"},
+
+	VerifiedVersion:  "1.0.80",
+	DriftGranularity: GranularityMinor,
+	// The one adapter that needs an identity probe: "copilot" is also the AWS Copilot CLI's
+	// binary name. Read off the installed binary at 1.0.80, whose --version prints "GitHub
+	// Copilot CLI 1.0.80"; the vendor half is taken and the digits left to VerifiedVersion.
+	VersionMarker: "GitHub Copilot",
+
+	// Narrowed to the one glyph copilot draws, "❯" (U+276F), byte-verified with cat -vet
+	// against the driven panes. Nil would have worked in the sense that defaultPrompts
+	// contains "❯" — but it also contains the plain ">", which this CLI never opens a
+	// composer with, and accepting a glyph the agent does not draw is the fail-open this
+	// field's doc exists to prevent (codex's banner line is its worked example). The cost of
+	// nil is not hypothetical here: inputBoxText anchors on the BOTTOM-MOST prompt-glyph line
+	// in its window, so any ">"-opening transcript row below the real composer — a quoted
+	// diff, a shell transcript, agent prose — becomes the composer it reads.
+	// TestCopilotComposerRejectsThePlainAngleBracket.
+	InputBoxPrompts: []string{"❯"},
+
+	// "Worki", not "Working", and the truncation is the finding. The status row reads
+	// "<spinner> Working · <N> B esc interrupt", and the footer loses it to the wrap in
+	// stages: at the two narrowest rungs the cells are jammed together and the WORD is split
+	// mid-way — width 24 renders "WorkinKiB    interrup" and width 20 "WorkiKiB   interr".
+	// What each rung actually renders is recorded per rung in copilotBusyLadder's notes rather
+	// than summarised as an onset here, because a sentence about where the row "goes
+	// multi-column" has been written wrong twice. "Worki" is the longest prefix present at
+	// every driven rung, and it is present at all eight.
+	// TestCopilotBusyMarkerIsTheLongestSurvivingPrefix reads both halves off the ladder —
+	// that this marker is found at every rung, and that one character more is not.
+	//
+	// An earlier draft of this entry keyed on "Working" and disclosed the two narrow rungs as
+	// a floor that could not be repaired without a spinner frame-set. That was wrong on its
+	// own fixtures, and wrong in the fail-dangerous direction: BusyMarkers being non-empty is
+	// what disables the content-change fallback in session/tmux/poll.go, and copilot has no
+	// hook record either, so a marker that misses does not decay to a stale Working — the
+	// session never enters PaneWorking at all. It reads Ready through a live turn, dings on a
+	// turn that has not ended, and promptDeliveryReady hands it a queued prompt mid-turn. A
+	// 70-column terminal leaves a preview pane of about 24 columns, which is the width that
+	// missed; see pane_width_test.go's header for where that number comes from.
+	//
+	// The two words this is deliberately not paired with are still worth recording. The byte
+	// counter sits BETWEEN "Working" and "esc interrupt", so that pair is never contiguous at
+	// any width; and the separator is not monotonic either — 34 renders "Working·" with no
+	// space where 40 and wider render "Working ·".
+	// TestCopilotBusyMarkerCannotKeyOnTheInterruptHint asserts both halves per rung.
+	BusyMarkers: []string{"Worki"},
+	// MarkerWindow deliberately 0. The status row REPLACES the hint row below the composer,
+	// so footerRegion's below-the-box anchor finds it. This is claude's arrangement; codex
+	// and gemini paint their status row above the composer, which is why they need a window,
+	// and copying one of theirs here would search past the row entirely.
+
+	// The collapsed-paste chip, wired because copilot ships one and turns it ON by default.
+	// VENDOR at 1.0.80 (app.js in @github/copilot-linux-x64): a paste is compared against a
+	// line threshold of 10 and, when compactPasteEnabled is set — `??!0`, i.e. defaulting to
+	// true — is replaced in the composer by "[Paste #N - L lines]". Leaving this nil is not a
+	// small loss: boxHoldsPrompt confirms a multi-line prompt either by its first-line
+	// signature (which the chip does not carry) or by this predicate, so with neither, every
+	// queued prompt over ten lines fails to confirm, is never submitted, and is re-pasted on
+	// the next keeper cycle — appending one more chip each time.
+	PasteCollapsed: copilotPasteCollapsed,
+
+	// A modal is up, so the composer glyph on screen is a selector. This is the structural
+	// half of dialog handling and it is not redundant with the matchers below: they read
+	// literals, so they stop covering the moment the pane is shorter than the dialog, and
+	// this does not. ModalVeto's doc carries the failure it closes.
+	ModalVeto: copilotModalUp,
+
+	Prompts: []PromptMatcher{
+		// The out-of-worktree path approval. NoAutoTap for a strictly worse reason than the
+		// one it carries on codex, where Enter approves a single command: this dialog's
+		// pre-selected option is the SECOND one, "Yes, and add these directories to the
+		// allowed list", so Enter widens the session's allowed-path list rather than
+		// approving one action. An autoyes tap would silently extend a copilot agent's
+		// filesystem reach past its worktree for the rest of the session — a sandbox
+		// widening performed by a convenience feature.
+		{Name: "approval", NoAutoTap: true, Match: copilotApprovalVisible},
+	},
+
+	Gates: []Gate{
+		// The folder-trust screen. A conjunction through Match, not Contains: the headline
+		// alone is a plausible sentence for a session to print while discussing this file,
+		// and Contains would read a flat bottom-N window that cannot reconstruct it below 60
+		// columns anyway. TestCopilotTrustGateNeedsBothLiterals holds the conjunction by
+		// rendering each literal without the other, which is the only shape that can tell an
+		// AND from an OR.
+		//
+		// Which two literals, and why not the title: the pair is what every driven rung
+		// renders, and the title "Confirm folder trust" is the one thing that does not — at
+		// width 20 it wraps and its first row scrolls off, leaving "trust" alone on the box's
+		// first visible line (TestCopilotTrustGateTitleIsGoneAtWidth20). Head-truncated, not
+		// absent: a matcher keyed on a title SUFFIX would still fire there, which is exactly
+		// why a title is the wrong thing to key on — what it fires on is not the title.
+		{Name: "trust", Match: copilotTrustGateVisible},
+	},
+}
+
+// copilotModalUp backs the adapter's ModalVeto: an anchored box whose bottom border all but
+// ends the pane, which for copilot means one of its two dialogs is open.
+//
+// It reads no literal, deliberately — that is the whole reason it exists, and ModalVeto's doc
+// carries the delivery hole a literal cannot cover. What makes the structural test sound here is
+// that copilot's composer is BORDERLESS (claude's arrangement), so it is never such a box: a
+// bare "❯" between two full-width horizontal rules, with the status footer below.
+//
+// That is held on a DRIVEN IDLE ladder, which is the pane it has to be true of and the one this
+// argument used to be unable to cite — TestCopilotIdleComposerIsNotABox, seven widths from 20 to
+// 120. Before that ladder was driven the citation was a busy-only ladder, and the idle captures
+// that would have settled it had been discarded as invalid; the claim held, but nothing on disk
+// said so. TestCopilotBusyPanesStayDeliverable holds the same property mid-turn.
+//
+// It inherits bottomBoxBlock's disclosed exposure — quoted box art that ends the pane — and
+// pays for it in the safe direction: a pane that trips this holds its queued prompt instead of
+// typing it onto something that is not a composer.
+func copilotModalUp(content string) bool {
+	_, ok := bottomBoxBlock(content)
+	return ok
+}
+
+// copilotPasteChipRegex and copilotSavedPasteRegex are copilot's two collapsed-paste
+// placeholders, taken from the vendor's own producers and matchers in the 1.0.80 bundle rather
+// than from a screenshot. Both sides are quoted here because they DISAGREE, and the disagreement
+// is what these patterns have to absorb:
+//
+//	producers   nbi = (t,e) => `[Paste #${t} - ${e} lines]`
+//	            PAn = (t,e) => `[Saved pasted content to workspace (${e}) id=${t}]`
+//	matchers    /\[Paste #(\d+)(?: - \d+ lines)?\]/g
+//	            /\[Saved pasted content to workspace \([^)]+\) id=(\d+)\]/g
+//
+// Three things follow, each of which a fixture got wrong before it was read off the bundle:
+//
+//   - The parenthesized value is a formatted BYTE SIZE, not a filename: PAn is called as
+//     PAn(oe, te.formattedSize) and formattedSize is Xft(r.sizeBytes) = shellFormatBytesHuman.
+//     The object beside it does carry filePath, and only the sibling <pasted_content …/> XML
+//     builder reads that. So the real string is "(12.3 KB)", never "(paste-2.txt)".
+//   - The line-count half is NOT optional in the producer, but IS optional in the matcher — so
+//     a bare "[Paste #N]" is a shape copilot accepts back from its own composer while never
+//     writing one. This follows the matcher, because reading the composer back is exactly what
+//     this predicate does.
+//   - The producer has no pluralization: e=1 renders "1 lines". `lines?` here is tolerance for a
+//     future vendor fix, not a shape 1.0.80 emits.
+//
+// The tolerance is deliberate in the fail-open direction, and that is the safe one: PasteCollapsed
+// is the sole landing signal for a collapsed prompt, so a pattern that is too NARROW re-pastes a
+// chip per retry forever (the loop wiring this field prevents), while one that is too wide can
+// only mistake an unrelated bracketed string the user typed for their own paste landing.
+var (
+	copilotPasteChipRegex  = regexp.MustCompile(`\[Paste #\d+(?: - \d+ lines?)?\]`)
+	copilotSavedPasteRegex = regexp.MustCompile(`\[Saved pasted content to workspace \([^)]+\) id=\d+\]`)
+)
+
+// copilotPasteCollapsed backs the copilot adapter's PasteCollapsed: whether the input-box
+// readback is one of copilot's two paste placeholders rather than the pasted text itself.
+// Either shape means the paste landed, which is all the delivery path asks.
+func copilotPasteCollapsed(boxText string) bool {
+	return copilotPasteChipRegex.MatchString(boxText) || copilotSavedPasteRegex.MatchString(boxText)
+}
+
+// copilotTrustHeadline and copilotTrustOption are the folder-trust gate's two literals, as
+// consts so the guards measure against the symbol the matcher reads rather than restating a
+// string. Both survive every driven rung; the title does not, which is why neither is it.
+//
+// THEY ARE NOT GUARDED ALIKE, and saying so is the point. Shortening either one keeps the
+// ladder green — a conjunction only narrows as its terms lengthen — so what the ladder holds
+// is that both are REACHABLE at every rung, not that either is the shortest sufficient form.
+// Lengthening one past what the narrowest rung renders is what reddens it. That the
+// conjunction is an AND at all is a separate property, and a ladder of real dialogs cannot
+// test it: both dialogs differ in BOTH literals, so every fixture agrees with an OR.
+// TestCopilotTrustGateNeedsBothLiterals and TestCopilotApprovalNeedsBothLiterals are the
+// single-literal panes that do not.
+const (
+	copilotTrustHeadline = "Do you trust the files in this folder?"
+	copilotTrustOption   = "Yes, and remember this folder for future sessions"
+)
+
+// copilotDialogVisible is the shape both copilot dialogs share: two literals inside the
+// bottom-most anchored box, read through flattenBottomBox so a headline hard-wrapped across
+// the box's own borders still reconstructs.
+//
+// Two clauses doing different jobs, the way geminiTrustGateVisible's do. The box says a
+// dialog is LIVE — a dismissed one is replaced by the composer, which for copilot is not an
+// anchored box, so this goes false; and it is what keeps the wall-stripping scan off the whole
+// pane. The literal pair says WHICH dialog, and both terms are needed: each headline is
+// ordinary English and each option label is the specific half.
+//
+// One helper for both rather than two identical bodies, so the conjunction and the anchor are
+// one thing to review and one thing to change. What differs between the two dialogs is only
+// their literals, which is also why no fixture can distinguish this AND from an OR.
+//
+// What the box clause narrows and does not close is bottomBoxBlock's own disclosed exposure —
+// quoted box art that ends the pane. A transcript quoting a dialog and stopping exactly at its
+// bottom border does fire this. That direction fails CLOSED (a queued prompt is held, never
+// mis-delivered), which GateUp's own doc records as the acceptable one.
+func copilotDialogVisible(content, headline, option string) bool {
+	flat, ok := flattenBottomBox(content)
+	if !ok {
+		return false
+	}
+	return strings.Contains(flat, headline) && strings.Contains(flat, option)
+}
+
+// copilotTrustGateVisible reports copilot's folder-trust screen.
+func copilotTrustGateVisible(content string) bool {
+	return copilotDialogVisible(content, copilotTrustHeadline, copilotTrustOption)
+}
+
+// copilotApprovalHeadline and copilotApprovalOption are the approval dialog's two literals.
+// The option label deliberately starts at "Yes," and not at the selector: the space between
+// "❯" and "2." is not stable and not monotonic in width, so including it would pass a wide
+// check and fail at a narrower one while passing again narrower still.
+// TestCopilotApprovalOptionExcludesTheSelector carries the eight readings.
+//
+// Neither the decline row "3. No (Esc)" nor the "↑/↓ to navigate · enter to select · esc to
+// cancel" footer appears here, though both survive every width: the folder-trust dialog
+// renders them identically, so neither can discriminate.
+const (
+	copilotApprovalHeadline = "Do you want to allow this?"
+	copilotApprovalOption   = "Yes, and add these directories to the allowed list"
+)
+
+// copilotApprovalVisible reports copilot's out-of-worktree path approval. Same two clauses as
+// copilotTrustGateVisible, through the same helper, and the literal pair matters more here
+// than there because this adapter's two dialogs share their decline row and their entire
+// navigation footer.
+//
+// It carries NoAutoTap on the matcher rather than relying on this predicate's precision, and
+// that is not belt-and-braces: bottomBoxBlock's disclosed exposure is quoted box art that ends
+// the pane, and a session reading this very file could produce it. What NoAutoTap costs is a
+// needs-input on a working session. What it buys is bounded, and the bound is worth stating
+// exactly: no AUTOYES TAP can widen the agent's allowed-path list. It says nothing about the
+// delivery path, because NoAutoTap is consulted only once DetectPrompt has fired — the pane
+// where this matcher is blind is covered by ModalVeto instead.
+func copilotApprovalVisible(content string) bool {
+	return copilotDialogVisible(content, copilotApprovalHeadline, copilotApprovalOption)
+}
+
 // Generic is the adapter for programs no table entry recognizes: no markers
 // (content-change fallback), no prompt or gate detection, no resume. Strictly
 // the pre-adapter behavior for an unknown agent — except that unknown agents no
@@ -1861,7 +2171,7 @@ var Generic = &Adapter{
 
 // registry is ordered; Resolve returns the first alias match. Aliases are
 // disjoint today, so order is cosmetic.
-var registry = []*Adapter{claude, codex, gemini, aider, agy}
+var registry = []*Adapter{claude, codex, gemini, aider, agy, copilot}
 
 // Resolve maps a program string to its adapter, or Generic when no entry
 // matches; it never returns nil. The program's first token is basenamed and

@@ -37,6 +37,7 @@ const (
 	KeyGemini  Key = "gemini"
 	KeyAider   Key = "aider"
 	KeyAgy     Key = "agy"
+	KeyCopilot Key = "copilot"
 	KeyGeneric Key = "generic"
 )
 
@@ -191,6 +192,33 @@ type Adapter struct {
 	// also holds numbers and objects, and a non-bool reads as unknown, never as a
 	// flip. Nil (every adapter but claude) = no gates pinned, nothing reported.
 	VerifiedGates []VerifiedGate
+	// VersionMarker is a substring the binary's `--version` output must contain for that
+	// binary to be this agent's CLI. Empty (every adapter but copilot) means the name is not
+	// contested.
+	//
+	// It exists because a binary NAME is not an identity. "copilot" is also the AWS Copilot
+	// CLI's binary name, so on a machine with that one installed Atrium offers a profile whose
+	// program prints deployment help and exits, and Resolve hands it this adapter's
+	// folder-trust gate and busy marker. The discriminator was driven and written into the spec
+	// ("GitHub Copilot CLI 1.0.80"); this is what reads it.
+	//
+	// ONE CONSUMER, and that is the design rather than an oversight: doctor.Check, which
+	// reports a mismatch as StatusForeign instead of as this agent having drifted past its pin.
+	// Detection does NOT read it. Checking a marker means running `<bin> --version`, which for
+	// copilot 1.0.80 costs ~1.4s warm and unpacks a platform package into ~/.cache/copilot,
+	// and config detection is reached synchronously from every path that needs a config in
+	// hand; wiring it there was measured and reverted (see config.DetectAgentProfiles).
+	// doctor already runs `--version` for every agent, so it answers the question for free.
+	//
+	// The cost of that is a real hole, stated rather than papered over: `atrium new --profile
+	// copilot` on such a machine still creates a session, and it dies at launch. What the user
+	// gets is `atrium doctor` naming the reason, not prevention.
+	//
+	// A MARKER, not a version parse: the question is whose CLI this is, which is answered by
+	// the vendor string and not by the digits. agent.Resolve deliberately does not consult it
+	// either — it is a pure function over a program string and cannot exec anything — so a
+	// hand-written profile pointing at the wrong copilot still resolves here.
+	VersionMarker string
 
 	// aliases are lowercased substrings matched against the basename of the
 	// program's first token by Resolve.
@@ -295,6 +323,47 @@ type Adapter struct {
 	// the others'. Codex proves the point twice: its banner line "│ >_ OpenAI Codex" and
 	// its "> You are in <dir>" header both read as a composer under the default set.
 	InputBoxPrompts []string
+
+	// ModalVeto reports that the pane's bottom chrome is a MODAL the agent drew, not its
+	// live composer, even though a composer glyph is on screen. It has two consumers, and both
+	// directions matter: InputBoxText returns no readback, so prompt delivery is held, and the
+	// poller classifies the pane PaneGate, so the row says needs-input instead of Ready.
+	//
+	// It exists because the composer glyph is not always the composer's. Several agents draw
+	// their dialog's selected row with the same glyph, which InputBoxVisible's own doc records
+	// as unfixable ON THAT LINE'S SHAPE — and the pairing it prescribes instead (GateUp and
+	// DetectPrompt) is a LITERAL match, so it holds only while the dialog's literals are on
+	// screen. A pane shorter than the dialog scrolls the headline off while leaving the
+	// selector, the option rows and the whole nav footer visible: the literals go, the glyph
+	// stays, and AwaitingInput (!GateUp && !DetectPrompt && InputBoxVisible) goes TRUE on a
+	// modal. A queued prompt is then typed into it and Enter selects the highlighted option.
+	// Copilot's is "Yes, and add these directories to the allowed list", so the convenience
+	// feature widens the agent's filesystem reach. NoAutoTap cannot help: it is consulted
+	// only once DetectPrompt has already fired.
+	//
+	// So this is deliberately STRUCTURAL, never a literal: it must hold at a pane height where
+	// no literal is left to read. copilotModalUp is the worked example — an anchored box whose
+	// bottom border all but ends the pane, which copilot's borderless composer never is.
+	// TestCopilotNeverDeliversAPromptIntoADialog walks each driven rung down from its full
+	// height and measures the composed triple at every height where the veto still holds;
+	// TestCopilotBusyPanesStayDeliverable holds the other direction, that the veto has not
+	// simply killed delivery.
+	//
+	// nil for every other adapter, and that is NOT a finding that the others are safe — it is
+	// that nobody has driven the height axis for them. Their ladders are width ladders, so the
+	// question has not been asked. The class is already documented here for one of them:
+	// gemini's IdeIntegrationNudge is a screen where DetectPrompt and GateUp both measured
+	// false while InputBoxVisible measured true, and what closed it was giving that dialog its
+	// own Gate (#717) — a literal, which is the remedy this field exists to complement rather
+	// than replace.
+	//
+	// It is still NOT a substitute for Gates/Prompts. A Gate names the dialog it matched, and a
+	// Prompt carries NoAutoTap and an answer key; the veto is a structural "something modal ends
+	// this pane" and can name nothing. So it reports PaneGate, which surfaces needs-input and
+	// auto-taps nothing — right for a dialog nobody has anchored, wrong as a replacement for
+	// anchoring one. An adapter should still grow a literal Gate for the heights that have one;
+	// the veto is what covers the heights below.
+	ModalVeto func(content string) bool
 
 	// Gates are the startup screens this agent can show.
 	Gates []Gate
@@ -513,7 +582,18 @@ func (a *Adapter) gateWindow() int {
 // confirm a queued prompt actually landed in the composer before it is submitted. The
 // agent's own prompt glyph is stripped, since the signature it is compared against does
 // not carry one.
+//
+// ModalVeto is applied HERE rather than in InputBoxVisible, because this is the readback the
+// delivery actually acts on. Vetoing only the readiness predicate left the hole it was added to
+// close: SendPrompt checks AwaitingInput once and then calls boxHoldsPrompt, so a dialog that
+// rises in between was read as composer text — and on every driven copilot dialog pane that
+// text is the dialog's own option rows ("Yes", "Yes, and add …"), which a queued prompt's
+// signature can be a substring of. That path skips typing and taps Enter on the highlighted
+// option. One veto site, and InputBoxVisible derives from it, so the two can no longer disagree.
 func (a *Adapter) InputBoxText(content string) (string, bool) {
+	if a.ModalVeto != nil && a.ModalVeto(content) {
+		return "", false
+	}
 	return inputBoxText(content, a.inputBoxPrompts())
 }
 
@@ -531,7 +611,12 @@ func (a *Adapter) InputBoxText(content string) (string, bool) {
 // does — additionally presents a box line on a frame whose composer an overlay has replaced.
 // So the caller must pair this with GateUp and DetectPrompt, which is what excludes those
 // screens; on codex's trust gate at narrow widths that pairing is what GateWindow protects.
+//
+// That pairing is a LITERAL match, so it covers only the pane heights where the dialog's
+// literals are still on screen. ModalVeto is the structural half for an agent whose dialog
+// outgrows the pane and takes its headline with it; see that field. It is read through
+// InputBoxText, which this is now a thin predicate over.
 func (a *Adapter) InputBoxVisible(content string) bool {
-	_, ok := inputBoxText(content, a.inputBoxPrompts())
+	_, ok := a.InputBoxText(content)
 	return ok
 }

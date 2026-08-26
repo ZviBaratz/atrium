@@ -27,6 +27,27 @@ import (
 // at all. agy's "✜" is a plus-shaped cross; the nearest thing the row draws is
 // prCheckGlyph's failing-CI "✗" (ui/row.go), a saltire rather than a plus. A star was
 // the other candidate for agy and would have read as a second gemini.
+//
+// copilot's "⎈" (U+2388 HELM SYMBOL) is a pilot's wheel. Three separate claims this comment made
+// about it turned out to be false, so what is left is the reasoning that does not depend on a
+// measurement, and the measurements are gone rather than corrected a fourth time.
+//
+// The deleted ones, named so nobody re-derives them: that U+2388 being one codepoint below
+// Branch's U+2387 means a font rendering one renders the other (fonts are built by block and by
+// demand, not by neighbour); that the two codepoints' font coverage here is "disjoint" (33 of the
+// 35 families covering either cover BOTH — only the DejaVu split is disjoint); and a per-glyph
+// tally of covering families, whose last figure was also wrong. All three were host-specific
+// `fc-list` readings dressed as properties of the glyph, and no test in this repo can hold one.
+//
+// What survives, because it does not need a count: ⎈ is a HELM, ⎇ is an alternate-key fork, and
+// they do not share a shape. Nor do they share much of a frame — displayBranch
+// (ui/list_render.go) prints the branch NAME with no glyph, and Glyphs.Branch has exactly one
+// production consumer, the ? legend (app/help.go), so the two appear together only in a labelled
+// list, the weakest confusability setting there is. The circle family was ruled out first —
+// Ready "●", ReadySeen "○" and AcctAvailable "●" have it — and the diamond family second, for
+// the reason codex's entry already records about "◆". A glyph this far into the box-drawing
+// technical block is the most tofu-prone in the plain set whatever the exact tally, which is
+// what the ascii rung below exists for.
 func plainAgentGlyphs() map[string]string {
 	return map[string]string{
 		"claude":  "✻", // claude code's own spinner glyph
@@ -34,6 +55,7 @@ func plainAgentGlyphs() map[string]string {
 		"gemini":  "✦",
 		"aider":   "≡",
 		"agy":     "✜", // a plus-cross; see the note above on what that was checked against
+		"copilot": "⎈", // U+2388 HELM SYMBOL — a pilot's wheel; see above on what it was checked against
 		"generic": "•",
 	}
 }
@@ -72,6 +94,7 @@ func plainAgentGlyphs() map[string]string {
 //	aider   A  free — aider has been in this table since #67, so it keeps the letter
 //	agy     N  a and g are claimed and Y is Branch, which exhausts the key: fall to the
 //	           product name, a(n)tigravity
+//	copilot P  c is claude's and o is ReadySeen, so co(p)ilot
 //	generic .  not a name. The quietest 7-bit mark there is, standing in for "•" — the
 //	           unknown-agent marker should recede, not announce itself
 //
@@ -88,6 +111,7 @@ func asciiAgentGlyphs() map[string]string {
 	g["gemini"] = "G"
 	g["aider"] = "A"
 	g["agy"] = "N"
+	g["copilot"] = "P"
 	g["generic"] = "."
 	return g
 }

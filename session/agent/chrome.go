@@ -3,6 +3,7 @@ package agent
 import (
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -12,7 +13,25 @@ import (
 // The input is expected to be cleaned for detection already (ANSI stripped,
 // trailing whitespace trimmed — see tmux's cleanForDetection).
 
-var whiteSpaceRegex = regexp.MustCompile(`\s+`)
+// whiteSpaceRegex is the run-of-whitespace every flattening pass collapses. It is NOT `\s+`:
+// Go's \s is [\t\n\f\r ], so a NO-BREAK SPACE (U+00A0) is not whitespace to it, and an agent
+// that pads with one leaves a rune sitting inside a phrase a matcher is about to look for.
+// Copilot 1.0.80 pads the command it echoes into its transcript with them ("● Executing
+// \u00a0cat /etc/hostname\u00a0 now.") — so this is measured rather than defensive. WHICH
+// fixtures carry them, and how many, is a datum the test reads off the panes rather than a
+// number here: TestFlatteningNormalizesNoBreakSpace.
+//
+// The class is `\p{Zs}`, not the single U+00A0 this first shipped with, because U+00A0 is not
+// the only space Go already treats as one: strings.TrimSpace and the callers around here go
+// through unicode.IsSpace, which spans U+2007, U+2009, U+202F, U+205F and U+3000 too. Fixing one
+// rune left this pass narrower than every neighbour it feeds, and the gap was in the
+// fail-dangerous direction — see isHorizontalRule, where a border row padded with any of them
+// takes the box anchor down and reports "no dialog on screen". Zs rather than IsSpace because
+// the vertical whitespace IsSpace also covers is what `\s` already contributes.
+//
+// U+200B ZERO WIDTH SPACE is deliberately NOT in either class: Go does not call it a space and
+// it has no width, so collapsing it would join two words that render as two words.
+var whiteSpaceRegex = regexp.MustCompile(`[\s\p{Zs}]+`)
 
 // pasteChipRegex matches claude's collapsed-paste placeholder in an input-box readback, e.g.
 // "[Pasted text #1 +29 lines]" — the readback of a ≥4-line bracketed paste (claude renders it
@@ -59,6 +78,93 @@ func flattenChrome(content string, n int) string {
 	return whiteSpaceRegex.ReplaceAllString(liveChromeLines(content, n), " ")
 }
 
+// flattenBottomBox returns the pane's bottom-most anchored box as one whitespace-normalized
+// line, with the interior rows' side walls removed first, and reports whether such a box was
+// on screen at all.
+//
+// It exists because a dialog drawn INSIDE box borders wraps its body rather than truncating
+// it, and the border runes and their padding then sit between a sentence's fragments:
+// copilot 1.0.80's folder-trust headline reconstructs through flattenChrome as
+// "…files in this │ │ folder?…", which no amount of newline collapsing can rejoin. Stripping
+// the walls before flattening recovers it, and that was measured at every driven rung rather
+// than reasoned about — see the copilot ladders in copilot_pane_test.go, whose narrowest is
+// the one flattenChrome cannot reach.
+//
+// IT DELIBERATELY SYNTHESISES ACROSS ROWS, which inverts bottomBoxBlock's own contract.
+// That function returns lines unjoined precisely so a caller matching a literal gets no
+// cross-line synthesis; here the synthesis IS the feature. The trap it inverts (#713,
+// gemini's trust gate) was flattening across a bottom-N WINDOW, where the transcript scrolls
+// through and any two neighbouring lines can manufacture a phrase neither renders. Confining
+// it to one box's interior is a NARROWING of that surface, and an earlier draft of this doc
+// claimed it was a closure — "the only text that can combine is text the dialog itself drew".
+// It is not, in two measured ways, and both are held by
+// TestFlattenBottomBoxSynthesisSurface rather than described here:
+//
+//   - A BLANK interior row used to be a zero-width joiner. It strips to "" and the collapse
+//     folded it away, so four rows reading "Do you trust the" / "" / "files in this" /
+//     "folder?" flattened to exactly copilotTrustHeadline — a phrase spliced across a
+//     paragraph break that no paragraph rendered. It is now boxRowGap, a separator no literal
+//     can span, which is what makes the nested-box paragraph below true of blank rows too.
+//   - The wall run walks up until a row is not box interior, and what normally stops it is
+//     the box's TOP border, which isBoxWallLine rejects. On a pane shorter than the box that
+//     border has scrolled off — copilotTrustgateW20Pane is already in that state — so the
+//     walk continues into whatever sits above, and walled transcript rows join the interior.
+//     That direction manufactures a dialog that is not there, which fails CLOSED (a queued
+//     prompt is held, never mis-delivered) and is the direction GateUp's own doc records as
+//     acceptable. Closing it needs a top-border requirement, which bottomBoxBlock measured
+//     and rejected for a better reason — see its HEIGHT case.
+//
+// What it does NOT strip is a NESTED box's own borders. Copilot draws the path under review
+// inside a second box, and leaving those runes in place keeps them as separators, so a
+// literal cannot be manufactured across one. The outer walls are the only thing removed, and
+// TestStripBoxWallsKeepsANestedBoxWall holds that on a real doubly-walled path row rather
+// than on the nested box's corners, which no wall-stripping implementation would touch.
+//
+// ok=false means no box whose bottom border all but ends the pane. For THIS adapter that is
+// the composer frame, because copilot's composer is borderless between two horizontal rules;
+// it is not a general claim about composers, and the sentence here used to make one. gemini's
+// composer is itself a round-bordered box, so flattenBottomBox returns ok=TRUE on its idle
+// pane — TestFlattenBottomBoxIsTrueOnABoxDrawnComposer. Any adapter reading liveness off this
+// predicate must first know which shape its own composer is.
+//
+// Input must already be cleaned for detection (ANSI stripped), like every other predicate here.
+func flattenBottomBox(content string) (string, bool) {
+	// Make the sentinel's premise true by construction rather than asserting it: a NUL arriving
+	// in the pane would otherwise be indistinguishable from a blank-row separator and could
+	// break a literal in half. Stripping it before the scan covers a live pane, which no test
+	// over committed fixtures can.
+	block, ok := bottomBoxBlock(strings.ReplaceAll(content, boxRowGap, ""))
+	if !ok {
+		return "", false
+	}
+	parts := make([]string, 0, len(block))
+	for _, line := range block {
+		if interior := stripBoxWalls(line); interior != "" {
+			parts = append(parts, interior)
+			continue
+		}
+		parts = append(parts, boxRowGap)
+	}
+	flat := whiteSpaceRegex.ReplaceAllString(strings.Join(parts, " "), " ")
+	return strings.Trim(flat, " "+boxRowGap), true
+}
+
+// boxRowGap is what flattenBottomBox writes where a box interior row is BLANK — a padding row,
+// or the blank line a dialog puts between its headline and its options.
+//
+// It is a separator, and it has to be one that cannot be part of any literal a caller matches,
+// because the whole point is that a phrase must not be reconstructed ACROSS a paragraph break.
+// A space would be folded into the collapse and rejoin the fragments; a printable rune could in
+// principle be one an agent draws. NUL is neither, and flattenBottomBox strips it from its input
+// so that stays true of a live pane and not just of the panes anyone has captured.
+//
+// It used to be justified by a test scanning this package's fixtures for a NUL. That test could
+// not fail: a raw NUL is `illegal character NUL` to the Go compiler, so the package cannot build
+// in any state where the assertion could fire, and a fixture that genuinely captured one would be
+// written as the escape "\x00", which a scan of the raw bytes does not see. Removing the input
+// by construction is what a scan was standing in for.
+const boxRowGap = "\x00"
+
 // isHorizontalRule reports whether line is a box-drawing horizontal border — the top or
 // bottom edge of claude's input box. Such a line is made only of horizontal dashes, box
 // corners/sides, and padding, and contains a real run of dashes (so a prose line with a
@@ -73,10 +179,19 @@ func isHorizontalRule(line string) bool {
 		switch r {
 		case '─':
 			dashes++
-		case '╭', '╮', '╰', '╯', '│', '┌', '┐', '└', '┘', '├', '┤', ' ':
-			// box corners/sides and interior padding are allowed
+		case '╭', '╮', '╰', '╯', '│', '┌', '┐', '└', '┘', '├', '┤':
+			// box corners and sides
 		default:
-			return false
+			// Any Unicode space is interior padding. Rejecting one costs the whole box anchor,
+			// so a single such rune in a border row would take bottomBoxBlock down and report
+			// "no dialog on screen" — the fail-dangerous direction, on the surface that renders
+			// a command and a path. Copilot 1.0.80 emits U+00A0; this admits the rest of the
+			// class for the same reason whiteSpaceRegex does, since the TrimSpace above already
+			// treats them all as space and it would be strange for the scan between them not to.
+			// TestHorizontalRuleAcceptsNoBreakSpacePadding.
+			if !unicode.IsSpace(r) {
+				return false
+			}
 		}
 	}
 	return dashes >= 3
@@ -543,6 +658,23 @@ func isInputBoxLine(line string, prompts promptSet) bool {
 	return false
 }
 
+// stripBoxWalls removes a box interior line's left and right side walls and the whitespace
+// around them. It is the wall half of stripBoxInterior, split out because two callers now
+// need it and only one of them wants the composer glyph taken off as well: stripBoxInterior
+// reads back what a user typed into a composer, so the glyph must go (the signature it is
+// compared against does not carry one); flattenBottomBox reads a DIALOG's prose, where the
+// same glyph is the selection pointer on the highlighted row and carries meaning.
+//
+// One function knows what a wall looks like, so an agent that draws a different one is a
+// single edit rather than a hunt. Only the LIGHT wall is accepted, matching isBoxWallLine —
+// see its doc for why the heavy form was dead code the compiler could not see.
+func stripBoxWalls(line string) string {
+	s := strings.TrimSpace(line)
+	s = strings.TrimSpace(strings.TrimPrefix(s, "│")) // left border
+	s = strings.TrimSpace(strings.TrimSuffix(s, "│")) // right border
+	return s
+}
+
 // stripBoxInterior removes an input-box interior line's side borders, its leading prompt
 // glyph (one of prompts), and surrounding whitespace, leaving just the typed text. Used
 // to read back what the user (or a queued-prompt send) has entered into the composer.
@@ -551,9 +683,7 @@ func isInputBoxLine(line string, prompts promptSet) bool {
 // removed — a composer line opens with exactly one, and stripping a second would eat
 // real text on an agent whose glyph is a legal first character of user input.
 func stripBoxInterior(line string, prompts promptSet) string {
-	s := strings.TrimSpace(line)
-	s = strings.TrimSpace(strings.TrimPrefix(s, "│")) // left border
-	s = strings.TrimSpace(strings.TrimSuffix(s, "│")) // right border
+	s := stripBoxWalls(line)
 	for _, g := range prompts {
 		if rest, ok := strings.CutPrefix(s, g); ok {
 			return strings.TrimSpace(rest)

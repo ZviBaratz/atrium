@@ -229,8 +229,24 @@ func TestClaudePasteCollapsed(t *testing.T) {
 	}
 	// Derived from Adapters(), not a hardcoded name list: the literal one this replaced
 	// read {"codex","gemini","aider"} and had silently skipped agy since #512 added it.
+	//
+	// The table is the set of agents that COLLAPSE a paste, and it is a table rather than a
+	// "claude and nobody else" branch because that branch turned the field into a trap: it
+	// asserted every other adapter leaves the field nil, so an adapter whose CLI does collapse
+	// pastes could not be wired without reddening this test. Copilot's does, on by default at
+	// 1.0.80, and it shipped nil past this assertion — the guard against a missing predicate
+	// had become a guard against the fix.
+	//
+	// Membership is a claim about the vendor, so each entry names where it was read.
+	collapses := map[Key]bool{
+		KeyClaude:  true, // "[Pasted text #N +L lines]", pasteChipRegex
+		KeyCopilot: true, // "[Paste #N - L lines]", copilotPasteChipRegex
+	}
 	for _, a := range Adapters() {
-		if a.Key == KeyClaude {
+		if collapses[a.Key] {
+			if a.PasteCollapsed == nil {
+				t.Errorf("%s collapses pastes and must wire PasteCollapsed", a.Key)
+			}
 			continue
 		}
 		if a.PasteCollapsed != nil {
@@ -256,6 +272,15 @@ var composerPanes = map[Key]string{
 	KeyGemini: geminiIdlePane,
 	KeyAider:  aiderIdlePane,
 	KeyAgy:    agyIdlePane,
+	// The DRIVEN idle pane. This entry used to be the widest BUSY rung, standing in for an
+	// idle one on the claim that "the difference is nil". Driving the idle ladder settled it:
+	// the claim was true — at w120 the four rows from the header through the bottom rule are
+	// byte-identical between the two, and only the row below differs (the nav footer versus
+	// "● Working · 544 B esc interrupt") — but no capture in the tree could show it, because
+	// the first sweep's idle captures were driven and then discarded as invalid. A true claim
+	// with its evidence deleted is the shape this table exists to prevent, so the fixture is
+	// now the thing itself; see copilotIdleLadder.
+	KeyCopilot: copilotIdleW120Pane,
 }
 
 func TestAdapterInputBoxVisible(t *testing.T) {

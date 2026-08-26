@@ -13,6 +13,8 @@ func (s Status) label() string {
 		return "⚠ drifted"
 	case StatusNotInstalled:
 		return "not installed"
+	case StatusForeign:
+		return "⚠ another CLI owns this name"
 	default:
 		return "unknown"
 	}

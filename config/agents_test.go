@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/ZviBaratz/atrium/session/agent"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -97,4 +98,33 @@ func TestDefaultConfigDoesNotProbe(t *testing.T) {
 	cfg := DefaultConfig()
 	assert.Equal(t, "claude", cfg.DefaultProgram)
 	assert.Empty(t, cfg.Profiles, "DefaultConfig must not run agent detection")
+}
+
+// agentResolveKey is the registry lookup TestKnownAgentBinsTracksTheRegistry needs, kept in one
+// place so the test file does not import session/agent just for a key comparison.
+func agentResolveKey(bin string) agent.Key {
+	return agent.Resolve(bin).Key
+}
+
+// TestDetectReportsAContestedBinaryWithoutVerifyingIt pins the altitude choice, in the
+// direction that is easy to undo by accident.
+//
+// `copilot` is the one contested name in the probed set — it is also the AWS Copilot CLI's
+// binary — and the temptation is to settle it here, by running `<bin> --version` and comparing
+// against the adapter's VersionMarker. That was tried and reverted: detection is reached from
+// every path that needs a config in hand, several of them synchronously before the first frame,
+// so a third-party exec here turned `atrium debug` on a fresh HOME from instant into 1.4s and
+// four root-package tests from 1.9s to 53s. No CI runner has copilot installed, so all of that
+// was invisible to CI — which is why the guard is a test and not a comment.
+//
+// So detection stays a pure PATH lookup and reports what is installed under each name. The
+// contested name is answered in `atrium doctor`, which already runs `--version` for every agent;
+// TestDoctorIsWhereAContestedNameIsAnswered (internal/doctor) holds the two halves together,
+// since this package cannot import that one.
+func TestDetectReportsAContestedBinaryWithoutVerifyingIt(t *testing.T) {
+	stubDetect(t, map[string]string{"copilot": "copilot"})
+	assert.Equal(t, []Profile{{Name: "copilot", Program: "copilot"}}, DetectAgentProfiles(),
+		"detection reports what is on PATH under an agent's name and does not exec it")
+	assert.NotEmpty(t, SeededDefaultConfig().Profiles,
+		"and so does the in-memory fallback the headless commands re-derive")
 }
