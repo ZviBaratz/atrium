@@ -338,10 +338,19 @@ type Adapter struct {
 	// height of every driven rung; TestCopilotBusyPanesStayDeliverable holds the other
 	// direction, that the veto has not simply killed delivery.
 	//
-	// nil for agents whose dialogs the literal pairing already covers at every reachable pane
-	// height. It is NOT a substitute for Gates/Prompts: a vetoed pane reports no needs-input,
-	// so the prompt is held rather than surfaced — fail-closed, which is the direction GateUp's
-	// own doc records as acceptable, and strictly better than delivery onto a dialog.
+	// nil for every other adapter, and that is NOT a finding that the others are safe — it is
+	// that nobody has driven the height axis for them. Their ladders are width ladders, so the
+	// question has not been asked. The class is already documented here for one of them:
+	// gemini's IdeIntegrationNudge is a screen where DetectPrompt and GateUp both measured
+	// false while InputBoxVisible measured true, and what closed it was giving that dialog its
+	// own Gate (#717) — a literal, which is the remedy this field exists to complement rather
+	// than replace.
+	//
+	// It is NOT a substitute for Gates/Prompts either. A vetoed pane reports no needs-input, so
+	// the prompt is held rather than surfaced — fail-closed, which is the direction GateUp's own
+	// doc records as acceptable, and strictly better than delivery onto a dialog. Surfacing it
+	// properly would need a state the poller does not have, and no driven capture of a
+	// short-pane dialog to test it against.
 	ModalVeto func(content string) bool
 
 	// Gates are the startup screens this agent can show.
