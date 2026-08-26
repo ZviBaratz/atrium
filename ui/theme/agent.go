@@ -36,9 +36,10 @@ import (
 // `fc-list :charset=2387` and `:charset=2388` on a Debian desktop put ⎇ in DejaVu Sans and
 // DejaVu Sans Condensed, and ⎈ in DejaVu Sans MONO — disjoint, and the monospace half is the
 // one a terminal actually resolves. So the conclusion holds for a better reason than the one
-// given, and the neighbour test was not a test. Both glyphs sit in 35 families here, which is
-// the JOINT LOWEST in this table (✻/✦/✜ 38, ❖ 53, ≡ 84, • 101) — the honest summary is that
-// this is the most tofu-prone entry in the plain set, which is what the ascii rung is for.
+// given, and the neighbour test was not a test. ⎈ is also the LEAST widely covered entry in this
+// table on the machine that measured it — 35 families, against 38 for ✻/✦/✜, 53 for ❖, 84 for ≡
+// and 101 for • — so the honest summary is that it is the most tofu-prone glyph in the plain set,
+// which is what the ascii rung exists for.
 //
 // AND THEY BARELY SHARE A FRAME. It also said the branch chip sits on the row's second line
 // beside the agent glyph. There is no branch chip: displayBranch (ui/list_render.go) prints the

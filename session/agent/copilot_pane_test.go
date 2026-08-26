@@ -541,8 +541,11 @@ func TestCopilotDialogSelectorIsTheComposerGlyph(t *testing.T) {
 //
 // The second half is the anti-vacuity check, and it is not optional. If the matchers happened to
 // hold at every height, the first half would pass with the veto deleted and this test would be
-// asserting nothing. So it also requires that a blind band EXISTS — heights where the literals
-// are gone and only the veto is holding the line.
+// asserting nothing. So it also counts the heights that WOULD have been deliverable without the
+// veto — matchers blind, and the box primitive still reporting a composer — and requires that
+// band to be non-empty at every rung. That count is the finding as a number, kept in the test
+// rather than in a sentence: prose put it at "3 to 5 rows" from one arithmetic and this measures
+// it per rung from the panes.
 func TestCopilotNeverDeliversAPromptIntoADialog(t *testing.T) {
 	awaitingInput := func(pane string) bool {
 		if _, up := copilot.GateUp(pane); up {
@@ -558,7 +561,7 @@ func TestCopilotNeverDeliversAPromptIntoADialog(t *testing.T) {
 		for _, c := range ladder {
 			t.Run(c.label(), func(t *testing.T) {
 				lines := strings.Split(c.pane, "\n")
-				blind := 0
+				vetoIsWhatSavedIt := 0
 				for drop := 0; drop < len(lines); drop++ {
 					short := strings.Join(lines[drop:], "\n")
 					if !copilotModalUp(short) {
@@ -573,14 +576,16 @@ func TestCopilotNeverDeliversAPromptIntoADialog(t *testing.T) {
 
 					_, gated := copilot.GateUp(short)
 					_, prompted := copilot.DetectPrompt(short)
-					if !gated && !prompted {
-						blind++
+					_, composer := inputBoxText(short, promptSet(copilot.InputBoxPrompts))
+					if !gated && !prompted && composer {
+						vetoIsWhatSavedIt++
 					}
 				}
-				require.Positivef(t, blind,
-					"%s: no truncation of this pane left the matchers blind, so the assertion "+
-						"above would also pass with ModalVeto deleted — it must not be read as "+
-						"evidence that the veto works", c.name)
+				require.Positivef(t, vetoIsWhatSavedIt,
+					"%s: no truncation of this pane was one where the matchers went blind AND "+
+						"the box primitive still saw a composer, so the assertion above would "+
+						"also pass with ModalVeto deleted — it must not be read as evidence "+
+						"that the veto works", c.name)
 			})
 		}
 	}

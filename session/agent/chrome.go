@@ -15,9 +15,10 @@ import (
 // whiteSpaceRegex is the run-of-whitespace every flattening pass collapses. It is NOT `\s+`:
 // Go's \s is [\t\n\f\r ], so a NO-BREAK SPACE (U+00A0) is not whitespace to it, and an agent
 // that pads with one leaves a rune sitting inside a phrase a matcher is about to look for.
-// Copilot 1.0.80 emits them — 56 in the driven captures, e.g. "● Executing \u00a0cat
-// /etc/hostname\u00a0 now." — so this is measured rather than defensive.
-// TestFlatteningNormalizesNoBreakSpace.
+// Copilot 1.0.80 pads the command it echoes into its transcript with them ("● Executing
+// \u00a0cat /etc/hostname\u00a0 now.") — so this is measured rather than defensive. WHICH
+// fixtures carry them, and how many, is a datum the test reads off the panes rather than a
+// number here: TestFlatteningNormalizesNoBreakSpace.
 var whiteSpaceRegex = regexp.MustCompile("[\\s\u00a0]+")
 
 // pasteChipRegex matches claude's collapsed-paste placeholder in an input-box readback, e.g.

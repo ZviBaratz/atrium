@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -194,11 +195,30 @@ func TestNoPaneFixtureCarriesTheRowGap(t *testing.T) {
 }
 
 // TestFlatteningNormalizesNoBreakSpace and TestHorizontalRuleAcceptsNoBreakSpacePadding are the
-// two halves of one finding: Go's \s does not include U+00A0, and copilot emits them (56 in the
-// driven captures of this package). Untreated, the first costs a literal match inside a dialog
-// and the second costs the box ANCHOR — which is the fail-dangerous direction, because a border
-// row padded with one would make every matcher report "no dialog on screen".
+// two halves of one finding: Go's \s does not include U+00A0, and copilot emits them. Untreated,
+// the first costs a literal match inside a dialog and the second costs the box ANCHOR — which is
+// the fail-dangerous direction, because a border row padded with one would make every matcher
+// report "no dialog on screen".
+//
+// The premise is asserted rather than counted in prose. A count is exactly the kind of claim
+// that rots, and the first draft of this comment carried one that was wrong by a factor of two
+// — 56, which is the number of BYTES, taken from a report instead of re-derived.
 func TestFlatteningNormalizesNoBreakSpace(t *testing.T) {
+	// The DIALOG ladders, which is where they are: copilot pads the command it echoes into the
+	// transcript with them ("● Executing \u00a0cat /etc/hostname\u00a0 now."). The busy ladder
+	// carries none, and this assertion found that out by failing when it was pointed there —
+	// which is the difference between a premise and a guess.
+	nbsp := 0
+	for _, ladder := range [][]paneCapture{copilotTrustgateLadder, copilotApprovalLadder} {
+		for _, c := range ladder {
+			nbsp += strings.Count(c.pane, "\u00a0")
+		}
+	}
+	require.Positive(t, nbsp,
+		"the premise: copilot's driven dialog panes really do carry NO-BREAK SPACEs. If a "+
+			"future re-drive stops emitting them, this treatment is no longer measured — "+
+			"decide whether to keep it, do not just delete this line")
+
 	pane := "  transcript above\n" +
 		"╭──────────────────╮\n" +
 		"│ Do\u00a0you trust the │\n" +
