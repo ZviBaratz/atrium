@@ -353,6 +353,14 @@ var (
 			"which login each configured account's config_dir is actually signed in as, checks it\n" +
 			"against that account's expect_account, and flags separate accounts that turn out to share\n" +
 			"one login — the state in which sessions silently bill an account nobody routed them to.\n" +
+			"Account pool parity asks the third question those two cannot: whether members that are\n" +
+			"genuinely different logins are actually substitutes. It diffs the plugins, marketplaces\n" +
+			"and MCP servers each member's config dir is configured with — including two members that\n" +
+			"configure the same name to point somewhere different — because rotation never consults\n" +
+			"capability, so a session placed on a member lacking an integration just quietly goes\n" +
+			"without one. It reads files only, so it measures configuration and not what claude.ai has\n" +
+			"granted, and a member it could not measure is reported rather than counted as having\n" +
+			"nothing.\n" +
 			"Terminal background detection reports which rung of the light/dark ladder can answer here,\n" +
 			"for anyone whose theme: auto did not adapt: it reads COLORFGBG, and names OSC 11 as the\n" +
 			"rung that outranks it but cannot be probed from a one-shot command — that query needs the\n" +
@@ -492,9 +500,14 @@ var (
 			// names; pools catches two names on one dir; parity diffs what each
 			// member's dir is CONFIGURED with — plugins, marketplaces, MCP servers —
 			// since rotation spends the pool's interchangeability promise on every
-			// unpinned session without ever checking it. Local JSON reads only, two
-			// per dir, so no probe budget for the same reason as the two sections
-			// above.
+			// unpinned session without ever checking it. Configuration is all it
+			// measures: grant state is in no file, so a pool whose members differ
+			// only in what claude.ai granted them reads as being in parity here.
+			// Local file reads, up to three per pooled dir (settings.json,
+			// settings.local.json, .claude.json) and no subprocess, so no probe
+			// budget — though like the two sections above it resolves config through
+			// config.LoadConfig, which SEEDS config.json when absent. The probe is
+			// read-only; `atrium doctor` as a whole is not.
 			if parity := doctor.RenderParity(doctor.CheckParityInstalled()); parity != "" {
 				fmt.Println()
 				fmt.Print(parity)

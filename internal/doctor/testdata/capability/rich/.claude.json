@@ -1,9 +1,18 @@
 {
   "numStartups": 12,
   "oauthAccount": { "emailAddress": "rich@example.com", "accountUuid": "u-rich" },
-  "claudeAiMcpEverConnected": ["Gmail", "Google Calendar", "Google Drive", "Linear"],
-  "mcpServers": {
-    "linear": { "type": "http", "url": "https://mcp.linear.app/mcp" },
-    "slack": { "type": "http", "url": "https://slack.example/mcp" }
+  "claudeAiMcpEverConnected": [
+    "claude.ai Gmail",
+    "claude.ai Google Calendar",
+    "claude.ai Google Drive",
+    "claude.ai Linear"
+  ],
+  "projects": {
+    "/home/tester/Projects/atrium": {
+      "mcpServers": {
+        "linear": { "type": "http", "url": "https://mcp.linear.app/mcp" },
+        "slack": { "type": "http", "url": "https://slack.example/mcp" }
+      }
+    }
   }
 }

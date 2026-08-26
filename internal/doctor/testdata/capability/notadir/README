@@ -1,3 +1,3 @@
-A config dir claude was never onboarded in: it holds neither settings.json nor
-.claude.json, so ReadDirCapabilities cannot answer for it. The file is here only
-because git does not track empty directories.
+A config dir claude was never onboarded in: it holds no settings.json,
+settings.local.json or .claude.json, so ReadDirCapabilities cannot answer for it at
+all. The file is here only because git does not track empty directories.
