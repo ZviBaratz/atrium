@@ -479,18 +479,22 @@ func evidenceCases() []evidenceCase {
 		// in parity. So its failure mode is silence, and `names` is what carries these
 		// rows — an empty section trivially satisfies every `forbids`.
 		//
-		// Its completeness channels are NOT reflection-audited, and that is deliberate
-		// rather than an oversight. They live on config.DimensionState, in a package
-		// evidenceScanPackages does not cover, and the flag is named for the opposite
-		// polarity to every word in evidenceFlagWords: Measured false is the unknown
-		// state, so an unset field, a var and a map miss all decline to claim anything.
-		// None of Known/Unread/Unprobed/Unproven can say that — their zero value is the
-		// confident answer — and "Measured" cannot join the list, because
-		// doctor.Filesystem already has a field of that name which is a path rather than
-		// a channel, and TestEveryEvidenceChannelIsCovered would then demand a row
-		// claiming it is one. What guards these instead is the rows below plus
-		// config's own table tests; a fourth axis on config.DirCapabilities is caught by
-		// TestStateCoversEveryDimension there, not here.
+		// Its completeness channels are NOT reflection-audited. One reason, and it is
+		// enough on its own: they live on config.DimensionState, and evidenceScanPackages
+		// covers this package and session/tmux, not config.
+		//
+		// Naming is a second, narrower obstacle. DimensionState.Measured would have to be
+		// spelled into evidenceFlagWords to be matched, and that word cannot be added:
+		// doctor.Filesystem.Measured is a PATH, not a channel, so
+		// TestEveryEvidenceChannelIsCovered would immediately demand a row claiming it is
+		// one. Nothing deeper than that is true here — Measured's polarity is ordinary.
+		// The Known fields on PressureResult and Filesystem read exactly the same way,
+		// false meaning unknown, which is why an earlier version of this comment arguing
+		// that no audited word could express that polarity was simply wrong.
+		//
+		// What guards these instead is the rows below plus config's own table tests; a
+		// fourth axis on config.DirCapabilities is caught by
+		// TestDimensionsIsTheWholeConstRange there, not here.
 		{
 			name:   "a pool member's config dir will not read",
 			covers: nil,
@@ -525,20 +529,23 @@ func evidenceCases() []evidenceCase {
 			why:     "mcpServers lives only in .claude.json, so a member without one has an unknown server set and must not be reported as configuring none",
 		},
 		{
-			name:   "a member's denial list could not be read",
+			// A denial claude enforces and this build cannot express — a serverCommand
+			// entry — travels through the same channel as an unreadable server list,
+			// because availableMCPServers folds the two together. The row drives it
+			// through the REAL reader so the fold is what is being tested: read as the
+			// configured set, this member would be credited with the server it blocks.
+			name:   "a member denies a server in a way this build cannot name",
 			covers: nil,
 			render: func(t *testing.T) string {
-				return RenderParity(CheckParity(parityPool(), func(dir string) (config.DirCapabilities, bool) {
-					caps := parityFullyMeasured()
-					if dir == "/b" {
-						caps.DeniedMCPServers = config.DimensionState{}
-					}
-					return caps, true
-				}))
+				cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+					{Name: "a", ConfigDir: fixtureDir(t, "rich"), Pool: "p"},
+					{Name: "b", ConfigDir: fixtureDir(t, "cmddenial"), Pool: "p"},
+				}}
+				return RenderParity(CheckParity(cfg, config.ReadDirCapabilities))
 			},
-			forbids: []string{"is denied for"},
-			names:   []string{"MCP server denials are unverified"},
-			why:     "a denial list this build cannot read, reported as absent, says the member allows a server it blocks",
+			forbids: []string{`MCP server "`},
+			names:   []string{"MCP server parity is unverified", "not evidence of parity"},
+			why:     "a denial this build cannot express, dropped rather than reported, credits the member with a server claude blocks for it",
 		},
 		{
 			name:   "a member's connector setting could not be read",
@@ -578,8 +585,7 @@ func parityFullyMeasured() config.DirCapabilities {
 		MCPServers: config.DimensionState{
 			Measured: true, Targets: map[string]string{"linear": `{"url":"https://mcp.linear.app/mcp"}`},
 		},
-		DeniedMCPServers: measuredEmpty,
-		Connectors:       config.ConnectorsOn,
+		Connectors: config.ConnectorsOn,
 	}
 }
 

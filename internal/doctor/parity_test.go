@@ -47,11 +47,10 @@ func named(names ...string) config.DimensionState {
 // about one difference is not also about three unmeasured ones.
 func measuredCaps(plugins, marketplaces, mcp []string) config.DirCapabilities {
 	return config.DirCapabilities{
-		Plugins:          named(plugins...),
-		Marketplaces:     named(marketplaces...),
-		MCPServers:       named(mcp...),
-		DeniedMCPServers: named(),
-		Connectors:       config.ConnectorsOn,
+		Plugins:      named(plugins...),
+		Marketplaces: named(marketplaces...),
+		MCPServers:   named(mcp...),
+		Connectors:   config.ConnectorsOn,
 	}
 }
 
@@ -65,16 +64,15 @@ func TestReadDirCapabilitiesFixtures(t *testing.T) {
 		plugins      []string
 		marketplaces []string
 		mcp          []string
-		denied       []string
 		mcpKnown     bool
 		connectors   config.ConnectorState
 		ok           bool
 	}{{
+		// Denies a server it does not configure, so the available set is untouched.
 		dir:          "rich",
 		plugins:      []string{"linear@quantivly", "superpowers@obra"},
 		marketplaces: []string{"obra", "quantivly"},
 		mcp:          []string{"linear", "slack"},
-		denied:       []string{"sketchy"},
 		mcpKnown:     true,
 		connectors:   config.ConnectorsOn,
 		ok:           true,
@@ -83,18 +81,47 @@ func TestReadDirCapabilitiesFixtures(t *testing.T) {
 		plugins:      []string{"superpowers@obra"},
 		marketplaces: []string{"obra"},
 		mcp:          []string{},
-		denied:       []string{},
 		mcpKnown:     true,
 		connectors:   config.ConnectorsOff,
 		ok:           true,
 	}, {
-		// The same names as rich, every one of them pointing somewhere else — and one
-		// of the two servers denied.
+		// The same names as rich, every one of them pointing somewhere else.
 		dir:          "rewired",
 		plugins:      []string{"linear@quantivly", "superpowers@obra"},
 		marketplaces: []string{"obra", "quantivly"},
 		mcp:          []string{"linear", "slack"},
-		denied:       []string{"slack"},
+		mcpKnown:     true,
+		connectors:   config.ConnectorsOn,
+		ok:           true,
+	}, {
+		// Configures both servers and denies one by serverName, so the available set
+		// is the smaller one. Read as the configured set, this dir would pass as a
+		// substitute for rich while unable to run one of rich's two servers.
+		dir:          "denied",
+		plugins:      []string{"linear@quantivly", "superpowers@obra"},
+		marketplaces: []string{"obra", "quantivly"},
+		mcp:          []string{"linear"},
+		mcpKnown:     true,
+		connectors:   config.ConnectorsOn,
+		ok:           true,
+	}, {
+		// A serverCommand denial: enforced by claude, and not expressible as a server
+		// name, so the axis is unknown rather than the configured set.
+		dir:          "cmddenial",
+		plugins:      []string{"linear@quantivly", "superpowers@obra"},
+		marketplaces: []string{"obra", "quantivly"},
+		mcpKnown:     false,
+		connectors:   config.ConnectorsOn,
+		ok:           true,
+	}, {
+		// The ordinary onboarded dir: .claude.json and no settings.json. Its plugin,
+		// marketplace and connector axes are claude's defaults — measured and empty,
+		// not unknown — which is what stops an identical pair of these from rendering
+		// four "unverified" lines.
+		dir:          "nosettings",
+		plugins:      []string{},
+		marketplaces: []string{},
+		mcp:          []string{"linear", "slack"},
 		mcpKnown:     true,
 		connectors:   config.ConnectorsOn,
 		ok:           true,
@@ -104,7 +131,6 @@ func TestReadDirCapabilitiesFixtures(t *testing.T) {
 		dir:          "nomcp",
 		plugins:      []string{"linear@quantivly", "superpowers@obra"},
 		marketplaces: []string{"obra", "quantivly"},
-		denied:       []string{},
 		mcpKnown:     false,
 		connectors:   config.ConnectorsOn,
 		ok:           true,
@@ -131,8 +157,6 @@ func TestReadDirCapabilitiesFixtures(t *testing.T) {
 			if tc.mcpKnown {
 				assert.Equal(t, tc.mcp, got.MCPServers.Names())
 			}
-			require.True(t, got.DeniedMCPServers.Measured)
-			assert.Equal(t, tc.denied, got.DeniedMCPServers.Names())
 			assert.Equal(t, tc.connectors, got.Connectors)
 		})
 	}
@@ -222,71 +246,70 @@ func TestCheckParityReportsDivergentTargets(t *testing.T) {
 	// Nothing is missing on either side, so no member is told it lacks anything.
 	assert.NotContains(t, out, "has it")
 
-	// rewired denies a server both members configure, which is a real difference in
-	// what a session placed there can do.
-	assert.Contains(t, out, `MCP server "slack" is denied for "rewired" but not for "rich"`)
-	// rich denies a server NEITHER member configures. Ranging over the denial lists
-	// instead of over the configured servers reported that as drift, and the only way
-	// to silence it was to copy the denial into every member.
+	assert.Len(t, warns, 4)
+}
+
+// A denied server is not a capability the dir has, so the denial belongs to the MCP
+// axis rather than to one of its own. Driven through the real reader over the denied
+// fixture, which configures both servers and denies one by serverName.
+//
+// The earlier shape compared the denial LISTS as a separate dimension and got both
+// directions wrong: a member that configures and denies a server was reported as
+// having it, and two members that both deny one were reported as drifting over a
+// server neither can run.
+func TestCheckParityFoldsDenialsIntoAvailability(t *testing.T) {
+	warns := CheckParity(pooled(t, "rich", "denied"), config.ReadDirCapabilities)
+	out := RenderParity(warns)
+
+	// rich can run slack; denied configures it and blocks it. One line, in the
+	// vocabulary of what a session can actually do.
+	assert.Contains(t, out, `MCP server "slack": "rich" has it, "denied" does not`)
+	// Not a second line in a second vocabulary.
+	assert.NotContains(t, out, "denied for")
+	// linear is configured identically in both and denied in neither.
+	assert.NotContains(t, out, `MCP server "linear"`)
+	// rich denies a server NEITHER member configures. It is not a capability anyone
+	// has, so it is not drift and not a line.
 	assert.NotContains(t, out, "sketchy")
-	assert.Len(t, warns, 5)
+	require.Len(t, warns, 1, "rendered:\n%s", out)
+	assert.Equal(t, config.DimensionMCPServer, warns[0].Dimension)
 }
 
-// A denial only matters for a server the member actually configures. A member that
-// does not configure it is not denying it — that gap belongs to the MCP-server
-// dimension, and charging it to two lines in two vocabularies is worse than one.
-func TestCheckParityDenialsRangeOverConfiguredServers(t *testing.T) {
-	denies := measuredCaps(nil, nil, nil)
-	denies.DeniedMCPServers = named("linear")
-	configures := measuredCaps(nil, nil, []string{"linear"})
-
-	// Neither member configures linear, though one denies it: nothing to report.
-	assert.Empty(t, CheckParity(twoMemberPool("/a", "/b"), staticReader(
-		map[string]config.DirCapabilities{"/a": denies, "/b": measuredCaps(nil, nil, nil)})))
-
-	// One configures it, the other denies without configuring: the difference is that
-	// only one has it, reported once, by the server dimension.
-	warns := CheckParity(twoMemberPool("/a", "/b"), staticReader(
-		map[string]config.DirCapabilities{"/a": configures, "/b": denies}))
-	require.Len(t, warns, 1)
-	assert.Equal(t, config.DimensionMCPServer, warns[0].Dimension)
-	assert.Contains(t, RenderParity(warns), `MCP server "linear": "a" has it, "b" does not`)
-
-	// Both configure it and one denies it: now the denial is the difference.
-	both := measuredCaps(nil, nil, []string{"linear"})
-	both.DeniedMCPServers = named("linear")
-	warns = CheckParity(twoMemberPool("/a", "/b"), staticReader(
-		map[string]config.DirCapabilities{"/a": configures, "/b": both}))
-	require.Len(t, warns, 1)
-	assert.Equal(t, config.DimensionDeniedMCPServer, warns[0].Dimension)
-	assert.Contains(t, RenderParity(warns), `MCP server "linear" is denied for "b" but not for "a"`)
+// Two members that both deny the same configured server agree about what they can do,
+// so the pool is in parity and the section stays silent. Under the old separate-axis
+// comparison this was a reported difference.
+func TestCheckParityBothDenyingIsParity(t *testing.T) {
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "a", ConfigDir: fixtureDir(t, "denied"), Pool: "p"},
+		{Name: "b", ConfigDir: fixtureDir(t, "denied2"), Pool: "p"},
+	}}
+	warns := CheckParity(cfg, config.ReadDirCapabilities)
+	assert.Empty(t, warns, "rendered:\n%s", RenderParity(warns))
 }
 
-// A denial list nothing could read leaves the pool unverified on that axis. But a
-// member whose SERVER list is the unreadable half is already named by the MCP-server
-// dimension, so it must not be charged a second line.
-func TestCheckParityUnreadableDenialList(t *testing.T) {
-	blindDenials := measuredCaps(nil, nil, []string{"linear"})
-	blindDenials.DeniedMCPServers = config.DimensionState{}
-	warns := CheckParity(twoMemberPool("/a", "/b"), staticReader(map[string]config.DirCapabilities{
-		"/a": measuredCaps(nil, nil, []string{"linear"}),
-		"/b": blindDenials,
-	}))
-	require.Len(t, warns, 1)
-	assert.Equal(t, ParityUnmeasured, warns[0].Kind)
-	assert.Equal(t, config.DimensionDeniedMCPServer, warns[0].Dimension)
-	assert.Contains(t, RenderParity(warns),
-		`MCP server denials are unverified: "b" does not report a readable denial list`)
+// A denial this build cannot express takes the MCP axis with it, because the
+// configured set is no longer the available set. The cmddenial fixture denies by
+// serverCommand, which claude enforces and which does not map onto a server name.
+func TestCheckParityUnnameableDenialLeavesMCPUnknown(t *testing.T) {
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "rich", ConfigDir: fixtureDir(t, "rich"), Pool: "p"},
+		{Name: "cmd", ConfigDir: fixtureDir(t, "cmddenial"), Pool: "p"},
+	}}
+	warns := CheckParity(cfg, config.ReadDirCapabilities)
+	out := RenderParity(warns)
 
-	// The other half: an unreadable SERVER list is one absent file and one line.
-	blindServers := measuredCaps(nil, nil, nil)
-	blindServers.MCPServers = config.DimensionState{}
-	warns = CheckParity(twoMemberPool("/a", "/b"), staticReader(map[string]config.DirCapabilities{
-		"/a": measuredCaps(nil, nil, []string{"linear"}),
-		"/b": blindServers,
-	}))
-	require.Len(t, warns, 1, "rendered: %s", RenderParity(warns))
-	assert.Equal(t, config.DimensionMCPServer, warns[0].Dimension)
+	assert.Contains(t, out, `MCP server parity is unverified: "cmd" does not report one`)
+	// The member must not be credited with the servers it configures, since one of
+	// them is blocked by a rule this build cannot name. The fixture is rich plus that
+	// one key, so ANY per-name line here is a fabrication — and `MCP server "` with the
+	// quote is what only a per-name line prints.
+	assert.NotContains(t, out, `MCP server "`)
+
+	// And only that axis is lost. The two dirs agree on plugins and marketplaces, so
+	// those must be compared and found equal rather than dragged down with the MCP one.
+	assert.NotContains(t, out, "plugin parity is unverified")
+	assert.NotContains(t, out, "marketplace parity is unverified")
+	require.Len(t, warns, 1, "rendered:\n%s", out)
 }
 
 // The false positive this shape exists to prevent. mcpServers lives only in

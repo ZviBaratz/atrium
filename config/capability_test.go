@@ -104,30 +104,36 @@ func TestReadDirCapabilities(t *testing.T) {
 		connectors:   ConnectorsOn,
 		ok:           true,
 	}, {
-		name:         "only .claude.json leaves settings dimensions unknown",
+		// The ordinary onboarded dir: claude writes .claude.json at login and creates
+		// settings.json only once something is configured. An ABSENT settings.json is
+		// an answer — claude's defaults are no plugins, no marketplaces, connectors
+		// on — so these axes are measured and empty. Gating them on the file existing
+		// turned the common case into three "unverified" lines against an identical
+		// sibling, and masked a real connector split behind one of them.
+		name:         "only .claude.json still answers the settings dimensions",
 		claude:       body(`{"projects":{"/p":{"mcpServers":{"linear":{}}}}}`),
-		plugins:      unmeasured,
-		marketplaces: unmeasured,
+		plugins:      measured(),
+		marketplaces: measured(),
 		mcp:          measured("linear"),
-		connectors:   ConnectorsUnknown,
+		connectors:   ConnectorsOn,
 		ok:           true,
 	}, {
 		// A top-level mcpServers key is read as well as the per-project scopes, so a
 		// dir written either way answers.
 		name:         "mcpServers at the top level and under projects",
 		claude:       body(`{"mcpServers":{"top":{}},"projects":{"/a":{"mcpServers":{"a":{}}},"/b":{"mcpServers":{"b":{}}}}}`),
-		plugins:      unmeasured,
-		marketplaces: unmeasured,
+		plugins:      measured(),
+		marketplaces: measured(),
 		mcp:          measured("a", "b", "top"),
-		connectors:   ConnectorsUnknown,
+		connectors:   ConnectorsOn,
 		ok:           true,
 	}, {
 		name:         "a project scope with no mcpServers contributes nothing",
 		claude:       body(`{"projects":{"/a":{"allowedTools":[]},"/b":{"mcpServers":{}}}}`),
-		plugins:      unmeasured,
-		marketplaces: unmeasured,
+		plugins:      measured(),
+		marketplaces: measured(),
 		mcp:          measured(),
-		connectors:   ConnectorsUnknown,
+		connectors:   ConnectorsOn,
 		ok:           true,
 	}, {
 		// enabledPlugins maps a name to a bool, so a key carrying false is not a
@@ -247,38 +253,82 @@ func TestReadDirCapabilities(t *testing.T) {
 	}, {
 		name:         "a reshaped projects map makes MCP unknown",
 		claude:       body(`{"projects":["/a"]}`),
-		plugins:      unmeasured,
-		marketplaces: unmeasured,
-		mcp:          unmeasured,
-		connectors:   ConnectorsUnknown,
-		ok:           true,
-	}, {
-		name:         "a reshaped project mcpServers makes MCP unknown",
-		claude:       body(`{"projects":{"/a":{"mcpServers":["linear"]}}}`),
-		plugins:      unmeasured,
-		marketplaces: unmeasured,
-		mcp:          unmeasured,
-		connectors:   ConnectorsUnknown,
-		ok:           true,
-	}, {
-		// claude layers settings.local.json over settings.json in the same scope, so
-		// a plugin enabled only in the local file really is enabled. Reading the base
-		// file alone reported this dir as lacking what it has.
-		name:         "settings.local.json is layered over settings.json",
-		settings:     body(`{"enabledPlugins":{"base@m":true,"both@m":false}}`),
-		local:        body(`{"enabledPlugins":{"both@m":true,"local@m":true}}`),
-		plugins:      measured("both@m", "local@m"),
+		plugins:      measured(),
 		marketplaces: measured(),
 		mcp:          unmeasured,
 		connectors:   ConnectorsOn,
 		ok:           true,
 	}, {
-		name:         "settings.local.json alone answers the settings dimensions",
-		local:        body(`{"enabledPlugins":{"local@m":true},"disableClaudeAiConnectors":true}`),
-		plugins:      measured("local@m"),
+		name:         "a reshaped project mcpServers makes MCP unknown",
+		claude:       body(`{"projects":{"/a":{"mcpServers":["linear"]}}}`),
+		plugins:      measured(),
 		marketplaces: measured(),
 		mcp:          unmeasured,
-		connectors:   ConnectorsOff,
+		connectors:   ConnectorsOn,
+		ok:           true,
+	}, {
+		// settings.local.json in a CONFIG dir is not a claude source. claude resolves
+		// its localSettings source to .claude/settings.local.json against the project
+		// root and labels it "project, gitignored". An earlier version read it here
+		// and layered it over settings.json, which spoke for the dir out of a file
+		// claude never consults there — and layered it whole-key, where claude merges
+		// enabledPlugins per plugin.
+		name:         "settings.local.json in the config dir is not read",
+		settings:     body(`{"enabledPlugins":{"base@m":true}}`),
+		local:        body(`{"enabledPlugins":{"local@m":true},"disableClaudeAiConnectors":true}`),
+		plugins:      measured("base@m"),
+		marketplaces: measured(),
+		mcp:          unmeasured,
+		connectors:   ConnectorsOn,
+		ok:           true,
+	}, {
+		// And it cannot make the dir answerable on its own, which is the half that
+		// matters: a dir holding only that file is a dir claude was never onboarded
+		// in, and it used to be spoken for on all four axes.
+		name:  "settings.local.json alone is not a claude config dir",
+		local: body(`{"enabledPlugins":{"local@m":true}}`),
+		ok:    false,
+	}, {
+		// enabledPlugins values are typed array<string> | boolean | object: an array
+		// carries version constraints and an object is the extended format. Accepting
+		// only true/false/null made ONE such entry take the whole dimension
+		// unmeasured and discard every readable entry beside it.
+		name:         "a version constraint and an extended-format object are enabled",
+		settings:     body(`{"enabledPlugins":{"plain@m":true,"pinned@m":["^1.2"],"extended@m":{"version":"2.0"}}}`),
+		plugins:      measured("extended@m", "pinned@m", "plain@m"),
+		marketplaces: measured(),
+		mcp:          unmeasured,
+		connectors:   ConnectorsOn,
+		ok:           true,
+	}, {
+		name:         "an array of non-strings is a shape this build cannot read",
+		settings:     body(`{"enabledPlugins":{"a@m":[7]}}`),
+		plugins:      unmeasured,
+		marketplaces: measured(),
+		mcp:          unmeasured,
+		connectors:   ConnectorsOn,
+		ok:           true,
+	}, {
+		// additionalMarketplaces is claude's documented alias, "read exactly as if it
+		// were spelled extraKnownMarketplaces". Reading only the canonical key made
+		// two dirs claude treats identically report a marketplace one has and the
+		// other lacks.
+		name:         "additionalMarketplaces is read as extraKnownMarketplaces",
+		settings:     body(`{"additionalMarketplaces":{"obra":{"source":{"repo":"obra/superpowers"}}}}`),
+		plugins:      measured(),
+		marketplaces: measured("obra"),
+		mcp:          unmeasured,
+		connectors:   ConnectorsOn,
+		ok:           true,
+	}, {
+		// claude ignores the alias with a warning when both appear in one file, so
+		// the canonical key wins here too.
+		name:         "the canonical marketplace key wins over the alias",
+		settings:     body(`{"extraKnownMarketplaces":{"canonical":{"source":{}}},"additionalMarketplaces":{"alias":{"source":{}}}}`),
+		plugins:      measured(),
+		marketplaces: measured("canonical"),
+		mcp:          unmeasured,
+		connectors:   ConnectorsOn,
 		ok:           true,
 	}, {
 		name:     "malformed settings.json",
@@ -291,10 +341,17 @@ func TestReadDirCapabilities(t *testing.T) {
 		claude:   body(`not json at all`),
 		ok:       false,
 	}, {
-		name:     "malformed settings.local.json",
-		settings: body(`{"enabledPlugins":{"a@m":true}}`),
-		local:    body(`{`),
-		ok:       false,
+		// Unreadable only matters for a file this probe reads. A broken
+		// settings.local.json belongs to a checkout, and refusing the whole dir over
+		// it would report a dir claude reads fine as unanswerable.
+		name:         "a malformed settings.local.json is ignored, not fatal",
+		settings:     body(`{"enabledPlugins":{"a@m":true}}`),
+		local:        body(`{`),
+		plugins:      measured("a@m"),
+		marketplaces: measured(),
+		mcp:          unmeasured,
+		connectors:   ConnectorsOn,
+		ok:           true,
 	}, {
 		name:     "settings.json is a top-level array",
 		settings: body(`["nope"]`),
@@ -532,8 +589,8 @@ func TestReadDirCapabilitiesCreatesNothing(t *testing.T) {
 	if after := entries(t, partial); !reflect.DeepEqual(before, after) {
 		t.Errorf("dir contents changed: %v → %v", before, after)
 	}
-	// Specifically the files the probe looked for and did not find.
-	for _, name := range []string{".claude.json", "settings.local.json"} {
+	// Specifically the file the probe looked for and did not find.
+	for _, name := range []string{".claude.json"} {
 		if _, err := os.Stat(filepath.Join(partial, name)); err == nil {
 			t.Errorf("the probe created the %s it failed to read", name)
 		}
@@ -554,12 +611,17 @@ func entries(t *testing.T, dir string) []string {
 	return names
 }
 
-// State is what lets a comparison iterate Dimensions() instead of naming fields, so
-// a fourth axis cannot be added without the differ seeing it. That only holds while
-// every listed dimension is actually wired to a field: a missing arm returns the
-// zero DimensionState, which reads as "unmeasured" and would silently drop the axis
-// from every comparison.
-func TestStateCoversEveryDimension(t *testing.T) {
+// Every Dimension const must be walked by Dimensions() and wired to a field. A
+// missing State arm returns the zero DimensionState, which reads as "unmeasured" and
+// silently drops the axis from every comparison; a const missing from Dimensions() is
+// never compared at all.
+//
+// Dimensions() ranges over the const values rather than a hand-written slice, so a
+// const declared before the sentinel is picked up without anyone remembering to list
+// it. The residual hole is a const declared PAST the sentinel, which is what the last
+// assertion here closes: nothing beyond dimensionLast may have a noun or a state,
+// because a dimension with either is one somebody wired up and left uncompared.
+func TestDimensionsIsTheWholeConstRange(t *testing.T) {
 	caps := DirCapabilities{
 		Plugins:      DimensionState{Measured: true, Targets: map[string]string{"p": ""}},
 		Marketplaces: DimensionState{Measured: true, Targets: map[string]string{"m": ""}},
@@ -574,6 +636,7 @@ func TestStateCoversEveryDimension(t *testing.T) {
 		t.Fatalf("Dimensions() = %v, but this test knows %d of them", Dimensions(), len(want))
 	}
 	seen := map[Dimension]bool{}
+	nouns := map[string]Dimension{}
 	for _, d := range Dimensions() {
 		if d == DimensionUnspecified {
 			t.Error("Dimensions() lists the unspecified zero value")
@@ -588,65 +651,153 @@ func TestStateCoversEveryDimension(t *testing.T) {
 		if d.Noun() == "" || d.Noun() == DimensionUnspecified.Noun() {
 			t.Errorf("dimension %v has no noun of its own (%q)", d, d.Noun())
 		}
+		// Two dimensions sharing a noun make one rendered line unattributable to the
+		// axis that produced it.
+		if prev, dup := nouns[d.Noun()]; dup {
+			t.Errorf("dimensions %v and %v share the noun %q", prev, d, d.Noun())
+		}
+		nouns[d.Noun()] = d
 	}
 	if caps.State(DimensionUnspecified).Measured {
 		t.Error("the unspecified dimension reported a measured state")
 	}
 
-	// The denial axis is wired to a field but deliberately left out of Dimensions():
-	// a generic name diff over a denial list answers the wrong question, so its
-	// comparison is a separate pass. Both halves of that need holding — the field
-	// reachable through State, and the dimension absent from the generic walk.
-	denied := DirCapabilities{DeniedMCPServers: DimensionState{
-		Measured: true, Targets: map[string]string{"evil": ""},
-	}}
-	if !denied.State(DimensionDeniedMCPServer).Has("evil") {
-		t.Error("State(DimensionDeniedMCPServer) is not wired to DeniedMCPServers")
+	// Nothing past the sentinel. A const added below dimensionLast is walked
+	// automatically; one added above it is not, and this is what says so.
+	past := dimensionLast + 1
+	if past.Noun() != DimensionUnspecified.Noun() {
+		t.Errorf("Dimension(%d) has the noun %q, so a dimension exists past dimensionLast "+
+			"and Dimensions() never walks it", int(past), past.Noun())
 	}
-	if seen[DimensionDeniedMCPServer] {
-		t.Error("Dimensions() lists the denial axis, which the generic name diff must not walk")
+	if caps.State(past).Measured {
+		t.Errorf("Dimension(%d) is wired to a field but is past dimensionLast, so it is never compared", int(past))
 	}
 }
 
-// deniedMcpServers is a per-dir key, not managed-settings-only: claude's own
-// allowManagedMcpServersOnly says the denylist "still merges from all sources, so
-// users can deny servers for themselves". It holds an array, so it needs its own
-// shape table — and an entry this build cannot read must make the whole list unknown,
-// because a denial it cannot honour reported as absent says the member allows a
-// server it blocks.
+// deniedMcpServers decides which of the CONFIGURED servers a dir can actually run, so
+// it is asserted through the MCP axis rather than on its own: a denied server is not a
+// capability the dir has.
+//
+// Its entries are objects carrying exactly one of serverName, serverCommand or
+// serverUrl — claude matches on r.serverName, on the expanded serverCommand argv, or
+// on the expanded serverUrl. An earlier version read bare strings, which is the one
+// shape claude REJECTS: it drops the whole key ("was present but invalid and was
+// dropped; its entries cannot be enforced"), so such a list denies nothing. Both
+// halves of that are pinned below, because the suite was previously green over a list
+// claude ignores.
 func TestReadDirCapabilitiesDeniedMCPServers(t *testing.T) {
+	const configured = `{"projects":{"/p":{"mcpServers":{"linear":{"type":"http"},"slack":{"type":"http"}}}}}`
+	both := measured("linear", "slack")
 	cases := []struct {
 		name     string
-		settings *string
-		local    *string
+		settings string
 		want     dimWant
 	}{
-		{"absent key", body(`{}`), nil, measured()},
-		{"null", body(`{"deniedMcpServers":null}`), nil, measured()},
-		{"a list of names", body(`{"deniedMcpServers":["evil","worse"]}`), nil, measured("evil", "worse")},
-		{"blanks skipped, duplicates collapsed", body(`{"deniedMcpServers":["evil","evil","","  "]}`), nil, measured("evil")},
-		{"a non-string entry makes the list unknown", body(`{"deniedMcpServers":["ok",7]}`), nil, unmeasured},
-		{"an object entry makes the list unknown", body(`{"deniedMcpServers":["ok",{"name":"x"}]}`), nil, unmeasured},
-		{"an object instead of a list is unknown", body(`{"deniedMcpServers":{"evil":true}}`), nil, unmeasured},
-		{"from settings.local.json", nil, body(`{"deniedMcpServers":["evil"]}`), measured("evil")},
-		// No settings file at all: the key's home is absent, so the answer is unknown
-		// rather than "denies nothing".
-		{"no settings file", nil, nil, unmeasured},
+		{"absent key denies nothing", `{}`, both},
+		{"null denies nothing", `{"deniedMcpServers":null}`, both},
+		{"a serverName denial removes that server", `{"deniedMcpServers":[{"serverName":"slack"}]}`, measured("linear")},
+		{"denying every server leaves an empty set, not an unknown one",
+			`{"deniedMcpServers":[{"serverName":"slack"},{"serverName":"linear"}]}`, measured()},
+		{"denying a server this dir does not configure changes nothing",
+			`{"deniedMcpServers":[{"serverName":"sketchy"}]}`, both},
+		{"a blank serverName names nothing", `{"deniedMcpServers":[{"serverName":"   "}]}`, both},
+		// The shape claude rejects. Reading it as a denial made the suite green on an
+		// axis claude does not enforce; reading it as unknown would print an
+		// "unverified" line for a list claude simply ignores.
+		{"bare strings are the shape claude drops, so nothing is denied",
+			`{"deniedMcpServers":["slack"]}`, both},
+		{"one malformed entry drops the whole key",
+			`{"deniedMcpServers":[{"serverName":"slack"},7]}`, both},
+		{"two of the three keys in one entry is invalid",
+			`{"deniedMcpServers":[{"serverName":"slack","serverUrl":"https://x"}]}`, both},
+		{"an entry with none of the three keys is invalid",
+			`{"deniedMcpServers":[{"name":"slack"}]}`, both},
+		{"a non-string serverName is invalid",
+			`{"deniedMcpServers":[{"serverName":7}]}`, both},
+		{"an object instead of a list is invalid",
+			`{"deniedMcpServers":{"slack":true}}`, both},
+		// Enforced, and not expressible as a server name. Unmeasured rather than
+		// short: reported as the configured set, this dir would be credited with a
+		// server it blocks.
+		{"a serverCommand denial cannot be named, so the axis is unknown",
+			`{"deniedMcpServers":[{"serverCommand":["/bin/sketchy"]}]}`, unmeasured},
+		{"a serverUrl denial cannot be named either",
+			`{"deniedMcpServers":[{"serverUrl":"https://sketchy.example/mcp"}]}`, unmeasured},
+		// Validity is decided over the whole list first, because claude's rejection is
+		// wholesale: this is a dropped key, not an unnameable denial.
+		{"an unnameable entry beside a malformed one is a dropped key",
+			`{"deniedMcpServers":[{"serverCommand":["/bin/sketchy"]},7]}`, both},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := capDirWith(t, map[string]*string{
-				"settings.json":       tc.settings,
-				"settings.local.json": tc.local,
-				// Keeps the dir answerable in the "no settings file" case.
-				".claude.json": body(`{}`),
+				"settings.json": body(tc.settings),
+				".claude.json":  body(configured),
 			})
 			got, ok := ReadDirCapabilities(dir)
 			if !ok {
-				t.Fatalf("dir did not read")
+				t.Fatal("dir did not read")
 			}
-			tc.want.check(t, "deniedMcpServers", got.DeniedMCPServers)
+			tc.want.check(t, "available MCP servers", got.MCPServers)
 		})
+	}
+}
+
+// A denial cannot be told apart from an absent server once the two are merged, so the
+// case that matters is the one where the SERVER list is unknown: an unreadable
+// denial list must take the MCP axis with it rather than leaving the configured set
+// standing in for the available one.
+func TestUnreadableDenialListMakesMCPUnknown(t *testing.T) {
+	dir := capDirWith(t, map[string]*string{
+		"settings.json": body(`{"enabledPlugins":{"a@m":true},"deniedMcpServers":[{"serverCommand":["/bin/x"]}]}`),
+		".claude.json":  body(`{"projects":{"/p":{"mcpServers":{"linear":{"type":"http"}}}}}`),
+	})
+	got, ok := ReadDirCapabilities(dir)
+	if !ok {
+		t.Fatal("dir did not read")
+	}
+	if got.MCPServers.Measured {
+		t.Errorf("MCP servers reported as measured (%v) despite a denial this build cannot express",
+			got.MCPServers.Names())
+	}
+	// And only that axis: a dimension that could be read must not be lost with it, or
+	// one unreadable field silences the whole section.
+	if !got.Plugins.Measured || !got.Plugins.Has("a@m") {
+		t.Errorf("the plugin axis was lost with the MCP axis: %+v", got.Plugins)
+	}
+}
+
+// Numbers must survive fingerprinting exactly. Decoding into `any` without UseNumber
+// made every JSON number a float64, which collided values past 2^53 — two dirs
+// configuring one server differently compared EQUAL, and the divergence was never
+// reported — and produced "" for a value outside float64's range, which the differ
+// reads as "no difference" rather than as "not comparable".
+func TestTargetsDoNotRoundNumbers(t *testing.T) {
+	server := func(n string) string {
+		return `{"projects":{"/p":{"mcpServers":{"linear":{"type":"http","timeout":` + n + `}}}}}`
+	}
+	read := func(n string) DimensionState {
+		t.Helper()
+		got, ok := ReadDirCapabilities(capDirWith(t, map[string]*string{".claude.json": body(server(n))}))
+		if !ok {
+			t.Fatalf("dir with timeout %s did not read", n)
+		}
+		return got.MCPServers
+	}
+
+	for _, pair := range [][2]string{
+		{"9007199254740993", "9007199254740992"}, // adjacent past 2^53
+		{"12345678901234567890", "12345678901234567891"},
+		{"1e400", "1e401"}, // outside float64 entirely
+	} {
+		a, b := read(pair[0]), read(pair[1])
+		if a.Target("linear") == "" {
+			t.Errorf("timeout %s produced no target, which a differ reads as no difference", pair[0])
+			continue
+		}
+		if a.Target("linear") == b.Target("linear") {
+			t.Errorf("timeouts %s and %s produced the same target %q", pair[0], pair[1], a.Target("linear"))
+		}
 	}
 }
 

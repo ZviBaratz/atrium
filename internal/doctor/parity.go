@@ -20,8 +20,9 @@ package doctor
 // whose members are configured identically and differ only in what claude.ai granted
 // them reads as being in parity here. What this section catches is the configuration
 // half: a plugin, a marketplace or an MCP server one member has and another does
-// not, one they both have that points somewhere different, and a server one of them
-// blocks with deniedMcpServers while another allows it.
+// not, one they both have that points somewhere different, and an MCP server one
+// member can run while another cannot — whether because it is not configured there
+// or because that member's deniedMcpServers blocks it.
 //
 // The section is silent when a pool is in parity, so it must never be silent when a
 // member could not be read. Every unanswered question gets a line of its own —
@@ -95,6 +96,12 @@ type ParityWarning struct {
 	// the members an unanswered question is about.
 	Have []string
 	Lack []string
+	// Compared lists the members that WERE compared on this axis, and is set only for
+	// ParityUnmeasured. It is what separates "this member was left out of a comparison
+	// that still happened" from "nothing was compared at all" — one sentence claimed
+	// the latter in both cases, and with three or more members it printed "nothing was
+	// compared" directly above the comparison it denied.
+	Compared []string
 }
 
 // parityMember pairs a member's display label with what its dir turned out to hold.
@@ -135,9 +142,9 @@ func CheckParity(cfg *config.Config, read config.CapabilityReadFunc) []ParityWar
 
 	// One cache for the whole report: two accounts naming one directory cost a single
 	// read and, more to the point, cannot be made to disagree with each other by a
-	// file rewritten between two of them. That pair is not hypothetical — it is
-	// roughly the configuration CheckPools flags, though that section buckets the
-	// raw config_dir while this one keys on the cleaned path.
+	// file rewritten between two of them. That pair is not hypothetical — it is the
+	// configuration CheckPools flags, which resolves membership and cleans the dir the
+	// same way this does.
 	cached := cachedCapabilityRead(read)
 
 	var warns []ParityWarning
@@ -211,7 +218,7 @@ func memberLabels(accounts []config.ClaudeAccount) []string {
 // Fewer than two readable members means there is nothing to compare against, and in
 // particular no dimension to call unverified: the ParityUnreadable and
 // ParityNoConfigDir lines already say why the pool went unchecked, and adding a
-// per-dimension line for a single member would repeat it three times.
+// per-dimension line for a single member would repeat it once per dimension.
 func diffPool(pool string, members []parityMember) []ParityWarning {
 	if len(members) < 2 {
 		return nil
@@ -220,81 +227,7 @@ func diffPool(pool string, members []parityMember) []ParityWarning {
 	for _, dim := range config.Dimensions() {
 		warns = append(warns, diffDimension(pool, dim, members)...)
 	}
-	warns = append(warns, diffDenials(pool, members)...)
 	return append(warns, diffConnectors(pool, members)...)
-}
-
-// diffDenials reports servers the pool configures that only some members allow.
-//
-// It is a separate pass rather than another config.Dimensions() entry because a
-// generic name diff over a denial list answers the wrong question, which is what the
-// earlier shape got wrong: its union came from the denial lists and a member that
-// denied nothing counted as HAVING every server anyone denied, so two members neither
-// of which configured a server were reported as disagreeing about one, and the only
-// way to silence the line was to copy the denial into every member.
-//
-// What fixes that is the per-server filter: only the members that CONFIGURE a server
-// are bucketed, because a member that does not configure one is not denying it — that
-// gap belongs to the MCP-server dimension, and charging it here too would say one
-// thing in two vocabularies. The walk below ranges over the configured servers
-// because that is how the question is posed, but with the filter in place the two
-// choices cannot disagree: a name nobody configures buckets no member either way.
-// Swapping the walk back to the denial lists is behaviour-preserving, and no test
-// claims otherwise.
-func diffDenials(pool string, members []parityMember) []ParityWarning {
-	var measured []parityMember
-	var unreadable []string
-	for _, m := range members {
-		if m.caps.DeniedMCPServers.Measured && m.caps.MCPServers.Measured {
-			measured = append(measured, m)
-			continue
-		}
-		// A member whose SERVER list is what could not be read is already named by
-		// the MCP-server dimension; repeating it here would charge one absent file
-		// to two lines.
-		if !m.caps.DeniedMCPServers.Measured {
-			unreadable = append(unreadable, m.label)
-		}
-	}
-
-	var warns []ParityWarning
-	if len(unreadable) > 0 {
-		warns = append(warns, ParityWarning{
-			Pool: pool, Kind: ParityUnmeasured,
-			Dimension: config.DimensionDeniedMCPServer, Lack: unreadable,
-		})
-	}
-	if len(measured) < 2 {
-		return warns
-	}
-
-	configured := map[string]bool{}
-	for _, m := range measured {
-		for _, n := range m.caps.MCPServers.Names() {
-			configured[n] = true
-		}
-	}
-	for _, name := range sortedKeys(configured) {
-		var allow, deny []string
-		for _, m := range measured {
-			if !m.caps.MCPServers.Has(name) {
-				continue
-			}
-			if m.caps.DeniedMCPServers.Has(name) {
-				deny = append(deny, m.label)
-			} else {
-				allow = append(allow, m.label)
-			}
-		}
-		if len(allow) > 0 && len(deny) > 0 {
-			warns = append(warns, ParityWarning{
-				Pool: pool, Kind: ParityMissing,
-				Dimension: config.DimensionDeniedMCPServer,
-				Feature:   name, Have: allow, Lack: deny,
-			})
-		}
-	}
-	return warns
 }
 
 // diffDimension emits the unmeasured members of one dimension, then one warning per
@@ -314,7 +247,8 @@ func diffDimension(pool string, dim config.Dimension, members []parityMember) []
 	var warns []ParityWarning
 	if len(unmeasured) > 0 {
 		warns = append(warns, ParityWarning{
-			Pool: pool, Kind: ParityUnmeasured, Dimension: dim, Lack: unmeasured,
+			Pool: pool, Kind: ParityUnmeasured, Dimension: dim,
+			Lack: unmeasured, Compared: labelsOf(measured),
 		})
 	}
 	if len(measured) < 2 {
@@ -465,17 +399,14 @@ func (w ParityWarning) line() string {
 		return fmt.Sprintf("capabilities unreadable for %s (%s) — it was left out of the comparison",
 			quotedList(w.Lack), w.Dir)
 	case ParityUnmeasured:
-		if w.Dimension == config.DimensionDeniedMCPServer {
-			return fmt.Sprintf("MCP server denials are unverified: %s %s not report a readable denial list",
-				quotedList(w.Lack), agrees(w.Lack, "does", "do"))
+		if len(w.Compared) >= 2 {
+			return fmt.Sprintf("%s parity is unverified: %s %s not report one and %s left out of the comparison",
+				w.Dimension.Noun(), quotedList(w.Lack),
+				agrees(w.Lack, "does", "do"), agrees(w.Lack, "was", "were"))
 		}
 		return fmt.Sprintf("%s parity is unverified: %s %s not report one, so nothing was compared",
 			w.Dimension.Noun(), quotedList(w.Lack), agrees(w.Lack, "does", "do"))
 	case ParityMissing:
-		if w.Dimension == config.DimensionDeniedMCPServer {
-			return fmt.Sprintf("%s %q is denied for %s but not for %s",
-				w.Dimension.Noun(), w.Feature, quotedList(w.Lack), quotedList(w.Have))
-		}
 		return fmt.Sprintf("%s %q: %s %s it, %s %s not",
 			w.Dimension.Noun(), w.Feature,
 			quotedList(w.Have), agrees(w.Have, "has", "have"),
@@ -512,6 +443,12 @@ func agrees(labels []string, one, many string) string {
 // non-sequitur for a member nothing could be read from, and "check the file parses"
 // is a non-sequitur for two dirs that were read and disagree.
 //
+// The two unanswered causes are split for the same reason. A dir that would not open
+// and a field whose SHAPE this build does not compare are different problems, and one
+// hint telling the reader to check that the files "are present and parse" was the
+// wrong diagnosis for the second: the file is present and parses fine, and it is the
+// value inside it that went unread.
+//
 // The drift hint states the consequence rather than the fact, because "these dirs
 // differ" is a curiosity until it is spelled out as rotation placing sessions on a
 // member that cannot do the work. It promises nothing Atrium does not do: routing
@@ -524,14 +461,16 @@ func RenderParity(warns []ParityWarning) string {
 	}
 	var b strings.Builder
 	b.WriteString("Account pool parity:\n")
-	var drifted, unanswered, ambient bool
+	var drifted, unreadable, unrecognised, ambient bool
 	for _, w := range warns {
 		fmt.Fprintf(&b, "  ⚠ pool %q: %s\n", w.Pool, w.line())
 		switch w.Kind {
 		case ParityMissing, ParityDivergent, ParityConnectors:
 			drifted = true
-		case ParityUnreadable, ParityUnmeasured, ParityConnectorsUnknown:
-			unanswered = true
+		case ParityUnreadable:
+			unreadable = true
+		case ParityUnmeasured, ParityConnectorsUnknown:
+			unrecognised = true
 		case ParityNoConfigDir:
 			ambient = true
 		}
@@ -541,9 +480,14 @@ func RenderParity(warns []ParityWarning) string {
 		b.WriteString("      so a session placed on a member that lacks one just quietly goes without.\n")
 		b.WriteString("      Align the config dirs, or split the pool.\n")
 	}
-	if unanswered {
-		b.WriteString("    → what could not be read is not evidence of parity. Check the dir exists\n")
-		b.WriteString("      and that its settings.json and .claude.json are present and parse.\n")
+	if unreadable {
+		b.WriteString("    → what could not be read is not evidence of parity. Check the dir exists,\n")
+		b.WriteString("      is an absolute path, and that its settings.json and .claude.json parse.\n")
+	}
+	if unrecognised {
+		b.WriteString("    → what could not be read is not evidence of parity. A setting was present in\n")
+		b.WriteString("      a shape this build does not compare, so that axis is unknown rather than\n")
+		b.WriteString("      empty. Check the value of the named setting.\n")
 	}
 	if ambient {
 		b.WriteString("    → give that member its own config_dir, or rotation cannot be told what it\n")
