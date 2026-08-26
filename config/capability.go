@@ -124,14 +124,20 @@ const (
 	// the top level and under every projects.<path> scope, minus what settings.json
 	// denies.
 	DimensionMCPServer
-
-	// dimensionLast is the highest real axis, and it is what Dimensions() ranges to
-	// rather than a hand-written slice — so a const added above it is walked without
-	// anyone remembering to list it. A const added BELOW it is still missed, which is
-	// what TestDimensionsIsTheWholeConstRange holds by asserting nothing past this
-	// sentinel has a Noun or a State.
-	dimensionLast = DimensionMCPServer
 )
+
+// dimensionLast is the highest real axis, and it is what Dimensions() ranges to
+// instead of a hand-written slice, so a new Dimension takes effect without anyone
+// remembering to list it separately.
+//
+// It is declared OUTSIDE the block above on purpose. Inside it, a const appended
+// after this line with no value of its own would repeat this expression list rather
+// than continue the iota, and silently come out equal to DimensionMCPServer.
+//
+// The hole it leaves is a Dimension whose value exceeds it, which Dimensions() cannot
+// reach. TestDimensionsIsTheWholeConstRange closes that by asserting nothing past
+// this sentinel has a noun or a state.
+const dimensionLast = DimensionMCPServer
 
 // Dimensions is the fixed order a comparison walks, so a rendered report does not
 // reorder between runs on an unchanged config.
@@ -264,9 +270,10 @@ func (c DirCapabilities) State(d Dimension) DimensionState {
 // "has nothing". Three things produce it: a relative (or empty) dir, a file that is
 // present but unreadable or unparseable, and a dir holding neither of the two files.
 // The last is the case worth being deliberate about: a dir claude was never
-// onboarded in is not a dir with no plugins, and reporting it as one would accuse
-// the whole reason DimensionState exists: mcpServers lives only in .claude.json, so
-// a dir without one has an unknown MCP set, not an empty one.
+// onboarded in is not a dir configured with nothing, and reporting it as one accuses
+// every member of its pool of drift the user cannot fix. The same distinction runs
+// one level down, which is what DimensionState is for — mcpServers lives only in
+// .claude.json, so a dir without one has an unknown MCP set, not an empty one.
 //
 // A relative dir is refused rather than joined against the working directory, for
 // the reason ReadAccountIdentity refuses one: "" is the routing value meaning
