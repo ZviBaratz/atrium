@@ -828,3 +828,41 @@ func TestClaudeAccountReadCapabilities(t *testing.T) {
 		t.Error("an inherit-env account reported capabilities")
 	}
 }
+
+// A version constraint is a comparable target, not just a name. Two dirs pinning one
+// plugin to different versions are not substitutes, and recording the constraint as
+// "enabled, nothing to compare" reported them as agreeing.
+func TestPluginVersionConstraintsAreComparable(t *testing.T) {
+	read := func(val string) DimensionState {
+		t.Helper()
+		got, ok := ReadDirCapabilities(capDirWith(t, map[string]*string{
+			"settings.json": body(`{"enabledPlugins":{"keep@m":true,"pinned@m":` + val + `}}`),
+		}))
+		if !ok {
+			t.Fatalf("dir with pinned@m = %s did not read", val)
+		}
+		return got.Plugins
+	}
+
+	one, two := read(`["^1.2"]`), read(`["^2.0"]`)
+	if one.Target("pinned@m") == "" {
+		t.Fatal("a version constraint recorded no target, so two pins compare as equal")
+	}
+	if one.Target("pinned@m") == two.Target("pinned@m") {
+		t.Errorf("^1.2 and ^2.0 produced the same target %q", one.Target("pinned@m"))
+	}
+	// Same constraint, same target — otherwise every pinned plugin diverges from its
+	// own twin.
+	if one.Target("pinned@m") != read(`["^1.2"]`).Target("pinned@m") {
+		t.Error("identical constraints produced different targets")
+	}
+	// A bare true still carries nothing to compare, so it cannot diverge.
+	if one.Target("keep@m") != "" {
+		t.Errorf("a bare true acquired the target %q", one.Target("keep@m"))
+	}
+	// An extended-format object is comparable for the same reason.
+	obj := read(`{"version":"2.0"}`)
+	if obj.Target("pinned@m") == "" {
+		t.Error("an extended-format object recorded no target")
+	}
+}

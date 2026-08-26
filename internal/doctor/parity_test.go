@@ -718,3 +718,74 @@ func readFixtureFile(t *testing.T, dir, name string) (string, error) {
 	data, err := os.ReadFile(filepath.Join(fixtureDir(t, dir), name))
 	return string(data), err
 }
+
+// The unmeasured line states whether a comparison happened, because with three or
+// more members one CAN happen without the unmeasured member in it. A single sentence
+// saying "nothing was compared" was printed directly above the comparison it denied.
+func TestUnmeasuredLineSaysWhetherAnythingWasCompared(t *testing.T) {
+	blind := measuredCaps(nil, nil, nil)
+	blind.Plugins = config.DimensionState{}
+
+	t.Run("two members, one blind: nothing was compared", func(t *testing.T) {
+		out := RenderParity(CheckParity(twoMemberPool("/a", "/b"), staticReader(
+			map[string]config.DirCapabilities{
+				"/a": measuredCaps([]string{"p@m"}, nil, nil),
+				"/b": blind,
+			})))
+		assert.Contains(t, out, `plugin parity is unverified: "b" does not report one, so nothing was compared`)
+		assert.NotContains(t, out, "has it", "there was no second measured member to compare against")
+	})
+
+	t.Run("three members, one blind: the other two were compared", func(t *testing.T) {
+		cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+			{Name: "a", ConfigDir: "/a", Pool: "p"},
+			{Name: "b", ConfigDir: "/b", Pool: "p"},
+			{Name: "c", ConfigDir: "/c", Pool: "p"},
+		}}
+		out := RenderParity(CheckParity(cfg, staticReader(map[string]config.DirCapabilities{
+			"/a": measuredCaps([]string{"p@m"}, nil, nil),
+			"/b": measuredCaps(nil, nil, nil),
+			"/c": blind,
+		})))
+		assert.Contains(t, out, `plugin parity is unverified: "c" does not report one and was left out of the comparison`)
+		// The comparison the old sentence denied had happened.
+		assert.Contains(t, out, `plugin "p@m": "a" has it, "b" does not`)
+		assert.NotContains(t, out, "nothing was compared")
+	})
+}
+
+// A dir that would not open and a setting held in a shape this build cannot compare
+// are different problems with different remedies. One hint told the reader to check
+// that files "are present and parse" — the wrong diagnosis for the second, where the
+// file is present, parses fine, and it is the value inside it that went unread.
+func TestUnansweredRemediesSplitByCause(t *testing.T) {
+	unreadable := RenderParity(CheckParity(twoMemberPool("/a", "/b"), func(dir string) (config.DirCapabilities, bool) {
+		if dir == "/b" {
+			return config.DirCapabilities{}, false
+		}
+		return measuredCaps(nil, nil, nil), true
+	}))
+	assert.Contains(t, unreadable, "Check the dir exists")
+	assert.NotContains(t, unreadable, "Check the value of the named setting")
+
+	blind := measuredCaps(nil, nil, nil)
+	blind.Plugins = config.DimensionState{}
+	unrecognised := RenderParity(CheckParity(twoMemberPool("/a", "/b"), staticReader(
+		map[string]config.DirCapabilities{"/a": measuredCaps(nil, nil, nil), "/b": blind})))
+	assert.Contains(t, unrecognised, "Check the value of the named setting")
+	assert.NotContains(t, unrecognised, "Check the dir exists")
+
+	// Both causes at once get both remedies, since a report can hold both.
+	both := RenderParity(CheckParity(twoMemberPool("/a", "/b"), func(dir string) (config.DirCapabilities, bool) {
+		if dir == "/b" {
+			return config.DirCapabilities{}, false
+		}
+		return blind, true
+	}))
+	assert.Contains(t, both, "Check the dir exists")
+
+	// Whichever cause fired, the reader is told the gap is not parity.
+	for _, out := range []string{unreadable, unrecognised, both} {
+		assert.Contains(t, out, "not evidence of parity")
+	}
+}
