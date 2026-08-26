@@ -357,11 +357,10 @@ var (
 			"genuinely different logins are actually substitutes. It diffs the plugins, marketplaces\n" +
 			"and MCP servers each member's config dir is configured with — including two members that\n" +
 			"configure the same name to point somewhere different, and one that denies a server the\n" +
-			"other allows — because rotation never consults\n" +
-			"capability, so a session placed on a member lacking an integration just quietly goes\n" +
-			"without one. It reads files only, so it measures configuration and not what claude.ai has\n" +
-			"granted, and a member it could not measure is reported rather than counted as having\n" +
-			"nothing.\n" +
+			"other allows — because rotation never consults capability, so a session placed on a\n" +
+			"member lacking an integration just quietly goes without one. It reads files only, so it\n" +
+			"measures configuration and not what claude.ai has granted, and a member it could not\n" +
+			"measure is reported rather than counted as having nothing.\n" +
 			"Terminal background detection reports which rung of the light/dark ladder can answer here,\n" +
 			"for anyone whose theme: auto did not adapt: it reads COLORFGBG, and names OSC 11 as the\n" +
 			"rung that outranks it but cannot be probed from a one-shot command — that query needs the\n" +
