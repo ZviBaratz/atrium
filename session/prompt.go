@@ -140,6 +140,16 @@ func (i *Instance) typePrompt(ts *tmux.Session, prompt string) error {
 //  3. confirms the text landed in the box before submitting (soft error if it never does);
 //  4. presses Enter and confirms the box cleared (soft error if it did not submit).
 //
+// READINESS IS RE-ASSERTED AT EVERY POINT THAT SENDS KEYSTROKES, not just at entry. Each check
+// is its own pane capture, so the gate at step 1 only describes the pane as it was then; a
+// dialog can rise in the gap before step 2 or step 4. That gap is where a queued prompt gets
+// typed into a modal, or where Enter lands on a modal's pre-highlighted option — for copilot
+// that option is "Yes, and add these directories to the allowed list", so the miss widens the
+// agent's filesystem reach rather than merely losing the prompt. The extra captures cost a
+// delivery attempt two pane reads; delivery is once per session, so the invariant is worth more
+// than the reads. Holding on a re-check is safe in both branches: unsent text stays in the
+// composer and the next tick re-enters at step 1.
+//
 // It is idempotent across the common soft-failure paths: step 2 is skipped when the box
 // already holds the prompt, so a retry after a not-yet-submitted attempt re-submits rather
 // than re-types. The one residual doubling window is a submit that actually succeeded but
@@ -164,6 +174,9 @@ func (i *Instance) SendPrompt(prompt string) error {
 	// Skip typing if a previous attempt already staged this prompt in the box but could
 	// not confirm its submission; retype only when the box does not already hold it.
 	if !boxHoldsPrompt(ts, prompt, sig) {
+		if !ts.AwaitingInput() {
+			return errPromptNotReady
+		}
 		if err := i.typePrompt(ts, prompt); err != nil {
 			return err
 		}
@@ -172,6 +185,9 @@ func (i *Instance) SendPrompt(prompt string) error {
 		}
 	}
 
+	if !ts.AwaitingInput() {
+		return errPromptNotReady
+	}
 	if err := ts.TapEnter(); err != nil {
 		return fmt.Errorf("error submitting prompt to tmux session: %w", err)
 	}

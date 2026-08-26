@@ -316,8 +316,9 @@ type Adapter struct {
 	InputBoxPrompts []string
 
 	// ModalVeto reports that the pane's bottom chrome is a MODAL the agent drew, not its
-	// live composer, even though a composer glyph is on screen. When it fires,
-	// InputBoxVisible is false and prompt delivery is held.
+	// live composer, even though a composer glyph is on screen. It has two consumers, and both
+	// directions matter: InputBoxText returns no readback, so prompt delivery is held, and the
+	// poller classifies the pane PaneGate, so the row says needs-input instead of Ready.
 	//
 	// It exists because the composer glyph is not always the composer's. Several agents draw
 	// their dialog's selected row with the same glyph, which InputBoxVisible's own doc records
@@ -334,9 +335,10 @@ type Adapter struct {
 	// So this is deliberately STRUCTURAL, never a literal: it must hold at a pane height where
 	// no literal is left to read. copilotModalUp is the worked example — an anchored box whose
 	// bottom border all but ends the pane, which copilot's borderless composer never is.
-	// TestCopilotNeverDeliversAPromptIntoADialog measures the composed triple at every pane
-	// height of every driven rung; TestCopilotBusyPanesStayDeliverable holds the other
-	// direction, that the veto has not simply killed delivery.
+	// TestCopilotNeverDeliversAPromptIntoADialog walks each driven rung down from its full
+	// height and measures the composed triple at every height where the veto still holds;
+	// TestCopilotBusyPanesStayDeliverable holds the other direction, that the veto has not
+	// simply killed delivery.
 	//
 	// nil for every other adapter, and that is NOT a finding that the others are safe — it is
 	// that nobody has driven the height axis for them. Their ladders are width ladders, so the
@@ -346,11 +348,12 @@ type Adapter struct {
 	// own Gate (#717) — a literal, which is the remedy this field exists to complement rather
 	// than replace.
 	//
-	// It is NOT a substitute for Gates/Prompts either. A vetoed pane reports no needs-input, so
-	// the prompt is held rather than surfaced — fail-closed, which is the direction GateUp's own
-	// doc records as acceptable, and strictly better than delivery onto a dialog. Surfacing it
-	// properly would need a state the poller does not have, and no driven capture of a
-	// short-pane dialog to test it against.
+	// It is still NOT a substitute for Gates/Prompts. A Gate names the dialog it matched, and a
+	// Prompt carries NoAutoTap and an answer key; the veto is a structural "something modal ends
+	// this pane" and can name nothing. So it reports PaneGate, which surfaces needs-input and
+	// auto-taps nothing — right for a dialog nobody has anchored, wrong as a replacement for
+	// anchoring one. An adapter should still grow a literal Gate for the heights that have one;
+	// the veto is what covers the heights below.
 	ModalVeto func(content string) bool
 
 	// Gates are the startup screens this agent can show.
@@ -553,7 +556,18 @@ func (a *Adapter) gateWindow() int {
 // confirm a queued prompt actually landed in the composer before it is submitted. The
 // agent's own prompt glyph is stripped, since the signature it is compared against does
 // not carry one.
+//
+// ModalVeto is applied HERE rather than in InputBoxVisible, because this is the readback the
+// delivery actually acts on. Vetoing only the readiness predicate left the hole it was added to
+// close: SendPrompt checks AwaitingInput once and then calls boxHoldsPrompt, so a dialog that
+// rises in between was read as composer text — and on every driven copilot dialog pane that
+// text is the dialog's own option rows ("Yes", "Yes, and add …"), which a queued prompt's
+// signature can be a substring of. That path skips typing and taps Enter on the highlighted
+// option. One veto site, and InputBoxVisible derives from it, so the two can no longer disagree.
 func (a *Adapter) InputBoxText(content string) (string, bool) {
+	if a.ModalVeto != nil && a.ModalVeto(content) {
+		return "", false
+	}
 	return inputBoxText(content, a.inputBoxPrompts())
 }
 
@@ -574,11 +588,9 @@ func (a *Adapter) InputBoxText(content string) (string, bool) {
 //
 // That pairing is a LITERAL match, so it covers only the pane heights where the dialog's
 // literals are still on screen. ModalVeto is the structural half for an agent whose dialog
-// outgrows the pane and takes its headline with it; see that field.
+// outgrows the pane and takes its headline with it; see that field. It is read through
+// InputBoxText, which this is now a thin predicate over.
 func (a *Adapter) InputBoxVisible(content string) bool {
-	if a.ModalVeto != nil && a.ModalVeto(content) {
-		return false
-	}
-	_, ok := inputBoxText(content, a.inputBoxPrompts())
+	_, ok := a.InputBoxText(content)
 	return ok
 }

@@ -2005,3 +2005,53 @@ func TestStartSessionAtriumMarkerReachesPane(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(out), "ATRIUM=1")
 }
+
+// A copilot dialog on a pane too short to hold its headline must classify as PaneGate, not
+// PaneIdle. This is the poller half of agent.Adapter.ModalVeto: GateUp and DetectPrompt match
+// literals in the bottom window, so they both go blind on the truncated pane while the dialog
+// is still on screen and still blocking, and a dialog pane carries no busy marker either (the
+// box's own bottom border is the last horizontal rule, so the footer region the marker is
+// confined to is empty). Without the veto branch the pane falls through to idle: the row reads
+// Ready on a turn that is waiting for an answer, the completion notification fires, and
+// promptDeliveryReady hands over a queued prompt.
+//
+// The pane is written truncated on purpose — the headline rows ("Allow directory access", "Do
+// you want to allow this?") are the ones a short pane scrolls off, and they are what the
+// approval matcher keys on. The subtests below assert both matchers are in fact blind here, so
+// a PaneGate result cannot be credited to either of them.
+func TestPollClassifiesAHeadlessCopilotDialogAsGate(t *testing.T) {
+	const dialog = "" +
+		"│   1. Yes                             │\n" +
+		"│ ❯2. Yes, and add these directories   │\n" +
+		"│  to the allowed list                 │\n" +
+		"│   3. No (Esc)                        │\n" +
+		"│                                      │\n" +
+		"│ ↑/↓ to navigate · enter to select ·  │\n" +
+		"│ esc to cancel                        │\n" +
+		"╰──────────────────────────────────────╯"
+
+	content := dialog
+	s := pollSession(t, "copilot", &content, nil)
+	cleaned := cleanForDetection(dialog)
+
+	t.Run("neither literal matcher can see it", func(t *testing.T) {
+		_, gated := s.adapter.GateUp(cleaned)
+		require.False(t, gated, "the trust gate's headline is off this pane")
+		_, prompted := s.adapter.DetectPrompt(cleaned)
+		require.False(t, prompted, "the approval matcher's headline is off this pane")
+		require.False(t, s.adapter.HasBusyMarker(cleaned),
+			"a dialog pane has no footer region, so no busy marker either")
+	})
+
+	t.Run("the veto classifies it anyway", func(t *testing.T) {
+		require.Equal(t, PaneGate, s.Poll(),
+			"a dialog whose headline has scrolled off is still a dialog, not an idle pane")
+	})
+
+	t.Run("and the composer is not offered for delivery", func(t *testing.T) {
+		require.False(t, s.adapter.InputBoxVisible(cleaned),
+			"the dialog's selector row must not read as a composer")
+		_, hasBox := s.adapter.InputBoxText(cleaned)
+		require.False(t, hasBox, "and it must hand back no readback for boxHoldsPrompt")
+	})
+}

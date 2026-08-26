@@ -574,11 +574,27 @@ func TestCopilotNeverDeliversAPromptIntoADialog(t *testing.T) {
 							"prompt would be typed into it",
 						c.name, len(lines)-drop)
 
+					// The readiness gate is not the only thing that acts on a capture.
+					// SendPrompt confirms delivery through InputBoxText, so that has to be
+					// vetoed too — a readback here is a readback boxHoldsPrompt compares a
+					// prompt signature against, and a match there SKIPS typing and taps Enter
+					// on the dialog's highlighted row.
+					readback, hasBox := copilot.InputBoxText(short)
+					require.Falsef(t, hasBox,
+						"%s truncated to %d rows: InputBoxText handed back %q as composer text "+
+							"while a dialog is on screen", c.name, len(lines)-drop, readback)
+
 					_, gated := copilot.GateUp(short)
 					_, prompted := copilot.DetectPrompt(short)
-					_, composer := inputBoxText(short, promptSet(copilot.InputBoxPrompts))
+					unvetoed, composer := inputBoxText(short, promptSet(copilot.InputBoxPrompts))
 					if !gated && !prompted && composer {
 						vetoIsWhatSavedIt++
+						// Name the hazard rather than just counting it: what the primitive
+						// returns on these heights is the dialog's own option rows, and "Yes"
+						// is a substring a queued prompt's first line can carry.
+						require.Containsf(t, whiteSpaceRegex.ReplaceAllString(unvetoed, " "), "Yes",
+							"%s truncated to %d rows: the un-vetoed readback is expected to be "+
+								"the dialog's option rows", c.name, len(lines)-drop)
 					}
 				}
 				require.Positivef(t, vetoIsWhatSavedIt,
