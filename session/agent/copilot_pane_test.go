@@ -1691,14 +1691,32 @@ func composerHeadroom(t *testing.T, pane string) string {
 // landed", so a predicate that fires on ordinary typed text would confirm a prompt that never
 // arrived and submit an empty composer.
 func TestCopilotPasteCollapsed(t *testing.T) {
+	// The shapes 1.0.80's PRODUCERS actually render, which is what a landed paste looks like.
+	// Read off the bundle: `[Paste #${t} - ${e} lines]` (always plural, no pluralization logic)
+	// and `[Saved pasted content to workspace (${e}) id=${t}]` where e is formattedSize, a
+	// human byte size — NOT a filename. Two of these were previously written as strings the
+	// vendor cannot emit ("- 1 line", "(paste-2.txt)"), which meant the only committed evidence
+	// for this predicate encoded shapes that never occur.
 	for _, box := range []string{
 		"[Paste #1 - 29 lines]",
-		"[Paste #12 - 1 line]",
-		"[Paste #3]",
+		"[Paste #12 - 1 lines]",
+		"[Saved pasted content to workspace (12.3 KB) id=2]",
+		"[Saved pasted content to workspace (988 B) id=17]",
 		"before [Paste #2 - 40 lines] after",
-		"[Saved pasted content to workspace (paste-2.txt) id=2]",
 	} {
-		t.Run("collapsed: "+box, func(t *testing.T) {
+		t.Run("rendered: "+box, func(t *testing.T) {
+			require.True(t, copilotPasteCollapsed(box))
+		})
+	}
+
+	// Shapes the producers never write but the vendor's own MATCHER accepts, so reading the
+	// composer back must too. Kept apart from the group above so neither is mistaken for the
+	// other: these are tolerance, not evidence of what copilot renders.
+	for _, box := range []string{
+		"[Paste #3]",          // the matcher makes " - N lines" optional; nbi never omits it
+		"[Paste #4 - 1 line]", // singular, for a future vendor pluralization fix
+	} {
+		t.Run("tolerated: "+box, func(t *testing.T) {
 			require.True(t, copilotPasteCollapsed(box))
 		})
 	}
@@ -1710,6 +1728,8 @@ func TestCopilotPasteCollapsed(t *testing.T) {
 		"[Pasted text #1 +29 lines]", // claude's chip, not copilot's
 		"[Paste #]",
 		"[Saved pasted content to workspace () id=]",
+		"[Saved pasted content to workspace (12.3 KB)]",    // no id
+		"Saved pasted content to workspace (12.3 KB) id=2", // no brackets
 	} {
 		t.Run("plain: "+box, func(t *testing.T) {
 			require.False(t, copilotPasteCollapsed(box))

@@ -58,10 +58,14 @@ import (
 // A Match matcher IS exercised at every width it has captures for, because fires() runs the
 // production predicate; read the rungs off paneCoverage rather than from a list here, which is
 // what #666 had to correct when it drove claudeGateVisible below 28. What cannot be enumerated
-// is its individual literals: they live inside the func — every adapter's Match predicates, of
-// which the registry now declares eleven across claude, gemini, aider and copilot, plus the
-// token helpers they call — so the alternatives ledger below skips them. Naming a subset here
-// was how that sentence went stale twice; the list is `grep -n "Match: " registry.go`. Beyond that, the width-bearing surfaces outside
+// is its individual literals: they live inside the func, along with the token helpers it calls,
+// so the alternatives ledger below skips them.
+//
+// There was a count of those predicates here. It has now been wrong twice and the correction
+// offered for it was wrong a third time — `grep -n "Match: "` and `grep -n "Match: [a-z]"` both
+// over-count, because a doc comment in registry.go contains the phrase. Two failed corrections
+// say the sentence does not want stating, so the number is gone rather than restated: what
+// matters is that the literals are unenumerable from here, not how many funcs hold them. Beyond that, the width-bearing surfaces outside
 // Prompts/Gates/BusyMarkers — PermissionMode's footer markers, LiveSpinner, SuggestionVisible,
 // PasteCollapsed, BackgroundWork — have no coverage here at all.
 //
@@ -262,7 +266,9 @@ var paneCoverage = map[string][]paneCapture{
 	// those captures went. An earlier draft of this entry was two rungs short, on the belief
 	// that the multi-column footer's mid-word split at 24 and 20 left nothing to match. It
 	// splits the WORD, not the row, and the marker keys on the prefix that survives it.
-	"copilot/busy": copilotBusyLadder,
+	// The busy ladder is two tables: the original 20-and-up sweep plus the sub-20 band driven
+	// after paneCoverage was found asserting a floor that does not exist.
+	"copilot/busy": append(append([]paneCapture{}, copilotBusyNarrowLadder...), copilotBusyLadder...),
 }
 
 // paneCoverageExempt is the other direction, and it exists because a `continue` on "no
@@ -383,17 +389,27 @@ var wantRungs = map[string][]int{
 	"agy/busy":                {20, 24, 28, 40, 120, 120},
 	"agy/prompt/confirmation": {20, 24, 28, 40, 120},
 
-	// Eight rungs, one per driven width, and the floor really is 20 rather than "20 is simply
-	// where driving stopped": the narrowest rung was driven and the gate fires there. What
-	// fails at 20 is the TITLE, which no matcher here reads.
+	// Eight rungs each, 20 the narrowest DRIVEN width rather than a floor — nothing clamps the
+	// preview pane's width (see this file's header). What fails at 20 is the TITLE, which no
+	// matcher here reads.
 	"copilot/gate/trust":      {20, 24, 26, 28, 34, 40, 60, 120},
 	"copilot/prompt/approval": {20, 24, 26, 28, 34, 40, 60, 120},
-	// Eight rungs, and the floor is 20 — the narrowest pane Atrium's own layout can produce is
-	// covered, so this adapter's busy marker has no unmeasured band. It read {26, …} while the
-	// marker was the whole word "Working"; what moved the floor was not a new capture but
-	// reading the two narrowest ones properly. See
-	// TestCopilotBusyMarkerIsTheLongestSurvivingPrefix.
-	"copilot/busy": {20, 24, 26, 28, 34, 40, 60, 120},
+
+	// Twelve rungs, and the band below 20 is DRIVEN rather than argued about. This entry read
+	// "the floor is 20 — the narrowest pane Atrium's own layout can produce is covered, so this
+	// adapter's busy marker has no unmeasured band", which contradicted the header above and
+	// registry.go's agy entry: the list may take maxListRatio = 0.60 of the terminal and the
+	// remainder is not clamped, so there is no such narrowest pane. Driving 12/14/16/18 settled
+	// it — "Worki" survives on one row at every one, and at 12 the footer renders " Worki inte"
+	// with "ng" below, so five characters is exactly what fits rather than merely enough.
+	// TestCopilotBusyMarkerSurvivesBelowTwenty and
+	// TestCopilotBusyMarkerIsExactlyWhatFitsAtTwelve.
+	"copilot/busy": {12, 14, 16, 18, 20, 24, 26, 28, 34, 40, 60, 120},
+
+	// The driven IDLE ladder is deliberately NOT here: this table is keyed by matcher kind and
+	// asserts a matcher FIRES at every captured width, and an idle pane's property is the
+	// inverse of that (no gate, no prompt, no busy marker). It is iterated directly by
+	// TestCopilotIdleComposerIsNotABox and its two siblings, the way composerPanes is.
 }
 
 // keysWithNoRecordedCaptureWidth are covered by real captures whose provenance never wrote

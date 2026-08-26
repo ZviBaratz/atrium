@@ -2036,12 +2036,32 @@ func copilotModalUp(content string) bool {
 }
 
 // copilotPasteChipRegex and copilotSavedPasteRegex are copilot's two collapsed-paste
-// placeholders, mirroring the vendor's own pair of detectors at 1.0.80 rather than a shape
-// read off one screenshot: a paste over the line threshold becomes "[Paste #N - L lines]",
-// and one over the byte threshold is written to the workspace and becomes "[Saved pasted
-// content to workspace (<file>) id=N]". The vendor's own regex makes the " - L lines" half
-// optional, so this does too — that is the shape it accepts back from its own composer.
-// Tolerant on the plural for the same reason claude's chip regex is.
+// placeholders, taken from the vendor's own producers and matchers in the 1.0.80 bundle rather
+// than from a screenshot. Both sides are quoted here because they DISAGREE, and the disagreement
+// is what these patterns have to absorb:
+//
+//	producers   nbi = (t,e) => `[Paste #${t} - ${e} lines]`
+//	            PAn = (t,e) => `[Saved pasted content to workspace (${e}) id=${t}]`
+//	matchers    /\[Paste #(\d+)(?: - \d+ lines)?\]/g
+//	            /\[Saved pasted content to workspace \([^)]+\) id=(\d+)\]/g
+//
+// Three things follow, each of which a fixture got wrong before it was read off the bundle:
+//
+//   - The parenthesized value is a formatted BYTE SIZE, not a filename: PAn is called as
+//     PAn(oe, te.formattedSize) and formattedSize is Xft(r.sizeBytes) = shellFormatBytesHuman.
+//     The object beside it does carry filePath, and only the sibling <pasted_content …/> XML
+//     builder reads that. So the real string is "(12.3 KB)", never "(paste-2.txt)".
+//   - The line-count half is NOT optional in the producer, but IS optional in the matcher — so
+//     a bare "[Paste #N]" is a shape copilot accepts back from its own composer while never
+//     writing one. This follows the matcher, because reading the composer back is exactly what
+//     this predicate does.
+//   - The producer has no pluralization: e=1 renders "1 lines". `lines?` here is tolerance for a
+//     future vendor fix, not a shape 1.0.80 emits.
+//
+// The tolerance is deliberate in the fail-open direction, and that is the safe one: PasteCollapsed
+// is the sole landing signal for a collapsed prompt, so a pattern that is too NARROW re-pastes a
+// chip per retry forever (the loop wiring this field prevents), while one that is too wide can
+// only mistake an unrelated bracketed string the user typed for their own paste landing.
 var (
 	copilotPasteChipRegex  = regexp.MustCompile(`\[Paste #\d+(?: - \d+ lines?)?\]`)
 	copilotSavedPasteRegex = regexp.MustCompile(`\[Saved pasted content to workspace \([^)]+\) id=\d+\]`)
