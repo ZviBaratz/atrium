@@ -79,11 +79,22 @@ it this adapter's folder-trust gate and busy marker, and `atrium doctor` parsed 
 string and reported *Copilot CLI drifted* for a CLI that is not installed. The discriminator was
 already in the line above and nothing read it. It is now `Adapter.VersionMarker` —
 `"GitHub Copilot"`, the vendor half of that `--version` string, with the digits left to
-`VerifiedVersion` — consulted by `config.DetectAgentProfiles` (which skips a binary that fails,
-fail-closed) and by `doctor.Check` (which reports `StatusForeign`, a status of its own rather
-than a drift or a not-installed). `agent.Resolve` deliberately does not consult it: it is a pure
-function over a program string and cannot exec anything, so a hand-written profile pointing at
-the wrong `copilot` still resolves here and `doctor` is what tells the user.
+`VerifiedVersion` — consulted by `config.DetectAgentProfilesVerified` (which skips a binary that
+fails, fail-closed) and by `doctor.Check` (which reports `StatusForeign`, a status of its own
+rather than a drift or a not-installed). `agent.Resolve` deliberately does not consult it: it is
+a pure function over a program string and cannot exec anything, so a hand-written profile
+pointing at the wrong `copilot` still resolves here and `doctor` is what tells the user.
+
+**`--version` IS NOT A CHEAP READ, which is why there are two detectors.** Measured on 1.0.80:
+**2.6s** against a cold `HOME` and **0.7s** warm, and it creates `~/.cache/copilot/pkg` on the
+way — a version flag that unpacks a platform package. The first version of this fix put that on
+`config.DetectAgentProfiles`, which is `LoadConfig`'s fallback and is re-derived by
+`loadStoredConfig` on every poll of `atrium new --wait`; four root-package tests went from 1.9s
+to 53s. CI could not see it: no runner has copilot installed, so the probe never ran there, and
+the failure exists only on a machine that HAS the contested binary. So the verifying detector is
+reserved for the paths where the user asked to detect, and the unverified one stays on config
+loading. The generalisable part: a `--version` probe is a diagnostic, and this is the second time
+this document has recorded a cost that only appears on the machine the feature is for.
 
 ### COPILOT_HOME isolates config and state — DRIVEN
 

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session/agent"
 )
 
@@ -35,10 +36,14 @@ func KnownAgentBins() []string {
 	return bins
 }
 
-// identityProbeTimeout bounds the `--version` probe below. Short, and shorter than doctor's:
-// this one runs while a first-run config is being seeded, where a wedged binary would stall
-// startup rather than a diagnostic command the user chose to run.
-const identityProbeTimeout = 5 * time.Second
+// identityProbeTimeout bounds the `--version` probe below. It matches doctor.ProbeTimeout, and
+// duplicating the value rather than importing it is forced: internal/doctor imports this package.
+//
+// It is deliberately generous, because the probe FAILS CLOSED — a timeout means "not this agent",
+// so a budget shorter than the binary's cold start makes a legitimately installed CLI vanish from
+// detection with no error. Measured cold on 1.0.80: 2.6s. A 5s budget looked like plenty against
+// that and is one slow disk away from dropping the agent it exists to find.
+const identityProbeTimeout = 10 * time.Second
 
 // agentIdentityOK reports whether the installed binary really is the agent whose name it
 // carries, by checking the adapter's VersionMarker against `<program> --version`. An adapter
@@ -83,6 +88,18 @@ var agentIdentityOK = func(a *agent.Adapter, program string) bool {
 	out, err := exec.CommandContext(ctx, cmd, "--version").Output()
 	ok := err == nil && strings.Contains(string(out), a.VersionMarker)
 	identityCache[key] = ok
+
+	// Both failures are logged, and they are different failures. The point is that this function
+	// SKIPS an agent silently: without a line here, "the CLI I installed is not in the picker"
+	// has no evidence anywhere on the machine.
+	switch {
+	case err != nil:
+		log.WarningLog.Printf("identity probe for %q failed (%v); not offering it as %s",
+			cmd, err, a.Key)
+	case !ok:
+		log.WarningLog.Printf("%q does not report %q, so it is another vendor's CLI under that "+
+			"name; not offering it as %s", cmd, a.VersionMarker, a.Key)
+	}
 	return ok
 }
 
