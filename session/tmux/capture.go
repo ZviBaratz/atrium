@@ -130,9 +130,14 @@ func resolvePaneID(ctx context.Context, exec cmd.Executor, sessionName string) (
 //
 // A pane id is the identity a NAME is not: tmux mints it once and never reissues it, so
 // it survives a rename of the session, the window or the pane. That is what makes it the
-// only sound way to answer "am I inside this session?" — the name a process was launched
-// with is frozen in its environment, and a session renamed since then answers to a name
+// sound way to answer "am I inside this session?" — the name a process was launched with
+// is frozen in its environment, and a session renamed since then answers to a name
 // nothing in that process knows.
+//
+// Sound only WITHIN one server, though, and a caller comparing these against a pane id
+// out of its own environment has to establish that first: tmux numbers panes per server
+// from %0, so an operator's own tmux and Atrium's both hand out %0, %1, %2, and a
+// cross-server match means nothing. SocketPath is what settles it.
 //
 // Every pane, not the agent's alone: the question is whether the CALLER's pane belongs to
 // this session, and the caller may be a shell the user split off rather than the agent.
@@ -151,6 +156,24 @@ func PaneIDsForSession(ctx context.Context, exec cmd.Executor, sessionName strin
 		}
 	}
 	return ids, nil
+}
+
+// SocketPath asks the server on Atrium's socket where that socket is, so a caller can
+// tell whether some other tmux server is the one its own $TMUX names. ok is false
+// whenever no answer came back, and the reasons are not enumerated: none of them says
+// anything about the path, only about whether a server was there to name it.
+//
+// #{socket_path} is the server's own answer, which is why this asks rather than
+// reconstructing $TMUX_TMPDIR/tmux-<uid>/<name> from tmux's layout rule. A caller that
+// gets ok=false has learnt nothing about the path and must not treat the absence as a
+// match — see refuseSelfRetirement, which drops to its name comparison instead.
+func SocketPath(ctx context.Context, exec cmd.Executor) (string, bool) {
+	out, err := exec.Output(tmuxCommand(ctx, "display-message", "-p", "#{socket_path}"))
+	if err != nil {
+		return "", false
+	}
+	path := strings.TrimSpace(string(out))
+	return path, path != ""
 }
 
 // trimCapture drops the blank rows tmux pads a partly-filled pane with, then

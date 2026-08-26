@@ -374,7 +374,8 @@ still reclaim it.
 It is not free, and the gate's absence is not a claim that it is. Freeing the worktree
 deletes the directory, so files git ignores that lived in it are gone for good — a local
 `.env`, a build cache, a session's installed dependencies — and resume rebuilds the
-worktree without them (only `carry_files` entries are re-seeded). This is the same loss
+worktree without them (only the paths named by `carry_files` and `link_paths` are
+re-seeded, the latter unless the session was created dependency-isolated). This is the same loss
 the TUI's pause dialog warns about, and `atrium pause` prints it too. It does refuse what a park cannot do: an already-paused session,
 a direct session, which runs in your own checkout with no worktree to free, and one
 whose startup is still in flight, where the park would race the setup it is removing.

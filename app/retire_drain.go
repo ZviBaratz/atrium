@@ -169,6 +169,12 @@ func (m *home) drainRetireRequests() tea.Cmd {
 		if m.outboxPoisoned[e.Path] {
 			continue
 		}
+		if disposed >= retireDisposalBudget {
+			// Every remaining arm either disposes or dispatches, and a dispatch cannot
+			// happen without also being able to dispose. Stop rather than continue: the
+			// spool stays in order, so the oldest record is still the next one up.
+			break
+		}
 		// Already answered, and durably so. outboxPoisoned covers the same record for
 		// the rest of THIS run and dies with the process, which is not long enough: a
 		// refusal whose receipt landed but whose unlink failed — ENOSPC, EROFS, a
@@ -178,15 +184,16 @@ func (m *home) drainRetireRequests() tea.Cmd {
 		// the request had been refused. The create drain probes its disclosure mark
 		// here for the same reason. Retry the unlink rather than only skipping, so the
 		// record leaves as soon as whatever blocked it lets go.
+		//
+		// Charged to the budget like any other disposal, and sitting below its check for
+		// that reason. The unlink is cheaper than a Reject's write-then-unlink, but it is
+		// still a syscall per record on the update goroutine, and a spool that filled up
+		// while the unlinks were failing is exactly the backlog the budget exists to
+		// spread over several ticks.
 		if outbox.Receipted(e.Path) {
 			m.discardSpoolFile(e.Path, func() error { return outbox.Remove(e.Path) })
+			disposed++
 			continue
-		}
-		if disposed >= retireDisposalBudget {
-			// Every remaining arm either disposes or dispatches, and a dispatch cannot
-			// happen without also being able to dispose. Stop rather than continue: the
-			// spool stays in order, so the oldest record is still the next one up.
-			break
 		}
 
 		switch {
@@ -372,34 +379,51 @@ func (m *home) abandonStuckRetirement(now time.Time) {
 // the asyncActionDoneMsg handler clears that and then re-feeds the inner result as a
 // SEPARATE later message. Between those two messages neither inherited hold is true.
 //
-// The third is the overlays that CAPTURE AN INSTANCE: a confirmation stashes its
-// teardown action, renameTarget holds the row being relabelled, queueTarget mirrors it.
-// A teardown dispatched underneath any of them leaves that close to act on a session
+// The third is the frame on screen, whenever it is one a retirement must not act under.
+// The overlays that CAPTURE AN INSTANCE are its obvious members: a confirmation stashes
+// its teardown action, renameTarget holds the row being relabelled, queueTarget mirrors
+// it. A teardown dispatched underneath any of them leaves that close to act on a session
 // that is already gone — with the deep-rename toggle on, a tmux rename, a
 // `git branch -m` and a worktree move against a session whose branch was just deleted.
-// All three are cleared on the accepting and the cancelling path alike, so the hold is
-// as reliable as the overlay is.
 //
-// Each is named rather than standing in for it with "anything but the default frame",
-// which is the gate createDrainHeld's own comment gives as the thing that deadlocked
-// that drain. The frame carries states no retirement can disturb, and two of them never
-// end on their own: a fresh install sits in stateWelcome until someone answers the
-// modal, and nothing answers it on a machine driven only by `atrium new`, where
-// markWelcomeSeen is deliberately skipped for a background spawn. A blanket state gate
-// therefore means `atrium kill --wait` always times out and every record expires at the
-// TTL — on exactly the headless machine these verbs exist for. stateInfo is the same
-// trap arriving later: a drained retirement that fails raises one, and the drain would
-// then hold on the modal its own failure put up. A list that can fall behind is the
-// lesser risk; the falling-behind is one hold too many, and this is one hold too few.
+// Naming those three fields is not enough, and that is why this group tests the frame
+// rather than the fields. The composers that capture NOTHING are the worse case:
+// openQuickSend puts the row's name in the overlay title and then calls
+// GetSelectedInstance again when the user submits, submitDiffComment does the same, and
+// runPaletteAction hands its row to dispatchAction, which resolves the selection like
+// any keypress would. A drained kill calls list.RemoveInstance, which moves the
+// selection — so the message a user typed for one session is queued to its neighbour,
+// and the notice confirms the wrong name. A list of fields cannot see that class at all.
 func (m *home) retireDrainHeld() bool {
-	return m.createDrainHeld() || m.pendingRetirement != nil || m.overlayHoldsAnInstance()
+	return m.createDrainHeld() || m.pendingRetirement != nil || m.frameDefersRetirement()
 }
 
-// overlayHoldsAnInstance reports whether an overlay is open that captured a specific
-// row to act on when it closes. See retireDrainHeld, its only caller, for why the three
-// are named individually.
-func (m *home) overlayHoldsAnInstance() bool {
-	return m.pendingConfirmAction != nil || m.renameTarget != nil || m.queueTarget != nil
+// frameDefersRetirement reports whether the frame on screen is one a drained retirement
+// must not act under. Every frame but three is. See retireDrainHeld, its only caller,
+// for the class of overlay that forces the polarity this way round.
+//
+// The exemptions are the frames that do not end on their own, which is the trap a
+// blanket "anything but the default frame" gate falls into — the gate createDrainHeld's
+// own comment gives as the thing that deadlocked that drain. A fresh install sits in
+// stateWelcome until somebody answers the modal, and nothing answers it on a machine
+// driven only by `atrium new`, where markWelcomeSeen is deliberately skipped for a
+// background spawn. stateInfo is the same trap arriving later, from two directions: a
+// drained retirement that fails raises one, so the drain would hold on a modal its own
+// failure put up, and showReleaseNotes raises one after an upgrade that nothing headless
+// dismisses. Under either, `atrium kill --wait` always times out and every record
+// expires at the TTL — on exactly the headless machine these verbs exist for.
+//
+// Every other frame takes a keypress to enter, so a headless TUI is never in one, and a
+// human who is in one is there to leave it. That puts the failure direction the safe way
+// round: a frame wrongly absent from this switch costs a retirement the ticks until it
+// closes, where a row wrongly absent from a field list misdelivered a user's message.
+func (m *home) frameDefersRetirement() bool {
+	switch m.state {
+	case stateDefault, stateWelcome, stateInfo:
+		return false
+	default:
+		return true
+	}
 }
 
 // executeRetirement dispatches one retirement, or returns the verdict that stopped it.

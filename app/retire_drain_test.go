@@ -608,22 +608,20 @@ func TestRetireDrainHoldsWhileAnyOverlayHoldsAnInstance(t *testing.T) {
 	}
 }
 
-// TestRetireDrainActsUnderAFrameThatHoldsNoInstance is the half a blanket "anything but
-// the default frame" gate got wrong, and it is not a corner: two of these frames never
-// end on their own.
+// TestRetireDrainActsUnderTheFramesThatNeverEnd is the half a blanket "anything but the
+// default frame" gate got wrong, and it is not a corner: both of these frames never end
+// on their own.
 //
 // A fresh install sits in stateWelcome until somebody answers the modal, and nothing
 // answers it on a machine driven only by `atrium new` — markWelcomeSeen is deliberately
-// skipped for a background spawn. stateInfo is the same trap arriving later: a drained
-// retirement that fails used to raise one, so the drain would hold on the modal its own
-// failure put up. Under either, a blanket gate means `atrium kill --wait` always times
-// out and every record expires at the TTL, on exactly the headless machine these verbs
-// exist for.
-//
-// The rest are here because they are one keypress away and hold nothing: none captures
-// a row to act on when it closes.
-func TestRetireDrainActsUnderAFrameThatHoldsNoInstance(t *testing.T) {
-	for _, st := range []state{stateWelcome, stateInfo, stateHelp, statePrompt, stateFilter, stateSettings} {
+// skipped for a background spawn. stateInfo is the same trap arriving later, from two
+// directions: a drained retirement that fails raises one, so the drain would hold on the
+// modal its own failure put up, and showReleaseNotes raises one after an upgrade that
+// nothing headless dismisses. Under either, a blanket gate means `atrium kill --wait`
+// always times out and every record expires at the TTL, on exactly the headless machine
+// these verbs exist for.
+func TestRetireDrainActsUnderTheFramesThatNeverEnd(t *testing.T) {
+	for _, st := range []state{stateDefault, stateWelcome, stateInfo} {
 		t.Run(fmt.Sprintf("state %d", st), func(t *testing.T) {
 			h := drainHome(t)
 			inst := addInstance(t, h, "fix-auth", "/repo/web")
@@ -631,10 +629,64 @@ func TestRetireDrainActsUnderAFrameThatHoldsNoInstance(t *testing.T) {
 			h.state = st
 			killRecord(t, "fix-auth", "/repo/web")
 
-			assert.NotNil(t, h.drainRetireRequests(), "the frame captures no row, so nothing is at risk")
+			assert.NotNil(t, h.drainRetireRequests(), "nothing ends this frame, so a hold strands the request for its whole TTL")
 			assert.True(t, h.retiring[inst], "and the retirement an agent asked for goes through")
 		})
 	}
+}
+
+// TestRetireDrainHoldsUnderAFrameThatActsOnTheSelection is the other half, and the half
+// an enumeration of capture FIELDS could not see.
+//
+// None of these frames parks a row in pendingConfirmAction, renameTarget or queueTarget.
+// Each resolves the selection when it closes instead: openQuickSend puts the row's name
+// in the overlay title and calls GetSelectedInstance again on submit, submitDiffComment
+// does the same, and runPaletteAction hands its row to dispatchAction, which resolves
+// the selection like any keypress. A drained kill calls list.RemoveInstance, which moves
+// that selection — so acting under one of these queues a user's message to the
+// neighbouring session and tells them it went to the one they picked.
+func TestRetireDrainHoldsUnderAFrameThatActsOnTheSelection(t *testing.T) {
+	for _, st := range []state{statePrompt, stateDiffComment, stateCommandPalette, stateCustomCommands, stateHistory} {
+		t.Run(fmt.Sprintf("state %d", st), func(t *testing.T) {
+			h := drainHome(t)
+			inst := addInstance(t, h, "fix-auth", "/repo/web")
+			retirable(inst)
+			h.state = st
+			record := killRecord(t, "fix-auth", "/repo/web")
+
+			assert.Nil(t, h.drainRetireRequests(), "the frame acts on whatever is selected when it closes")
+			assert.False(t, h.retiring[inst])
+			assert.Len(t, retireRecords(t), 1, "held, not refused")
+			_, rejected := outbox.Rejection(record)
+			assert.False(t, rejected, "a human mid-compose is not a reason to destroy the request")
+		})
+	}
+}
+
+// TestRetireDrainLeavesAQuickSendPointedAtItsOwnRow follows the hold to the consequence
+// it exists to prevent, rather than stopping at the gate.
+//
+// The overlay names one session in its title and re-reads the selection on submit, so
+// the invariant that matters is that the two still agree after a tick that had a
+// retirement waiting on it. Removing the row a kill names moves the selection under an
+// open composer, and the prompt goes to whichever row slid into its place.
+func TestRetireDrainLeavesAQuickSendPointedAtItsOwnRow(t *testing.T) {
+	h := drainHome(t)
+	doomed := addInstance(t, h, "fix-auth", "/repo/web")
+	retirable(doomed)
+	neighbour := addInstance(t, h, "fix-billing", "/repo/web")
+	retirable(neighbour)
+
+	// The composer is open over the row the kill names — the case where the selection
+	// and the record point at the same session.
+	h.list.SetSelectedInstance(0)
+	require.Equal(t, doomed, h.list.GetSelectedInstance(), "the composer opens over the row the record names")
+	h.state = statePrompt
+	killRecord(t, "fix-auth", "/repo/web")
+
+	assert.Nil(t, h.drainRetireRequests())
+	assert.Equal(t, doomed, h.list.GetSelectedInstance(),
+		"the row the open composer named must survive the tick, or its submit queues to %q", neighbour.Title())
 }
 
 // TestRetireDrainHoldsWhileTmuxIsUnusable mirrors the hold drainCreateRequests has

@@ -657,6 +657,8 @@ func TestRetireRefusesItsOwnSessionWhoseTmuxNameWasNeverRecorded(t *testing.T) {
 //
 // The pane id is what survives a rename — tmux mints it once and never reissues it — so
 // the guard asks that first, and TMUX_PANE is tmux's own answer for the caller's half.
+// $TMUX is the other half: the id only means anything once the caller is known to be on
+// the server that minted it.
 func TestRetireRefusesItsOwnSessionAfterADeepRename(t *testing.T) {
 	sandboxDataDir(t)
 	d := inst("fix-auth", "/repo/web")
@@ -664,15 +666,70 @@ func TestRetireRefusesItsOwnSessionAfterADeepRename(t *testing.T) {
 	seedInstances(t, d)
 	t.Setenv(sessionNameEnv, "atrium_web_fix-auth") // frozen at launch: the OLD name
 	t.Setenv(paneIDEnv, "%1")
+	t.Setenv(tmuxServerEnv, atriumSocket+",4242,0")
 
 	probe := cleanProbe()
 	probe.panes = func(session.InstanceData) []string { return []string{"%1", "%4"} }
+	probe.socket = func() (string, bool) { return atriumSocket, true }
 
 	_, _, err := retireCmd(t, outbox.ModeKill, probe, "fix-auth", 0)
 
 	require.Error(t, err, "the name no longer matches, so only the pane id can catch this")
 	assert.Contains(t, err.Error(), "its own session")
 	assert.Empty(t, spooledRetires(t))
+}
+
+// atriumSocket is a stand-in for wherever Atrium's tmux server says its socket is. Its
+// value is irrelevant; that the caller's $TMUX names the SAME one is the whole point.
+const atriumSocket = "/run/atrium/tmux-1000/atrium"
+
+// TestRetireActsWhenTheCallersPaneIDCollidesOnAnotherServer is the cross-server half of
+// the pane check, and the reason it cannot be a bare id comparison.
+//
+// tmux numbers panes per server from %0, so an operator sitting in their OWN tmux holds
+// pane ids Atrium's server hands out too. Believing a match across the two refuses
+// `atrium kill worker-3` typed in the operator's own window whenever the numbers
+// collide — and tells them the worker is their own session, which it is not. The name
+// comparison is untouched by this and still catches the case it was always for.
+func TestRetireActsWhenTheCallersPaneIDCollidesOnAnotherServer(t *testing.T) {
+	sandboxDataDir(t)
+	worker := inst("worker-3", "/repo/web")
+	worker.TmuxName = "atrium_web_worker-3"
+	seedInstances(t, worker)
+	// The collision: the caller's own pane is %1 and so is one of the worker's.
+	t.Setenv(paneIDEnv, "%1")
+	t.Setenv(tmuxServerEnv, "/tmp/tmux-1000/default,999,0")
+
+	probe := cleanProbe()
+	probe.panes = func(session.InstanceData) []string { return []string{"%1", "%4"} }
+	probe.socket = func() (string, bool) { return atriumSocket, true }
+
+	_, _, err := retireCmd(t, outbox.ModeKill, probe, "worker-3", 0)
+
+	require.NoError(t, err, "a pane id from another server is not evidence about this one")
+	assert.Len(t, spooledRetires(t), 1)
+}
+
+// TestRetireIgnoresPaneEvidenceWhenTheServerWillNotSayWhereItIs: ok=false teaches the
+// guard nothing about the socket, so the match it cannot qualify goes unused rather than
+// being taken on trust. What is left is the name comparison, which is what the guard had
+// before pane ids were consulted at all.
+func TestRetireIgnoresPaneEvidenceWhenTheServerWillNotSayWhereItIs(t *testing.T) {
+	sandboxDataDir(t)
+	worker := inst("worker-3", "/repo/web")
+	worker.TmuxName = "atrium_web_worker-3"
+	seedInstances(t, worker)
+	t.Setenv(paneIDEnv, "%1")
+	t.Setenv(tmuxServerEnv, atriumSocket+",4242,0")
+
+	probe := cleanProbe()
+	probe.panes = func(session.InstanceData) []string { return []string{"%1", "%4"} }
+	probe.socket = func() (string, bool) { return "", false }
+
+	_, _, err := retireCmd(t, outbox.ModeKill, probe, "worker-3", 0)
+
+	require.NoError(t, err)
+	assert.Len(t, spooledRetires(t), 1)
 }
 
 // TestRetireActsOnOtherSessionsFromInsideOne is the other half: the self-guard must not
@@ -702,9 +759,11 @@ func TestRetireActsOnAnotherSessionWhosePanesAreNotTheCallers(t *testing.T) {
 	worker.TmuxName = "atrium_web_worker-3"
 	seedInstances(t, worker)
 	t.Setenv(paneIDEnv, "%9")
+	t.Setenv(tmuxServerEnv, atriumSocket+",4242,0")
 
 	probe := cleanProbe()
 	probe.panes = func(session.InstanceData) []string { return []string{"%1", "%2"} }
+	probe.socket = func() (string, bool) { return atriumSocket, true }
 
 	_, _, err := retireCmd(t, outbox.ModeKill, probe, "worker-3", 0)
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -102,8 +103,9 @@ var (
 			"It is not free, though. Freeing the worktree deletes the directory, so files git\n" +
 			"ignores that lived in it are gone for good — a local .env, a build cache, a\n" +
 			"session's installed dependencies — and resume rebuilds the worktree without them\n" +
-			"(only carry_files entries are re-seeded). The TUI's pause dialog warns about the\n" +
-			"same loss; this command prints it.\n\n" +
+			"(only the paths named by carry_files and link_paths are re-seeded, the latter\n" +
+			"unless the session was created dependency-isolated). The TUI's pause dialog warns\n" +
+			"about the same loss; this command prints it.\n\n" +
 			"It does refuse what a park cannot do — an\n" +
 			"already-paused session, a direct (non-git) session, which runs in your own\n" +
 			"checkout with no worktree to free, and one still starting up, where the park\n" +
@@ -143,6 +145,12 @@ type retireProbe struct {
 	// running inside the session it is retiring — and the shape of a machine with no
 	// tmux server to ask.
 	panes func(session.InstanceData) []string
+	// socket is where Atrium's own tmux server says its socket is, which is what makes
+	// panes comparable with a pane id out of the caller's environment at all. Pane ids
+	// are per-server and every server numbers from %0, so the two are only the same
+	// namespace once this says the caller is on Atrium's socket. nil, or !ok, means that
+	// could not be established and the pane evidence goes unused.
+	socket func() (string, bool)
 }
 
 // liveRetireProbe is the real thing: git against the session's own worktree, tmux
@@ -170,6 +178,9 @@ func liveRetireProbe(ctx context.Context, exec cmd2.Executor) retireProbe {
 				return nil
 			}
 			return ids
+		},
+		socket: func() (string, bool) {
+			return tmux.SocketPath(ctx, exec)
 		},
 	}
 }
@@ -297,7 +308,7 @@ func runRetire(out, errOut io.Writer, mode outbox.Mode, probe retireProbe, selec
 	if err != nil {
 		return err
 	}
-	if err := refuseSelfRetirement(mode, target, probe.panes); err != nil {
+	if err := refuseSelfRetirement(mode, target, probe); err != nil {
 		return err
 	}
 	if err := admits(mode, target); err != nil {
@@ -380,8 +391,17 @@ const sessionNameEnv = "ATRIUM_SESSION"
 
 // paneIDEnv is tmux's own answer to "which pane is this process in". tmux sets it in
 // every pane it spawns and nothing outside one has it, so an empty value means the
-// command was not run from inside a session at all — which is nobody's own session.
+// command was not run from inside a tmux pane at all — which is nobody's own session.
+//
+// A non-empty one says only that SOME server spawned this process, never that it was
+// Atrium's. The id is meaningless outside the server that minted it, which is what
+// tmuxServerEnv is read for.
 const paneIDEnv = "TMUX_PANE"
+
+// tmuxServerEnv is tmux's own answer to "which server is this pane on". tmux writes
+// "<socket-path>,<pid>,<session-index>" into every process it spawns and unsets it
+// outside one; only the socket path is read here.
+const tmuxServerEnv = "TMUX"
 
 // refuseSelfRetirement refuses a target that is the session the command is running in.
 //
@@ -401,6 +421,11 @@ const paneIDEnv = "TMUX_PANE"
 // itself. TMUX_PANE is tmux's own answer to "which pane is this", set in every pane it
 // spawns, and unset outside one.
 //
+// Asked first, but only once the ids are known to come from the same namespace — see
+// callerOnAtriumServer. A pane id says nothing across servers, and comparing one that
+// came out of the operator's own tmux against ids listed off Atrium's socket refuses
+// legitimate work on a collision that carries no meaning.
+//
 // The name comparison stays as the fallback for the machine with no tmux server to ask,
 // and it goes through tmuxSessionName rather than the raw field: TmuxName is absent from
 // state written before the field existed, and comparing against an empty string made the
@@ -411,13 +436,13 @@ const paneIDEnv = "TMUX_PANE"
 // the only identity available is what the caller's own environment says, and the agent
 // has a shell to overwrite it with — but an agent that lies about its OWN identity only
 // spares itself, so a guard that needs no enforcement is exactly what fits here.
-func refuseSelfRetirement(mode outbox.Mode, d session.InstanceData, panes func(session.InstanceData) []string) error {
+func refuseSelfRetirement(mode outbox.Mode, d session.InstanceData, probe retireProbe) error {
 	refuse := fmt.Errorf("refusing to %s %q: that is its own session, and an agent that "+
 		"retires the pane it is running in cannot report what happened — ask another "+
 		"session, or retire it from the TUI", mode, d.Title)
 
-	if self := strings.TrimSpace(os.Getenv(paneIDEnv)); self != "" && panes != nil {
-		for _, id := range panes(d) {
+	if self := strings.TrimSpace(os.Getenv(paneIDEnv)); self != "" && callerOnAtriumServer(probe) {
+		for _, id := range probe.panes(d) {
 			if id == self {
 				return refuse
 			}
@@ -428,6 +453,32 @@ func refuseSelfRetirement(mode outbox.Mode, d session.InstanceData, panes func(s
 		return refuse
 	}
 	return nil
+}
+
+// callerOnAtriumServer reports whether this process's own tmux pane is on the server
+// Atrium runs its sessions on, which is the precondition for comparing a pane id out of
+// the environment against ids listed off that server.
+//
+// A precondition, not a nicety. tmux numbers panes per server from %0, so an operator's
+// own tmux hands out the same ids Atrium's does, and `atrium kill worker-3` typed in a
+// window of the operator's own session would refuse itself whenever the two collide —
+// for low-numbered panes the ordinary case, not an exotic one. The refusal it produced
+// named the caller's session as the target's own, which is the one thing it is not.
+//
+// No is the answer to every uncertainty: no $TMUX, a value the split cannot read a path
+// out of, no probe to ask, or a server that does not answer where its socket is. Each
+// leaves the pane evidence unusable and the guard on its name comparison, which is what
+// it had before pane ids were consulted at all.
+func callerOnAtriumServer(probe retireProbe) bool {
+	if probe.panes == nil || probe.socket == nil {
+		return false
+	}
+	caller := filepath.Clean(strings.SplitN(strings.TrimSpace(os.Getenv(tmuxServerEnv)), ",", 2)[0])
+	if caller == "." {
+		return false
+	}
+	ours, ok := probe.socket()
+	return ok && filepath.Clean(ours) == caller
 }
 
 // establishSafety runs the gate and turns a refusal into the command's error.
