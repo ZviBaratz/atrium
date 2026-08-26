@@ -182,6 +182,20 @@ func TestHuggersObeyTheInsetRuleAcrossTheSnapZone(t *testing.T) {
 			return NewTextOverlay(strings.Repeat("x", 200) + "\n" + strings.Repeat("y", 200))
 		}},
 		{"settings", func() sizedOverlay { return NewSettingsOverlay(config.DefaultConfig()) }},
+		// The same panel carrying #815's repo layer. It is a separate hugger rather
+		// than a replacement because nil is the pre-#815 rendering and both have to
+		// obey the rule — and the layer adds the newest consumers of the inner width
+		// (the provenance chip and help line), which is precisely what the snap zone
+		// moves: inner width is 92 at the cap and 93/94/95 inside the band.
+		{"settings+repo layer", func() sizedOverlay {
+			o := NewSettingsOverlay(config.DefaultConfig())
+			o.SetRepoLayer(&RepoLayer{
+				Repo:  "/src/" + strings.Repeat("a", repoLayerPathWidth-len("/src/")),
+				Lists: map[string][]string{"carry_files": {".dev.vars", ".env.local"}},
+			})
+			o.OpenAt("carry_files")
+			return o
+		}},
 		{"accounts", func() sizedOverlay {
 			return NewAccountsOverlay(&config.Config{}, config.DefaultState())
 		}},

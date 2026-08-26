@@ -90,6 +90,19 @@ type Worktree struct {
 	// every Setup — including the paused→resume recreation. A zero-value Worktree
 	// (test literals) has it off, reproducing the shared-link behavior.
 	isolateDeps bool
+	// repoLocalSeeds, when set, answers what THIS repo's own trusted .atrium.json
+	// adds to the seed lists (#815). The signature carries both halves, but only the
+	// carry half has a production producer today — see SetRepoLocalSeeds. It is a
+	// callback rather than a captured pair of lists for two reasons that pull the
+	// same way: the answer depends on
+	// bytes that exist only once this Setup has checked the worktree out, and the
+	// trust check behind it lives in package session (internal/repotrust imports
+	// session/git, so the dependency cannot run the other way). Pushed in by the
+	// Instance like isolateDeps, but consulted on every Setup rather than frozen —
+	// a grant, a revocation or an edited file must reach the next materialization.
+	// nil (test literals, a direct session) means "no repo-local layer", which is
+	// exactly the pre-#815 behavior.
+	repoLocalSeeds func(worktreePath string) (carry, link []string)
 	// statsCache caches rev-list commit counts (ahead/behind) for revListCacheTTL
 	// and the dirty flag for dirtyCacheTTL. The dirty TTL (1s) is shorter than the
 	// rev-list TTL (3s) because dirty reflects uncommitted file edits that should
@@ -306,6 +319,30 @@ func (g *Worktree) SetIsolateDeps(v bool) {
 // IsolateDeps reports whether link_paths seeding is suppressed for this worktree.
 func (g *Worktree) IsolateDeps() bool {
 	return g.isolateDeps
+}
+
+// SetRepoLocalSeeds installs the resolver seedLocalPaths asks what this repo's own
+// trusted .atrium.json contributes to the seed lists (#815).
+//
+// The link return is part of the seam, not a live capability: link_paths is not a
+// repo-layerable key (repocfg.RepoLocalLayerKeys), so package session's resolver
+// always returns nil for it and only this package's own tests exercise that half.
+// Keeping the parameter is deliberate — it is what the deferred half plugs into.
+//
+// fn is
+// called once per Setup, AFTER the worktree is checked out and before anything is
+// seeded, with the materialized worktree path — because the bytes that decide the
+// answer are that worktree's own, which is what closes the gap between the trust
+// prompt and what actually runs.
+//
+// fn must be safe to call from Setup's goroutine and must never return entries it
+// has not proven trusted: this side treats what it hands back as granted. Call
+// before the worktree is shared with background goroutines, from the same two
+// Instance sites SetIsolateDeps documents — the Start path alone would lose the
+// layer on every resume, since Resume calls Setup on the worktree
+// NewWorktreeFromStorage rebuilt.
+func (g *Worktree) SetRepoLocalSeeds(fn func(worktreePath string) (carry, link []string)) {
+	g.repoLocalSeeds = fn
 }
 
 // ghContext returns ctx tagged with this worktree's GH_CONFIG_DIR so the gh

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/ZviBaratz/atrium/repocfg"
 	"github.com/ZviBaratz/atrium/session/git"
@@ -44,24 +45,34 @@ type Assessment struct {
 	// Hash is the content hash of that file's checked-out form ("" when absent
 	// or unreadable).
 	Hash string
-	// Entries is the usable repo_scripts entry it declares, if any (at most one —
-	// repocfg's one-entry rule — carrying its position in the file); Problems the
-	// refused one. Templates are NOT compiled here — content is still untrusted
-	// at assessment time.
-	Entries  []repocfg.RepoLocalEntry
-	Problems []repocfg.Problem
+	// Local is the parsed file: the usable repo_scripts entry it declares, if any
+	// (at most one — repocfg's one-entry rule — carrying its position in the file),
+	// the refused one as a Problem, and what it layers over the user's own lists
+	// (#815). One field rather than a spread of them so every asking
+	// surface can describe the file through repocfg.RepoLocalSurfaces and none can
+	// describe half of it. Templates are NOT compiled here — content is still
+	// untrusted at assessment time.
+	Local repocfg.RepoLocal
 
-	// Granted is the verdict for exactly (Key, Hash). HasGrant reports whether
-	// the ledger holds ANY record for Key — what separates "never asked" from
-	// "granted for different content" in prompt copy. Record is that record.
+	// Granted is the verdict for exactly (Key, Hash) AND for everything this file
+	// declares — see ScopeUpgrade. HasGrant reports whether the ledger holds ANY
+	// record for Key — what separates "never asked" from "granted for different
+	// content" in prompt copy. Record is that record.
 	Granted  bool
 	HasGrant bool
 	Record   Record
 
+	// ScopeUpgrade is the one case where the bytes match a grant and Granted is
+	// still false: the record predates GrantVersionSeeds and this file declares
+	// seed lists, so the prompt that wrote it could not have described them. The
+	// file has not changed, so prompt copy must not say it has.
+	ScopeUpgrade bool
+
 	// FileErr is a present-but-unusable file: over the size cap, unreadable,
-	// undecodable JSON, or more than one entry. Nothing from such a file executes
-	// (there are no Entries), and surfaces report it rather than dropping it
-	// silently.
+	// undecodable JSON, more than one entry, or a repo_scripts entry the parse
+	// refused (a Problem). Nothing from such a file applies — enforcement refuses
+	// it whole, so nothing here may describe it as grantable — and surfaces report
+	// it rather than dropping it silently.
 	FileErr error
 	// LedgerErr is a ledger that could not be read (corrupt, future version).
 	// Grants read as zero while it stands — fail closed — and surfaces say so.
@@ -69,14 +80,26 @@ type Assessment struct {
 }
 
 // WantsPrompt reports whether creating a session from this repo should ask the
-// user: the create ref declares a usable entry and the ledger does not grant
-// these bytes. A file that declares nothing usable never prompts — there is
-// nothing to run, so there is nothing to ask about (its Problems still
-// surface at enforcement). "Usable" is parse-usable, which since the parse
-// refuses configures-nothing entries in compile's own words means the entry
-// the prompt describes is one enforcement could actually run.
+// user: the create ref declares something the grant would put into the session,
+// and the ledger does not grant these bytes (or grants them at a version that
+// predates half of what they now confer — see ScopeUpgrade). A file that declares
+// nothing usable never prompts — there is nothing to apply, so there is nothing
+// to ask about — and neither does an unusable one: AssessRepo turns a refused
+// entry into FileErr precisely so Local is empty here, because enforcement
+// refuses such a file whole and a prompt for it would grant nothing, forever.
+//
+// "Declares something" is repocfg.RepoLocalSurfaces, which is also what
+// enforcement calls to decide the same question and what the dialog and `trust
+// allow` describe the file by — so the prompt cannot offer to grant a file the
+// gate would treat as absent, or stay silent about one it would apply. Since the
+// parse refuses configures-nothing entries in compile's own words and refuses an
+// unusable seed list whole, everything the list names is something enforcement
+// could actually act on. Note that a seed-only file (carry_files, no repo_scripts)
+// prompts: it executes nothing, but it decides which of the user's own gitignored
+// files are copied in front of an agent, which is #815's recorded reason for
+// gating it behind the same grant as the script.
 func (a Assessment) WantsPrompt() bool {
-	return a.Present && len(a.Entries) > 0 && !a.Granted
+	return a.Present && len(repocfg.RepoLocalSurfaces(a.Local)) > 0 && !a.Granted
 }
 
 // LiveState compares a recorded grant with its repo as it stands now, in the
@@ -87,21 +110,35 @@ func (a Assessment) WantsPrompt() bool {
 // session created now runs what you granted". Each git probe underneath
 // self-bounds (session/git's local timeout), so a wedged repo costs timeouts,
 // not a hang.
-func LiveState(ctx context.Context, key string, rec Record, updateBase bool) string {
+//
+// declares is what the grant covers, in RepoLocalSurfaces' words — the same list
+// the create-time dialog and `trust allow`'s receipt print. It rides this function
+// rather than a second call because the assessment behind it is the same one, and
+// a separate derivation would double the git forks per trusted repo. It is empty
+// for every state but "current": a grant whose repo has changed, lost the file, or
+// gone away covers nothing that would apply now, and printing the old file's
+// surfaces there would describe a session nobody can create.
+func LiveState(ctx context.Context, key string, rec Record, updateBase bool) (state, declares string) {
 	if _, err := os.Stat(key); err != nil {
-		return "missing (repo gone?)"
+		return "missing (repo gone?)", ""
 	}
 	a, err := AssessCreateDefault(ctx, key, updateBase)
 	if err != nil || a.FileErr != nil {
-		return "unreadable"
+		return "unreadable", ""
 	}
 	switch {
 	case !a.Present:
-		return "absent at " + a.Ref
+		return "absent at " + a.Ref, ""
+	case a.ScopeUpgrade:
+		// The bytes match, so this is not "changed" — but the grant predates the
+		// prompt that describes the file's seed lists, so nothing applies until the
+		// user re-allows. Saying "current" here would report a session that would
+		// run untrusted as trusted.
+		return "needs re-allow (new keys)", ""
 	case a.Hash == rec.Hash:
-		return "current"
+		return "current", strings.Join(repocfg.RepoLocalSurfaces(a.Local), " + ")
 	default:
-		return "changed (re-allow to use)"
+		return "changed (re-allow to use)", ""
 	}
 }
 
@@ -148,19 +185,47 @@ func AssessRepo(ctx context.Context, path, ref string) (Assessment, error) {
 
 	a.Hash = HashBytes(data)
 	parsed, err := repocfg.ParseRepoLocal(data)
-	if err != nil {
+	switch {
+	case err != nil:
 		a.FileErr = err
-	} else {
-		a.Entries = parsed.Entries
-		a.Problems = parsed.Problems
+	case len(parsed.Problems) > 0:
+		// A refused entry makes the file unusable, not partly usable. Enforcement
+		// refuses it whole (routeRepoLocal's Problems check runs before its
+		// surfaces check), so leaving the seed lists in Local here would let the
+		// dialog offer — and `trust allow` write — a grant for a file that then
+		// applies nothing, permanently: re-creating re-prompts and re-granting
+		// re-succeeds. Reporting it as unusable is what keeps the asking surfaces
+		// and the gate on one answer, and it is what main did before the seed
+		// lists gave a Problems-only file something to describe.
+		a.FileErr = fmt.Errorf("%s: %w", repocfg.RepoLocalFileName, parsed.Problems[0])
+	default:
+		a.Local = parsed
 	}
-	if len(a.Entries) > 0 {
+	if len(repocfg.RepoLocalSurfaces(a.Local)) > 0 {
 		a.Remote = git.GetRemoteURL(ctx, root)
 	}
 
 	ledger, err := Load()
 	a.LedgerErr = err
-	a.Granted = ledger.Granted(key, a.Hash)
 	a.Record, a.HasGrant = ledger.Lookup(key)
+	// The SAME scoped question the enforcement funnel asks (session/repoconfig.go's
+	// routeRepoLocal), so the prompt cannot offer to grant something the gate would
+	// refuse, or stay silent about something it would apply. Asking a different
+	// question here is precisely how the version gate came to be advisory-only.
+	need := GrantScope{Seeds: declaresSeeds(a.Local)}
+	a.Granted = ledger.GrantedFor(key, a.Hash, need)
+	// Distinguish "the file changed" from "this atrium reads more of it than the one
+	// that granted it did" — the bytes match in the second case, so prompt copy must
+	// not claim an edit nobody made.
+	a.ScopeUpgrade = !a.Granted && a.HasGrant && a.Record.Hash == a.Hash && need.Seeds && !a.Record.CoversSeeds()
 	return a, nil
+}
+
+// declaresSeeds reports whether a parsed file layers anything over the user's own
+// seed lists — the half of a grant that GrantVersionSeeds gates.
+//
+// It delegates rather than deciding, so this and the enforcement funnel cannot drift:
+// see repocfg.DeclaresLayers for why the predicate is derived from the layer map.
+func declaresSeeds(rl repocfg.RepoLocal) bool {
+	return repocfg.DeclaresLayers(rl)
 }

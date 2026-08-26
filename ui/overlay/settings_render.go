@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/ZviBaratz/atrium/repocfg"
 	"github.com/ZviBaratz/atrium/ui/theme"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -572,20 +573,28 @@ func (s *SettingsOverlay) renderRowLine(i, width, labelW int) string {
 	}
 }
 
-// rowValueAndBadge sizes a row's value cell and picks its right-aligned badge. There are
-// three claims on that column, in priority order:
+// rowValueAndBadge sizes a row's value cell and picks its right-aligned badge. The
+// claims on that column, in priority order:
 //
 //   - an inert reason chip, which degrades to one word but never drops: a dimmed row with no
 //     marker reads as broken, and the help pane only describes the SELECTED row;
 //   - a search result's category, which degrades by truncation for the same reason — a flat
 //     list drawn from ten categories needs it — and is why the timing badge yields while a
 //     filter is active;
+//   - a repo-layered row's contribution count (#815), which degrades to a bare "+N": it is
+//     not a refusal to explain like the first, nor the only thing telling two results apart
+//     like the second, but "the value shown is not the value in force here" outranks
+//     reference information. What makes it safe to drop below the narrowest rung is the `?`
+//     view, which carries the whole sentence unconditionally — NOT the help line, which
+//     yields to a truncated value and so is absent in exactly the correlated case (a long
+//     list is both why the value truncates and why the layer is worth saying);
 //   - the apply timing, which is reference information and is dropped outright (spec §10).
 //
-// For the first two the value is sized against the SHORTEST form the badge can take, never
-// the widest: reserving against the widest lets a rich enum value find no room beside a long
-// chip, fall back to the whole slack, and evict the very chip the ladder was supposed to
-// guarantee. fitValue then covers the kinds valueCell's own reservation does not reach.
+// For every claim but the last the value is sized against the SHORTEST form the badge can
+// take, never the widest: reserving against the widest lets a rich enum value find no room
+// beside a long chip, fall back to the whole slack, and evict the very chip the ladder was
+// supposed to guarantee. fitValue then covers the kinds valueCell's own reservation does not
+// reach.
 func (s *SettingsOverlay) rowValueAndBadge(i, width, labelW int, inert string) (value, badge string) {
 	avail := valueAvail(width, labelW)
 	switch {
@@ -600,12 +609,45 @@ func (s *SettingsOverlay) rowValueAndBadge(i, width, labelW int, inert string) (
 			s.valueCell(i, width, labelW, strings.Repeat("x", searchBadgeMinCells)),
 			avail, searchBadgeMinCells)
 		return value, searchBadge(s.rows[i].category.label(), badgeAvail(width, labelW, value))
+	case len(s.repoLayerEntries(i)) > 0:
+		// A repo-layered row whose selected repo actually contributes (#815). Ranked
+		// under the two above and over the timing badge: it is not a refusal to
+		// explain like an inert reason, nor the only thing telling two search results
+		// apart, but it says the value shown here is not the whole value in this repo
+		// — which outranks reference information. Like the inert chip it degrades
+		// rather than being dropped. The surface that survives a pane too narrow even
+		// for the shortest rung is expandedHelpContent, NOT contextLine: contextLine
+		// ranks this below a truncated value (spec §10) and returns nothing at all for
+		// an empty row range or a filter with no hits — and a long list is both the
+		// reason the value truncates and the reason the layer is interesting, so the two
+		// compete exactly when it matters. repoLayerContext's own clause says this.
+		candidates := repoLayerBadgeCandidates(len(s.repoLayerEntries(i)))
+		shortest := candidates[len(candidates)-1]
+		value = fitValue(s.valueCell(i, width, labelW, shortest), avail, ansi.StringWidth(shortest))
+		return value, fitBadge(candidates, width, labelW, value)
 	default:
 		// No fitValue here, deliberately: spec §10 drops a timing badge before touching the
 		// value, and a timing badge is reference information that loses nothing by going.
 		candidates := []string{s.rows[i].timing.badge()}
 		value = s.valueCell(i, width, labelW, candidates[0])
 		return value, fitBadge(candidates, width, labelW, value)
+	}
+}
+
+// repoLayerBadgeCandidates renders "this repo adds N" widest first, for the same
+// take-the-widest-that-fits ladder the inert chip and the enum value use.
+//
+// The count is the whole payload, so every rung keeps it and only the words go: a
+// bare "+2" still tells the user their list is not the effective list here, which
+// is the one thing this chip exists to say. Which repo, and which entries, is the
+// `?` view's job (expandedHelpContent) — the surface a narrow pane cannot take
+// away. NOT contextLine, which ranks the provenance below a truncated value and so
+// is absent in exactly the correlated case; see rowValueAndBadge's own note.
+func repoLayerBadgeCandidates(n int) []string {
+	return []string{
+		fmt.Sprintf("+%d from %s", n, repocfg.RepoLocalFileName),
+		fmt.Sprintf("+%d from repo", n),
+		fmt.Sprintf("+%d", n),
 	}
 }
 
@@ -922,6 +964,13 @@ func (s *SettingsOverlay) contextLine(width int) string {
 		// The chip is three words in a column and is easy to misread as a prohibition; this is
 		// the sentence that says what it actually means.
 		body = "No effect right now — " + chip + "."
+	case s.repoLayerContext() != "":
+		// A repo-layered row the selected repo contributes to (#815). Ranked over the
+		// gloss/detail fallback because the badge is a bare count and this names the
+		// repo and its entries — but BELOW the truncated value above it, which spec §10
+		// requires, and which means this line is not the guaranteed surface. That is
+		// expandedHelpContent's job.
+		body = s.repoLayerContext()
 	default:
 		// The current option's gloss, which is what makes cycling an enum teach rather than
 		// guess (D8) — and failing that, the first sentence of detail.
@@ -953,6 +1002,69 @@ func (s *SettingsOverlay) contextLine(width int) string {
 
 	return rightAligned(body, pos, width)
 }
+
+// repoLayerFor names the repository adding to row i and the entries it adds, or ""
+// when the row is not repo-layerable, no layer was injected, or this repo adds
+// nothing to it. One sentence, read by both the help line and the `?` view, so the
+// two cannot describe the same layer differently.
+//
+// It leads with the file and the repo and trails with the entries, because
+// contextLine truncates from the right: the entries are recoverable (they are in
+// that file, and the row's own value is not what changed), while "which repo" is
+// the part that makes the badge's count mean anything. What makes the `?` view
+// carry this too, rather than relying on the one line, is not path truncation but
+// the RANKING: contextLine yields the whole line to a truncated value, and a row
+// whose value truncates is exactly a row whose list is long enough for the layer to
+// matter. TestRepoLayerContextLineNamesTheRepo pins that yielding case.
+func (s *SettingsOverlay) repoLayerFor(i int) string {
+	entries := s.repoLayerEntries(i)
+	if len(entries) == 0 {
+		return ""
+	}
+	where := s.repoLayer.Repo
+	if where == "" {
+		where = "this repo"
+	}
+	// Sanitize BOTH interpolations. These are the repo's own committed strings and
+	// the repo path, and this line is measured and truncated downstream — a rule the
+	// parse cannot supply, because it deliberately admits combining marks so macOS's
+	// decomposed filenames work, and three hundred of them measure one cell in every
+	// library while rendering as a smear across the row.
+	repo := theme.SanitizeUntrusted(where, repoLayerPathWidth)
+	list := theme.SanitizeUntrusted(strings.Join(entries, ", "), repoLayerEntriesWidth)
+	return fmt.Sprintf("%s in %s also adds: %s", repocfg.RepoLocalFileName, repo, list)
+}
+
+// repoLayerPathWidth and repoLayerEntriesWidth bound the two untrusted spans in the
+// provenance line. The line as a whole is truncated by contextLine and wrapped by
+// the `?` view, so these are not the only bound — they are the bound that holds when
+// the measurer downstream is handed a string whose cell count does not match what a
+// terminal draws, which is the whole failure mode a per-rune parse rule cannot close.
+const (
+	repoLayerPathWidth    = 48
+	repoLayerEntriesWidth = 120
+)
+
+// repoLayerEntries is what the selected repo adds to row i, and it is gated on the
+// row's SCOPE rather than on its key.
+//
+// That routing is the point. The key-keyed switch this replaced was a third,
+// unguarded copy of the layerable-key list: both bridge guards (a row's scope ↔
+// repocfg.RepoLocalLayerKeys ↔ repoLocalWire's json tags) passed while a third
+// layered key rendered no badge, no provenance line and no `?` entry, because the
+// switch returned nil for anything outside its two cases — the silent "the value
+// shown is not the effective value and never admits it" failure the scope seam
+// exists to prevent. Reading r.scope here is also what makes that field load-bearing
+// in production instead of test-only.
+func (s *SettingsOverlay) repoLayerEntries(i int) []string {
+	if i < 0 || i >= len(s.rows) || s.rows[i].scope != scopeRepoLayered {
+		return nil
+	}
+	return s.repoLayer.forKey(s.rows[i].key)
+}
+
+// repoLayerContext is repoLayerFor for the selected row — contextLine's caller.
+func (s *SettingsOverlay) repoLayerContext() string { return s.repoLayerFor(s.cursor) }
 
 // rightAligned lays a body string and a right-aligned position readout into exactly width
 // cells, truncating the body to make room. The counter is five cells and the body is
@@ -1232,6 +1344,14 @@ func (s *SettingsOverlay) expandedHelpContent(i int) string {
 				b.WriteString("  " + o + "\n")
 			}
 		}
+	}
+	if prov := s.repoLayerFor(i); prov != "" {
+		// The `?` view is where the provenance is GUARANTEED to be readable. The chip
+		// carries a bare count and drops on a narrow pane, and contextLine yields to a
+		// truncated value — which is the correlated case, since a long list is both the
+		// reason the value truncates and the reason the layer is interesting. Only this
+		// surface has room unconditionally.
+		b.WriteString("\n" + prov + "\n")
 	}
 	b.WriteString("\nCurrent value: " + row.get(s.cfg) + "\n")
 	return b.String()
