@@ -1,12 +1,24 @@
 # GitHub Copilot CLI Integration
 
 **Date:** 2026-08-26
-**Status:** Stage 1 LANDED (2026-08-26). All three surfaces are driven — the two dialogs, and
-the busy marker on the re-driven ladder that replaced the invalid one — and each is pinned to
-a verbatim width ladder in `copilot_pane_test.go`. The wall-stripping scan
-(`flattenBottomBox`) is anchored on `bottomBoxBlock` rather than the whole pane. What Stage 1
-did NOT close is below under NOT MEASURED; `HookSupport` waits on #773, the transcript
-readers on Stage 3, and adapter-declared launch knobs on #816.
+**Status:** Stage 1 LANDED (2026-08-26), then CORRECTED in the same PR after review. All three
+surfaces are driven — the two dialogs, and the busy marker on the re-driven ladder that replaced
+the invalid one — and each is pinned to a verbatim width ladder in `copilot_pane_test.go`. The
+wall-stripping scan (`flattenBottomBox`) is anchored on `bottomBoxBlock` rather than the whole
+pane.
+
+Four of the review's findings changed shipped behaviour and each is written into the section it
+belongs to rather than listed here: the pane-height delivery hole (`ModalVeto`, under NOT
+MEASURED), the whole-word busy marker that missed its two narrowest rungs (the busy-marker
+section), `PasteCollapsed` left nil against a default-on chip (its own section), and the
+contested binary NAME (install and resolution). The common thread is worth naming, because it is
+this document's own failure as much as the code's: each was a conclusion this spec drew
+correctly from driven evidence and then stopped one inference short of — the narrow rungs were
+read and the surviving prefix in them was not, the height of the box was measured and the height
+of the PANE never was.
+
+What Stage 1 did NOT close is below under NOT MEASURED; `HookSupport` waits on #773, the
+transcript readers on Stage 3, and adapter-declared launch knobs on #816.
 **Driven against:** GitHub Copilot CLI **1.0.80** (npm `@github/copilot`), Linux
 
 ## Motivation
@@ -58,7 +70,20 @@ silently — the doctrine in `session/agent/registry.go`'s package header, and t
 `npm install -g @github/copilot` yields `copilot --version` = "GitHub Copilot CLI
 1.0.80". The binary resolves on the bare `PATH` (through a mise shim here), so
 `detectAgentCommand` in `config/agents.go` needs only its plain `exec.LookPath` branch —
-not the shell-profile-aware probe claude requires. Add `"copilot"` to `knownAgentBins`.
+not the shell-profile-aware probe claude requires.
+
+**But the NAME is contested, which Stage 1 first missed.** AWS Copilot CLI installs a binary
+called exactly `copilot`, and `exec.LookPath` cannot tell the two apart: on such a machine
+Atrium seeded a profile whose program prints deployment help and exits, `agent.Resolve` handed
+it this adapter's folder-trust gate and busy marker, and `atrium doctor` parsed AWS's version
+string and reported *Copilot CLI drifted* for a CLI that is not installed. The discriminator was
+already in the line above and nothing read it. It is now `Adapter.VersionMarker` —
+`"GitHub Copilot"`, the vendor half of that `--version` string, with the digits left to
+`VerifiedVersion` — consulted by `config.DetectAgentProfiles` (which skips a binary that fails,
+fail-closed) and by `doctor.Check` (which reports `StatusForeign`, a status of its own rather
+than a drift or a not-installed). `agent.Resolve` deliberately does not consult it: it is a pure
+function over a program string and cannot exec anything, so a hand-written profile pointing at
+the wrong `copilot` still resolves here and `doctor` is what tells the user.
 
 ### COPILOT_HOME isolates config and state — DRIVEN
 
@@ -211,12 +236,24 @@ Resume     copilot --resume=<session-id>
 `--effort`'s levels are close enough to claude's that issue #816's declaration can likely
 share a field kind.
 
-### Paste collapsing — VENDOR, needs a driven capture
+### Paste collapsing — VENDOR, and WIRED in Stage 1
 
 The `compactPaste` setting (default `true`) renders a paste of more than ten lines as
-`[Paste #N - X lines]`. That is a `PasteCollapsed` case, as claude has for its own chip
-shape, and without one a queued paste would not be recognised as landed. The literal
-above is VENDOR; the matcher needs the real chip captured off a pane.
+`[Paste #N - X lines]`. That is a `PasteCollapsed` case, as claude has for its own chip shape,
+and without one a queued paste is not recognised as landed — so it is never submitted and the
+keeper re-pastes it on every cycle, appending one more chip each time.
+
+Stage 1 first shipped the field NIL and this section as a to-do, on the reasoning that the
+literal was VENDOR and wanted a driven capture. That was the wrong call: the failure it left in
+place is total (no prompt over ten lines is ever delivered), and the vendor bundle answers the
+shape precisely enough to matter. Read off `app.js` at 1.0.80: the threshold is 10 lines, the
+default is on (`compactPasteEnabled ?? !0`), the chip template is `` `[Paste #${t} - ${e} lines]` ``,
+and the CLI carries its OWN pair of detectors for reading them back —
+`/\[Paste #(\d+)(?: - \d+ lines)?\]/` (the line clause optional) and
+`/\[Saved pasted content to workspace \([^)]+\) id=(\d+)\]/`, the second for a paste over the
+byte threshold, which is written to the workspace instead. `copilotPasteCollapsed` mirrors that
+pair. A driven capture is still worth having, and it is now a confirmation rather than a
+prerequisite.
 
 ### The TUI, driven at the width ladder — DRIVEN
 
@@ -225,8 +262,10 @@ Driven 2026-08-26 on 1.0.80 at widths 120/60/40/34/28/26/24/20, in an isolated
 fixtures preserved outside the run root, since `drive-agent`'s `down` removes it. The
 organization's usage page reported 12 AI credits for the whole of Stage 0.
 
-**Composer.** The glyph is `❯` (U+276F), which the package default set already accepts, so
-`InputBoxPrompts` stays nil. The composer is delimited by horizontal rules above and below
+**Composer.** The glyph is `❯` (U+276F). Stage 1 first left `InputBoxPrompts` nil on the
+grounds that the package default set already accepts it — but that set is `{❯, >}`, and the
+plain `>` is a glyph this CLI never opens a composer with, so the nil also accepted a
+transcript row. It is now narrowed to `{❯}`, which is what the field is for. The composer is delimited by horizontal rules above and below
 rather than a box, so there are no vertical borders on its own line.
 
 **Busy marker — DRIVEN at all eight widths, 2026-08-26 (the second ladder).** The status
@@ -253,25 +292,38 @@ spinner is painted at all eight, so the turn outlived the sweep. Note the unit c
 
 Three findings, each of which a wide capture alone would have got wrong.
 
-**`Working` alone is the only viable marker, and its floor is 26.** The byte counter sits
-*between* the two words, so `Working esc interrupt` is never contiguous at any width. `esc
-interrupt` on its own stops being contiguous at 34 — one rung earlier than the width at
-which the footer goes multi-column — because the single-column row simply wraps there. So a
-matcher keyed on the hint would miss five of eight rungs. `Working` survives to 26; at 24
-and 20 the multi-column footer splits it mid-word (`Workin`/`g`, then `Worki`/`ng`), and no
-substring and no window value can reach a word that is not on screen as a word.
+**`Worki` is the marker, and its floor is 20 — the whole ladder.** The byte counter sits
+*between* `Working` and `esc interrupt`, so that pair is never contiguous at any width. `esc
+interrupt` on its own stops being contiguous at 34, the first rung at which the row wraps at
+all, so a matcher keyed on the hint would miss five of eight rungs.
+
+The **word** `Working` survives only to 26: at 24 and 20 the column grid splits it mid-word
+(`Workin`/`g`, then `Worki`/`ng`). This spec first concluded from that "no substring and no
+window value can reach a word that is not on screen as a word", and Stage 1 shipped with
+`BusyMarkers: {"Working"}` and those two rungs disclosed as an unrepairable floor. **That was
+wrong on this table's own rows.** The split is of the WORD, not of the row, so the prefix
+`Worki` is on screen at every one of the eight rungs — read straight off the 24 and 20 cells
+above. One character more (`Workin`) misses at 20, which is what makes `Worki` the longest
+prefix the ladder supports rather than a short string that happens to work.
+
+The miss mattered more than a missing rung, because a non-empty `BusyMarkers` is what disables
+the poller's content-change fallback and copilot has no hook record: the session did not hold a
+stale `Working`, it never entered working at all at ≤24 columns. Ready through a live turn, a
+completion ding mid-turn, and a queued prompt delivered into a running turn. The general lesson
+is the one this document already argues in the other direction — read the narrow rungs, do not
+infer them — applied to a conclusion drawn FROM narrow rungs that stopped one inference short.
 
 **Losing 34's space is not a width-monotonic story either.** At 34 the row reads
 `Working·` with no space before the separator, while 40 and every wider rung read
 `Working ·`. A marker of `Working ·` would therefore have passed 120, 60 and 40 and failed
 at 34 — the same non-monotonic shape the approval dialog's selector shows.
 
-**Those two lost rungs are what `LiveSpinner` would be for, and it stays nil.** The spinner
-glyph is present at 24 and 20, so a frame-set detector is the only signal left there. This
-ladder captured one frame per rung, which cannot establish a frame set, so that surface is
-NOT MEASURED and Stage 1 records the two rungs as negative evidence rather than guessing a
-predicate for them. A session at 24 columns or narrower reports idle during a live turn;
-that is the disclosed cost of not driving the spinner.
+**`LiveSpinner` stays nil, and no longer has a rung riding on it.** It was Stage 1's answer to
+the two rungs the whole-word marker missed; with `Worki` there is no missed rung, so the spinner
+is now a redundancy rather than the only signal anywhere. It remains NOT MEASURED — this ladder
+captured one frame per rung, which cannot establish a frame set — and what it would buy is a
+second, structural busy signal for a build that changes the status row's wording. Worth driving,
+not load-bearing.
 
 **Why this section is dated and the first ladder is kept.** The first sweep's turn ended
 after its width-60 rung, so its six narrow rungs captured an IDLE pane while looking like a
@@ -399,17 +451,39 @@ a stalled counter says the turn is over even while the row is still on screen. A
 ladder over a transient state needs a monotone quantity the state itself advances, not just
 a marker the state leaves behind.
 
+And the same argument applies one level up, to this document. Stating the criterion in prose
+is not applying it: the re-driven ladder's growth was written here and checked by eye, which
+is how the FIRST sweep's identical credit figure across six rungs got past a reader in the
+first place. `copilotBusyCounters` in `session/agent/copilot_pane_test.go` now carries the
+eight readings as data and a test holds them to the panes and to each other, so a re-drive
+that catches an idle rung reddens instead of being noticed.
+
 ## NOT MEASURED
 
-- **`LiveSpinner`'s frame set**, and therefore whether a busy predicate can be written for
-  the two rungs where `Working` splits mid-word (24 and 20). The re-driven ladder in the
-  busy-marker section above closed that section's other three questions — the floor is 26,
-  `esc interrupt` breaks at 34, and `Working ·` is non-monotonic — but it captured one
-  spinner frame per rung, and one frame cannot establish a set. Stage 1 records 24 and 20 as
-  negative evidence instead of guessing a predicate for them.
+- **`LiveSpinner`'s frame set.** It captured one spinner frame per rung, and one frame cannot
+  establish a set. No rung depends on it: the busy-marker section's floor is 20, so what a
+  spinner would add is a second, structural signal for a build that rewords the status row.
+  This entry read "and therefore whether a busy predicate can be written for the two rungs
+  where `Working` splits mid-word (24 and 20)" — those rungs are covered by the surviving
+  prefix, which is a marker, not a spinner.
 - **`ResumeProbe`'s needle.** `--continue` and `-r, --resume` both appear in `--help`, but
   the needle must be pinned to the listing rather than the bare word, and that has not
   been chosen.
+- **`HeadlessNamer`.** The CAPABILITY is VENDOR — `-p, --prompt <text>` with
+  `--allow-all-tools` — and the field is nonetheless false, because the half it requires is a
+  matching branch in `session/naming.go`, which needs the envelope copilot prints in that mode
+  driven and parsed. Setting the bool without it ships a capability that is registered and dead,
+  which is the same shape `HookSupport` is waiting on #773 to avoid. Named here because it is
+  otherwise the one nil a reader cannot tell from an oversight.
+- **The pane HEIGHT axis, for the dialogs.** Every dialog capture is 40 rows, so the ladders
+  say nothing about a pane shorter than the box. That axis is where Stage 1's worst defect was:
+  both matchers key on a headline near the TOP of the box, so a short pane leaves the dialog
+  fully on screen with its headline gone — `GateUp` and `DetectPrompt` false, the composer glyph
+  still there, and `AwaitingInput` true on a modal, which types the queued prompt into it and
+  Enters the pre-highlighted *"Yes, and add these directories to the allowed list"*. `ModalVeto`
+  closes it structurally (an anchored box ending the pane is not a composer) and
+  `TestCopilotNeverDeliversAPromptIntoADialog` holds it by truncating each rung from the top.
+  What is still NOT MEASURED is a real capture at a short height — the guard synthesises them.
 - **Hook payloads on stdin.** Only hook *output* was probed. What each event delivers is
   unmeasured; Atrium's state writers may not need it.
 - **The paste chip.** `compactPaste` is documented and its placeholder shape is VENDOR; no
@@ -606,9 +680,10 @@ Four things it must carry that were not obvious before driving:
    and its title scrolls off, so a title-keyed matcher misses a gate that is on screen.
 4. A pinned width floor for the busy marker, as a value a test reads rather than a
    sentence prose repeats — and pinned to the re-driven ladder, not to the table this
-   spec used to carry. That floor is 26, and the two rungs below it are recorded as
-   misses, because the multi-column footer splits `Working` mid-word there.
+   spec used to carry. That floor is 20: the marker is the surviving prefix `Worki`, since
+   the column grid splits the word and not the row.
 
-Remaining before Stage 1 is finished, not before it starts: the paste-chip capture, the
-`resume` drive and its `RESUME_TABLE` row, and a `ResumeProbe` needle chosen against the
-help listing. All three are listed under NOT MEASURED above.
+Remaining after Stage 1: the paste-chip capture (the predicate is wired from the vendor
+bundle — a capture would confirm it), the `resume` drive and its `RESUME_TABLE` row, a
+`ResumeProbe` needle chosen against the help listing, `LiveSpinner`'s frame set, and a
+`HeadlessNamer` branch driven against `copilot -p`. All are listed under NOT MEASURED above.

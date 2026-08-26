@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/ZviBaratz/atrium/session/agent"
@@ -28,6 +29,14 @@ const (
 	StatusUnknown
 	// StatusNotInstalled means the binary is not on PATH.
 	StatusNotInstalled
+	// StatusForeign means a binary IS installed under this agent's name, but its --version
+	// output does not carry the adapter's VersionMarker — so it is a different vendor's CLI
+	// that happens to share the name. It is deliberately its own status rather than folded
+	// into NotInstalled or Unknown: "nothing is installed", "something is installed and its
+	// version could not be read" and "something else owns this name" are three different
+	// things to tell a user, and only the third has "the agent you wanted is not what is on
+	// PATH" as its fix.
+	StatusForeign
 )
 
 // Result is the drift report for one agent.
@@ -75,6 +84,12 @@ func Check(ctx context.Context, adapters []*agent.Adapter, r Runner) []Result {
 			res.Status = StatusNotInstalled
 		case err != nil:
 			res.Status = StatusUnknown
+		case a.VersionMarker != "" && !strings.Contains(out, a.VersionMarker):
+			// Reported BEFORE the version is parsed, because parsing it is what produced the
+			// wrong answer: AWS Copilot CLI's --version parses cleanly, so `copilot` used to
+			// be classified as this adapter drifting past 1.0.80 — a drift warning naming a
+			// CLI that is not installed.
+			res.Status = StatusForeign
 		default:
 			res.Status, res.Installed = classify(out, a)
 		}

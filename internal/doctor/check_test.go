@@ -212,3 +212,50 @@ func TestCheck_BadVerifiedVersionIsUnknown(t *testing.T) {
 		t.Errorf("claude status = %v, want StatusUnknown when VerifiedVersion is invalid semver", s)
 	}
 }
+
+// TestCheckSeparatesAForeignCLIFromDrift is the AWS Copilot CLI case. That tool installs a
+// binary called exactly `copilot`, prints a parseable version, and so used to be classified as
+// this adapter drifting past its pin — a drift warning about a CLI the user does not have,
+// telling them to re-verify matcher strings against a deployment tool.
+//
+// Three rows, because what makes StatusForeign worth its own value is that it is none of the
+// other three: the vendor's own output is OK, a foreign version is Foreign rather than Drifted
+// or Unknown, and an absent binary is still NotInstalled. An adapter with no VersionMarker must
+// be unaffected, which the gemini row holds — otherwise the marker check would quietly become a
+// requirement every adapter has to satisfy.
+func TestCheckSeparatesAForeignCLIFromDrift(t *testing.T) {
+	adapters := agent.Adapters()
+
+	t.Run("the vendor's own CLI passes", func(t *testing.T) {
+		r := fakeRunner{out: map[string]string{"copilot": "GitHub Copilot CLI 1.0.80\n"}}
+		if got := statusFor(Check(context.Background(), adapters, r), agent.KeyCopilot); got != StatusOK {
+			t.Errorf("status = %v, want StatusOK", got)
+		}
+	})
+
+	t.Run("another vendor's CLI under the same name is foreign, not drifted", func(t *testing.T) {
+		// AWS Copilot CLI's shape: a clean semver with no "GitHub Copilot" in it, and ahead of
+		// the pin, so the drift branch is the one it would otherwise take.
+		r := fakeRunner{out: map[string]string{"copilot": "copilot version: v1.34.1\n"}}
+		if got := statusFor(Check(context.Background(), adapters, r), agent.KeyCopilot); got != StatusForeign {
+			t.Errorf("status = %v, want StatusForeign", got)
+		}
+	})
+
+	t.Run("an adapter with no marker is unaffected", func(t *testing.T) {
+		r := fakeRunner{out: map[string]string{"gemini": geminiWithinPin}}
+		requireWithinPin(t, agent.KeyGemini, geminiWithinPin)
+		if got := statusFor(Check(context.Background(), adapters, r), agent.KeyGemini); got != StatusOK {
+			t.Errorf("status = %v, want StatusOK", got)
+		}
+	})
+}
+
+// TestForeignStatusHasItsOwnLabel: a status the renderer does not know about falls through to
+// "unknown", which would put this back to being indistinguishable from an unparseable version.
+func TestForeignStatusHasItsOwnLabel(t *testing.T) {
+	label := StatusForeign.label()
+	if label == StatusUnknown.label() || label == StatusNotInstalled.label() {
+		t.Errorf("StatusForeign renders as %q, which is another status's label", label)
+	}
+}

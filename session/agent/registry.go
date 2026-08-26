@@ -1233,13 +1233,20 @@ var gemini = &Adapter{
 // prompt was typed into a RadioButtonSelect whose highlighted default is "Yes", the #512 class
 // rather than this gate's milder one.
 //
-// Width. The headline is UNREPAIRABLE as an anchor once it wraps: gemini draws the dialog in
-// a rounded box, so a wrapped headline has the box's own "│" between its halves, and
-// flattenChrome joins on whitespace only. Measured on residue-free captures, it is
-// unreachable at 40, 24 and 20 at every GateWindow up to 200 — more lines than any of those
-// panes has. Codex wraps WITHOUT a box, which is why widening its window worked there and why
-// #713's guess that the same "would also work at width 40" does not hold here.
+// Width. The headline is unreachable THROUGH A FLAT WINDOW once it wraps: gemini draws the
+// dialog in a rounded box, so a wrapped headline has the box's own "│" between its halves, and
+// flattenChrome joins on whitespace only. Measured on residue-free captures, it is unreachable
+// at 40, 24 and 20 at every GateWindow up to 200 — more lines than any of those panes has.
+// Codex wraps WITHOUT a box, which is why widening its window worked there and why #713's guess
+// that the same "would also work at width 40" does not hold here.
 // TestGeminiTrustGateHeadlineIsUnreachableOnceItWraps pins it.
+//
+// THAT IS A LIMIT OF THE WINDOW, NOT OF THE HEADLINE, and this said "UNREPAIRABLE" until
+// flattenBottomBox existed to disprove it. Measured on these same captures, the wall-stripping
+// scan reaches the headline at 40, 24 AND 20 — including the rung this gate MISSES. So the
+// repair exists and is not applied here: switching this matcher to it is a change to gemini's
+// false-positive surface (a stripped box interior, and this gate has a composer veto reasoning
+// about unstripped lines), which wants its own driven pass rather than a ride on copilot's.
 //
 // The option rows truncate from the right rather than wrapping, so "Trust folder" survives as
 // a left-anchored prefix however long the directory name is — until the row itself is cut,
@@ -1913,6 +1920,10 @@ var copilot = &Adapter{
 
 	VerifiedVersion:  "1.0.80",
 	DriftGranularity: GranularityMinor,
+	// The one adapter that needs an identity probe: "copilot" is also the AWS Copilot CLI's
+	// binary name. Read off the installed binary at 1.0.80, whose --version prints "GitHub
+	// Copilot CLI 1.0.80"; the vendor half is taken and the digits left to VerifiedVersion.
+	VersionMarker: "GitHub Copilot",
 
 	// Narrowed to the one glyph copilot draws, "❯" (U+276F), byte-verified with cat -vet
 	// against the driven panes. Nil would have worked in the sense that defaultPrompts

@@ -192,6 +192,24 @@ type Adapter struct {
 	// also holds numbers and objects, and a non-bool reads as unknown, never as a
 	// flip. Nil (every adapter but claude) = no gates pinned, nothing reported.
 	VerifiedGates []VerifiedGate
+	// VersionMarker is a substring the binary's `--version` output must contain for that
+	// binary to be this agent's CLI. Empty (every adapter but copilot) means the name is not
+	// contested and the probe is skipped.
+	//
+	// It exists because a binary NAME is not an identity. "copilot" is also the AWS Copilot
+	// CLI's binary name, and detection is an exec.LookPath — so on a machine with that one
+	// installed, Atrium seeds a profile whose program prints deployment help and exits, and
+	// Resolve hands it this adapter's folder-trust gate and busy marker. The discriminator was
+	// already driven and written into the spec ("GitHub Copilot CLI 1.0.80"); this is what
+	// reads it. config.DetectAgentProfiles skips a binary that fails the check, and
+	// doctor.Check reports it as a foreign CLI rather than as this agent having drifted.
+	//
+	// A MARKER, not a version parse: the question is whose CLI this is, which is answered by
+	// the vendor string and not by the digits. It is deliberately not consulted by
+	// agent.Resolve, which is a pure function over a program string and cannot exec anything —
+	// so a hand-written profile pointing at the wrong copilot still resolves here, and what
+	// tells the user is doctor.
+	VersionMarker string
 
 	// aliases are lowercased substrings matched against the basename of the
 	// program's first token by Resolve.

@@ -58,10 +58,10 @@ import (
 // A Match matcher IS exercised at every width it has captures for, because fires() runs the
 // production predicate; read the rungs off paneCoverage rather than from a list here, which is
 // what #666 had to correct when it drove claudeGateVisible below 28. What cannot be enumerated
-// is its individual literals: they live inside the func (claudeGateVisible,
-// claudeFetchPermissionVisible, claudeNetworkPermissionVisible, claudeSelectionFooterVisible,
-// claudeLocalPermissionVisible, aiderConfirmVisible and the token helpers they call), so the
-// alternatives ledger below skips them. Beyond that, the width-bearing surfaces outside
+// is its individual literals: they live inside the func — every adapter's Match predicates, of
+// which the registry now declares eleven across claude, gemini, aider and copilot, plus the
+// token helpers they call — so the alternatives ledger below skips them. Naming a subset here
+// was how that sentence went stale twice; the list is `grep -n "Match: " registry.go`. Beyond that, the width-bearing surfaces outside
 // Prompts/Gates/BusyMarkers — PermissionMode's footer markers, LiveSpinner, SuggestionVisible,
 // PasteCollapsed, BackgroundWork — have no coverage here at all.
 //

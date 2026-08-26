@@ -41,7 +41,8 @@ const (
 	// PaneDead session for lost-session recovery. Runtime-only, never persisted.
 	PaneDead
 	// PaneGate means a one-time startup/trust screen is up (claude's folder-trust or
-	// new-MCP prompt, codex/gemini/agy folder-trust, aider's first-run docs prompt). It
+	// new-MCP prompt, codex/gemini/agy/copilot folder-trust, aider's first-run docs
+	// prompt — every adapter declaring Gates, which is all six of them). It
 	// consumes keystrokes until a human dismisses it, so a queued first prompt must be
 	// held; callers surface it as needs-input rather than tapping. Runtime-only, never
 	// persisted.

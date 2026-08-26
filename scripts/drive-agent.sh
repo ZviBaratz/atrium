@@ -77,6 +77,16 @@
 #     That Enter is the only key it ever sends, and it sends none at all at a pane that
 #     is already dead.
 #
+#     "Every agent it drives" is RESUME_TABLE's rows, and that set is smaller than the
+#     adapter registry: an adapter with no Resume has no row here and is not driven by
+#     this script at all. copilot is the live example — it has none, and its width
+#     ladders in session/agent/copilot_pane_test.go were driven by hand. So the list
+#     above is exhaustive of THIS script and says nothing about an agent it cannot
+#     drive: a hand driver gets no isolation from here and must arrange its own, which
+#     for copilot means COPILOT_HOME, or the drive writes a nonce trust record and an
+#     allowed-directory entry into the real ~/.copilot. Adding a row is what would
+#     bring an agent under these guarantees.
+#
 # USAGE — see `help`. The short version:
 #
 #   scripts/drive-agent.sh up agy

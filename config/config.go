@@ -131,7 +131,7 @@ func DefaultConfig() *Config {
 
 // seededDefaultConfig is DefaultConfig with profiles seeded from the installed
 // agent CLIs so the create-form picker works out of the box; claude leads when
-// present (it is first in knownAgentBins) and becomes the default program,
+// present (it is first in KnownAgentBins) and becomes the default program,
 // falling back to the bare "claude" literal when nothing is detected (the
 // historical behavior for a machine with no agents yet). It is the config a
 // user actually receives from every LoadConfig fallback — kept separate from

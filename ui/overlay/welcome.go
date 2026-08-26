@@ -132,8 +132,8 @@ func (w *WelcomeOverlay) Render() string {
 	case len(w.detected) == 0:
 		b.WriteString("⚠ No supported agent CLIs found on PATH.\n")
 		b.WriteString(overlayDimStyle().Render(fmt.Sprintf(
-			"Install claude, codex, gemini, or aider (or press %s later).",
-			keys.LabelOf(keys.KeySettings))))
+			"Install %s (or press %s later).",
+			installableAgents(), keys.LabelOf(keys.KeySettings))))
 		hint = "enter continue · esc skip"
 	default:
 		b.WriteString("Choose your default agent:\n\n")
@@ -156,4 +156,21 @@ func (w *WelcomeOverlay) Render() string {
 		Padding(1, 2).
 		Width(w.width)
 	return style.Render(b.String())
+}
+
+// installableAgents renders the probed agent list for the no-agents-found line — "claude,
+// codex, … or copilot", from config.KnownAgentBins rather than from a literal.
+//
+// It is derived because the literal it replaced was stale in the direction that matters most:
+// this line is shown to a user with NO agent installed, so an agent missing from it is an agent
+// that first run never offers. It had been four names for two adapters longer than that.
+func installableAgents() string {
+	bins := config.KnownAgentBins()
+	switch len(bins) {
+	case 0:
+		return "an agent CLI"
+	case 1:
+		return bins[0]
+	}
+	return strings.Join(bins[:len(bins)-1], ", ") + " or " + bins[len(bins)-1]
 }

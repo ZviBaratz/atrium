@@ -28,13 +28,26 @@ import (
 // prCheckGlyph's failing-CI "✗" (ui/row.go), a saltire rather than a plus. A star was
 // the other candidate for agy and would have read as a second gemini.
 //
-// copilot's "⎈" (U+2388 HELM SYMBOL) is a pilot's wheel. The neighbour it was checked
-// against is Branch's "⎇" (U+2387) — one codepoint below it, so a font rendering one
-// renders the other, and they share a FRAME (the agent glyph is pinned to the far right
-// of the row's first line, the branch chip sits on its second). They do not share a
-// shape: ⎇ is an alternate-key fork, ⎈ is a spoked wheel. The circle family was ruled
-// out first — Ready "●", ReadySeen "○" and AcctAvailable "●" have it — and the diamond
-// family second, for the reason codex's entry already records about "◆".
+// copilot's "⎈" (U+2388 HELM SYMBOL) is a pilot's wheel, and two things this comment used to
+// claim about it were wrong in ways worth keeping written down.
+//
+// ADJACENCY IS NOT COVERAGE. It read "one codepoint below Branch's ⎇ (U+2387), so a font
+// rendering one renders the other". Fonts are built by block and by demand, not by neighbour:
+// `fc-list :charset=2387` and `:charset=2388` on a Debian desktop put ⎇ in DejaVu Sans and
+// DejaVu Sans Condensed, and ⎈ in DejaVu Sans MONO — disjoint, and the monospace half is the
+// one a terminal actually resolves. So the conclusion holds for a better reason than the one
+// given, and the neighbour test was not a test. Both glyphs sit in 35 families here, which is
+// the JOINT LOWEST in this table (✻/✦/✜ 38, ❖ 53, ≡ 84, • 101) — the honest summary is that
+// this is the most tofu-prone entry in the plain set, which is what the ascii rung is for.
+//
+// AND THEY BARELY SHARE A FRAME. It also said the branch chip sits on the row's second line
+// beside the agent glyph. There is no branch chip: displayBranch (ui/list_render.go) prints the
+// branch NAME with no glyph, and Glyphs.Branch has exactly one production consumer, the ? legend
+// (app/help.go). So ⎇ and ⎈ appear together only there, in a labelled list — the weakest
+// confusability setting there is. They do not share a shape either: ⎇ is an alternate-key fork,
+// ⎈ is a spoked wheel. The circle family was ruled out first — Ready "●", ReadySeen "○" and
+// AcctAvailable "●" have it — and the diamond family second, for the reason codex's entry
+// already records about "◆".
 func plainAgentGlyphs() map[string]string {
 	return map[string]string{
 		"claude":  "✻", // claude code's own spinner glyph

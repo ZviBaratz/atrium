@@ -211,7 +211,7 @@ var (
 	profilesDetectCmd = &cobra.Command{
 		Use:   "detect",
 		Short: "Probe for installed agent CLIs and add missing profiles",
-		Long: "Probes the machine for known agent CLIs (claude, codex, gemini, aider) and appends a\n" +
+		Long: "Probes the machine for known agent CLIs (" + agentBinList() + ") and appends a\n" +
 			"profile for each newly found one. Existing profiles and the default program are never\n" +
 			"modified, so hand-edited entries always survive a re-detect.",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -340,7 +340,7 @@ var (
 			"required, and one that is missing — or present but older than the version Atrium\n" +
 			"needs — exits nonzero so scripts/CI can gate; gh is optional, needed\n" +
 			"only for push/PR flows, and its authentication is reported but never fatal. Agent\n" +
-			"heuristics probes installed agent CLIs (claude, codex, gemini, aider) and reports whether\n" +
+			"heuristics probes installed agent CLIs (" + agentBinList() + ") and reports whether\n" +
 			"each one's version has drifted past the version Atrium's pane-classification heuristics\n" +
 			"were verified against; drift means a session's status may be misread (re-verify the\n" +
 			"matcher strings in session/agent/registry.go). Feature gates covers what a version\n" +
@@ -790,4 +790,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// agentBinList renders the probed agent binaries for the two help texts that name the set.
+// Derived from config.KnownAgentBins, which is itself derived from the adapter registry, so a
+// new adapter cannot leave either help string stale — both had named four agents since agy was
+// added.
+func agentBinList() string {
+	return strings.Join(config.KnownAgentBins(), ", ")
 }

@@ -39,8 +39,10 @@ func TestAdaptersExposesSeededVersions(t *testing.T) {
 		KeyCopilot: {"1.0.80", GranularityMinor, nil},
 	}
 	got := Adapters()
-	if len(got) != 6 {
-		t.Fatalf("Adapters() returned %d adapters, want 6", len(got))
+	// len(want), not a literal: the count and the table are the same fact, and a hardcoded
+	// number is one more place to forget when an adapter lands.
+	if len(got) != len(want) {
+		t.Fatalf("Adapters() returned %d adapters, want %d", len(got), len(want))
 	}
 	for _, a := range got {
 		w, ok := want[a.Key]

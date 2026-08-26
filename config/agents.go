@@ -1,8 +1,12 @@
 package config
 
 import (
+	"context"
 	"os/exec"
 	"strings"
+	"time"
+
+	"github.com/ZviBaratz/atrium/session/agent"
 )
 
 // Agent auto-detection: probe the machine for known agent CLIs so profiles
@@ -10,10 +14,58 @@ import (
 // profiles on first run, and `atrium profiles detect` re-probes and merges new
 // agents into an existing config without touching user-edited entries.
 
-// knownAgentBins are the agent CLIs probed when seeding or refreshing
-// profiles, in picker order. Each name doubles as the generated profile's
-// Name and matches the binary's adapter in session/agent by basename.
-var knownAgentBins = []string{"claude", "codex", "gemini", "aider", "agy", "copilot"}
+// KnownAgentBins are the agent CLIs probed when seeding or refreshing profiles, in picker
+// order. Each name doubles as the generated profile's Name and matches the binary's adapter in
+// session/agent by basename.
+//
+// DERIVED from the adapter registry rather than listed, which is the whole point. It was a
+// literal, and nothing tied the two together: an adapter added to the registry and forgotten
+// here passed the glyph guard, the version pin and paneCoverage, then was never probed for —
+// missing from BOTH sides of every comparison, so no table test could see the gap. The keys
+// ARE the binary names by construction (agent.Resolve matches an adapter's aliases against the
+// program's basename, and each of these adapters is keyed on its own binary), and picker order
+// is registry order, which is what claude leading depends on.
+func KnownAgentBins() []string {
+	adapters := agent.Adapters()
+	bins := make([]string, 0, len(adapters))
+	for _, a := range adapters {
+		bins = append(bins, string(a.Key))
+	}
+	return bins
+}
+
+// identityProbeTimeout bounds the `--version` probe below. Short, and shorter than doctor's:
+// this one runs while a first-run config is being seeded, where a wedged binary would stall
+// startup rather than a diagnostic command the user chose to run.
+const identityProbeTimeout = 5 * time.Second
+
+// agentIdentityOK reports whether the installed binary really is the agent whose name it
+// carries, by checking the adapter's VersionMarker against `<program> --version`. An adapter
+// with no marker is not contested and is accepted without exec'ing anything, which is every
+// adapter but copilot.
+//
+// FAIL-CLOSED on a probe that does not answer: a binary that cannot be run, times out, or
+// prints something without the vendor string is not this agent. The cost of that direction is a
+// missing profile the user can add by hand; the cost of the other is a profile whose sessions
+// die on launch, and an `atrium doctor` line about the wrong CLI's version.
+//
+// A var so tests can say what is installed without depending on the machine.
+var agentIdentityOK = func(a *agent.Adapter, program string) bool {
+	if a.VersionMarker == "" {
+		return true
+	}
+	cmd := ProgramCommand(program)
+	if cmd == "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), identityProbeTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, cmd, "--version").Output()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(out), a.VersionMarker)
+}
 
 // detectAgentCommand resolves an agent binary name to a runnable program
 // string, or an error when it is not installed. claude keeps the
@@ -34,13 +86,17 @@ var detectAgentCommand = func(bin string) (string, error) {
 	return bin, nil
 }
 
-// DetectAgentProfiles probes for the known agent CLIs and returns one profile
-// per installed binary, in picker order. Missing binaries are skipped silently.
+// DetectAgentProfiles probes for the known agent CLIs and returns one profile per installed
+// binary, in picker order. Missing binaries are skipped silently, and so is a binary that is
+// installed under an agent's name but is not that agent — see agentIdentityOK.
 func DetectAgentProfiles() []Profile {
 	var profiles []Profile
-	for _, bin := range knownAgentBins {
+	for _, bin := range KnownAgentBins() {
 		program, err := detectAgentCommand(bin)
 		if err != nil {
+			continue
+		}
+		if !agentIdentityOK(agent.Resolve(bin), program) {
 			continue
 		}
 		profiles = append(profiles, Profile{Name: bin, Program: program})
