@@ -129,16 +129,12 @@ func flattenChrome(content string, n int) string {
 //
 // Input must already be cleaned for detection (ANSI stripped), like every other predicate here.
 func flattenBottomBox(content string) (string, bool) {
-	block, ok := bottomBoxBlock(content)
+	// Make the sentinel's premise true by construction rather than asserting it: a NUL arriving
+	// in the pane would otherwise be indistinguishable from a blank-row separator and could
+	// break a literal in half. Stripping it before the scan covers a live pane, which no test
+	// over committed fixtures can.
+	block, ok := bottomBoxBlock(strings.ReplaceAll(content, boxRowGap, ""))
 	if !ok {
-		return "", false
-	}
-	// Make the sentinel's premise true by construction rather than asserting it: a NUL
-	// arriving in the pane would otherwise be indistinguishable from a blank-row separator and
-	// could break a literal in half. Stripping it here covers a live pane, which no test over
-	// committed fixtures can.
-	content = strings.ReplaceAll(content, boxRowGap, "")
-	if block, ok = bottomBoxBlock(content); !ok {
 		return "", false
 	}
 	parts := make([]string, 0, len(block))

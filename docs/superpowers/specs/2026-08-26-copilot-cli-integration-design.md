@@ -486,10 +486,32 @@ first place. `copilotBusyCounters` in `session/agent/copilot_pane_test.go` now c
 eight readings as data and a test holds them to the panes and to each other, so a re-drive
 that catches an idle rung reddens instead of being noticed.
 
+### The IDLE pane and the sub-20 band — DRIVEN (second round)
+
+Two things Stage 1 asserted without a capture, both driven on 1.0.80 after review:
+
+**The idle composer.** There was no idle copilot pane in the tree at all — `composerPanes`
+entered the widest *busy* capture, and `copilotModalUp`'s soundness argument (copilot's composer
+is never a bottom-anchored box, so "a box ends the pane" identifies a dialog) cited that busy-only
+ladder. The first sweep's idle captures had been driven and then discarded as invalid, so the
+evidence was deleted rather than missing. Seven widths now, 20 to 120: the composer is a bare `❯`
+between two full-width rules with the status footer below, at every one. The stand-in claim turns
+out to have been true — at 120 the header row, both rules and the glyph are byte-identical between
+idle and busy, and only the row below differs — but nothing on disk said so.
+
+**The busy floor.** `paneCoverage` claimed "the floor is 20 — the narrowest pane Atrium's own
+layout can produce is covered, so this adapter's busy marker has no unmeasured band". That
+contradicted the same file's header and `registry.go`'s agy entry, which both record that the
+preview pane's width is *not* clamped: the list may take `maxListRatio` = 0.60 of the terminal and
+nothing floors the remainder. Driving 12/14/16/18 settled it — `Worki` survives on one row at
+every one, and at 12 the footer renders `" Worki inte"` with `"ng"` below, so five characters is
+exactly what fits rather than merely enough. The generalisable part: "the narrowest X the layout
+can produce" was a claim about a *different* file's code, and it was wrong there.
+
 ## NOT MEASURED
 
 - **`LiveSpinner`'s frame set.** It captured one spinner frame per rung, and one frame cannot
-  establish a set. No rung depends on it: the busy-marker section's floor is 20, so what a
+  establish a set. No rung depends on it: the busy marker now survives to width 12, so what a
   spinner would add is a second, structural signal for a build that rewords the status row.
   This entry read "and therefore whether a busy predicate can be written for the two rungs
   where `Working` splits mid-word (24 and 20)" — those rungs are covered by the surviving
@@ -512,10 +534,25 @@ that catches an idle rung reddens instead of being noticed.
   closes it structurally (an anchored box ending the pane is not a composer) and
   `TestCopilotNeverDeliversAPromptIntoADialog` holds it by truncating each rung from the top.
   What is still NOT MEASURED is a real capture at a short height — the guard synthesises them.
+
+  A second review round found the veto had been wired to only one of the three places that act
+  on a capture. `InputBoxVisible` had it; `InputBoxText` did not, and that is the readback
+  `SendPrompt` compares a prompt signature against *after* the readiness gate has passed — on
+  every driven dialog pane it returns the dialog's own option rows, so a signature that is a
+  substring of one skips typing and taps Enter on the highlighted option. `Poll` did not consult
+  it either, so the whole band classified `PaneIdle`: Ready on a blocked turn, ding fired, prompt
+  held with no needs-input row. Fixed at the mechanism rather than per-adapter — one veto site
+  under `InputBoxText`, readiness re-asserted before every point `SendPrompt` sends keystrokes,
+  and both poller classification sites reporting `PaneGate`.
 - **Hook payloads on stdin.** Only hook *output* was probed. What each event delivers is
   unmeasured; Atrium's state writers may not need it.
 - **The paste chip.** `compactPaste` is documented and its placeholder shape is VENDOR; no
-  pane was driven with a paste over the ten-line threshold.
+  pane was driven with a paste over the ten-line threshold. The shapes themselves were corrected
+  against the bundle in review: the saved-paste placeholder's parenthesized value is
+  `formattedSize` = `shellFormatBytesHuman(sizeBytes)`, a byte size — the object carries
+  `filePath` too and only the sibling `<pasted_content …/>` builder reads it — and the chip
+  producer has no pluralization, so one line renders "1 lines". Two committed fixtures had
+  encoded strings the vendor cannot emit.
 - **Resume behaviour in a directory with nothing to resume.** The question
   `drive-agent`'s `resume` verb exists to answer, and the row it would add to
   `RESUME_TABLE`.

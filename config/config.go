@@ -136,7 +136,6 @@ func DefaultConfig() *Config {
 // historical behavior for a machine with no agents yet). It is the config a
 // user actually receives from every LoadConfig fallback — kept separate from
 // DefaultConfig so tests constructing defaults never probe the machine.
-//
 func seededDefaultConfig() *Config {
 	cfg := DefaultConfig()
 	cfg.Profiles = DetectAgentProfiles()
