@@ -4,6 +4,7 @@ import (
 	"context"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ZviBaratz/atrium/session/agent"
@@ -49,6 +50,17 @@ const identityProbeTimeout = 5 * time.Second
 // missing profile the user can add by hand; the cost of the other is a profile whose sessions
 // die on launch, and an `atrium doctor` line about the wrong CLI's version.
 //
+// THE PROBE IS EXPENSIVE AND NOT SIDE-EFFECT-FREE, which is why only
+// DetectAgentProfilesVerified runs it. `copilot --version` measured 2.6s against a cold HOME and
+// 0.7s warm, and it creates ~/.cache/copilot/pkg on the way — a version flag that unpacks a
+// platform package. So this is a diagnostic-grade operation, not a startup one.
+//
+// MEMOIZED per process for the same reason, since a verified detection can legitimately be asked
+// for more than once in a session. The cache is cleared by RefreshAgentIdentities, which the two
+// USER-INITIATED re-probes call: that is the case a process cache would otherwise get wrong —
+// install the CLI while the TUI is running, press detect, and a stale "not that vendor" answer
+// would keep hiding it.
+//
 // A var so tests can say what is installed without depending on the machine.
 var agentIdentityOK = func(a *agent.Adapter, program string) bool {
 	if a.VersionMarker == "" {
@@ -58,13 +70,34 @@ var agentIdentityOK = func(a *agent.Adapter, program string) bool {
 	if cmd == "" {
 		return false
 	}
+
+	key := string(a.Key) + "\x00" + cmd
+	identityMu.Lock()
+	defer identityMu.Unlock()
+	if ok, seen := identityCache[key]; seen {
+		return ok
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), identityProbeTimeout)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, cmd, "--version").Output()
-	if err != nil {
-		return false
-	}
-	return strings.Contains(string(out), a.VersionMarker)
+	ok := err == nil && strings.Contains(string(out), a.VersionMarker)
+	identityCache[key] = ok
+	return ok
+}
+
+var (
+	identityMu    sync.Mutex
+	identityCache = map[string]bool{}
+)
+
+// RefreshAgentIdentities discards the memoized identity probes so the next detection re-runs
+// them. Call it before a detection the USER asked for — otherwise installing an agent while
+// Atrium is running cannot be picked up by pressing detect.
+func RefreshAgentIdentities() {
+	identityMu.Lock()
+	defer identityMu.Unlock()
+	identityCache = map[string]bool{}
 }
 
 // detectAgentCommand resolves an agent binary name to a runnable program
@@ -87,16 +120,37 @@ var detectAgentCommand = func(bin string) (string, error) {
 }
 
 // DetectAgentProfiles probes for the known agent CLIs and returns one profile per installed
-// binary, in picker order. Missing binaries are skipped silently, and so is a binary that is
-// installed under an agent's name but is not that agent — see agentIdentityOK.
+// binary, in picker order. Missing binaries are skipped silently.
+//
+// It does NOT check that a binary is the agent whose name it carries — DetectAgentProfilesVerified
+// does, and the split is deliberate. Verifying means running `<bin> --version`, and for at least
+// one agent that is not a cheap read: copilot 1.0.80 takes ~2.6s on a cold cache and unpacks its
+// platform package into ~/.cache/copilot on the way. This function is LoadConfig's fallback and
+// is re-derived by loadStoredConfig (cli_session) on every poll of `atrium new --wait`, so a probe
+// here is seconds of latency and a filesystem write per poll — measured, by four root-package
+// tests that went from 1.9s to 53s when this did verify.
 func DetectAgentProfiles() []Profile {
+	return detectProfiles(false)
+}
+
+// DetectAgentProfilesVerified is DetectAgentProfiles plus the identity check: a binary installed
+// under an agent's name that is not that agent is skipped. See agentIdentityOK for what that
+// costs and why it is not the default.
+//
+// Use it where the user ASKED to detect (`atrium profiles detect`, the Settings panel, the
+// first-run seed that writes a config), never on a path that merely needs a config in memory.
+func DetectAgentProfilesVerified() []Profile {
+	return detectProfiles(true)
+}
+
+func detectProfiles(verify bool) []Profile {
 	var profiles []Profile
 	for _, bin := range KnownAgentBins() {
 		program, err := detectAgentCommand(bin)
 		if err != nil {
 			continue
 		}
-		if !agentIdentityOK(agent.Resolve(bin), program) {
+		if verify && !agentIdentityOK(agent.Resolve(bin), program) {
 			continue
 		}
 		profiles = append(profiles, Profile{Name: bin, Program: program})

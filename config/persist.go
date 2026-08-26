@@ -11,7 +11,10 @@ import (
 // file is created with defaults, and any read/parse error logs a warning and
 // falls back to DefaultConfig. See loadJSONFile for the shared load behavior.
 func LoadConfig() *Config {
-	return loadJSONFile(ConfigFileName, "config", seededDefaultConfig, saveConfig)
+	// The seed this writes is the one a user lives with, so it verifies each contested binary
+	// rather than trusting the name — once, on the run that creates config.json.
+	seed := func() *Config { return seededDefaultConfig(DetectAgentProfilesVerified) }
+	return loadJSONFile(ConfigFileName, "config", seed, saveConfig)
 }
 
 // SeededDefaultConfig is the config LoadConfig falls back to when config.json is
@@ -20,7 +23,10 @@ func LoadConfig() *Config {
 // without LoadConfig's writes — a plain DefaultConfig has no Profiles at all, so
 // GetProfiles synthesizes a single "claude" and `atrium new --profile codex` is
 // refused on exactly the never-run-the-TUI machine the flag exists to serve.
-func SeededDefaultConfig() *Config { return seededDefaultConfig() }
+// It deliberately does NOT verify agent identities: this is re-derived on every poll of
+// `atrium new --wait` and nothing keeps what it returns, so the several seconds
+// DetectAgentProfilesVerified can cost would be paid per poll for a value thrown away.
+func SeededDefaultConfig() *Config { return seededDefaultConfig(DetectAgentProfiles) }
 
 // saveConfig saves the configuration to disk
 func saveConfig(config *Config) error {

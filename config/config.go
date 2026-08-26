@@ -136,9 +136,15 @@ func DefaultConfig() *Config {
 // historical behavior for a machine with no agents yet). It is the config a
 // user actually receives from every LoadConfig fallback — kept separate from
 // DefaultConfig so tests constructing defaults never probe the machine.
-func seededDefaultConfig() *Config {
+//
+// It takes the detector as an argument because its two callers need different ones, and that
+// difference is the whole point: LoadConfig's fallback WRITES the config it seeds, so it is worth
+// verifying each contested binary once; SeededDefaultConfig hands back an in-memory config on a
+// path that re-derives it per poll, where the same verification is seconds of latency for a value
+// nothing keeps. See DetectAgentProfilesVerified.
+func seededDefaultConfig(detect func() []Profile) *Config {
 	cfg := DefaultConfig()
-	cfg.Profiles = DetectAgentProfiles()
+	cfg.Profiles = detect()
 	if len(cfg.Profiles) > 0 {
 		cfg.DefaultProgram = cfg.Profiles[0].Name
 	} else {

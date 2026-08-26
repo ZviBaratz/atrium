@@ -219,7 +219,10 @@ var (
 			defer log.Close()
 
 			cfg := config.LoadConfig()
-			added := cfg.MergeDetectedProfiles(config.DetectAgentProfiles())
+			// The user asked for a re-probe, so discard the memoized identity answers first —
+			// otherwise a CLI installed since this process started stays invisible.
+			config.RefreshAgentIdentities()
+			added := cfg.MergeDetectedProfiles(config.DetectAgentProfilesVerified())
 			if len(added) == 0 {
 				fmt.Println("no new agents detected; profiles unchanged")
 				return nil

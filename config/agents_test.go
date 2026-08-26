@@ -72,7 +72,7 @@ func TestMergeDetectedProfiles(t *testing.T) {
 func TestSeededDefaultConfig(t *testing.T) {
 	t.Run("detected agents become profiles with the first as default", func(t *testing.T) {
 		stubDetect(t, map[string]string{"claude": "/usr/local/bin/claude", "aider": "aider"})
-		cfg := seededDefaultConfig()
+		cfg := seededDefaultConfig(DetectAgentProfiles)
 		assert.Equal(t, "claude", cfg.DefaultProgram)
 		assert.Equal(t, []Profile{
 			{Name: "claude", Program: "/usr/local/bin/claude"},
@@ -84,7 +84,7 @@ func TestSeededDefaultConfig(t *testing.T) {
 
 	t.Run("no detected agents falls back to the claude literal", func(t *testing.T) {
 		stubDetect(t, nil)
-		cfg := seededDefaultConfig()
+		cfg := seededDefaultConfig(DetectAgentProfiles)
 		assert.Equal(t, "claude", cfg.DefaultProgram)
 		assert.Empty(t, cfg.Profiles)
 	})
@@ -128,14 +128,15 @@ func TestDetectSkipsAForeignBinaryUnderAnAgentsName(t *testing.T) {
 	t.Run("a foreign copilot is not seeded", func(t *testing.T) {
 		stubDetect(t, map[string]string{"copilot": "copilot"})
 		stubIdentity(t, false)
-		assert.Empty(t, DetectAgentProfiles(),
+		assert.Empty(t, DetectAgentProfilesVerified(),
 			"the binary is on PATH under an agent's name but is not that agent")
 	})
 
 	t.Run("the real copilot still is", func(t *testing.T) {
 		stubDetect(t, map[string]string{"copilot": "copilot"})
 		stubIdentity(t, true)
-		assert.Equal(t, []Profile{{Name: "copilot", Program: "copilot"}}, DetectAgentProfiles())
+		assert.Equal(t, []Profile{{Name: "copilot", Program: "copilot"}},
+			DetectAgentProfilesVerified())
 	})
 
 	t.Run("an uncontested agent is accepted without running anything", func(t *testing.T) {
@@ -147,4 +148,46 @@ func TestDetectSkipsAForeignBinaryUnderAnAgentsName(t *testing.T) {
 		assert.False(t, agentIdentityOK(agent.Resolve("copilot"), "atrium-no-such-binary-xyz"),
 			"and a contested one fails closed when the probe cannot answer")
 	})
+}
+
+// TestTheConfigLoadPathNeverRunsTheIdentityProbe is the regression guard for a break this
+// package cannot feel and CI could not see.
+//
+// Wiring the identity probe into DetectAgentProfiles put `copilot --version` on the path
+// loadStoredConfig (cli_session) re-derives once per poll of `atrium new --wait`. That probe is
+// ~2.6s against a cold HOME and creates ~/.cache/copilot/pkg on the way, so four root-package
+// tests went from 1.9s to 53s and failed their wait budget. CI stayed green throughout, because
+// no CI runner has copilot installed and the probe therefore never ran there — the failure only
+// exists on a machine that HAS the contested binary, which is every machine that matters for it.
+//
+// So the guard is here rather than in the root package: this is where the two detectors are, and
+// asserting which one probes is the whole claim. The fatal-on-call stub is deliberate — a
+// counter would let a single stray probe pass as "not many".
+func TestTheConfigLoadPathNeverRunsTheIdentityProbe(t *testing.T) {
+	stubDetect(t, map[string]string{"copilot": "copilot"})
+	orig := agentIdentityOK
+	agentIdentityOK = func(*agent.Adapter, string) bool {
+		t.Error("the config-load path must not run the identity probe: it costs seconds and " +
+			"writes to the agent's own cache dir, and it is re-derived per poll by `atrium new --wait`")
+		return true
+	}
+	t.Cleanup(func() { agentIdentityOK = orig })
+
+	assert.NotEmpty(t, DetectAgentProfiles(),
+		"the unverified detector still reports what is on PATH")
+	assert.NotEmpty(t, SeededDefaultConfig().Profiles,
+		"and so does the in-memory fallback the headless commands re-derive")
+}
+
+// TestTheVerifiedDetectorDoesRunTheProbe is the other half: a guard that only asserts the
+// negative above would also pass if the probe had been deleted outright.
+func TestTheVerifiedDetectorDoesRunTheProbe(t *testing.T) {
+	stubDetect(t, map[string]string{"copilot": "copilot"})
+	probed := 0
+	orig := agentIdentityOK
+	agentIdentityOK = func(*agent.Adapter, string) bool { probed++; return true }
+	t.Cleanup(func() { agentIdentityOK = orig })
+
+	assert.NotEmpty(t, DetectAgentProfilesVerified())
+	assert.Positive(t, probed, "the verified detector is the one that checks identity")
 }
