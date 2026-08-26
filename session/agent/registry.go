@@ -2017,10 +2017,15 @@ var copilot = &Adapter{
 // ends the pane, which for copilot means one of its two dialogs is open.
 //
 // It reads no literal, deliberately — that is the whole reason it exists, and ModalVeto's doc
-// carries the delivery hole a literal cannot cover. What makes the structural test sound here
-// is that copilot's composer is BORDERLESS (claude's arrangement), so it is never such a box:
-// TestCopilotBusyPanesStayDeliverable holds that at every driven rung, which is the direction
-// that would break prompt delivery outright if it were wrong.
+// carries the delivery hole a literal cannot cover. What makes the structural test sound here is
+// that copilot's composer is BORDERLESS (claude's arrangement), so it is never such a box: a
+// bare "❯" between two full-width horizontal rules, with the status footer below.
+//
+// That is held on a DRIVEN IDLE ladder, which is the pane it has to be true of and the one this
+// argument used to be unable to cite — TestCopilotIdleComposerIsNotABox, seven widths from 20 to
+// 120. Before that ladder was driven the citation was a busy-only ladder, and the idle captures
+// that would have settled it had been discarded as invalid; the claim held, but nothing on disk
+// said so. TestCopilotBusyPanesStayDeliverable holds the same property mid-turn.
 //
 // It inherits bottomBoxBlock's disclosed exposure — quoted box art that ends the pane — and
 // pays for it in the safe direction: a pane that trips this holds its queued prompt instead of

@@ -272,12 +272,15 @@ var composerPanes = map[Key]string{
 	KeyGemini: geminiIdlePane,
 	KeyAider:  aiderIdlePane,
 	KeyAgy:    agyIdlePane,
-	// A DRIVEN live-turn pane, not an idle one, and the difference is nil: copilot's composer
-	// is the same empty "❯" between two horizontal rules whether a turn is running or not —
-	// what a turn changes is the status row BELOW it. Using the widest busy rung means this
-	// entry cites a capture the busy ladder already holds rather than a second one nothing
-	// else reads.
-	KeyCopilot: copilotWorkingW120Pane,
+	// The DRIVEN idle pane. This entry used to be the widest BUSY rung, standing in for an
+	// idle one on the claim that "the difference is nil". Driving the idle ladder settled it:
+	// the claim was true — at w120 the four rows from the header through the bottom rule are
+	// byte-identical between the two, and only the row below differs (the nav footer versus
+	// "● Working · 544 B esc interrupt") — but no capture in the tree could show it, because
+	// the first sweep's idle captures were driven and then discarded as invalid. A true claim
+	// with its evidence deleted is the shape this table exists to prevent, so the fixture is
+	// now the thing itself; see copilotIdleLadder.
+	KeyCopilot: copilotIdleW120Pane,
 }
 
 func TestAdapterInputBoxVisible(t *testing.T) {
