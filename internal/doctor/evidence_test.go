@@ -560,7 +560,7 @@ func evidenceCases() []evidenceCase {
 				}))
 			},
 			// Folded into either bucket it would fabricate a split, or hide one.
-			forbids: []string{"connectors are on for"},
+			forbids: []string{"in its own settings.json"},
 			names:   []string{"connector setting could not be read", "not evidence of parity"},
 			why:     "a setting that is neither JSON true nor false is not a state, and a tri-state exists so it cannot be reported as one",
 		},

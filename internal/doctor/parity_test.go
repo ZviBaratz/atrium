@@ -202,7 +202,7 @@ func TestCheckParityOverFixtures(t *testing.T) {
 	assert.Contains(t, out, `marketplace "quantivly": "rich" has it, "bare" does not`)
 	assert.Contains(t, out, `MCP server "linear": "rich" has it, "bare" does not`)
 	assert.Contains(t, out, `MCP server "slack": "rich" has it, "bare" does not`)
-	assert.Contains(t, out, `claude.ai connectors are on for "rich" but disabled for "bare"`)
+	assert.Contains(t, out, `"bare" disables claude.ai connectors in its own settings.json and "rich" does not`)
 
 	// Shared by both dirs, and pointing at the same place in both, so not a parity
 	// problem and not a line.
@@ -561,7 +561,7 @@ func TestCheckParityConnectorsUnknownIsItsOwnLine(t *testing.T) {
 
 	out := RenderParity(warns)
 	assert.Contains(t, out, `the claude.ai connector setting could not be read for "b"`)
-	assert.NotContains(t, out, "connectors are on for")
+	assert.NotContains(t, out, "in its own settings.json")
 	assert.Contains(t, out, "not evidence of parity")
 	assert.NotContains(t, out, "Align the config dirs")
 }

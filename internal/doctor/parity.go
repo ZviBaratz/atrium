@@ -402,21 +402,27 @@ func (w ParityWarning) line() string {
 		if len(w.Compared) >= 2 {
 			return fmt.Sprintf("%s parity is unverified: %s %s not report one and %s left out of the comparison",
 				w.Dimension.Noun(), quotedList(w.Lack),
-				agrees(w.Lack, "does", "do"), agrees(w.Lack, "was", "were"))
+				plural(len(w.Lack), "does", "do"), plural(len(w.Lack), "was", "were"))
 		}
 		return fmt.Sprintf("%s parity is unverified: %s %s not report one, so nothing was compared",
-			w.Dimension.Noun(), quotedList(w.Lack), agrees(w.Lack, "does", "do"))
+			w.Dimension.Noun(), quotedList(w.Lack), plural(len(w.Lack), "does", "do"))
 	case ParityMissing:
 		return fmt.Sprintf("%s %q: %s %s it, %s %s not",
 			w.Dimension.Noun(), w.Feature,
-			quotedList(w.Have), agrees(w.Have, "has", "have"),
-			quotedList(w.Lack), agrees(w.Lack, "does", "do"))
+			quotedList(w.Have), plural(len(w.Have), "has", "have"),
+			quotedList(w.Lack), plural(len(w.Lack), "does", "do"))
 	case ParityDivergent:
 		return fmt.Sprintf("%s %q is configured differently across %s — same name, different target",
 			w.Dimension.Noun(), w.Feature, quotedList(w.Have))
 	case ParityConnectors:
-		return fmt.Sprintf("claude.ai connectors are on for %s but disabled for %s",
-			quotedList(w.Have), quotedList(w.Lack))
+		// Stated as what the dirs DECLARE, not as the state in force.
+		// disableClaudeAiConnectors is any-source-true — "a project can opt out, but a
+		// project-level false cannot override a user-level true" — so a project or
+		// managed source can switch connectors off for every member here, and only
+		// the dir's own setting is knowable from a config dir.
+		return fmt.Sprintf("%s %s claude.ai connectors in its own settings.json and %s %s not",
+			quotedList(w.Lack), plural(len(w.Lack), "disables", "disable"),
+			quotedList(w.Have), plural(len(w.Have), "does", "do"))
 	case ParityConnectorsUnknown:
 		return fmt.Sprintf("the claude.ai connector setting could not be read for %s", quotedList(w.Lack))
 	case parityKindUnset:
@@ -424,14 +430,6 @@ func (w ParityWarning) line() string {
 	default:
 		return fmt.Sprintf("internal error: parity warning with unknown kind %d", int(w.Kind))
 	}
-}
-
-// agrees picks the verb form for a list of member labels.
-func agrees(labels []string, one, many string) string {
-	if len(labels) == 1 {
-		return one
-	}
-	return many
 }
 
 // RenderParity formats the section for `atrium doctor` (empty string when no pool
