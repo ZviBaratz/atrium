@@ -609,12 +609,18 @@ func (m *home) resumeSelected(selected *session.Instance) tea.Cmd {
 func (m *home) handlePauseDone(msg pauseDoneMsg) tea.Cmd {
 	if msg.err != nil {
 		m.reapStrandedShell(msg.instance, msg.worktreeGone)
+		m.settleRetirement(msg.instance, msg.err)
 		if serr := m.persistInstances(); serr != nil {
 			log.WarningLog.Printf("failed to persist after a failed pause: %v", serr)
 		}
 		return m.handleError(msg.err)
 	}
 	selected := msg.instance
+	// Belt for the spool's braces. The retire drain dispatches through pauseIOCmd, whose
+	// outcome is a batchPauseDoneMsg, so a claim should never be settled from here — but
+	// a claim nobody answers is held until retireSettleGrace, and settling one that was
+	// never ours is impossible (settleRetirement keys on the instance).
+	m.settleRetirement(selected, nil)
 	cleanupTerminalForInstance(m.tabbedWindow, selected)
 	if serr := m.persistInstances(); serr != nil {
 		log.WarningLog.Printf("failed to persist paused instance %s: %v", selected.Title(), serr)
@@ -948,14 +954,22 @@ func (m *home) pauseInstances(insts []*session.Instance, message, altConfirmKey 
 }
 
 // pauseIOCmd is the goroutine half of a pause: Instance.Pause for each of insts,
-// collected into the message the Update loop applies. It touches no model state, so
-// it is safe off the update thread — which it must be, because pause() is a
-// kill-session, two git queries, possibly a WIP commit and a recursive worktree
-// removal per instance.
+// collected into the message the Update loop applies. It runs off the update thread —
+// which it must, because pause() is a kill-session, two git queries, possibly a WIP
+// commit and a recursive worktree removal per instance.
 //
-// Named and shared for killIOCmd's reason. It has two callers with nothing else in
-// common — the pause confirmation and the retire drain (#835) — and a park reachable
-// by one path but not the other would be the worse kind of surprise. What it
+// It touches nothing the MODEL owns: no m.list, no storage, no overlay state, which is
+// what the batchPauseDoneMsg handler exists to apply on the loop. What it does touch is
+// the instance, and pause() reaches Instance.diffStats through clearCachedDirty and
+// noteAutoPauseCommit — both documented main-loop-only, alongside SetDiffStats, because
+// none of the three takes a lock and View reads the same pointer while rendering. That
+// race predates this seam and is not fixed here; it is written down here because this is
+// where a second caller was added, and because retireVerdict now reads those same
+// numbers on the next tick.
+//
+// Named and shared for killIOCmd's reason. Its callers have nothing else in common —
+// the pause confirmation and the retire drain (#835) — and a park reachable by one path
+// but not the other would be the worse kind of surprise. What it
 // deliberately does NOT own is the busy gate: every caller must wrap it in
 // beginAsyncAction, because pause() writes SetStatus(Paused) only after the pane is
 // already dead, and nothing marks a pausing instance retiring (that mark covers
@@ -2292,12 +2306,14 @@ func sessionsWithUnpushedWork(insts []*session.Instance) int {
 // a fat tree, and it used to run inline with no progress row at all (#380). The
 // model half is applyKillDone.
 //
-// Shared by the kill confirmation and the post-merge cleanup offer (#384) so both
-// retire a session by exactly the same path — which is also why the undo journal
-// is written here rather than at either call site: a session recoverable from one
-// entry point and not the other would be the worse kind of surprise. It takes the
-// model only to reach that journal (the data dir and the sweep's context); it
-// touches nothing else on it, and must not, because it runs off the update thread.
+// Shared by every path that retires a session — the kill confirmation, the post-merge
+// cleanup offer (#384), and the retire drain a spooled `atrium kill` reaches (#835) — so
+// all of them tear one down by exactly the same route. That is also why the undo journal
+// is written here rather than at the call sites: a session recoverable from one entry
+// point and not another would be the worse kind of surprise, and this is the one place
+// none of them can skip. It takes the model only to reach that journal (the data dir and
+// the sweep's context); it touches nothing else on it, and must not, because it runs off
+// the update thread.
 func killIOCmd(m *home, inst *session.Instance) tea.Cmd {
 	return func() tea.Msg {
 		// Refuse to kill only when the branch is checked out in the primary repo
@@ -2333,10 +2349,17 @@ func killIOCmd(m *home, inst *session.Instance) tea.Cmd {
 	}
 }
 
-// armTeardown pairs a teardown's bookkeeping with the Cmd that performs it: the
-// returned hook is staged with armOnConfirm and the Cmd with confirmAction, so both
-// halves are decided in one place and neither can be given to one path and forgotten
-// on the other. Single kill and batch kill both go through here.
+// armTeardown pairs a teardown's bookkeeping with the Cmd that performs it, so both
+// halves are decided in one place and neither can be given to one path and forgotten on
+// the other.
+//
+// The two results are staged, not called: a confirmed kill hands the hook to armOnConfirm
+// and the Cmd to confirmAction, which is what defers the arming to the accept (see the
+// last paragraph). A caller with no dialog to stage them on — the retire drain, whose
+// decision was already made by the gate — calls the hook itself on the update thread and
+// passes the Cmd to beginAsyncAction, which is the same two things in the same order
+// without the deferral. What every caller owes is that the hook runs if and only if the
+// Cmd does; endTeardown is what releases it.
 //
 // The hook does two things, and both must happen on the update thread:
 //
@@ -2409,12 +2432,23 @@ func (m *home) applyKillDone(msg killDoneMsg) tea.Cmd {
 		m.endTeardown([]*session.Instance{inst})
 	}
 	if msg.refused != nil {
+		// The record a spooled kill is still holding is answered with the refusal, not
+		// by its disappearance: the session is untouched, so a producer blocked in
+		// --wait has to hear why rather than read an unlink as a teardown. A no-op when
+		// this kill came from the key rather than the spool.
+		m.settleRetirement(msg.outcome.inst, msg.refused)
 		return m.handleError(msg.refused)
 	}
 	inst := msg.outcome.inst
 	if inst == nil {
 		return nil
 	}
+	// Past the refusal, so the session is going whatever else failed below: Kill tears
+	// tmux and the worktree down before storage is written, and the row goes regardless.
+	// outcome.err means the teardown was incomplete, not that the session survived, so
+	// the retirement is reported as done — a producer told "refused" would go looking
+	// for a session that is gone.
+	m.settleRetirement(inst, nil)
 	m.tabbedWindow.CleanupTerminalForInstance(inst)
 	storeErr := m.storage.DeleteInstance(inst.Title(), inst.Path)
 	m.list.RemoveInstance(inst)

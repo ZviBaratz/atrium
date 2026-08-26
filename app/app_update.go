@@ -254,11 +254,11 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// asked for. Outside the attachGen guard on purpose: none is a pane
 		// observation, so an attach having happened gives no reason to drop them.
 		//
-		// The retire drain runs last of the three, and the order is load-bearing in one
-		// direction only. It dispatches a teardown behind beginAsyncAction, which sets
+		// The retire drain runs last, and the order is load-bearing in one direction
+		// only. It dispatches a teardown behind beginAsyncAction, which sets
 		// actionInFlight — and createDrainHeld reads that, so a retirement dispatched
 		// first would hold the create drain for the length of its I/O. Running it last
-		// lets both spools make progress on the same tick, and costs the retirement
+		// lets the other two make progress on the same tick, and costs the retirement
 		// nothing: it is retried every tick and its record is durable.
 		if cmd := m.drainOutbox(); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -559,6 +559,14 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// a session that did not park cleanly.
 		for _, f := range msg.failures {
 			m.reapStrandedShell(f.inst, f.worktreeGone)
+			// A pause the retire spool asked for and that did not happen: the session is
+			// still there, so its record has to carry the reason rather than vanish. A
+			// no-op for every instance the drain did not dispatch, which is all of them
+			// when the batch came from the key.
+			m.settleRetirement(f.inst, f.err)
+		}
+		for _, inst := range msg.pausedInstances {
+			m.settleRetirement(inst, nil)
 		}
 		cmd := m.finishBatch(msg.pausedInstances, len(msg.failures) > 0,
 			fmt.Sprintf("paused %d session%s", msg.paused, plural(msg.paused)),

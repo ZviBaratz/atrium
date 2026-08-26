@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,8 +26,13 @@ import (
 // half a test is about is the only thing it mentions.
 func cleanProbe() retireProbe {
 	return retireProbe{
-		stats: func(session.InstanceData) *git.DiffStats { return &git.DiffStats{} },
-		busy:  func(session.InstanceData) (bool, error) { return false, nil },
+		stats: func(session.InstanceData) *git.DiffStats {
+			// BranchStatsMeasured, because a zero DiffStats is what a FAILED measurement
+			// looks like: the gate refuses one, so a probe returning it would send every
+			// test here through the unestablished arm instead of the arm it names.
+			return &git.DiffStats{BranchStatsMeasured: true}
+		},
+		busy: func(session.InstanceData) (bool, error) { return false, nil },
 	}
 }
 
@@ -92,10 +98,11 @@ func TestKillRefusesWorkAtRiskAndSpoolsNothing(t *testing.T) {
 		busy  bool
 		says  string
 	}{
-		{"uncommitted changes", &git.DiffStats{Dirty: true}, false, "uncommitted"},
-		{"unpushed commits", &git.DiffStats{Unpushed: 3}, false, "3 unpushed"},
+		{"uncommitted changes", &git.DiffStats{Dirty: true, BranchStatsMeasured: true}, false, "uncommitted"},
+		{"unpushed commits", &git.DiffStats{Unpushed: 3, BranchStatsMeasured: true}, false, "3 unpushed"},
 		{"stats that failed", &git.DiffStats{Error: errors.New("no repo")}, false, "could not be established"},
-		{"a working agent", &git.DiffStats{}, true, "still working"},
+		{"a working agent", &git.DiffStats{BranchStatsMeasured: true}, true, "still working"},
+		{"stats nothing measured", &git.DiffStats{}, false, "could not be established"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sandboxDataDir(t)
@@ -249,7 +256,9 @@ func TestRetireWaitReportsARejection(t *testing.T) {
 	require.Len(t, entries, 1)
 	require.NoError(t, outbox.Reject(entries[0].Path, "it has uncommitted changes"))
 
-	// A second kill of the same session finds the receipt from the first.
+	// A second kill, spooled fresh. Its record is a new path — the names are
+	// UnixNano plus a nonce — so it carries no receipt yet, which is what makes the
+	// rejection below the one this awaitSpool reads.
 	_, _, err = retireCmd(t, outbox.ModeKill, cleanProbe(), "fix-auth", 0)
 	require.NoError(t, err)
 	fresh := spooledRetires(t)
@@ -412,4 +421,220 @@ func TestKillRefusesAnAgentItCannotObserve(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Empty(t, spooledRetires(t))
+}
+
+// TestRetireResolvesOnlyAnExactName is the guard a destructive verb needs and that
+// resolveSession's fourth tier does not give it.
+//
+// That tier matches a SUBSTRING of the title or of the freely-mutable display name, and
+// a single hit resolves. It was written for peek, which only reads, and send, which only
+// types — a truncated selector there costs a misdirected message. Here it deletes a
+// branch: with one session called "fix-auth", `atrium kill fix` would resolve and
+// destroy it, and the ambiguity report that protects against two candidates does nothing
+// when exactly one session contains the typo.
+func TestRetireResolvesOnlyAnExactName(t *testing.T) {
+	for _, mode := range []outbox.Mode{outbox.ModeKill, outbox.ModePause} {
+		t.Run(string(mode), func(t *testing.T) {
+			sandboxDataDir(t)
+			d := inst("fix-auth", "/repo/web")
+			d.DisplayName = "the auth fix"
+			seedInstances(t, d)
+
+			// "the auth fix" is the DISPLAY name — cosmetic, freely mutable, and not
+			// unique — so an exact match on it is still not an identity.
+			for _, selector := range []string{"fix", "auth", "the auth fix", "FIX-AUTH-2"} {
+				_, _, err := retireCmd(t, mode, cleanProbe(), selector, 0)
+				require.Error(t, err, "%q is not this session's name", selector)
+				assert.Contains(t, err.Error(), "no session")
+				assert.Empty(t, spooledRetires(t), "and nothing is queued against a guess")
+			}
+		})
+	}
+}
+
+// TestRetireStillResolvesTheNamesThatIdentifyASession: exactness is about refusing a
+// guess, not about making the verb hard to address. The title, the tmux name and a
+// case-insensitive title all name exactly one session, and all three still work — the
+// same three tiers `atrium send` reaches before it starts guessing.
+func TestRetireStillResolvesTheNamesThatIdentifyASession(t *testing.T) {
+	for _, selector := range []string{"fix-auth", "atrium_web_fix-auth", "FIX-AUTH"} {
+		t.Run(selector, func(t *testing.T) {
+			sandboxDataDir(t)
+			d := inst("fix-auth", "/repo/web")
+			d.TmuxName = "atrium_web_fix-auth"
+			seedInstances(t, d)
+
+			_, _, err := retireCmd(t, outbox.ModeKill, cleanProbe(), selector, 0)
+
+			require.NoError(t, err)
+			require.Len(t, spooledRetires(t), 1)
+		})
+	}
+}
+
+// TestRetireRefusesTheCallersOwnSession closes the case parentage was the wrong tool
+// for. Scoping kill rights by who spawned a session cannot be enforced — $ATRIUM_SESSION
+// is a tmux env var the agent can set to anything — but this guard needs no enforcement,
+// because an agent that lies about its own identity only spares itself.
+//
+// Without it, an agent following `atrium guide`'s instruction to retire sessions itself
+// can reach its own row: pause is ungated end to end, and resolveSession has no reason
+// to treat the caller's session differently from any other. The drain then kills the
+// tmux session that agent is running in and removes the directory its shell is cwd'd to,
+// so the process that would report what happened is the one that died — and a --wait dies
+// with the pane, so the outcome reaches nobody at all.
+func TestRetireRefusesTheCallersOwnSession(t *testing.T) {
+	for _, mode := range []outbox.Mode{outbox.ModeKill, outbox.ModePause} {
+		t.Run(string(mode), func(t *testing.T) {
+			sandboxDataDir(t)
+			d := inst("fix-auth", "/repo/web")
+			d.TmuxName = "atrium_web_fix-auth"
+			seedInstances(t, d)
+			t.Setenv(sessionNameEnv, "atrium_web_fix-auth")
+
+			_, _, err := retireCmd(t, mode, refusingProbe(t), "fix-auth", 0)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "its own session")
+			assert.Empty(t, spooledRetires(t), "and nothing is queued")
+		})
+	}
+}
+
+// TestRetireActsOnOtherSessionsFromInsideOne is the other half: the self-guard must not
+// become a general refusal to retire anything from inside a session, which is the only
+// place these verbs are ever run from.
+func TestRetireActsOnOtherSessionsFromInsideOne(t *testing.T) {
+	sandboxDataDir(t)
+	mine := inst("orchestrator", "/repo/web")
+	mine.TmuxName = "atrium_web_orchestrator"
+	worker := inst("worker-3", "/repo/web")
+	worker.TmuxName = "atrium_web_worker-3"
+	seedInstances(t, mine, worker)
+	t.Setenv(sessionNameEnv, "atrium_web_orchestrator")
+
+	_, _, err := retireCmd(t, outbox.ModeKill, cleanProbe(), "worker-3", 0)
+
+	require.NoError(t, err)
+	require.Len(t, spooledRetires(t), 1)
+}
+
+// TestBusyProbeConsultsTheLiveSpinner is the hole CanDetectBusy was added to close and
+// did not.
+//
+// The gate admits an adapter with a busy marker OR a live spinner, but the measurement
+// read only the markers — so for claude the two documented mid-turn states where the
+// footer marker is absent read as idle, and for a spinner-only adapter HasBusyMarker
+// short-circuits to false unconditionally. Both are the "I cannot tell" → "nothing is
+// happening" failure the method exists to prevent, arriving through the measurement
+// instead of the gate.
+func TestBusyProbeConsultsTheLiveSpinner(t *testing.T) {
+	d := inst("fix-auth", "/repo/web")
+	d.TmuxName = "atrium_web_fix-auth"
+	adapter := agent.Resolve(d.Program)
+	require.NotNil(t, adapter.LiveSpinner, "precondition: this program's adapter has a spinner")
+
+	// A real claude pane mid-turn with no busy marker anywhere: the footer hint is lit
+	// off the CLI's narrowest notion of busy and drops mid-turn, and a narrow pane
+	// truncates the footer line outright. The spinner sits in the live band above the
+	// input box, which is the only place the matcher looks.
+	const boxRule = "──────────────────────────────────────────────────────────"
+	spinning := &fakeTmux{content: strings.Join([]string{
+		"● Some earlier reasoning about the change.",
+		"",
+		"✽ Wrangling… (14m 24s · ↓ 34.6k tokens)",
+		"",
+		boxRule,
+		"❯ ",
+		boxRule,
+		"  ⏵⏵ auto mode on · ← for agents",
+	}, "\n")}
+	require.False(t, adapter.HasBusyMarker(spinning.content),
+		"precondition: no marker, so the marker-only read would clear this")
+
+	busy, err := busyFromPane(context.Background(), spinning.exec(), d)
+
+	require.NoError(t, err)
+	assert.True(t, busy, "a live spinner is a running turn, and this is the only reader of it")
+}
+
+// TestBusyProbeNormalizesThePaneTheWayThePollDoes: the adapter's matchers are documented
+// against the CLEANED pane, and the poll's own reads go through cleanForDetection. A
+// probe that skipped it would be a second, slightly different classification wearing the
+// same adapter — trailing whitespace is what tmux pads a footer row with, and it is what
+// separates a matched marker from a missed one for any matcher anchored to end-of-line.
+func TestBusyProbeNormalizesThePaneTheWayThePollDoes(t *testing.T) {
+	d := inst("fix-auth", "/repo/web")
+	d.TmuxName = "atrium_web_fix-auth"
+
+	padded := &fakeTmux{content: "· Thinking… (3s)   \n\n  esc to interrupt      \n   \n"}
+	busy, err := busyFromPane(context.Background(), padded.exec(), d)
+
+	require.NoError(t, err)
+	assert.True(t, busy, "tmux pads its rows; the classification must not depend on that")
+}
+
+// TestKillReportsTreeTroubleAheadOfPaneTrouble: two things can fail here and the order
+// they are reported in is what the caller acts on. A dirty tree is the caller's to fix
+// and stays true until they do; an unreadable pane is a fact about the machine. Probing
+// tmux first meant a dirty aider session was told the thing it could do nothing about.
+func TestKillReportsTreeTroubleAheadOfPaneTrouble(t *testing.T) {
+	sandboxDataDir(t)
+	seedInstances(t, inst("fix-auth", "/repo/web"))
+	probe := retireProbe{
+		stats: func(session.InstanceData) *git.DiffStats {
+			return &git.DiffStats{Dirty: true, BranchStatsMeasured: true}
+		},
+		busy: func(session.InstanceData) (bool, error) {
+			return false, errors.New("no server running")
+		},
+	}
+
+	_, _, err := retireCmd(t, outbox.ModeKill, probe, "fix-auth", 0)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "uncommitted")
+	assert.NotContains(t, err.Error(), "no server")
+}
+
+// TestKillRefusesStatsWhoseMeasurementFailed is #835's trap arriving through the door
+// the first implementation left open.
+//
+// git.RepoStats sets DiffStats.Error for exactly one cause — an unset base commit — and
+// computeRepoStats swallows every git subprocess failure into a zero value. So a session
+// whose repository was moved out from under it, or whose `git status` timed out on a cold
+// mount, reaches the gate reporting no error, no changes and nothing unpushed: identical,
+// field by field, to a tree that was measured and found clean.
+func TestKillRefusesStatsWhoseMeasurementFailed(t *testing.T) {
+	sandboxDataDir(t)
+	seedInstances(t, inst("fix-auth", "/repo/web"))
+	probe := cleanProbe()
+	probe.stats = func(session.InstanceData) *git.DiffStats {
+		// Exactly what an unreadable worktree yields: nothing set, nothing reported.
+		return &git.DiffStats{}
+	}
+
+	_, _, err := retireCmd(t, outbox.ModeKill, probe, "fix-auth", 0)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "could not be established")
+	assert.Empty(t, spooledRetires(t))
+}
+
+// TestStatsProbeReportsATreeItCouldNotRead pins the same property one layer down, on the
+// real thing rather than a fake: a worktree that is not there must come back saying so,
+// not saying "clean".
+func TestStatsProbeReportsATreeItCouldNotRead(t *testing.T) {
+	d := inst("fix-auth", filepath.Join(t.TempDir(), "gone"))
+	d.Worktree = session.GitWorktreeData{
+		RepoPath:      d.Path,
+		WorktreePath:  filepath.Join(d.Path, "worktrees", "fix-auth"),
+		BranchName:    "zvi/fix-auth",
+		BaseCommitSHA: "0123456789abcdef0123456789abcdef01234567",
+	}
+
+	stats := statsFromWorktree(context.Background(), d, "")
+
+	assert.False(t, stats.BranchStatsMeasured,
+		"a tree git could not read must not report the same numbers as a clean one")
 }

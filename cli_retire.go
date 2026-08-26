@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"strings"
 	"time"
 
 	cmd2 "github.com/ZviBaratz/atrium/cmd"
@@ -55,16 +57,21 @@ var (
 			"for as long as that journal retains its ref.\n\n" +
 			"It refuses unless safety is ESTABLISHED rather than merely un-contradicted: the\n" +
 			"tree is recomputed at call time and must report no uncommitted changes and no\n" +
-			"unpushed commits, and the agent must be idle. A session whose numbers cannot be\n" +
-			"computed is refused rather than read as clean, which is why a paused or direct\n" +
-			"session — neither of which has a worktree to read — is refused too, and so is a\n" +
-			"session whose agent shows nothing in its pane to say a turn is running (aider,\n" +
-			"and any program Atrium has no adapter for). The refusal names the condition that\n" +
-			"failed. There is no --force: use the TUI, or `atrium pause`, which keeps the\n" +
-			"branch and so needs no gate.\n\n" +
+			"unpushed commits, and the agent must be idle. A tree whose numbers could not be\n" +
+			"MEASURED is refused rather than read as clean — which is why a paused, starting\n" +
+			"or direct session is refused too, none of them having a worktree to read, and so\n" +
+			"is a session whose agent shows nothing in its pane to say a turn is running\n" +
+			"(aider, and any program Atrium has no adapter for). The refusal names the\n" +
+			"condition that failed. There is no --force: use the TUI, or `atrium pause`, which\n" +
+			"keeps the branch and so needs no gate.\n\n" +
+			"The session is addressed by name — its title, its tmux name, or either in any\n" +
+			"case — and not by a substring of one, which `ls` and `send` accept and a verb\n" +
+			"that deletes a branch should not. It also will not retire the session it is run\n" +
+			"from.\n\n" +
 			"Delivery is asynchronous, on `atrium new`'s terms: the request is spooled to the\n" +
-			"data directory and the running Atrium executes it. Use --wait to block until it\n" +
-			"has actually been acted on.",
+			"data directory and the running Atrium executes it, re-checking every condition\n" +
+			"first. Use --wait to block until the teardown has reported back; a refusal then\n" +
+			"arrives as a non-zero exit naming its reason.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			log.Initialize(logDir(), false)
@@ -83,10 +90,13 @@ var (
 			"It is not gated the way `atrium kill` is, because it destroys nothing: a session\n" +
 			"with uncommitted or unpushed work can be paused, which makes this the verb to\n" +
 			"reach for when a kill is refused. It does refuse what a park cannot do — an\n" +
-			"already-paused session, and a direct (non-git) session, which runs in your own\n" +
-			"checkout with no worktree to free.\n\n" +
+			"already-paused session, a direct (non-git) session, which runs in your own\n" +
+			"checkout with no worktree to free, and one still starting up, where the park\n" +
+			"would race the setup it is removing.\n\n" +
+			"It addresses a session by name rather than by a substring, and will not park the\n" +
+			"session it is run from, for the reasons `atrium kill --help` gives.\n\n" +
 			"Delivery is asynchronous, on `atrium new`'s terms. Use --wait to block until the\n" +
-			"session has actually been parked.",
+			"park has reported back; a failure then arrives as a non-zero exit naming it.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			log.Initialize(logDir(), false)
@@ -141,8 +151,14 @@ func liveRetireProbe(ctx context.Context, exec cmd2.Executor) retireProbe {
 // confirmation reads, so this asks for precisely the numbers the TUI's kill dialog
 // asks for and no more.
 //
-// Failures arrive as stats.Error, which the gate reports as unestablished. Nothing is
-// returned nil.
+// A failure it could not measure reports itself rather than reading as a clean tree, and
+// that takes two fields rather than one. stats.Error carries only the failures that stop
+// computation before it starts — in practice an unset base commit — because
+// computeRepoStats is best-effort by design and swallows every git subprocess failure
+// into a zero value: a repository moved out from under the worktree, or a `git status`
+// that times out on a cold mount, would otherwise arrive reporting no error, no changes
+// and nothing unpushed. stats.BranchStatsMeasured is what separates that from a tree
+// that was measured and found clean, and retire.Gate reads both. Nothing is returned nil.
 func statsFromWorktree(ctx context.Context, d session.InstanceData, branchPrefix string) *git.DiffStats {
 	w := d.Worktree
 	return git.NewWorktreeFromStorage(ctx, w.RepoPath, w.WorktreePath, w.SessionName,
@@ -152,10 +168,27 @@ func statsFromWorktree(ctx context.Context, d session.InstanceData, branchPrefix
 // busyFromPane reports whether the session's agent is mid-turn, by capturing its pane
 // and asking the adapter its recorded program resolves to.
 //
-// Same capture `atrium peek` uses, and the same classification the poll loop applies
-// — HasBusyMarker for a turn in flight, BackgroundWorkVisible for sub-agents still
-// running after one ended. Both, because the second is the case that reads as finished
-// and is not.
+// Same capture `atrium peek` uses, normalized through the same tmux.CleanForDetection the
+// poll's own reads go through, and then all three of the adapter's single-capture
+// signals:
+//
+//   - HasBusyMarker, for the footer marker a turn in flight lights.
+//   - LiveSpinner, for the turns where that marker is absent. It is not a belt-and-braces
+//     second opinion, it is the only reader of the states registry.go documents the
+//     spinner as existing for: claude's footer hint is lit off its narrowest notion of
+//     busy and drops mid-turn, and the footer truncates on overflow, so a narrow pane
+//     loses the marker while the turn runs. Those "fail safe" for the poll, which falls
+//     back to content-change detection across ticks; for a one-shot gate they would fail
+//     into a cleared teardown. It also covers the adapter shape CanDetectBusy admits and
+//     HasBusyMarker cannot see at all — one whose only signal IS the spinner, for which
+//     HasBusyMarker short-circuits to false unconditionally.
+//   - BackgroundWorkVisible, for sub-agents and shells still running after a turn ended,
+//     which is the case that reads as finished and is not.
+//
+// Where the poll gates the spinner behind an animation frame change and this does not:
+// two captures is what tells an animating spinner from one quoted in the scrollback, and
+// a one-shot probe has only one capture. The false positive that costs is a refusal to
+// kill a session that was idle, which is the direction this is allowed to be wrong in.
 //
 // A capture that fails is an error rather than "not busy". The distinction is the one
 // the gate exists to draw: a pane nobody could read is not an idle pane, and answering
@@ -173,9 +206,13 @@ func busyFromPane(ctx context.Context, exec cmd2.Executor, d session.InstanceDat
 			"so %q cannot be established as idle — pause it instead, or kill it from the TUI",
 			d.Program, d.Title)
 	}
-	content, err := tmux.CapturePaneForSession(ctx, exec, tmuxSessionName(d), tmux.CaptureOpts{})
+	raw, err := tmux.CapturePaneForSession(ctx, exec, tmuxSessionName(d), tmux.CaptureOpts{})
 	if err != nil {
 		return false, fmt.Errorf("could not read %q's pane to tell whether its agent is working: %w", d.Title, err)
+	}
+	content := tmux.CleanForDetection(raw)
+	if adapter.LiveSpinner != nil && adapter.LiveSpinner(content) {
+		return true, nil
 	}
 	return adapter.HasBusyMarker(content) || adapter.BackgroundWorkVisible(content), nil
 }
@@ -205,8 +242,14 @@ func runRetire(out, errOut io.Writer, mode outbox.Mode, probe retireProbe, selec
 	if err != nil {
 		return err
 	}
-	target, err := resolveSession(instances, selector, path)
+	// resolveSessionNamed, not resolveSession: a verb that deletes a branch must not
+	// resolve a substring of a title, or of the mutable display label. See that
+	// function for why the tier is right for peek and send and wrong here.
+	target, err := resolveSessionNamed(instances, selector, path)
 	if err != nil {
+		return err
+	}
+	if err := refuseSelfRetirement(mode, target); err != nil {
 		return err
 	}
 	if err := admits(mode, target); err != nil {
@@ -236,33 +279,74 @@ func runRetire(out, errOut io.Writer, mode outbox.Mode, probe retireProbe, selec
 	return nil
 }
 
-// admits refuses a target whose state the verb cannot act on, before anything is
-// probed or spooled. Both refusals name the state rather than letting it surface as a
-// git error from deep inside a probe, or as a rejection receipt a caller has to wait
-// for.
+// admits refuses a target whose state the verb cannot act on, before anything is probed
+// or spooled, so the refusal names the state rather than surfacing as a git error from
+// deep inside a probe or as a receipt the caller has to wait for.
 //
-// A kill needs a worktree to read, and neither a direct session (which never had one)
-// nor a paused one (whose worktree is gone, its work folded into the branch) has one.
-// Refusing both is the same rule as the gate's, one step earlier: safety that cannot
-// be established is not safety. The cost is that pause-then-kill has to go through the
-// TUI, which is the conservative direction.
-//
-// A pause refuses what Instance.Pause refuses — a direct session runs in the user's
-// own checkout, so parking it stops a live agent and reclaims no disk or branch in
-// exchange — plus a session that is already parked, where there is nothing left to do.
+// The rule itself lives in internal/retire, shared with the drain, and that sharing is
+// the point rather than tidiness. This screen used to be here only: the drain re-ran the
+// tree gate and not this one, so a session parked or started in the window between the
+// spool and the tick was torn down by the very path whose command refuses it. Both sides
+// now ask retire.Admits, and there is one place to read what the states mean.
 func admits(mode outbox.Mode, d session.InstanceData) error {
-	if d.Direct {
-		return fmt.Errorf("%q is a direct (non-git) session: it has no worktree or branch, "+
-			"so there is nothing to %s", d.Title, mode)
+	v := retire.Admits(retireVerb(mode), retire.State{
+		Direct:  d.Direct,
+		Paused:  d.Status == session.Paused,
+		Loading: d.Status == session.Loading,
+	})
+	if v.Allowed() {
+		return nil
 	}
-	if d.Status == session.Paused {
-		if mode == outbox.ModePause {
-			return fmt.Errorf("%q is already paused", d.Title)
-		}
-		return fmt.Errorf("%q is paused, so its worktree is gone and what a kill would "+
-			"discard cannot be established — resume it, or kill it from the TUI", d.Title)
+	return fmt.Errorf("refusing to %s %q: %s", mode, d.Title, v.Reason())
+}
+
+// retireVerb translates the spool's mode into the verb the shared rules take. Two enums
+// rather than one because internal/retire must not import the spool — the decision is
+// meant to be reachable from a table test with no data dir in sight — and app has its own
+// copy of this translation for the same reason.
+func retireVerb(mode outbox.Mode) retire.Verb {
+	switch mode {
+	case outbox.ModeKill:
+		return retire.Kill
+	case outbox.ModePause:
+		return retire.Pause
+	default:
+		return retire.VerbUnknown
 	}
-	return nil
+}
+
+// sessionNameEnv is the tmux environment variable Atrium sets in every session's pane to
+// that session's own tmux name (session/tmux.Session.start). Read here to recognise the
+// caller.
+const sessionNameEnv = "ATRIUM_SESSION"
+
+// refuseSelfRetirement refuses a target that is the session the command is running in.
+//
+// This is not the parentage check the header rejects, and the difference is what makes it
+// worth having. Scoping kill rights by who spawned a session cannot be enforced — the
+// only identity available is this env var and the agent has a shell to overwrite it with
+// — but an agent that lies about its OWN identity only spares itself, so a guard that
+// needs no enforcement is exactly what fits here.
+//
+// What it prevents is not hypothetical. `atrium guide` hands agents both verbs and tells
+// them to retire a finished session themselves, pause is ungated end to end, and nothing
+// else in this path treats the caller's own row as different from any other. Retiring it
+// runs kill-session against the pane the agent is running in and `git worktree remove`
+// against the directory its shell is cwd'd to: the process that would report what
+// happened is the one that died, and a --wait dies with the pane, so the outcome reaches
+// nobody.
+//
+// Matched on the tmux name because that is what the variable holds and it is the one
+// name that is unique across repos. An empty variable means the command was not run from
+// inside a session at all, which is nobody's own session.
+func refuseSelfRetirement(mode outbox.Mode, d session.InstanceData) error {
+	self := strings.TrimSpace(os.Getenv(sessionNameEnv))
+	if self == "" || d.TmuxName == "" || d.TmuxName != self {
+		return nil
+	}
+	return fmt.Errorf("refusing to %s %q: that is its own session, and an agent that "+
+		"retires the pane it is running in cannot report what happened — ask another "+
+		"session, or retire it from the TUI", mode, d.Title)
 }
 
 // establishSafety runs the gate and turns a refusal into the command's error.
@@ -271,12 +355,23 @@ func admits(mode outbox.Mode, d session.InstanceData) error {
 // unestablished verdict: a tmux server that is not running and a tree with unpushed
 // commits are different things for a caller to do something about, so the error says
 // which it hit.
+//
+// The tree is measured first, and the order is the same argument Gate makes internally.
+// A caller acts on the first reason it is given; a dirty tree is theirs to fix and stays
+// true until they do, while an unreadable pane is a fact about the machine. Probing tmux
+// first told the owner of a dirty aider session the one thing they could do nothing
+// about, and never mentioned the work at risk. It also spends the cheaper of the two
+// checks first — no capture at all for a session that was never going to clear.
 func establishSafety(probe retireProbe, d session.InstanceData) error {
+	stats := probe.stats(d)
+	if v := retire.Gate(stats, false); !v.Allowed() {
+		return fmt.Errorf("refusing to kill %q: %s", d.Title, v.Reason())
+	}
 	busy, err := probe.busy(d)
 	if err != nil {
 		return fmt.Errorf("refusing to kill %q: %w", d.Title, err)
 	}
-	if v := retire.Gate(probe.stats(d), busy); !v.Allowed() {
+	if v := retire.Gate(stats, busy); !v.Allowed() {
 		return fmt.Errorf("refusing to kill %q: %s", d.Title, v.Reason())
 	}
 	return nil
@@ -284,10 +379,19 @@ func establishSafety(probe retireProbe, d session.InstanceData) error {
 
 // waitForRetirement blocks until the spooled retirement has been accounted for.
 //
-// No in-flight companion: the retire spool has no claim step, so the record's
-// disappearance is the whole signal. The drain unlinks it whether it acted or refused,
-// which is why a refusal leaves a receipt and why awaitSpool's sampling order — not
-// this function — is what keeps a refusal from reading as a teardown.
+// The record's disappearance is the whole signal, and what makes that a truthful signal
+// is that the drain does not unlink at dispatch. It claims the record and answers it from
+// the teardown's OUTCOME — removed if the session was retired, receipted with the reason
+// if it was not — so the two things this can report are the two things that happened. It
+// did unlink at dispatch once, which made a success here mean only "a TUI picked this up":
+// killIOCmd still refuses a branch checked out in the base repo, and every Instance.Pause
+// failure is collected rather than fatal, so both of those exited 0 with the session
+// untouched.
+//
+// No in-flight companion even so, because there is no window to name. The create spool's
+// claim file exists so a request mid-creation can be described to a waiting producer as
+// in progress; here the record itself stays put for exactly that window, and awaitSpool's
+// sampling order is what keeps a receipt from being missed underneath it.
 func waitForRetirement(record string, mode outbox.Mode, timeout time.Duration) error {
 	return awaitSpool(record, "", timeout, spoolWaitCopy{
 		refused: fmt.Sprintf("atrium refused to %s the session", mode),

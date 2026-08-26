@@ -74,6 +74,13 @@ func (t *Session) markerWorking(content string) bool {
 // substring matches are not split by SGR codes embedded mid-text.
 var ansiRegex = regexp.MustCompile("\x1b\\[[0-9;?]*[a-zA-Z]")
 
+// CleanForDetection is cleanForDetection, exported for the one caller outside this
+// package that has to classify a pane the same way Poll does: `atrium kill`'s idle
+// probe (cli_retire.go). The adapter matchers in session/agent are all documented
+// against the cleaned pane, so a caller that skipped this would be a second, subtly
+// different classification wearing the same adapter.
+func CleanForDetection(content string) string { return cleanForDetection(content) }
+
 // cleanForDetection strips ANSI escapes and trailing whitespace per line, yielding the
 // stable text used for hashing and substring matching in Poll.
 func cleanForDetection(content string) string {

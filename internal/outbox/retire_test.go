@@ -3,6 +3,7 @@ package outbox
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -61,18 +62,33 @@ func TestRetireSpoolIsInvisibleToTheOtherTwo(t *testing.T) {
 	assert.Empty(t, creates, "and it is not a create request")
 }
 
-// TestListRetiresIgnoresTheNestedSpools is the same property from the other side:
-// the retire walk must not pick up the sibling spools' records either.
-func TestListRetiresIgnoresTheNestedSpools(t *testing.T) {
+// TestListRetiresIgnoresWhatIsNotARecord: the spool directory holds more than records.
+// Reject writes a receipt beside each one, WriteFileAtomic leaves an in-flight temp file
+// while a concurrent kill commits, and an editor or a future version may leave a
+// subdirectory. listFiles screens all three by name and by type, and it matters most here
+// because this is the walk whose entries get acted on: a receipt decoded as a record would
+// be a retirement nobody asked for.
+func TestListRetiresIgnoresWhatIsNotARecord(t *testing.T) {
 	sandbox(t)
-	_, err := Write(msg("fix-auth", "/repo/web", "hello"))
+	record := writeValidRetire(t)
+	dir, err := RetireDir()
 	require.NoError(t, err)
-	_, err = WriteCreate(Request{Title: "other", Path: "/repo/web"})
+	require.NoError(t, Reject(record, "it has uncommitted changes"))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("scratch"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".1787-abcd.json.tmp"), []byte("{}"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "nested"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "nested", "1787729910438636469-b526c7c4.json"),
+		[]byte("{}"), 0o644))
+	// Precondition, so a listing that came back empty because the directory was empty
+	// could not pass this.
+	des, err := os.ReadDir(dir)
 	require.NoError(t, err)
+	require.Greater(t, len(des), 1, "the spool holds more than the one record")
 
 	entries, err := ListRetires()
+
 	require.NoError(t, err)
-	assert.Empty(t, entries)
+	assert.Empty(t, entries, "the record was receipted; nothing else in the directory is one")
 }
 
 // TestListRetiresToleratesAnAbsentSpool: never having run `atrium kill` is the
@@ -228,6 +244,15 @@ func TestClearDiscardsQueuedRetiresWithAReceipt(t *testing.T) {
 	assert.Equal(t, clearReason, reason)
 }
 
+// writeValidRetire spools one well-formed retirement and returns its path, for the tests
+// that then break exactly one field of it through rewriteRetire.
+func writeValidRetire(t *testing.T) string {
+	t.Helper()
+	record, err := WriteRetire(retirement("fix-auth", "/repo/web", ModeKill))
+	require.NoError(t, err)
+	return record
+}
+
 // rewriteRetire edits a spooled record's raw JSON in place, standing in for a
 // record written by a different atrium or by hand. It goes through the map rather
 // than the struct so a field can be removed outright, which is the case
@@ -242,4 +267,104 @@ func rewriteRetire(t *testing.T, record string, edit func(map[string]any)) {
 	out, err := json.Marshal(m)
 	require.NoError(t, err)
 	require.NoError(t, config.WriteFileAtomic(record, out, 0o644))
+}
+
+// TestListRetiresRejectsAFutureTimestamp closes the other half of the guard the
+// zero-time screen exists for, and it has the same consequence for the same reason.
+//
+// expired() is `now.Sub(createdAt) > TTL`, which is negative — so never expired — for
+// any CreatedAt ahead of the clock, and the record's filename is its UnixNano, so it
+// also sorts to the tail of the spool and is drained last. A record written while the
+// machine's clock was fast, or before an NTP correction stepped it backwards, would
+// therefore be both immortal AND executable: it survives every sweep and every
+// reset-era horizon check, and is acted on by whichever TUI starts next.
+func TestListRetiresRejectsAFutureTimestamp(t *testing.T) {
+	sandbox(t)
+	record := writeValidRetire(t)
+	rewriteRetire(t, record, func(m map[string]any) {
+		m["created_at"] = time.Now().Add(2 * time.Hour).Format(time.RFC3339Nano)
+	})
+
+	entries, err := ListRetires()
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Error(t, entries[0].Err)
+	assert.Contains(t, entries[0].Err.Error(), "the future")
+}
+
+// TestListRetiresToleratesASmallClockSkew: the guard is for a record nothing can ever
+// expire, not for the sub-second disagreement between two processes stamping and reading
+// a time. Refusing that would make the spool unreliable on any machine whose clock is
+// being nudged by NTP while Atrium runs.
+func TestListRetiresToleratesASmallClockSkew(t *testing.T) {
+	sandbox(t)
+	record := writeValidRetire(t)
+	rewriteRetire(t, record, func(m map[string]any) {
+		m["created_at"] = time.Now().Add(time.Second).Format(time.RFC3339Nano)
+	})
+
+	entries, err := ListRetires()
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.NoError(t, entries[0].Err)
+}
+
+// TestListRetiresRejectsAControlCharacterInTheTitle applies readCreate's screen to the
+// other record type that carries an argv-shaped title.
+//
+// The reason is the same one FirstControlRune documents: a title is stored verbatim and
+// rendered as one row, so an embedded newline splits that row and shifts every mouse
+// zone below it, and an escape lets the title write its own ANSI. `atrium kill "$(gh
+// issue view N --json title -q .title)"` is exactly how one arrives. The title here also
+// has to MATCH a stored one to do anything, so a control character is doubly certain to
+// be a mistake — but it reaches the drain's log line and its rejection receipt either way.
+func TestListRetiresRejectsAControlCharacterInTheTitle(t *testing.T) {
+	sandbox(t)
+	record := writeValidRetire(t)
+	rewriteRetire(t, record, func(m map[string]any) { m["title"] = "fix\nauth" })
+
+	entries, err := ListRetires()
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Error(t, entries[0].Err)
+	assert.Contains(t, entries[0].Err.Error(), "control character")
+}
+
+// TestWriteRetireRefusesAControlCharacterInTheTitle is the producer side of the same
+// screen: the command is the last place with somebody to tell.
+func TestWriteRetireRefusesAControlCharacterInTheTitle(t *testing.T) {
+	sandbox(t)
+
+	_, err := WriteRetire(Retire{Title: "fix\x1b[31mauth", Path: "/repo/web", Mode: ModeKill})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "control character")
+}
+
+// TestWriteRetireRefusesAFutureTimestamp: WriteRetire takes a caller-supplied CreatedAt
+// verbatim, which is what lets a test stage an aged record — so it is also what would let
+// a caller stage an immortal one.
+func TestWriteRetireRefusesAFutureTimestamp(t *testing.T) {
+	sandbox(t)
+
+	_, err := WriteRetire(Retire{
+		Title: "fix-auth", Path: "/repo/web", Mode: ModeKill,
+		CreatedAt: time.Now().Add(2 * time.Hour),
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "the future")
+}
+
+// TestGerundNamesOnlyTheModesItKnows: the mapping used to return "killing" for anything
+// that was not pause, so a mode this build does not recognise would be announced to the
+// user as a kill — the most destructive of the two — while retireVerb refuses to act on
+// it. A progress row and a warning that disagree with what will happen is worse than a
+// vague one.
+func TestGerundNamesOnlyTheModesItKnows(t *testing.T) {
+	assert.Equal(t, "killing", ModeKill.Gerund())
+	assert.Equal(t, "pausing", ModePause.Gerund())
+	assert.Equal(t, "retiring", Mode("vaporize").Gerund(),
+		"an unrecognised mode must not borrow the destructive verb's name")
+	assert.Equal(t, "retiring", Mode("").Gerund())
 }

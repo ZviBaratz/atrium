@@ -201,3 +201,61 @@ func dirEntryNames(t *testing.T, dir string) []string {
 func trimmed(s string) string {
 	return string(bytes.TrimSpace([]byte(s)))
 }
+
+// TestLsKilledPublishesBranchAsAnEmptyStringForADirectSession is the schema half of the
+// honesty this listing is for.
+//
+// `branch,omitempty` drops the key entirely for a direct session, so `jq -r '.[].branch'`
+// prints "null" and `select(.branch == "")` matches nothing — which the README's field
+// table says is how you find one. sessionJSON, the sibling schema this mirrors, keeps
+// Branch plain for the same reason: `ls --json` promises fields are added and never
+// repurposed, and a key present for some rows and absent for others breaks that for
+// anyone iterating.
+func TestLsKilledPublishesBranchAsAnEmptyStringForADirectSession(t *testing.T) {
+	sandboxDataDir(t)
+	journalEntry(t, undo.Entry{Title: "notes", Path: "/repo/web", Direct: true})
+
+	got := killedJSONOut(t)
+	require.Len(t, got, 1)
+	branch, present := got[0]["branch"]
+	assert.True(t, present, "the key must be there for every row, or a consumer cannot test it")
+	assert.Equal(t, "", branch)
+	assert.Equal(t, true, got[0]["direct"])
+}
+
+// TestLsKilledTableNamesADirectSessionWithoutABranch: the human form has to say
+// something in the branch column for a session that never had one, rather than leave it
+// looking truncated.
+func TestLsKilledTableNamesADirectSessionWithoutABranch(t *testing.T) {
+	sandboxDataDir(t)
+	journalEntry(t, undo.Entry{Title: "notes", Path: "/repo/web", Direct: true})
+
+	out := lsKilled(t, false)
+	assert.Contains(t, out, "notes")
+	assert.Contains(t, out, "—", "a direct session's missing branch is stated, not blank")
+}
+
+// TestLsKilledGroupsTheEntriesOneUndoWouldRestoreTogether is why batch_id is published.
+//
+// The TUI's undo key restores undo.LatestBatch, which is a BATCH and not one entry — a
+// visual-mode kill of four sessions is undone as four. So "the newest entry" is not what
+// `U` offers, and a listing that dropped the grouping would leave a reader unable to tell
+// which rows come back together from which are separate kills needing recoverByHand.
+func TestLsKilledGroupsTheEntriesOneUndoWouldRestoreTogether(t *testing.T) {
+	sandboxDataDir(t)
+	now := time.Now()
+	journalEntry(t, undo.Entry{Title: "solo", Path: "/r", At: now.Add(-time.Hour)})
+	journalEntry(t, undo.Entry{Title: "a", Path: "/r", BatchID: "batch-1", At: now.Add(-2 * time.Minute)})
+	journalEntry(t, undo.Entry{Title: "b", Path: "/r", BatchID: "batch-1", At: now.Add(-time.Minute)})
+
+	got := killedJSONOut(t)
+	require.Len(t, got, 3)
+	byTitle := map[string]map[string]any{}
+	for _, row := range got {
+		byTitle[row["title"].(string)] = row
+	}
+	assert.Equal(t, "batch-1", byTitle["a"]["batch_id"])
+	assert.Equal(t, "batch-1", byTitle["b"]["batch_id"])
+	assert.NotContains(t, byTitle["solo"], "batch_id",
+		"a session killed on its own belongs to no batch, which is different from an empty one")
+}

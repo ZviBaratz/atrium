@@ -14,14 +14,28 @@
 // It lives in its own package because neither caller can import the other: the
 // commands are in package main, the drain is in package app, and main imports app.
 //
+// There are two decisions here, not one, because a session can be unretirable for
+// two unrelated kinds of reason. Admits covers what its lifecycle says — a direct
+// session has no worktree, a parked one's is already gone, a starting one's is still
+// being built — and Gate covers what its tree says. Both are shared, and the second
+// one was not at first: the command screened the lifecycle states before spooling and
+// the drain re-checked only the tree, so a session parked in between was torn down by
+// the same code whose front door refuses it.
+//
 // The refusal is not a formality. `atrium kill` deletes a branch, so the posture
 // is that safety must be ESTABLISHED rather than merely un-contradicted — a
 // distinction that matters because the fields this reads have no way to say "I
 // don't know". git.DiffStats.Dirty is a plain bool and Unpushed a plain int, so a
 // DiffStats whose computation failed is indistinguishable, field by field, from
-// one describing a genuinely clean tree. Error is the only thing that tells them
-// apart, which is why it is consulted first and why a nil DiffStats refuses
-// instead of clearing.
+// one describing a genuinely clean tree. Two fields tell them apart: Error, for the
+// failures that stop computation starting, and BranchStatsMeasured, for the git
+// commands that ran and failed — which Error does not carry, because the poll wants
+// those swallowed. Both are consulted before anything else, and a nil DiffStats
+// refuses rather than clearing.
+//
+// Every zero value in this package refuses, for the same reason. An undecided Verdict
+// and an unnamed Verb are things a caller can produce without meaning to, and the one
+// direction in which that must not resolve is "go ahead".
 package retire
 
 import (
@@ -34,8 +48,18 @@ import (
 type Condition int
 
 const (
+	// Unknown is the zero value, and it is a refusal.
+	//
+	// Clear deliberately does not sit here. Verdict and Condition are exported and two
+	// packages in two module trees construct them, so Gate and Admits are not
+	// boundaries anything outside can be held to — a struct field left unset, a map
+	// miss, append's zero fill, a `return Verdict{}, err` whose error is later folded
+	// away. Every one of those produces a zero Verdict, and if Clear were iota's 0
+	// every one of them would clear a teardown. Costing one constant to make the
+	// undecided verdict refuse removes the whole class.
+	Unknown Condition = iota
 	// Clear means nothing stands in the way of retiring this session.
-	Clear Condition = iota
+	Clear
 	// Unestablished means the tree's numbers could not be computed, so nothing
 	// about what a teardown would destroy is known. Distinct from a clean tree, and
 	// deliberately so — see the package doc.
@@ -50,7 +74,53 @@ const (
 	// Nothing is at risk that the two conditions above do not already cover — this
 	// one is about not throwing away a turn in flight.
 	Busy
+	// Direct means the session is a direct (non-git) one, running in the user's own
+	// checkout with no worktree or branch of its own. Neither verb has anything to act
+	// on, and a kill has nothing to read either.
+	Direct
+	// Parked means a kill was asked for a session that is already paused. Its worktree
+	// is gone, so what the kill would discard cannot be established.
+	Parked
+	// AlreadyParked means a pause was asked for a session that is already paused.
+	// Separate from Parked because the two verbs are refused for opposite reasons —
+	// one because nothing can be measured, one because nothing is left to do — and the
+	// caller acts on the difference.
+	AlreadyParked
+	// Starting means the session's Start is still in flight. Its worktree is being
+	// populated and its tmux session created, so a teardown would race the setup it is
+	// tearing down.
+	Starting
 )
+
+// Verb is which retirement is being asked for. The two differ in what they destroy,
+// so a rule that refuses a state has to know which one is asking.
+type Verb int
+
+const (
+	// VerbUnknown is the zero value and names no verb, so a rule asked about it
+	// refuses. Same polarity, and same reason, as Condition's Unknown.
+	VerbUnknown Verb = iota
+	// Kill deletes the branch and removes the worktree.
+	Kill
+	// Pause removes the worktree and keeps the branch.
+	Pause
+)
+
+// State is what a session's lifecycle says about whether a verb can act on it at all,
+// independent of anything in its tree.
+//
+// Three plain booleans rather than a status enum, because the two callers hold the
+// status in different shapes — the command reads a decoded session.InstanceData, the
+// drain reads a live Instance — and translating each into these three at the call site
+// is the narrowest thing they can agree on.
+type State struct {
+	// Direct is a session running in the user's own checkout, with no worktree.
+	Direct bool
+	// Paused is a session already parked: agent stopped, worktree removed, branch kept.
+	Paused bool
+	// Loading is a session whose Start has not finished.
+	Loading bool
+}
 
 // Verdict is one gate decision, and the reason for it.
 type Verdict struct {
@@ -70,6 +140,20 @@ func (v Verdict) Reason() string {
 	switch v.Condition {
 	case Clear:
 		return ""
+	case Unknown:
+		return "nothing decided whether it was safe to retire, which is not the same " +
+			"as deciding that it was"
+	case Direct:
+		return "it is a direct (non-git) session, so it has no worktree or branch to " +
+			"retire"
+	case Parked:
+		return "it is paused, so its worktree is gone and what a teardown would " +
+			"discard cannot be established — resume it, or retire it from the TUI"
+	case AlreadyParked:
+		return "it is already paused"
+	case Starting:
+		return "it is still starting up, so a teardown would race the setup it is " +
+			"tearing down"
 	case Unestablished:
 		return "its tree state could not be established, so what a teardown would " +
 			"destroy is unknown"
@@ -100,7 +184,13 @@ func (v Verdict) Reason() string {
 // wasteful — reporting the cheap one first would send an agent to wait out a turn
 // when the real answer was that its worker had unpushed commits.
 func Gate(stats *git.DiffStats, busy bool) Verdict {
-	if stats == nil || stats.Error != nil {
+	// Three ways to have no trustworthy numbers, and only the first two are obvious.
+	// BranchStatsMeasured is the third: git.RepoStats sets Error for one cause (an
+	// unset base commit) and swallows every subprocess failure into a zero value, so a
+	// tree whose `git status` never ran arrives here reporting no error, no changes and
+	// nothing unpushed. That field is the only thing that separates it from a tree that
+	// was measured and found clean.
+	if stats == nil || stats.Error != nil || !stats.BranchStatsMeasured {
 		return Verdict{Condition: Unestablished}
 	}
 	if stats.Dirty {
@@ -111,6 +201,38 @@ func Gate(stats *git.DiffStats, busy bool) Verdict {
 	}
 	if busy {
 		return Verdict{Condition: Busy}
+	}
+	return Verdict{Condition: Clear}
+}
+
+// Admits decides whether verb can act on a session in st at all, before anything
+// about its tree is measured.
+//
+// This is the rule the tree gate cannot express, and it is shared for the reason the
+// tree gate is: it has two callers on two sides of a spool, and the first
+// implementation put it on only one of them. `atrium kill` screened these states
+// before spooling, but the drain re-ran only Gate — so a session parked or started in
+// the window between the two was torn down anyway, by the very code path whose command
+// refuses it outright. Both sides now ask here.
+//
+// Direct is reported ahead of the other two because it is the state no verb can ever
+// act on, whatever else is true: the others describe a moment, this one describes the
+// session.
+func Admits(verb Verb, st State) Verdict {
+	if verb != Kill && verb != Pause {
+		return Verdict{Condition: Unknown}
+	}
+	if st.Direct {
+		return Verdict{Condition: Direct}
+	}
+	if st.Paused {
+		if verb == Pause {
+			return Verdict{Condition: AlreadyParked}
+		}
+		return Verdict{Condition: Parked}
+	}
+	if st.Loading {
+		return Verdict{Condition: Starting}
 	}
 	return Verdict{Condition: Clear}
 }

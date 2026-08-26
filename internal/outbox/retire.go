@@ -105,23 +105,35 @@ func RetireDir() (string, error) {
 // WriteRetire commits r to the retire spool and returns the path it was written to.
 // It stamps Version and, unless the caller supplied one, CreatedAt.
 //
-// The two validations are the ones a drain cannot make good on its own. An
-// unaddressable target is refused here because the producer is the last place with
-// somebody to tell — and the path must be ABSOLUTE rather than merely non-empty,
-// since filepath.Abs resolves a relative one against the *draining TUI's* working
-// directory with a nil error, naming a repo the writer never meant. An unrecognised
-// Mode is refused because it is the field that chooses between deleting a branch and
-// keeping it, and there is no safe default to fall back on.
+// The validations are the ones a drain cannot make good on its own. An unaddressable
+// target is refused here because the producer is the last place with somebody to tell —
+// and the path must be ABSOLUTE rather than merely non-empty, since filepath.Abs resolves
+// a relative one against the *draining TUI's* working directory with a nil error, naming a
+// repo the writer never meant. An unrecognised Mode is refused because it is the field
+// that chooses between deleting a branch and keeping it, and there is no safe default to
+// fall back on. A control character in the title is refused for the reason
+// FirstControlRune documents, applied to the other record type that takes a title
+// straight from argv. And a CreatedAt in the future is refused because this function
+// takes the caller's value verbatim, which is what lets a test stage an aged record and
+// would equally let a caller stage a record nothing can ever expire — see
+// futureTimestamp.
 func WriteRetire(r Retire) (string, error) {
 	r.Title = strings.TrimSpace(r.Title)
 	if r.Title == "" || !filepath.IsAbs(r.Path) {
 		return "", errors.New("outbox: a retirement needs a title and an absolute path")
+	}
+	if bad, ok := FirstControlRune(r.Title); ok {
+		return "", fmt.Errorf("outbox: a retirement title cannot contain a control character (%q)", bad)
 	}
 	if !r.Mode.valid() {
 		return "", fmt.Errorf("outbox: %q is not a retirement mode", r.Mode)
 	}
 	if r.CreatedAt.IsZero() {
 		r.CreatedAt = time.Now()
+	}
+	if futureTimestamp(r.CreatedAt, time.Now()) {
+		return "", fmt.Errorf("outbox: a retirement cannot be stamped in the future (%s)",
+			r.CreatedAt.Format(time.RFC3339))
 	}
 	r.Version = retireVersion
 
@@ -166,11 +178,21 @@ func (m Mode) valid() bool { return m == ModeKill || m == ModePause }
 // warning. Here rather than at either call site because both the producing command and
 // the draining TUI need it, in different packages, and two copies of a two-word mapping
 // is two places for a third mode to be forgotten.
+//
+// A mode this build does not recognise gets the neutral word, not the default arm of an
+// if. Falling through to "killing" meant announcing the more destructive of the two verbs
+// for a record that retireVerb refuses to act on at all — a progress row promising
+// something worse than what happens, which is the one direction a label must not be
+// wrong in.
 func (m Mode) Gerund() string {
-	if m == ModePause {
+	switch m {
+	case ModeKill:
+		return "killing"
+	case ModePause:
 		return "pausing"
+	default:
+		return "retiring"
 	}
-	return "killing"
 }
 
 // readRetire decodes one record, screening on the way in for exactly what
@@ -204,6 +226,11 @@ func readRetire(path string) RetireEntry {
 		return RetireEntry{Path: path, Err: fmt.Errorf(
 			"retirement %s names no addressable session", filepath.Base(path))}
 	}
+	if bad, ok := FirstControlRune(r.Title); ok {
+		return RetireEntry{Path: path, Err: fmt.Errorf(
+			"retirement %s names a title containing a control character (%q)",
+			filepath.Base(path), bad)}
+	}
 	if !r.Mode.valid() {
 		return RetireEntry{Path: path, Err: fmt.Errorf(
 			"retirement %s asks for %q, which is not a retirement mode", filepath.Base(path), r.Mode)}
@@ -212,8 +239,38 @@ func readRetire(path string) RetireEntry {
 		return RetireEntry{Path: path, Err: fmt.Errorf(
 			"retirement %s carries no created_at, so nothing can expire it", filepath.Base(path))}
 	}
+	if futureTimestamp(r.CreatedAt, time.Now()) {
+		return RetireEntry{Path: path, Err: fmt.Errorf(
+			"retirement %s is stamped in the future (%s), so nothing can expire it",
+			filepath.Base(path), r.CreatedAt.Format(time.RFC3339))}
+	}
 	return RetireEntry{Path: path, Retire: r}
 }
+
+// futureTimestamp reports whether createdAt is far enough ahead of now that expired()
+// could never fire for it.
+//
+// It is the second half of the same guard the zero-time screen is the first half of, and
+// it has the identical consequence: expired() is now.Sub(createdAt) > TTL, which is
+// negative for anything ahead of the clock, so such a record survives every sweep and
+// every reset-era horizon check while remaining perfectly executable — and because a
+// record's filename is its UnixNano, it also sorts to the tail of the spool and is drained
+// last, after everything an operator was watching. One TUI acts on it weeks after anyone
+// asked.
+//
+// The slack is what keeps this from being a liability of its own. Two processes stamping
+// and reading a time disagree by microseconds, and NTP nudges a clock while Atrium runs,
+// so refusing anything strictly ahead of now would make the spool unreliable on a healthy
+// machine. What it has to catch is a clock that was wrong by enough to outlive the
+// horizon, and anything past a minute of skew is that.
+func futureTimestamp(createdAt, now time.Time) bool {
+	return createdAt.After(now.Add(clockSkewSlack))
+}
+
+// clockSkewSlack is how far ahead of the reader's clock a record's timestamp may sit
+// before it is treated as a wrong clock rather than ordinary disagreement between two
+// processes. See futureTimestamp.
+const clockSkewSlack = time.Minute
 
 // clearRetires discards every queued retirement, returning how many it removed. For
 // `atrium reset`, whose wipe takes away the sessions these records name.
@@ -227,9 +284,9 @@ func readRetire(path string) RetireEntry {
 // It is a walk of its own rather than a third resolver inside Clear because Clear's
 // loop carries create-spool machinery — the claim rename and the disclosure a
 // destroyed request needs — and neither has a meaning here: there are no claims, and
-// a discarded retirement strands nothing that needs naming. Feeding these records
-// through that loop would run readCreate over them to build a disclosure from a
-// record shape it cannot decode.
+// a discarded retirement strands nothing that needs naming. Sharing that loop would mean
+// building a disclosure for every record, which for a retirement is a paragraph about a
+// session nobody was creating.
 func clearRetires() (int, error) {
 	dir, err := RetireDir()
 	if err != nil {

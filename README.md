@@ -172,8 +172,8 @@ The schema evolves additively: fields may be added, never removed or repurposed.
 **`atrium ls --killed`** switches `ls` to the other list: sessions that have been
 killed and are still restorable from the undo journal, newest first. It is a
 strictly wider view than the TUI's undo key, which offers only the most recent
-kill — so a human returning to several agent-initiated retirements can see all of
-them rather than the last one.
+*batch* — the entries one kill produced — so a human returning to several
+agent-initiated retirements can see all of them rather than only the last kill.
 
 ```bash
 atrium ls --killed
@@ -185,6 +185,7 @@ atrium ls --killed --json | jq -r '.[] | select(.uncommitted_work_lost) | .title
 | `id` | The journal entry, which is what identifies one killed session |
 | `title`, `display_name`, `path`, `branch` | What the session was; `branch` is empty for a direct session |
 | `direct` | It was a direct (non-git) session, so it had no branch or worktree |
+| `batch_id` | The kill this entry belonged to, present only when that kill retired more than one session. The undo key restores a whole batch, so entries sharing one come back together |
 | `killed_at` | RFC 3339 |
 | `uncommitted_work_lost` | Restoring this entry comes back **incomplete**: it had uncommitted changes and the teardown could not commit them, so they are gone. False is the ordinary case, including for a session that was dirty when killed — the teardown folds that work into the retained commits |
 
@@ -299,6 +300,19 @@ a `--wait` has to be sized for every build in series, and with no `--branch` eac
 variant starts from the target's HEAD at *its own* creation time — so pass
 `--branch` when the comparison depends on a common start point.
 
+Two of the TUI's gates ask the user a question rather than refusing: crossing the
+host-derived session cap, and routing to a fully rate-limited account pool. A
+headless request has nobody to ask, so it is refused with the reason; `--force`
+answers both in advance. An explicit `max_sessions` is not one of them — it
+refuses in the TUI too, and `--force` does not reach it.
+
+`--wait` blocks until the session actually exists and then prints its branch and
+worktree, read back from what Atrium recorded rather than derived from the title.
+Without it the command is honestly fire-and-forget: it prints what it queued, and
+`atrium ls` shows the session once it exists. That is not the same as watching for the
+*result* — a request the drain refuses leaves no session and no row, and the refusal is
+written as a receipt that only `--wait` reads.
+
 **`atrium kill`** and **`atrium pause`** retire a session, which is the other end
 of the lifecycle `new` opens ([#835](https://github.com/ZviBaratz/atrium/issues/835)).
 Without them an orchestrator agent could open sessions indefinitely and close none,
@@ -312,7 +326,7 @@ opts out of it.
 
 ```bash
 atrium kill fix-auth              # refuses unless the tree is provably safe
-atrium kill fix-auth --wait 60s   # block until it has actually been retired
+atrium kill fix-auth --wait 60s   # block on the outcome, not on the dispatch
 atrium pause fix-auth             # park it instead: branch kept, nothing discarded
 ```
 
@@ -320,12 +334,15 @@ atrium pause fix-auth             # park it instead: branch kept, nothing discar
 deleted, undo journal written — and refuses unless safety is **established** rather
 than merely un-contradicted. The tree is recomputed at call time and must report no
 uncommitted changes and no unpushed commits, and the agent must be idle. That
-distinction is the whole gate: the stored figures have no way to say "I don't know",
+distinction is the whole gate: the figures involved have no way to say "I don't know",
 so a session whose stats were never computed decodes as clean, and nothing refreshes
 them while no TUI is running — which is exactly the condition an agent-driven kill
-runs under. A session whose numbers cannot be computed is therefore refused rather
-than read as clean, which is also why a paused or direct session is refused: neither
-has a worktree to read.
+runs under. Recomputing is not on its own enough for that, either: git's own
+best-effort counters leave a failed measurement at zero rather than reporting it, so a
+worktree whose repository has moved reads exactly like a clean one. A session whose
+numbers cannot be *established* — as opposed to established and found clean — is
+therefore refused, which is also why a paused, starting or direct session is refused:
+none of them has a worktree to read.
 
 The idle half has the same shape and one more consequence. Atrium reads "a turn is
 running" off the pane, using the busy marker or live spinner its agent's adapter
@@ -339,12 +356,22 @@ There is no `--force`. Nothing can distinguish a human who has looked from an ag
 that has not, so a flag meaning "I looked" is a flag agents would pass; the TUI is
 where a person overrides the gate.
 
+Both verbs also address a session more strictly than the read-only commands do. `ls`,
+`peek` and `send` fall back to a substring of the title or of the display label when no
+exact name matches, which is a good trade when a wrong answer costs a misdirected
+message; here it deletes a branch, so only the names that *identify* a session resolve —
+its title, its tmux session name, or either of those in any case. `atrium kill fix` does
+not find `fix-auth`. And neither verb will retire the session it is being run from: an
+agent that tears down its own pane cannot report what happened, and a `--wait` dies with
+the pane, so the outcome would reach nobody.
+
 `pause` is deliberately **not** gated, because it destroys nothing: it stops the
 agent and frees the worktree while keeping the branch, committing whatever was
 uncommitted as a marker Atrium unwinds on resume. That makes it the verb to reach
 for when a kill is refused — an orchestrator whose worker has unpushed work can
 still reclaim it. It does refuse what a park cannot do: an already-paused session,
-and a direct session, which runs in your own checkout with no worktree to free.
+a direct session, which runs in your own checkout with no worktree to free, and one
+whose startup is still in flight, where the park would race the setup it is removing.
 
 Neither verb is scoped to sessions the caller created. What makes a teardown
 destructive is the *target's* tree state, not the caller's relation to it — a
@@ -354,22 +381,17 @@ parentage.
 
 Both are producers on the same terms as `send` and `new`: `state.json` has one
 writer, so retiring a session is spooled to `outbox/retire/` and executed by the
-running Atrium through the same path the kill and pause keys reach. The gate is
-re-run there before the teardown, because at least a poll tick passes in between and
-the target agent keeps working through it.
+running Atrium through the same path the kill and pause keys reach. Every check is
+re-run there before the teardown — the tree gate and the lifecycle one both — because
+at least a poll tick passes in between and the target keeps living through it: a
+session that was clean when the command looked can be dirty, parked or restarting by
+the time the teardown runs.
 
-Two of the TUI's gates ask the user a question rather than refusing: crossing the
-host-derived session cap, and routing to a fully rate-limited account pool. A
-headless request has nobody to ask, so it is refused with the reason; `--force`
-answers both in advance. An explicit `max_sessions` is not one of them — it
-refuses in the TUI too, and `--force` does not reach it.
-
-`--wait` blocks until the session actually exists and then prints its branch and
-worktree, read back from what Atrium recorded rather than derived from the title.
-Without it the command is honestly fire-and-forget: it prints what it queued, and
-`atrium ls` shows the session once it exists. That is not the same as watching for the
-*result* — a request the drain refuses leaves no session and no row, and the refusal is
-written as a receipt that only `--wait` reads.
+`--wait` blocks on the *outcome* rather than on the dispatch: the queued request is
+answered when the teardown reports back, so a kill the TUI turns down — its branch is
+checked out in your main repo, say — comes back as a non-zero exit carrying that reason
+rather than as a success. Without `--wait` the command is honestly fire-and-forget and
+says so; `atrium ls` is what shows whether the session is gone.
 
 Every spool is drained by the TUI's poll loop, which is **suspended while you
 are attached to a session** — Atrium has handed the terminal to tmux and its

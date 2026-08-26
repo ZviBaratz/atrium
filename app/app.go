@@ -404,6 +404,16 @@ type home struct {
 	// when it lifts rather than twice a second for as long as it lasts. State about
 	// the log line only — the hold itself is decided fresh each tick by probing.
 	createTmuxHeld bool
+	// retireTmuxHeld is createTmuxHeld for the retire drain (#835), which holds a
+	// teardown for the same reason and needs its own flag so the two holds log
+	// independently. State about the log line only.
+	retireTmuxHeld bool
+	// pendingRetirement is the spooled retirement currently between its dispatch and its
+	// outcome, or nil. In-memory only: a claim that does not survive the process is the
+	// right shape, because a restart re-reads the record and re-judges it, which is what
+	// a retirement whose fate nobody witnessed should get. See the type's own comment for
+	// why the record cannot be answered at dispatch.
+	pendingRetirement *pendingRetirement
 	// createAdoptHeld is createTmuxHeld's sibling for the other condition that holds a
 	// request instead of refusing it: a repo git could not be read, so the pin that
 	// licenses an adoption cannot be re-checked (see recheckAdoption). State about the log

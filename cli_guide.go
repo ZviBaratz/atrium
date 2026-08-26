@@ -109,14 +109,19 @@ const guidePage = "You are an AI agent running inside an Atrium session. Atrium 
 	"  `kill` removes the worktree and deletes the branch, and refuses unless that\n" +
 	"  is provably safe: no uncommitted changes, nothing unpushed, and the agent\n" +
 	"  idle. It recomputes those rather than trusting what was last recorded, and a\n" +
-	"  session it cannot establish them for is refused too: a paused or direct one\n" +
-	"  has no worktree to read, and some agents show nothing in the pane to say a\n" +
-	"  turn is running. The refusal names the condition, and there is no flag to\n" +
-	"  override it; that is the keyboard's call.\n" +
+	"  session it cannot establish them for is refused too: a paused, starting or\n" +
+	"  direct one has no worktree to read, and some agents show nothing in the pane\n" +
+	"  to say a turn is running. The refusal names the condition, and there is no\n" +
+	"  flag to override it; that is the keyboard's call.\n" +
 	"\n" +
 	"  `pause` is what to reach for when `kill` refuses. It stops the agent and\n" +
 	"  frees the worktree but keeps the branch, committing whatever was uncommitted\n" +
-	"  first, so nothing is discarded and no condition is checked.\n" +
+	"  first, so nothing is discarded and no tree condition is checked.\n" +
+	"\n" +
+	"  Name the session, do not describe it. Both verbs resolve a title or a tmux\n" +
+	"  name and refuse a substring of one, unlike `ls` and `send` — and neither will\n" +
+	"  retire the session you are running in. Retiring your own pane kills the agent\n" +
+	"  writing the report, so nobody learns what happened.\n" +
 	"\n" +
 	"  Either way you are asking, not doing: both spool a request the running\n" +
 	"  Atrium carries out, so they report what they queued. `atrium kill --help`\n" +

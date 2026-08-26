@@ -161,7 +161,8 @@ func mapKeys(m map[string]json.RawMessage) []string {
 	return out
 }
 
-// resolveSession finds the one session a selector names.
+// resolveSession finds the one session a selector names, guessing at a substring when
+// no exact name matches. For the read-only and additive verbs: peek, send, ls.
 //
 // Identity is the (Title, Path) pair, not the title: titles are unique only
 // within a repo group, so the same title can legitimately exist in two repos —
@@ -173,6 +174,29 @@ func mapKeys(m map[string]json.RawMessage) []string {
 // always wins over a substring. Without that, a user with sessions "api" and
 // "api-v2" could never address "api" at all — it would be permanently ambiguous.
 func resolveSession(instances []session.InstanceData, selector, pathFilter string) (session.InstanceData, error) {
+	return resolveSessionIn(instances, selector, pathFilter, true)
+}
+
+// resolveSessionNamed is resolveSession without the substring tier: the selector has to
+// be one of the names that identify a session, not a fragment of one.
+//
+// It exists for the destructive verbs, `atrium kill` and `atrium pause`. The substring
+// tier is right where a wrong answer costs a misdirected message (send) or a wasted read
+// (peek); it is wrong where the answer deletes a branch. With one session called
+// "fix-auth", `atrium kill fix` — a truncated title, a typo, an orchestrator that lost a
+// suffix — hits that tier as the only candidate and resolves, so the ambiguity report
+// that protects against two matches does nothing. It also matches DisplayName, the
+// freely-mutable cosmetic label, which is not an identity at all.
+//
+// The three tiers that remain are the ones where the selector IS a name: the title, the
+// tmux session name, and either of those case-insensitively. Nothing a caller has to
+// guess at.
+func resolveSessionNamed(instances []session.InstanceData, selector, pathFilter string) (session.InstanceData, error) {
+	return resolveSessionIn(instances, selector, pathFilter, false)
+}
+
+// resolveSessionIn is the shared body. guess admits the substring tier.
+func resolveSessionIn(instances []session.InstanceData, selector, pathFilter string, guess bool) (session.InstanceData, error) {
 	if len(instances) == 0 {
 		return session.InstanceData{}, fmt.Errorf("no sessions — run %s to create one", binName)
 	}
@@ -208,12 +232,22 @@ func resolveSession(instances []session.InstanceData, selector, pathFilter strin
 		func(d session.InstanceData) bool { return d.Title == selector },
 		func(d session.InstanceData) bool { return d.TmuxName == selector },
 		func(d session.InstanceData) bool {
-			return strings.EqualFold(d.Title, selector) || strings.EqualFold(label(d), selector)
+			if strings.EqualFold(d.Title, selector) {
+				return true
+			}
+			// The display label, case-insensitively, and only for the guessing callers.
+			// It is cosmetic, freely mutable and not unique, so it is not an identity —
+			// which is fine for a verb that reads or types and not for one that deletes
+			// a branch, where "exactly matches a label somebody renamed" is still a
+			// guess about which session was meant.
+			return guess && strings.EqualFold(label(d), selector)
 		},
-		func(d session.InstanceData) bool {
+	}
+	if guess {
+		tiers = append(tiers, func(d session.InstanceData) bool {
 			return strings.Contains(strings.ToLower(d.Title), lower) ||
 				strings.Contains(strings.ToLower(label(d)), lower)
-		},
+		})
 	}
 
 	for _, match := range tiers {

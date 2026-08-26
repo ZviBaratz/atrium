@@ -281,9 +281,20 @@ type killedJSON struct {
 	Title       string `json:"title"`
 	DisplayName string `json:"display_name"`
 	Path        string `json:"path"`
-	Branch      string `json:"branch,omitempty"`
+	// Branch is plain rather than omitempty, as sessionJSON's is and for its reason: a
+	// direct session's branch has to arrive as "" rather than as an absent key, or a
+	// consumer testing for one gets "null" from jq and a `select(.branch == "")` that
+	// matches nothing. omitempty here is reserved for genuinely optional attributes.
+	Branch string `json:"branch"`
 	// Direct marks a killed direct (non-git) session, which had no branch or worktree.
-	Direct   bool      `json:"direct"`
+	Direct bool `json:"direct"`
+	// BatchID groups the entries one kill produced, and it is published because the
+	// TUI's undo key restores a BATCH (undo.LatestBatch), not an entry: a visual-mode
+	// kill of four sessions comes back as four. Without it a reader cannot tell which
+	// rows return together from which are separate kills. Absent — not empty — for a
+	// session killed on its own, which is a different fact from belonging to an unnamed
+	// batch.
+	BatchID  string    `json:"batch_id,omitempty"`
 	KilledAt time.Time `json:"killed_at"`
 	// UncommittedWorkLost reports that this session's uncommitted changes are gone for
 	// good: they were there when it was killed and the teardown could not commit them,
@@ -337,6 +348,7 @@ func toKilledJSON(e undo.Entry) killedJSON {
 		Path:                e.Path,
 		Branch:              e.Branch,
 		Direct:              e.Direct,
+		BatchID:             e.BatchID,
 		KilledAt:            e.At,
 		UncommittedWorkLost: e.Dirty && !e.Committed,
 	}
