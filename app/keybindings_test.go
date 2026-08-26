@@ -180,3 +180,17 @@ func TestConstruct_UnbindingKillDisarmsTheAttachLayer(t *testing.T) {
 		"and the detach rebind must still be installed — bailing on the kill lookup used to "+
 			"skip it, leaving the pane detaching on ctrl+q while the list used ctrl+g")
 }
+
+// The reserved-esc refusal must survive clipReportLine whole: the modal keeps
+// the HEAD of a report line, so an over-long reason silently drops its own
+// tail (the "…and overlays" clause) while the keys package's substring test on
+// the raw Error() keeps passing — the reason's length is only checkable here,
+// beside the budget that clips it.
+func TestReservedEscReasonFitsTheReportLine(t *testing.T) {
+	problems := keys.Validate(map[string]keys.Spec{"new": {Keys: []string{"esc"}}})
+	require.Len(t, problems, 1)
+	line := problems[0].Error()
+	require.Equal(t, line, clipReportLine(line),
+		"the reserved-esc reason must render un-clipped in the keybindings modal")
+	require.Contains(t, line, "overlay")
+}

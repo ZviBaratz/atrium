@@ -38,9 +38,9 @@ func tabBorderWithBottom(th *theme.Theme, left, middle, right string) lipgloss.B
 // one that composed a frame is the one the memo keyed on — see tabbedKey. Border
 // color carries focus: the right pane's chrome is faint by default (the list
 // panel, which owns the selection, keeps the accent border) and lights up accent
-// only while a pane is in scroll mode — the one state where keyboard input is
-// captured by this pane. focused is that scroll-mode flag; frame metrics are
-// identical either way, so size computations may pass false.
+// only while the ACTIVE tab's pane is in a key-capturing mode — scroll mode, or
+// the preview's hint overlay. focused carries activePaneCaptured; frame metrics
+// are identical either way, so size computations may pass false.
 func inactiveTabStyle(th *theme.Theme) lipgloss.Style {
 	return lipgloss.NewStyle().
 		Border(tabBorderWithBottom(th, "┴", "─", "┴"), true).
@@ -498,11 +498,64 @@ func (w *TabbedWindow) IsTerminalInScrollMode() bool {
 	return w.terminal.IsScrolling()
 }
 
-// paneScrolling reports whether any tab pane is in a key-capturing mode
-// (scroll or hint) — the state that renders the window's chrome as focused.
-// The diff tab scrolls live without a mode, so it never claims focus.
-func (w *TabbedWindow) paneScrolling() bool {
-	return w.preview.IsScrolling() || w.preview.InHintMode() || w.terminal.IsScrolling()
+// ActivePaneInScrollMode reports whether the ACTIVE tab's pane is in scroll
+// mode — the one predicate behind "the tabs own the nav keys": the app's
+// derived focus and its esc ladder's scroll rung read it directly, and the
+// chrome accent reads it through activePaneCaptured (this plus the preview's
+// hint overlay), so none of them can disagree about scroll capture. Tab-scoped
+// on purpose: a preview snapshot left scrolled in the background must not
+// claim the diff tab's keys. The diff pane scrolls live without a mode, so it
+// never appears here.
+func (w *TabbedWindow) ActivePaneInScrollMode() bool {
+	switch w.activeTab {
+	case PreviewTab:
+		return w.preview.IsScrolling()
+	case TerminalTab:
+		return w.terminal.IsScrolling()
+	}
+	return false
+}
+
+// activePaneCaptured reports whether the active tab's pane is in a
+// key-capturing mode — scroll mode, or the preview's hint overlay — the state
+// that renders the window's chrome as focused. Tab-scoped like
+// ActivePaneInScrollMode so the border and the hint bar tell the same story: a
+// background snapshot must not keep the border lit while the bar and the nav
+// keys say the list has focus.
+func (w *TabbedWindow) activePaneCaptured() bool {
+	return w.ActivePaneInScrollMode() ||
+		(w.activeTab == PreviewTab && w.preview.InHintMode())
+}
+
+// ActivePaneScrollAtBottom reports whether the active tab's pane is in scroll
+// mode with its viewport resting at the snapshot's bottom — the position where
+// one more ScrollDown would exit the mode. Position only: the hold-vs-exit
+// policy lives at the caller (app routeFocusKey), which holds the nav key
+// there when scrollback exists above (so a held j cannot overshoot the exit
+// into a list move) and lets a zero-travel snapshot exit; the wheel and
+// shift+↓ keep their deliberate bottom exit.
+func (w *TabbedWindow) ActivePaneScrollAtBottom() bool {
+	switch w.activeTab {
+	case PreviewTab:
+		return w.preview.ScrollAtBottom()
+	case TerminalTab:
+		return w.terminal.ScrollAtBottom()
+	}
+	return false
+}
+
+// ActivePaneScrollAtTop is ActivePaneScrollAtBottom's mirror. A snapshot that
+// is at top and bottom at once has no travel at all — scrollback shorter than
+// the viewport — which is how the focus router tells "resting at the end of a
+// long scrollback" (hold) from "nothing to scroll" (let the exit through).
+func (w *TabbedWindow) ActivePaneScrollAtTop() bool {
+	switch w.activeTab {
+	case PreviewTab:
+		return w.preview.ScrollAtTop()
+	case TerminalTab:
+		return w.terminal.ScrollAtTop()
+	}
+	return false
 }
 
 // ResetTerminalToNormalMode exits scroll mode on the terminal pane
@@ -526,9 +579,9 @@ func (w *TabbedWindow) String() string {
 		width:     w.width,
 		height:    w.height,
 		activeTab: w.activeTab,
-		// Scroll mode is the one state where this pane captures keyboard input, so
-		// it is what lights the pane's chrome up as focused.
-		focused: w.paneScrolling(),
+		// A key-capturing mode on the ACTIVE pane is what lights the chrome up
+		// as focused — the same tab-scoped reading the app's focus model uses.
+		focused: w.activePaneCaptured(),
 		theme:   theme.Current(),
 	}
 	return w.memo.Get(k, func() string { return w.compose(k) })

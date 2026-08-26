@@ -451,10 +451,17 @@ unbounded list, user-authored text with no natural width.
   every registered `keys` handler before its globals — so it cannot be got wrong per
   state; what `q` or esc *means inside* the surface is the entry's own comment in
   `surfaceSpecs`, and keeping that rationale beside the entry is still on you.
-- `ui/menu_scan_test.go`'s enum-count tripwire (`require.Equal(t, 5, int(StateVisual))`)
+- `ui/menu_scan_test.go`'s enum tripwire (`require.Equal(t, 7, int(menuStateCount))`)
   pins **`ui.MenuState`**, not `app.state` — so an app state does *not* trip it, whatever
-  the neighbouring prose implies. It fires only if the new surface also needs its own
-  hint-bar variant, which a modal overlay does not: those hide the bar entirely.
+  the neighbouring prose implies. The sentinel fires on ANY appended MenuState (that is
+  its whole advantage over the old pin on a named value, which an append never moved);
+  the scan then makes you classify the new state: key hints (add it to the walk, and its
+  table to `keys.ModeHintTables()`) or progress text (StateBusy's exemption). A bar
+  variant that is NOT a MenuState — a render-time bool, the pane-focus bar's shape —
+  trips nothing: it must be added to `keys.ModeHintTables()` by hand, which seeds both
+  drift guards (the ui bar scan and `app/menu_click_test.go`'s click synthesis) and
+  whose arms table then demands a scan arm. That hand-add is the one unguarded step;
+  the scan's header names it.
 
 ## Changing user-visible copy
 

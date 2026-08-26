@@ -161,5 +161,13 @@ func (m *home) runPaletteAction(name keys.KeyName) (tea.Model, tea.Cmd) {
 	if reason := m.paletteInertReason(name); reason != "" {
 		return m, m.handleInfoNotice(reason)
 	}
+	// The focus router is re-applied for the same reason the busy gate is: it
+	// sits between that gate and dispatchAction on the keypress path, so a
+	// palette row has to cross it too — otherwise "up" run from the palette
+	// would move the list (killing a scrolled snapshot via the owner change)
+	// while the key the row advertises scrolls the pane.
+	if cmd, handled := m.routeFocusKey(name); handled {
+		return m, cmd
+	}
 	return m.dispatchAction(name)
 }

@@ -614,6 +614,15 @@ type home struct {
 	// it; motion events then map the cursor column to the split (see handleMouse).
 	draggingDivider bool
 
+	// focus is the EXPLICIT keyboard-focus target for the stateDefault frame;
+	// read through currentFocus (focus.go), which also derives focusTabs from
+	// the active pane's scroll mode. Zero value focusList, so assembleHome
+	// needs no seeding; the esc ladder's pop rung is the one reset — a future
+	// writer that points this at a pane owns clearing it when that pane goes
+	// away. Not to be confused with the focused field (terminal-window focus)
+	// or the "focus" layout preset (layoutIndex, app_presets.go).
+	focus focusTarget
+
 	// composingDiffComment is true while the diff-comment composer overlay is up
 	// (#383): it routes handlePromptState to the diff-comment submit/cancel and
 	// returns to stateDiffComment (not stateDefault) when the composer closes.
@@ -1124,6 +1133,16 @@ func (m *home) viewContent() string {
 	// read the same menuVisible bit — computeBudget charges the menu row off it —
 	// so the row the menu occupies here is exactly the row the layout reserved.
 	if m.menuVisible() {
+		// Pushed at render time so the bar always shows the same frame's
+		// derived focus: scroll mode can exit inside a pane (wheel at the
+		// bottom, snapshot owner change), and no imperative writer could
+		// cover those paths without staling. Gated on scroll capture, not on
+		// focusTabs alone, so the bar only swaps when its esc copy is true —
+		// under explicit focus with a live pane, esc pops focus rather than
+		// exiting scroll, and that bar variant is #806's to design
+		// (focusInspector likewise pushes nothing: routeFocusKey routes
+		// nothing for it until an inspector exists).
+		m.menu.SetPaneFocus(m.currentFocus() == focusTabs && m.tabbedWindow.ActivePaneInScrollMode())
 		k.menu, k.hasMenu = m.menu.String(), true
 	}
 	if m.errBox.HasContent() {

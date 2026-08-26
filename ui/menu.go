@@ -52,6 +52,11 @@ const (
 	// StateDiffComment is shown while diff-comment mode is active: the bar teaches
 	// the line cursor's move/comment/exit gestures instead of the usual options.
 	StateDiffComment
+	// menuStateCount sentinels the enum: appending a state bumps it and fails
+	// the bar scan's count pin (TestMenuBars_KeysExistInRegistry) until the new
+	// state is classified for that scan — pinning any named value cannot catch
+	// an append, which is how StateDiffComment shipped unscanned.
+	menuStateCount
 )
 
 // defaultHintKeys are the high-value bindings the always-on bar surfaces during
@@ -131,6 +136,15 @@ type Menu struct {
 	// are forced visible to teach a gesture or report progress even with the bar off.
 	quiet        bool
 	contextHints []keys.KeyName
+	// paneFocused is true while the tabbed panes hold keyboard focus (the
+	// app's focusTabs); the default-state bar then teaches the pane's nav
+	// vocabulary (keys.PaneFocusHints) instead of the context hints. Pushed by
+	// the app at render time — unlike activeTab's event-time writers — because
+	// pane focus is derived state no imperative writer could keep current.
+	// quiet blanks this variant with the rest of the default bar: chrome-free
+	// users opted out, and the scrolled pane's own footer already teaches the
+	// esc exit.
+	paneFocused bool
 	// busy holds one progress line per owner. Two kinds of operation compete for
 	// this single row: a modal action (kill, push, resume) that also freezes the
 	// keyboard, and a background one (name generation, opening a PR) that does
@@ -303,10 +317,16 @@ func baseHintsFor(instance *session.Instance) []keys.KeyName {
 	return defaultHintKeys
 }
 
-// SetActiveTab updates the currently active tab; the panes with a scroll mode
-// (diff/terminal) add a scroll hint to the default bar.
+// SetActiveTab updates the currently active tab; on the diff and terminal
+// tabs the default bar appends the KeyShiftUp scroll hint (see String).
 func (m *Menu) SetActiveTab(tab int) {
 	m.activeTab = tab
+}
+
+// SetPaneFocus records whether the tabbed panes hold keyboard focus — see the
+// paneFocused field for why the app pushes it per render.
+func (m *Menu) SetPaneFocus(focused bool) {
+	m.paneFocused = focused
 }
 
 // SetNotice shows transient feedback in place of the hints. Newlines are
@@ -369,15 +389,24 @@ func (m *Menu) markHint(dispatchKey, seg string) string {
 	return zone.Mark(hintZoneID(dispatchKey), seg)
 }
 
-// renderModeLine renders a mode bar (filter / hint / visual) from raw bindings.
-// A binding with exactly one key is clickable via that key; range/compound
-// teaching entries (no keys, or several) stay inert (see singleDispatchKey).
+// renderModeLine renders a mode bar (filter / hint / visual / …) from raw
+// bindings. A binding with exactly one key is clickable via that key;
+// range/compound teaching entries (no keys, or several) stay inert (see
+// singleDispatchKey). An entry whose display key is empty — every action
+// behind its label unbound — is skipped whole, for renderHintLine's reason:
+// the bar's shape is "key desc", so a keyless segment would promise an action
+// with no way to reach it.
 func (m *Menu) renderModeLine(bindings []key.Binding) string {
 	var s strings.Builder
-	for i, b := range bindings {
-		if i > 0 {
+	first := true
+	for _, b := range bindings {
+		if b.Help().Key == "" {
+			continue
+		}
+		if !first {
 			s.WriteString(sepStyle().Render(separator))
 		}
+		first = false
 		s.WriteString(m.markHint(singleDispatchKey(b), renderEntry(b)))
 	}
 	return s.String()
@@ -493,6 +522,12 @@ func (m *Menu) String() string {
 	case StateEmpty:
 		line = m.renderHintLine(emptyHintKeys)
 	default: // StateDefault
+		// While the panes hold keyboard focus, the bar teaches the pane's nav
+		// vocabulary; the context hints below return when focus does.
+		if m.paneFocused {
+			line = m.renderModeLine(keys.PaneFocusHints())
+			break
+		}
 		hints := m.contextHints
 		if hints == nil {
 			hints = defaultHintKeys
