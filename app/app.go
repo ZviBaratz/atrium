@@ -921,6 +921,10 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 	// (every session). Off Linux / when disabled this resolves to a harmless no-op.
 	tmux.SetAgentOOMMargin(appConfig.GetAgentOOMMargin())
 
+	// Resolve the agent-skills switch on the same terms: every launch reads the current
+	// value, so a session relaunched after a Settings change picks it up.
+	tmux.SetAgentSkills(appConfig.GetAgentSkills())
+
 	// Pre-accept Claude's workspace trust for the worktrees root before any
 	// session starts (opt-in; best-effort — on failure the trust dialog simply
 	// appears per worktree, as it would without the feature). Done once here on

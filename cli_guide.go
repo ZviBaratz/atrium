@@ -86,11 +86,21 @@ const guidePage = "You are an AI agent running inside an Atrium session. Atrium 
 	"\n" +
 	"  When the follow-up should run on a given model, pin it at creation instead\n" +
 	"  of asking for it in the prompt: `--model`, `--effort` and `--permission-mode`\n" +
-	"  set claude's flags on the new session, and are refused when what would run\n" +
-	"  is not claude. `--account` pins which configured Claude account it runs on,\n" +
+	"  set claude's flags on the new session. They need a claude somewhere in what\n" +
+	"  is being created: a lone non-claude session is refused, and so is a fan-out\n" +
+	"  with no claude member — but a MIXED fan-out is accepted, and the pins ride\n" +
+	"  only its claude members while the rest are left untouched, with no warning.\n" +
+	"  `--account` pins which configured Claude account it runs on,\n" +
 	"  by name; do not write `CLAUDE_CONFIG_DIR` into the program to do that —\n" +
 	"  whether on `--program` or in your config.json — which runs the session on one\n" +
 	"  account and records another.\n" +
+	"\n" +
+	"  A claude session is normally handed a skill for this: `/atrium:spawn` walks\n" +
+	"  the same choices — what to pin, whether to start from your own branch, and\n" +
+	"  what the first prompt has to say — and asks before creating anything. Every\n" +
+	"  gate around that is fail-open, so if it does not resolve, `atrium doctor`'s\n" +
+	"  Agent skills section names the gate that declined, per configured program.\n" +
+	"  Every other agent makes the choices by hand.\n" +
 	"\n" +
 	"  A title is a branch: the branch and tmux names derive from it, and a title\n" +
 	"  whose names are already taken is refused rather than quietly suffixed — with\n" +

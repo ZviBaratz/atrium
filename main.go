@@ -361,7 +361,11 @@ var (
 			"why: it resolves image_preview against the terminal the environment names and against\n" +
 			"tmux, and reports eligibility only — confirming the pixel rung means transmitting the\n" +
 			"image and waiting for the terminal to hand back an ID, which the running TUI does when a\n" +
-			"picture opens. On Linux, Host\n" +
+			"picture opens. Agent skills reports whether a claude session started now would be\n" +
+			"handed Atrium's own spawn skill — how to choose a follow-up session's model, effort and\n" +
+			"permission mode — and, when it would not, which gate refused. Every gate around that\n" +
+			"injection fails open, so a session that quietly never got the skill looks exactly like\n" +
+			"one that did. On Linux, Host\n" +
 			"pressure is the live counterpart to Host capacity: swap headroom, and space and inode\n" +
 			"headroom for the data dir, the tmux socket directory and the temp directory. It flags a\n" +
 			"path that is a tmpfs, because a tmpfs's contents are charged against RAM rather than to a\n" +
@@ -451,6 +455,22 @@ var (
 			defer cancelOOM()
 			fmt.Println()
 			fmt.Print(doctor.RenderOOM(doctor.CheckOOM(oomCtx)))
+
+			// Agent skills: whether a claude session launched now would be handed
+			// Atrium's own /atrium:spawn skill. Every gate around the injection is
+			// fail-open, so the state where it silently declines is invisible without a
+			// report that asks.
+			//
+			// Asked of the launch path itself (tmux.AgentPluginStatus), once per program
+			// a session could run — the default plus each profile's, because a default of
+			// codex says nothing about a claude profile and an older claude pinned in one
+			// answers the capability probe differently from the one on PATH. Running that
+			// path is what makes the report true rather than a prediction of it, and it
+			// materializes the plugin exactly where a launch would: gated on the program
+			// being claude and the setting being on, and a no-op once the bytes are
+			// current, so it writes nothing under a live session that it is reading.
+			fmt.Println()
+			fmt.Print(agentSkillsSection(config.LoadConfig()))
 
 			// Orphaned tmux servers: servers Atrium started that outlived their run,
 			// including the ones no socket lookup can reach because the socket file went
@@ -779,6 +799,29 @@ func init() {
 	rootCmd.AddCommand(doctorCmd)
 	rootCmd.AddCommand(reapCmd)
 	rootCmd.AddCommand(hookEventCmd)
+}
+
+// agentSkillsSection renders `atrium doctor`'s Agent skills section.
+//
+// Extracted from the command so a test can drive it, because the first line is the one that
+// was missing. agent_skills lives on a process-wide var, and doctor is a third process that
+// launches nothing — so a report that asks the launch path without installing the setting
+// first reads the built-in default and tells a user who switched the feature OFF that it is
+// injecting. That is the same omission the daemon had, one process over, and it is why this
+// installs the policy before asking rather than passing the setting alongside the answer:
+// two sources for one fact is what let them disagree.
+//
+// The programs asked about are the default plus every profile's, because a default of codex
+// says nothing about a claude profile and an older claude pinned in one answers the
+// capability probe differently from the one on PATH.
+func agentSkillsSection(cfg *config.Config) string {
+	tmux.SetAgentSkills(cfg.GetAgentSkills())
+	programs := []string{cfg.GetProgram()}
+	for _, p := range cfg.GetProfiles() {
+		programs = append(programs, p.Program)
+	}
+	return doctor.RenderAgentSkills(doctor.CheckAgentSkills(
+		tmux.SpawnSkillInvocation(), programs, tmux.AgentPluginStatus))
 }
 
 func main() {

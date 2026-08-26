@@ -131,12 +131,19 @@ var (
 )
 
 // binHelpContains reports whether bin's --help output contains needle. Used as a
-// capability gate before applying a version-sensitive flag (e.g. gemini --resume). Like
-// claudeSupportsSettingsFlag, it probes the literal canonical binary — never the
-// configured program, whose wrapper side effects must not run on a probe — and caches the
-// output per process so resurrecting many sessions costs one subprocess per binary. A
-// failed probe caches as empty output: the capability reads as absent and the caller
-// degrades (relaunch without resume) rather than failing the launch.
+// capability gate before applying a version-sensitive flag (e.g. gemini --resume). It
+// caches the output per process, so resurrecting many sessions costs one subprocess per
+// binary. A failed probe caches as empty output: the capability reads as absent and the
+// caller degrades (relaunch without resume) rather than failing the launch.
+//
+// WHICH binary is the caller's decision, not this function's, and the two callers decide
+// it differently on purpose. claudeSupportsSettingsFlag hard-codes the canonical name,
+// whose wrapper side effects can then never run on a probe. The gates that route through
+// probeTarget accept the configured program's own first token where its basename is
+// exactly the canonical name, because a binary installed outside PATH answers only under
+// its own path — and fall back to the canonical name for anything else, which is the
+// wrapper case. Read probeTarget before adding a caller: the empty-output cache means a
+// probe of the wrong binary is indistinguishable from a flag that does not exist.
 //
 // The lock covers only the map accesses, never the subprocess — a slow --help (the
 // probe allows up to probeTimeout) must not block concurrent resurrections of other

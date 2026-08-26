@@ -506,6 +506,18 @@ func (t *Session) start(workDir string, program string) error {
 		program = program + " --settings " + shellSingleQuote(settingsPath)
 	}
 
+	// Hand the agent Atrium's own skills (see spawnskill.go): a plugin loaded for the life
+	// of this process, carrying the `spawn` skill. A no-op for every non-claude agent, when
+	// the setting is off, and when this claude has no --plugin-dir flag. Single-quoted for
+	// the reason the settings path is — tmux hands the launch command to `sh -c` — though
+	// this path holds no session name and so carries no metacharacter of its own. Like the
+	// settings file, a failure here only costs the skill: the launch proceeds without it.
+	if pluginDir, err := ensureAgentPlugin(t.program); err != nil {
+		log.ErrorLog.Printf("agent skills disabled for %s: %v", hookName, err)
+	} else if pluginDir != "" {
+		program = program + " " + pluginDirFlag + " " + shellSingleQuote(pluginDir)
+	}
+
 	// Isolate a routed Antigravity (agy) account's config directory via bwrap. Keyed
 	// off the resolved adapter — not a string match on program — so it also covers
 	// the `antigravity` alias and the `--continue` resume command, and applied BEFORE

@@ -362,6 +362,11 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 		// its launched oom_score_adj until it is next relaunched (the kernel sets it once,
 		// at exec).
 		tmux.SetAgentOOMMargin(m.appConfig.GetAgentOOMMargin())
+	case "agent_skills":
+		// Re-sync the process-wide switch. Each session reads it at launch, so a session
+		// already running keeps the skills it started with (or their absence) until it is
+		// next relaunched — the plugin is named on the agent's command line at exec.
+		tmux.SetAgentSkills(m.appConfig.GetAgentSkills())
 	case "auto_yes":
 		// In-TUI auto-accept is driven by each instance's AutoYes flag (the
 		// daemon only runs while the TUI is closed — main.go stops it before
