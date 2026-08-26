@@ -632,6 +632,39 @@ func TestRenderParityUnsetKindIsVisiblyWrong(t *testing.T) {
 	// It is neither a difference nor an unanswered question, so it earns no remedy.
 	assert.NotContains(t, out, "Align the config dirs")
 	assert.NotContains(t, out, "not evidence of parity")
+
+	// And a kind from outside the set at all, which is the arm the switch's default
+	// exists for once the zero value has its own.
+	out = RenderParity([]ParityWarning{{Pool: "p", Kind: ParityKind(99), Feature: "x"}})
+	assert.Contains(t, out, "internal error: parity warning with unknown kind 99")
+	assert.NotContains(t, out, "no kind")
+}
+
+// One member with no comparable target must not change the verdict by where the pool
+// lists it. Comparing as it went, these same three members answered differently in a
+// different order — the same config rendering two ways between runs.
+func TestCheckParityDivergenceIsOrderIndependent(t *testing.T) {
+	withTarget := func(target string) config.DirCapabilities {
+		caps := measuredCaps(nil, nil, nil)
+		caps.MCPServers = config.DimensionState{
+			Measured: true, Targets: map[string]string{"linear": target},
+		}
+		return caps
+	}
+	caps := map[string]config.DirCapabilities{
+		"/a": withTarget(`{"url":"https://one.example"}`),
+		"/b": withTarget(""), // configured, but nothing comparable came back
+		"/c": withTarget(`{"url":"https://two.example"}`),
+	}
+	// Control: a and c really do disagree, so the pool has something to be silent about.
+	pair := CheckParity(twoMemberPool("/a", "/c"), staticReader(caps))
+	require.Len(t, pair, 1)
+	require.Equal(t, ParityDivergent, pair[0].Kind)
+
+	for _, order := range [][]string{{"/a", "/b", "/c"}, {"/b", "/a", "/c"}, {"/a", "/c", "/b"}} {
+		warns := CheckParity(twoMemberPool(order...), staticReader(caps))
+		assert.Empty(t, warns, "order %v", order)
+	}
 }
 
 // staticReader answers from a table, so a test never touches a real config dir.
