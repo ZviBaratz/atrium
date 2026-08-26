@@ -90,10 +90,13 @@ func hookSessionDir(sanitizedName string) (string, error) {
 // capability probe looks for in --help, so the two cannot drift.
 const settingsFlag = "--settings"
 
-// claudeSupportsSettingsFlag reports whether the claude the session will run accepts
-// --settings, probed once per binary per process through the shared help-probe cache. A
-// negative or failed probe disables hook injection entirely, so a launch can never fail
-// because of this feature.
+// claudeSettingsProbe reports whether the claude the session will run accepts --settings,
+// probed once per binary per process through the shared help-probe cache, and returns the
+// binary that answered. A negative or failed probe disables hook injection entirely, so a
+// launch can never fail because of this feature — which is exactly why the caller reports
+// the refusal against the name returned here rather than against the configured program:
+// the two differ in the wrapper case, and a message naming the wrong one sends someone to
+// check the flags of a binary that was never asked.
 //
 // probeTarget picks WHAT is probed, and it takes the session's own program for the reason
 // the plugin gate does: a claude installed at an absolute path outside PATH answers `--help`
@@ -102,8 +105,9 @@ const settingsFlag = "--settings"
 // loses its status hooks, its SessionStart brief, and accurate status classification with
 // them. A wrapper, whose side effects must not run on a probe, still falls back to the
 // canonical name.
-func claudeSupportsSettingsFlag(program string) bool {
-	return binHelpContains(probeTarget(program, agent.KeyClaude), settingsFlag)
+func claudeSettingsProbe(program string) (bin string, supported bool) {
+	bin = probeTarget(program, agent.KeyClaude)
+	return bin, binHelpContains(bin, settingsFlag)
 }
 
 var (
@@ -282,7 +286,25 @@ func buildHookSettings(binPath, stateFile string, brief SessionBrief) ([]byte, e
 // recover-in-place all route through start(), and a rename between two of them must not leave
 // the second describing the first.
 func ensureHookSettings(sanitizedName, program string, brief SessionBrief) (string, error) {
-	if !agent.Resolve(program).HookSupport || !claudeSupportsSettingsFlag(program) {
+	if !agent.Resolve(program).HookSupport {
+		return "", nil
+	}
+	// Say so, and name the binary that answered. This is a claude that was asked and
+	// refused, which is the one outcome here nothing else records: an unresolvable
+	// executable below logs, a probe that could not be exec'd logs inside binHelpContains,
+	// an IO failure is logged by the caller — and unlike the --plugin-dir gate beside it,
+	// this gate has no `atrium doctor` section to be read out of afterwards. Silent, it
+	// costs the session its status hooks, its brief and accurate classification with them
+	// for a reason stated nowhere. The gate above is not a refusal and stays silent: a
+	// program with no hook support is this feature not applying, and a line per aider
+	// launch would bury this one.
+	//
+	// Hedged for the reason doctor's plugin-dir wording is: a failed probe caches as empty
+	// output, so "no such flag" and "no such binary" arrive here as one answer, and naming
+	// only the first sends someone to upgrade a claude that was already current.
+	if bin, ok := claudeSettingsProbe(program); !ok {
+		log.InfoLog.Printf("status hooks disabled for %s: %q --help does not advertise %s "+
+			"(an older CLI, or a binary the probe could not run)", sanitizedName, bin, settingsFlag)
 		return "", nil
 	}
 	// The hooks re-invoke this very binary. If its path can't be resolved, skip injection

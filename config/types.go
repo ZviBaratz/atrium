@@ -254,7 +254,7 @@ type ClaudeAccount struct {
 
 // ResolvedConfigDir expands a leading ~ in ConfigDir to the user's home directory.
 func (a ClaudeAccount) ResolvedConfigDir() string {
-	return expandHomePath(a.ConfigDir)
+	return ExpandHomePath(a.ConfigDir)
 }
 
 // IsCatchAll reports whether the account has no routing rules, making it the
@@ -274,7 +274,7 @@ type AgyAccount struct {
 
 // ResolvedConfigDir returns the expanded path to the account's config directory.
 func (a AgyAccount) ResolvedConfigDir() string {
-	return expandHomePath(a.ConfigDir)
+	return ExpandHomePath(a.ConfigDir)
 }
 
 // IsCatchAll reports whether this account acts as a fallback for any path.
@@ -310,7 +310,7 @@ type GHAccount struct {
 
 // ResolvedConfigDir expands a leading ~ in ConfigDir to the user's home directory.
 func (a GHAccount) ResolvedConfigDir() string {
-	return expandHomePath(a.ConfigDir)
+	return ExpandHomePath(a.ConfigDir)
 }
 
 // IsCatchAll reports whether the account has no routing rules, making it the
@@ -319,9 +319,14 @@ func (a GHAccount) IsCatchAll() bool {
 	return len(a.RemoteMatches) == 0 && len(a.PathMatches) == 0
 }
 
-// expandHomePath expands a leading "~" or "~/" in p to the user's home directory.
+// ExpandHomePath expands a leading "~" or "~/" in p to the user's home directory.
 // On any failure resolving home, p is returned unchanged.
-func expandHomePath(p string) string {
+//
+// Exported because a config value carrying "~" is not only this package's problem: a
+// program string reaches tmux, which hands it to `sh -c` and so expands the tilde at
+// launch, while anything that exec's the same path DIRECTLY (a capability probe) does
+// not. Both need one spelling of this, not two.
+func ExpandHomePath(p string) string {
 	if p != "~" && !strings.HasPrefix(p, "~/") {
 		return p
 	}
