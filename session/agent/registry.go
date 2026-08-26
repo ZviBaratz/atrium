@@ -1937,10 +1937,13 @@ var copilot = &Adapter{
 	InputBoxPrompts: []string{"❯"},
 
 	// "Worki", not "Working", and the truncation is the finding. The status row reads
-	// "<spinner> Working · <N> B esc interrupt", and below 26 columns the footer becomes a
-	// multi-column grid that jams the cells together and splits the word mid-way: width 24
-	// renders "WorkinKiB    interrup" and width 20 "WorkiKiB   interr". "Worki" is the
-	// longest prefix present at every driven rung, and it is present at all eight.
+	// "<spinner> Working · <N> B esc interrupt", and the footer loses it to the wrap in
+	// stages: at the two narrowest rungs the cells are jammed together and the WORD is split
+	// mid-way — width 24 renders "WorkinKiB    interrup" and width 20 "WorkiKiB   interr".
+	// What each rung actually renders is recorded per rung in copilotBusyLadder's notes rather
+	// than summarised as an onset here, because a sentence about where the row "goes
+	// multi-column" has been written wrong twice. "Worki" is the longest prefix present at
+	// every driven rung, and it is present at all eight.
 	// TestCopilotBusyMarkerIsTheLongestSurvivingPrefix reads both halves off the ladder —
 	// that this marker is found at every rung, and that one character more is not.
 	//
