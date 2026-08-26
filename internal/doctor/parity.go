@@ -20,7 +20,8 @@ package doctor
 // whose members are configured identically and differ only in what claude.ai granted
 // them reads as being in parity here. What this section catches is the configuration
 // half: a plugin, a marketplace or an MCP server one member has and another does
-// not, or one they both have that points somewhere different.
+// not, one they both have that points somewhere different, and a server one of them
+// blocks with deniedMcpServers while another allows it.
 //
 // The section is silent when a pool is in parity, so it must never be silent when a
 // member could not be read. Every unanswered question gets a line of its own —
@@ -357,20 +358,24 @@ func diffDimension(pool string, dim config.Dimension, members []parityMember) []
 }
 
 // diverges reports whether the members configure name to point at different things.
-// A member whose target could not be canonicalised makes the answer no rather than
-// yes: two values nothing could compare are not evidence of a difference.
+//
+// A member carrying no comparable target answers no: enabledPlugins maps a name to a
+// bool, so there is nothing for it to point at, and a value that could not be
+// canonicalised is not evidence of a difference either. Every target is collected
+// before any is compared, so one uncomparable member cannot change the answer by
+// where the pool happens to list it — checking as it went, the same three members in
+// a different order gave a different verdict.
 func diverges(dim config.Dimension, name string, members []parityMember) bool {
-	first := ""
-	for i, m := range members {
+	targets := make([]string, 0, len(members))
+	for _, m := range members {
 		target := m.caps.State(dim).Target(name)
 		if target == "" {
 			return false
 		}
-		if i == 0 {
-			first = target
-			continue
-		}
-		if target != first {
+		targets = append(targets, target)
+	}
+	for _, t := range targets[1:] {
+		if t != targets[0] {
 			return true
 		}
 	}
