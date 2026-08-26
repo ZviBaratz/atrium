@@ -121,6 +121,14 @@ func flattenBottomBox(content string) (string, bool) {
 	if !ok {
 		return "", false
 	}
+	// Make the sentinel's premise true by construction rather than asserting it: a NUL
+	// arriving in the pane would otherwise be indistinguishable from a blank-row separator and
+	// could break a literal in half. Stripping it here covers a live pane, which no test over
+	// committed fixtures can.
+	content = strings.ReplaceAll(content, boxRowGap, "")
+	if block, ok = bottomBoxBlock(content); !ok {
+		return "", false
+	}
 	parts := make([]string, 0, len(block))
 	for _, line := range block {
 		if interior := stripBoxWalls(line); interior != "" {
@@ -139,9 +147,14 @@ func flattenBottomBox(content string) (string, bool) {
 // It is a separator, and it has to be one that cannot be part of any literal a caller matches,
 // because the whole point is that a phrase must not be reconstructed ACROSS a paragraph break.
 // A space would be folded into the collapse and rejoin the fragments; a printable rune could in
-// principle be one an agent draws. NUL is neither: tmux capture-pane yields the pane's rendered
-// text and cleanForDetection strips the escape sequences, so no captured pane carries one —
-// TestNoPaneFixtureCarriesTheRowGap reads every committed fixture in this package and holds it.
+// principle be one an agent draws. NUL is neither, and flattenBottomBox strips it from its input
+// so that stays true of a live pane and not just of the panes anyone has captured.
+//
+// It used to be justified by a test scanning this package's fixtures for a NUL. That test could
+// not fail: a raw NUL is `illegal character NUL` to the Go compiler, so the package cannot build
+// in any state where the assertion could fire, and a fixture that genuinely captured one would be
+// written as the escape "\x00", which a scan of the raw bytes does not see. Removing the input
+// by construction is what a scan was standing in for.
 const boxRowGap = "\x00"
 
 // isHorizontalRule reports whether line is a box-drawing horizontal border — the top or

@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"os"
 	"strings"
 	"testing"
 
@@ -183,31 +182,6 @@ func TestFlattenBottomBoxSynthesisSurface(t *testing.T) {
 	})
 }
 
-// TestNoPaneFixtureCarriesTheRowGap is boxRowGap's premise: it can only be a separator no
-// literal spans if no captured pane contains one. Read off the fixtures rather than assumed,
-// because the alternative — a printable rune — is the choice this rules out.
-//
-// It reads this package's SOURCE FILES rather than a capture table, and the difference matters:
-// a table covers the captures somebody remembered to list, and the claim here is about every
-// fixture in the package. An earlier draft walked paneCoverage and its comment said "every
-// committed fixture", which is two different sets.
-func TestNoPaneFixtureCarriesTheRowGap(t *testing.T) {
-	entries, err := os.ReadDir(".")
-	require.NoError(t, err)
-	read := 0
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") {
-			continue
-		}
-		body, err := os.ReadFile(e.Name())
-		require.NoError(t, err)
-		read++
-		require.NotContainsf(t, string(body), boxRowGap,
-			"%s carries a NUL, so boxRowGap would be indistinguishable from pane text", e.Name())
-	}
-	require.Positive(t, read, "no source files read, so this asserted nothing")
-}
-
 // TestFlatteningNormalizesNoBreakSpace and TestHorizontalRuleAcceptsNoBreakSpacePadding are the
 // two halves of one finding: Go's \s does not include U+00A0, and copilot emits them. Untreated,
 // the first costs a literal match inside a dialog and the second costs the box ANCHOR — which is
@@ -250,4 +224,33 @@ func TestHorizontalRuleAcceptsNoBreakSpacePadding(t *testing.T) {
 		"a NO-BREAK SPACE is padding; refusing it costs the box anchor and reports no dialog")
 	require.False(t, isHorizontalRule("╰──── x ────╯"),
 		"and the predicate must still reject a rule carrying real text")
+}
+
+// A NUL arriving in the pane must not act as flattenBottomBox's blank-row separator.
+//
+// boxRowGap is NUL precisely because no captured pane carries one, and that premise is now made
+// true by construction — flattenBottomBox strips it from its input — rather than asserted. The
+// assertion it replaced could not fail: a raw NUL is `illegal character NUL` to the Go compiler,
+// so the package cannot build in a state where a scan of its own source for one would fire.
+//
+// Written with the Go escape, which is what a fixture that genuinely captured a NUL would use
+// and exactly what a byte scan of the source does not see. Without the strip the sentinel splits
+// the headline and copilotTrustGateVisible stops recognising its own dialog — the fail-dangerous
+// direction, since that is the predicate holding the folder-trust gate.
+func TestFlattenBottomBoxStripsAnIncomingRowGap(t *testing.T) {
+	const headline = "Allow directory access"
+	split := boxedPane(headline[:6]+"\x00"+headline[6:], "  1. Yes")
+
+	flat, ok := flattenBottomBox(split)
+	require.True(t, ok, "the box is still a box")
+	require.NotContains(t, flat, "\x00", "the incoming NUL must not survive into the readback")
+	require.Contains(t, flat, headline,
+		"a NUL inside a row must not break the row's literal in half")
+
+	// The separator's real job is unaffected: a BLANK row still keeps two fragments apart.
+	blank := boxedPane(headline[:6], "", headline[6:])
+	flatBlank, ok := flattenBottomBox(blank)
+	require.True(t, ok)
+	require.NotContains(t, flatBlank, headline,
+		"a blank row is still a paragraph break, so the literal must not reconstruct across it")
 }
