@@ -185,9 +185,9 @@ atrium ls --killed --json | jq -r '.[] | select(.uncommitted_work_lost) | .title
 | `id` | The journal entry, which is what identifies one killed session |
 | `title`, `display_name`, `path`, `branch` | What the session was; `branch` is empty for a direct session |
 | `direct` | It was a direct (non-git) session, so it had no branch or worktree |
-| `batch_id` | The kill this entry belonged to, present only when that kill retired more than one session. The undo key restores a whole batch, so entries sharing one come back together |
+| `batch_id` | The kill this entry belonged to, present when it came from a batch kill (visual-mode `x` or the marked set) and absent for a single-session kill. The undo key restores a whole batch, so entries sharing one come back together |
 | `killed_at` | RFC 3339 |
-| `uncommitted_work_lost` | Restoring this entry comes back **incomplete**: it had uncommitted changes and the teardown could not commit them, so they are gone. False is the ordinary case, including for a session that was dirty when killed — the teardown folds that work into the retained commits |
+| `uncommitted_work_lost` | Restoring this entry comes back **incomplete**: it had uncommitted changes, nothing committed them, and removing the worktree took them with it. False for the usual dirty kill, where the teardown folds that work into the retained commits — but **true by design** for a session adopted onto a branch you own (`--branch <existing>`), which the teardown deliberately does not commit to |
 
 Restoring is still a TUI action; this only says what there is to restore. It never
 deletes a journal entry, however old — an entry past the retention horizon is
@@ -356,8 +356,8 @@ There is no `--force`. Nothing can distinguish a human who has looked from an ag
 that has not, so a flag meaning "I looked" is a flag agents would pass; the TUI is
 where a person overrides the gate.
 
-Both verbs also address a session more strictly than the read-only commands do. `ls`,
-`peek` and `send` fall back to a substring of the title or of the display label when no
+Both verbs also address a session more strictly than the read-only commands do. `peek`
+and `send` fall back to a substring of the title or of the display label when no
 exact name matches, which is a good trade when a wrong answer costs a misdirected
 message; here it deletes a branch, so only the names that *identify* a session resolve —
 its title, its tmux session name, or either of those in any case. `atrium kill fix` does
@@ -365,11 +365,17 @@ not find `fix-auth`. And neither verb will retire the session it is being run fr
 agent that tears down its own pane cannot report what happened, and a `--wait` dies with
 the pane, so the outcome would reach nobody.
 
-`pause` is deliberately **not** gated, because it destroys nothing: it stops the
-agent and frees the worktree while keeping the branch, committing whatever was
+`pause` is deliberately **not** gated, because nothing git tracks is at risk: it stops
+the agent and frees the worktree while keeping the branch, committing whatever was
 uncommitted as a marker Atrium unwinds on resume. That makes it the verb to reach
 for when a kill is refused — an orchestrator whose worker has unpushed work can
-still reclaim it. It does refuse what a park cannot do: an already-paused session,
+still reclaim it.
+
+It is not free, and the gate's absence is not a claim that it is. Freeing the worktree
+deletes the directory, so files git ignores that lived in it are gone for good — a local
+`.env`, a build cache, a session's installed dependencies — and resume rebuilds the
+worktree without them (only `carry_files` entries are re-seeded). This is the same loss
+the TUI's pause dialog warns about, and `atrium pause` prints it too. It does refuse what a park cannot do: an already-paused session,
 a direct session, which runs in your own checkout with no worktree to free, and one
 whose startup is still in flight, where the park would race the setup it is removing.
 

@@ -262,3 +262,86 @@ func TestSmallestPaneID(t *testing.T) {
 	_, err = smallestPaneID([]byte("nothing useful\n"))
 	require.Error(t, err)
 }
+
+// TestPaneIDsForSessionListsEveryPane: the caller recognising its own pane may be a shell
+// the user split off rather than the agent, so every pane in the session counts — and the
+// blank line tmux's trailing newline leaves must not become an empty id that matches
+// nothing (or, worse, an empty TMUX_PANE).
+func TestPaneIDsForSessionListsEveryPane(t *testing.T) {
+	r := &captureRecorder{panes: "%1\n%4\n%7\n"}
+
+	ids, err := PaneIDsForSession(context.Background(), r.exec(), "atrium_web_fix-auth")
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"%1", "%4", "%7"}, ids)
+	assert.Contains(t, r.calls[0], "atrium_web_fix-auth", "listed for the session it was asked about")
+}
+
+// TestPaneIDsForSessionRefusesAnEmptyName mirrors CapturePaneForSession's own guard: an
+// empty target is a name tmux would resolve against the current session, which is not the
+// session the caller asked about.
+func TestPaneIDsForSessionRefusesAnEmptyName(t *testing.T) {
+	r := &captureRecorder{panes: "%1\n"}
+
+	_, err := PaneIDsForSession(context.Background(), r.exec(), "")
+
+	require.Error(t, err)
+	assert.Empty(t, r.calls, "and it must not ask tmux anything")
+}
+
+// TestSessionConfirmedAbsentOnlyTrustsTheServersAnswer is the whole point of the helper:
+// it draws probeLiveness's distinction for a headless caller. Only tmux saying the session
+// is not there counts. A timeout, a cancelled context or a diagnostic this package has not
+// been taught is not an answer, and reading one as "gone" would clear a kill on a machine
+// whose server was merely busy.
+func TestSessionConfirmedAbsentOnlyTrustsTheServersAnswer(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  error
+		want bool
+	}{
+		{"the session is there", nil, false},
+		{"the server says it is not there", errors.New("exit status 1: can't find session: x"), true},
+		{"no server is listening at all", errors.New("exit status 1: no server running on /tmp/x"), true},
+		{"the probe was killed", errors.New("signal: killed"), false},
+		{"the socket could not be opened", errors.New("error connecting to /tmp/x (No such file or directory)"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := cmd_test.MockCmdExec{
+				RunFunc:    func(*exec.Cmd) error { return tc.run },
+				OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
+			}
+
+			assert.Equal(t, tc.want, SessionConfirmedAbsent(context.Background(), e, "atrium_web_fix-auth"))
+		})
+	}
+}
+
+// TestSessionConfirmedAbsentIgnoresACancelledContext: a cancelled context kills the probe
+// process, which surfaces as an ExitError like any other. Read as an answer it would say
+// every session is gone during shutdown.
+func TestSessionConfirmedAbsentIgnoresACancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	e := cmd_test.MockCmdExec{
+		RunFunc:    func(*exec.Cmd) error { return errors.New("exit status 1: can't find session") },
+		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
+	}
+
+	assert.False(t, SessionConfirmedAbsent(ctx, e, "atrium_web_fix-auth"),
+		"a probe the context killed answered nothing, whatever it printed")
+}
+
+// TestSessionConfirmedAbsentRefusesAnEmptyName: an empty name is not a session that is
+// absent, it is no question at all — and `has-session -t=` would answer about whatever
+// tmux considers current.
+func TestSessionConfirmedAbsentRefusesAnEmptyName(t *testing.T) {
+	asked := false
+	e := cmd_test.MockCmdExec{
+		RunFunc:    func(*exec.Cmd) error { asked = true; return errors.New("can't find session") },
+		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
+	}
+
+	assert.False(t, SessionConfirmedAbsent(context.Background(), e, ""))
+	assert.False(t, asked, "and tmux is not asked")
+}

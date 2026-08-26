@@ -116,12 +116,15 @@ const guidePage = "You are an AI agent running inside an Atrium session. Atrium 
 	"\n" +
 	"  `pause` is what to reach for when `kill` refuses. It stops the agent and\n" +
 	"  frees the worktree but keeps the branch, committing whatever was uncommitted\n" +
-	"  first, so nothing is discarded and no tree condition is checked.\n" +
+	"  first, so nothing git tracks is discarded and no tree condition is checked.\n" +
+	"  Freeing the worktree does delete it, though, so files git ignores that live\n" +
+	"  inside it — a local .env, a build cache, installed dependencies — are gone\n" +
+	"  for good, and resume rebuilds the worktree without them.\n" +
 	"\n" +
 	"  Name the session, do not describe it. Both verbs resolve a title or a tmux\n" +
-	"  name and refuse a substring of one, unlike `ls` and `send` — and neither will\n" +
-	"  retire the session you are running in. Retiring your own pane kills the agent\n" +
-	"  writing the report, so nobody learns what happened.\n" +
+	"  name and refuse a substring of one, unlike `peek` and `send` — and neither\n" +
+	"  will retire the session you are running in. Retiring your own pane kills the\n" +
+	"  agent writing the report, so nobody learns what happened.\n" +
 	"\n" +
 	"  Either way you are asking, not doing: both spool a request the running\n" +
 	"  Atrium carries out, so they report what they queued. `atrium kill --help`\n" +

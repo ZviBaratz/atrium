@@ -169,6 +169,19 @@ func (m *home) drainRetireRequests() tea.Cmd {
 		if m.outboxPoisoned[e.Path] {
 			continue
 		}
+		// Already answered, and durably so. outboxPoisoned covers the same record for
+		// the rest of THIS run and dies with the process, which is not long enough: a
+		// refusal whose receipt landed but whose unlink failed — ENOSPC, EROFS, a
+		// Windows or NFS lock — is still on disk for the next TUI to read, and by then
+		// the condition that justified the refusal may have cleared. Re-judging it
+		// would tear down a session whose producer was told, up to a TTL earlier, that
+		// the request had been refused. The create drain probes its disclosure mark
+		// here for the same reason. Retry the unlink rather than only skipping, so the
+		// record leaves as soon as whatever blocked it lets go.
+		if outbox.Receipted(e.Path) {
+			m.discardSpoolFile(e.Path, func() error { return outbox.Remove(e.Path) })
+			continue
+		}
 		if disposed >= retireDisposalBudget {
 			// Every remaining arm either disposes or dispatches, and a dispatch cannot
 			// happen without also being able to dispose. Stop rather than continue: the
@@ -215,8 +228,21 @@ func (m *home) drainRetireRequests() tea.Cmd {
 				// after that teardown reports.
 				continue
 			}
-			cmd, reason := m.executeRetirement(e.Retire.Mode, inst)
-			if reason != "" {
+			cmd, verdict := m.executeRetirement(e.Retire.Mode, inst)
+			if !verdict.Allowed() {
+				if verdict.Transient() {
+					// Held, not answered, and left queued in order. A session still
+					// starting finishes starting, and a tree whose numbers could not be
+					// taken is re-measured by the next poll — so answering either would
+					// refuse a durable request for a condition that clears itself, which
+					// is what the first tick after a launch does to every row still
+					// coming online. No log line: this repeats every tick for as long as
+					// it lasts, and the record staying in the spool is the observable
+					// part. A producer in --wait sees the timeout, and the TTL is the
+					// ceiling if it never clears.
+					continue
+				}
+				reason := verdict.Reason()
 				log.InfoLog.Printf("refusing a %s for %q: %s", e.Retire.Mode, inst.Title(), reason)
 				rejected[e.Path] = reason
 				// The reason, never the session's name. A display name has no length
@@ -249,9 +275,11 @@ func (m *home) drainRetireRequests() tea.Cmd {
 	switch {
 	case len(refusals) == 1:
 		// flashNotice rather than handleError, which for a long message opens a modal.
-		// A modal would be the wrong surface twice over: nobody asked for it, and
-		// retireDrainHeld holds on any non-default state, so a background refusal would
-		// stop the drain until somebody dismissed it.
+		// A modal is the wrong surface for a refusal nobody at the keyboard asked for:
+		// it covers the frame and waits for a dismissal to answer a question the
+		// producer's receipt already answered. The outcome handlers make the same
+		// choice for the same reason, through settleRetirement's report of whose
+		// retirement an outcome was.
 		cmds = append(cmds, m.flashNotice(firstRefusal, ui.NoticeError))
 	case len(refusals) > 1:
 		// A count rather than a list. Several refusals in one tick means a backlog, and
@@ -275,18 +303,24 @@ func (m *home) drainRetireRequests() tea.Cmd {
 // Keyed on inst because those handlers fire for every kill and pause the app performs,
 // keypress-driven ones included. Without the check, a user pausing a row by hand would
 // answer whatever record the drain happened to be holding.
-func (m *home) settleRetirement(inst *session.Instance, err error) {
+//
+// The bool is that same question asked out loud: it reports whether this outcome
+// belonged to a retirement the drain dispatched, which is what the done handlers need in
+// order to choose a surface for it. Nobody at the keyboard asked for a background
+// retirement, so nobody at the keyboard is owed a modal about it.
+func (m *home) settleRetirement(inst *session.Instance, err error) bool {
 	p := m.pendingRetirement
 	if p == nil || inst == nil || p.inst != inst {
-		return
+		return false
 	}
 	m.pendingRetirement = nil
 	if err != nil {
 		log.WarningLog.Printf("the %s of %q did not complete: %v", p.mode, inst.Title(), err)
 		m.discardSpoolFile(p.record, func() error { return outbox.Reject(p.record, err.Error()) })
-		return
+		return true
 	}
 	m.discardSpoolFile(p.record, func() error { return outbox.Remove(p.record) })
+	return true
 }
 
 // abandonStuckRetirement releases a claim whose outcome never arrived, so one lost
@@ -296,6 +330,17 @@ func (m *home) settleRetirement(inst *session.Instance, err error) {
 // the dispatch happened, so the teardown may well have too. A caller told "refused"
 // would go looking for a session that is gone, and one told "retired" would stop
 // watching a session that is still running.
+//
+// Everything the dispatch armed is released, not just the claim, and the claim is the
+// least of them. executeRetirement puts the app behind beginAsyncAction for either
+// verb and behind armTeardown for a kill, and the outcome message this retirement
+// never sent is what clears both — so releasing the record alone would leave
+// actionInFlight and the retiring mark set for the rest of the process. createDrainHeld
+// reads actionInFlight and retireDrainHeld reads createDrainHeld, so `atrium new` and
+// both retire verbs would stop draining: the wedge this function exists to prevent,
+// moved one field along. The grace period is what makes the release safe rather than a
+// race — fifteen minutes is long past the slowest legitimate teardown — and a message
+// that does arrive afterwards finds this idempotent and the claim already gone.
 func (m *home) abandonStuckRetirement(now time.Time) {
 	p := m.pendingRetirement
 	if p == nil || now.Sub(p.at) <= retireSettleGrace {
@@ -304,6 +349,8 @@ func (m *home) abandonStuckRetirement(now time.Time) {
 	log.ErrorLog.Printf("the %s of %q never reported back after %s; releasing its record",
 		p.mode, p.inst.Title(), retireSettleGrace)
 	m.pendingRetirement = nil
+	m.endTeardown([]*session.Instance{p.inst})
+	m.endAsyncAction()
 	m.discardSpoolFile(p.record, func() error {
 		return outbox.Reject(p.record, fmt.Sprintf(
 			"atrium dispatched the %s but it never reported back within %s, so whether the "+
@@ -325,50 +372,72 @@ func (m *home) abandonStuckRetirement(now time.Time) {
 // the asyncActionDoneMsg handler clears that and then re-feeds the inner result as a
 // SEPARATE later message. Between those two messages neither inherited hold is true.
 //
-// The third is the UI state, and it is deliberately "anything but the default frame"
-// rather than a list of the states that matter. Several overlays capture an instance
-// when they open and act on it when they close — a confirmation stashes its teardown
-// action, renameTarget holds the row being relabelled, queueTarget mirrors it — and a
-// teardown dispatched underneath any of them leaves that close to act on a session that
-// is already gone. With the deep-rename toggle on, that is a tmux rename, a
+// The third is the overlays that CAPTURE AN INSTANCE: a confirmation stashes its
+// teardown action, renameTarget holds the row being relabelled, queueTarget mirrors it.
+// A teardown dispatched underneath any of them leaves that close to act on a session
+// that is already gone — with the deep-rename toggle on, a tmux rename, a
 // `git branch -m` and a worktree move against a session whose branch was just deleted.
-// The list of which overlays capture an instance is a list that would fall behind; the
-// state is observable, and the cost of holding is a tick.
+// All three are cleared on the accepting and the cancelling path alike, so the hold is
+// as reliable as the overlay is.
+//
+// Each is named rather than standing in for it with "anything but the default frame",
+// which is the gate createDrainHeld's own comment gives as the thing that deadlocked
+// that drain. The frame carries states no retirement can disturb, and two of them never
+// end on their own: a fresh install sits in stateWelcome until someone answers the
+// modal, and nothing answers it on a machine driven only by `atrium new`, where
+// markWelcomeSeen is deliberately skipped for a background spawn. A blanket state gate
+// therefore means `atrium kill --wait` always times out and every record expires at the
+// TTL — on exactly the headless machine these verbs exist for. stateInfo is the same
+// trap arriving later: a drained retirement that fails raises one, and the drain would
+// then hold on the modal its own failure put up. A list that can fall behind is the
+// lesser risk; the falling-behind is one hold too many, and this is one hold too few.
 func (m *home) retireDrainHeld() bool {
-	return m.createDrainHeld() || m.pendingRetirement != nil || m.state != stateDefault
+	return m.createDrainHeld() || m.pendingRetirement != nil || m.overlayHoldsAnInstance()
 }
 
-// executeRetirement dispatches one retirement, or returns the reason it will not.
-// Exactly one of the two results is ever set.
+// overlayHoldsAnInstance reports whether an overlay is open that captured a specific
+// row to act on when it closes. See retireDrainHeld, its only caller, for why the three
+// are named individually.
+func (m *home) overlayHoldsAnInstance() bool {
+	return m.pendingConfirmAction != nil || m.renameTarget != nil || m.queueTarget != nil
+}
+
+// executeRetirement dispatches one retirement, or returns the verdict that stopped it.
+// Exactly one of the two results is ever set: a cleared verdict comes with a command.
 //
-// Both verbs go through the path the TUI's own key already uses — killIOCmd and
-// pauseIOCmd — rather than growing a second teardown. For a kill that is not a style
-// preference: the undo journal is written inside killIOCmd, deliberately, so that no
-// entry point can retire a session without recording how to get it back. A retirement
-// that bypassed it would be the one kind of kill `U` cannot undo, and nothing would
-// say so.
+// The verdict rather than its wording, because the caller has to tell a refusal that
+// answers the request from one that only describes this moment — see Verdict.Transient.
+//
+// Both verbs go through the path the TUI's own single-session key already uses —
+// killIOCmd and pauseIOCmd — rather than growing a second teardown. For a kill that is
+// not a style preference: killIOCmd writes the undo journal itself, so reaching a kill
+// through it is what makes a drained retirement as recoverable as a pressed one. A
+// retirement that grew its own teardown would be the one kind of kill `U` cannot undo,
+// and nothing would say so. (The batch kill is the one other teardown, and it journals in
+// its own loop for the same reason — see killIOCmd.)
 //
 // Both verbs are also screened by retire.Admits first. That rule is about what a verb
 // can act on at all rather than about work at risk, so it applies to the ungated verb
 // too: a pause of a session whose Start is still in flight would kill the tmux session
 // that Start is creating and remove the directory its Setup is still populating.
-func (m *home) executeRetirement(mode outbox.Mode, inst *session.Instance) (tea.Cmd, string) {
+func (m *home) executeRetirement(mode outbox.Mode, inst *session.Instance) (tea.Cmd, retire.Verdict) {
+	cleared := retire.Verdict{Condition: retire.Clear}
 	if v := retire.Admits(retireVerb(mode), instanceState(inst)); !v.Allowed() {
-		return nil, v.Reason()
+		return nil, v
 	}
 	label := fmt.Sprintf("%s '%s'…", mode.Gerund(), inst.DisplayName())
 	if mode == outbox.ModePause {
-		return m.beginAsyncAction(label, pauseIOCmd([]*session.Instance{inst})), ""
+		return m.beginAsyncAction(label, pauseIOCmd([]*session.Instance{inst})), cleared
 	}
 	if v := m.retireVerdict(inst); !v.Allowed() {
-		return nil, v.Reason()
+		return nil, v
 	}
 	arm, action := m.armTeardown([]*session.Instance{inst}, killIOCmd(m, inst))
 	// On the update thread, which is the only place the retiring mark and the
 	// WaitGroup may be touched — the same place and the same order the accepted
 	// confirmation applies them in.
 	arm()
-	return m.beginAsyncAction(label, action), ""
+	return m.beginAsyncAction(label, action), cleared
 }
 
 // retireVerb translates a spool record's mode into the verb the shared rules take. Two

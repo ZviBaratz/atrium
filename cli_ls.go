@@ -291,15 +291,27 @@ type killedJSON struct {
 	// BatchID groups the entries one kill produced, and it is published because the
 	// TUI's undo key restores a BATCH (undo.LatestBatch), not an entry: a visual-mode
 	// kill of four sessions comes back as four. Without it a reader cannot tell which
-	// rows return together from which are separate kills. Absent — not empty — for a
-	// session killed on its own, which is a different fact from belonging to an unnamed
-	// batch.
+	// rows return together from which are separate kills.
+	//
+	// Present for a kill that went through the BATCH path — visual-mode `x` and the
+	// marked-set kill — and absent for the single-session one, which journals with no
+	// batch at all. Those are not the same as "more than one session": killMarked mints
+	// a batch for a single marked row too, and one entry sharing nothing is still a
+	// batch of one. Absent rather than empty, which is a different fact from belonging
+	// to an unnamed batch.
 	BatchID  string    `json:"batch_id,omitempty"`
 	KilledAt time.Time `json:"killed_at"`
 	// UncommittedWorkLost reports that this session's uncommitted changes are gone for
-	// good: they were there when it was killed and the teardown could not commit them,
-	// so `git worktree remove -f` destroyed work the retained commits do not hold. A
+	// good: they were there when it was killed, nothing committed them, and
+	// `git worktree remove -f` then destroyed work the retained commits do not hold. A
 	// restore of this entry comes back incomplete.
+	//
+	// Two ways to get here and only one is a failure. The auto-commit can fail — a full
+	// disk, a hook that refuses — and PrepareUndo also declines to commit at all when
+	// the session was adopted onto a branch the USER owns, on the reasoning that Atrium
+	// should not write to such a branch uninvited. The worktree is still removed either
+	// way, so for an adopted-branch session this flag is the ORDINARY outcome of a dirty
+	// kill rather than a sign anything went wrong.
 	UncommittedWorkLost bool `json:"uncommitted_work_lost"`
 }
 
@@ -370,7 +382,14 @@ func writeKilledTable(w io.Writer, rows []killedJSON) error {
 		return err
 	}
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "SESSION\tBRANCH\tKILLED\tRESTORE")
+	// The same two identity columns the live table leads with, for the reason that one
+	// has them: a title is unique only within a repo group, so TITLE alone cannot tell
+	// the killed `web` of one repo from the killed `web` of another — and every row here
+	// is a candidate for a restore somebody has to pick. TITLE rather than the display
+	// label for the second half of that: the label is cosmetic and freely mutable, and
+	// resolveSessionNamed will not accept one back, so printing it would name a session
+	// by the one name no command answers to.
+	_, _ = fmt.Fprintln(tw, "TITLE\tREPO\tBRANCH\tKILLED\tRESTORE")
 	for _, r := range rows {
 		restore := "complete"
 		if r.UncommittedWorkLost {
@@ -378,11 +397,10 @@ func writeKilledTable(w io.Writer, rows []killedJSON) error {
 			// uncommitted changes are not coming back with it.
 			restore = "without uncommitted changes"
 		}
-		branch := r.Branch
-		if branch == "" {
-			branch = "—" // a direct session had none
-		}
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", r.DisplayName, branch,
+		// orDash, like every other table here — a direct session has no branch, and one
+		// glyph for "nothing" beats two.
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", orDash(r.Title),
+			orDash(filepath.Base(r.Path)), orDash(r.Branch),
 			r.KilledAt.Local().Format("2006-01-02 15:04"), restore)
 	}
 	return tw.Flush()

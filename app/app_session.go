@@ -835,6 +835,15 @@ type pauseFailure struct {
 	title        string
 	err          error
 	worktreeGone bool
+	// parked records whether the session ended up Paused despite the error, sampled
+	// alongside worktreeGone and for the same reason: pause()'s own doc says the
+	// returned error discriminates none of its outcomes, so a caller that needs one
+	// must measure it. Most of pause()'s failing arms reach SetStatus(Paused) — they
+	// park the session and report what they could not tidy — while its two guard
+	// returns (not started, already paused) touch nothing. Only the retire spool reads
+	// this: a receipt is owed the truth about whether the session is still there, and
+	// "the call returned an error" is not that truth.
+	parked bool
 }
 
 // batchPauseDoneMsg reports the outcome of a "pause all" run back through Update
@@ -985,7 +994,8 @@ func pauseIOCmd(insts []*session.Instance) tea.Cmd {
 				// reapStrandedShell gives. A failure here is still a teardown: most
 				// of pause()'s failing branches removed the worktree first.
 				res.failures = append(res.failures, pauseFailure{
-					inst: inst, title: inst.Title(), err: err, worktreeGone: inst.WorkingDirGone(),
+					inst: inst, title: inst.Title(), err: err,
+					worktreeGone: inst.WorkingDirGone(), parked: inst.Paused(),
 				})
 				continue
 			}
@@ -2306,14 +2316,21 @@ func sessionsWithUnpushedWork(insts []*session.Instance) int {
 // a fat tree, and it used to run inline with no progress row at all (#380). The
 // model half is applyKillDone.
 //
-// Shared by every path that retires a session — the kill confirmation, the post-merge
+// Shared by every path that retires ONE session — the kill confirmation, the post-merge
 // cleanup offer (#384), and the retire drain a spooled `atrium kill` reaches (#835) — so
-// all of them tear one down by exactly the same route. That is also why the undo journal
-// is written here rather than at the call sites: a session recoverable from one entry
-// point and not another would be the worse kind of surprise, and this is the one place
-// none of them can skip. It takes the model only to reach that journal (the data dir and
-// the sweep's context); it touches nothing else on it, and must not, because it runs off
-// the update thread.
+// all three tear one down by exactly the same route. The batch kill is the exception and
+// not an oversight: killInstances runs the same steps in its own loop, because a batch
+// needs one progress row, one undo batch id and one summary for the whole run rather than
+// per-session copies of each.
+//
+// The undo journal is written here rather than at those three call sites for the reason
+// that exception makes sharp: a session recoverable from one entry point and not another
+// would be the worse kind of surprise, so each teardown implementation has to journal,
+// and there had better be as few implementations as possible. killInstances journals in
+// its own loop for the same rule; nothing but the two of them may retire a session.
+//
+// It takes the model only to reach that journal (the data dir and the sweep's context);
+// it touches nothing else on it, and must not, because it runs off the update thread.
 func killIOCmd(m *home, inst *session.Instance) tea.Cmd {
 	return func() tea.Msg {
 		// Refuse to kill only when the branch is checked out in the primary repo
@@ -2436,7 +2453,16 @@ func (m *home) applyKillDone(msg killDoneMsg) tea.Cmd {
 		// by its disappearance: the session is untouched, so a producer blocked in
 		// --wait has to hear why rather than read an unlink as a teardown. A no-op when
 		// this kill came from the key rather than the spool.
-		m.settleRetirement(msg.outcome.inst, msg.refused)
+		if m.settleRetirement(msg.outcome.inst, msg.refused) {
+			// A refusal for a retirement an agent asked for. handleError sends a message
+			// this long to showInfo, which raises a persistent modal — the surface the
+			// drain deliberately avoids for its own refusals, and for the same reason:
+			// nobody at the keyboard asked for this retirement, and the producer already
+			// has the reason in its receipt. Same wording as the drain's notice, because
+			// it is the same event arriving one message later.
+			return m.flashNotice(fmt.Sprintf("refused to kill a session: %v", msg.refused),
+				ui.NoticeError)
+		}
 		return m.handleError(msg.refused)
 	}
 	inst := msg.outcome.inst
@@ -2761,6 +2787,22 @@ func (m *home) beginAsyncAction(label string, cmd tea.Cmd) tea.Cmd {
 		}
 		return asyncActionDoneMsg{result: result}
 	}
+}
+
+// endAsyncAction releases what beginAsyncAction armed: the key gate, the progress row
+// and the layout line it claimed. Main-thread only.
+//
+// Extracted because the asyncActionDoneMsg handler is no longer the only release. A
+// retirement the retire drain dispatched is abandoned by retireSettleGrace when its
+// outcome never arrives, and an abandonment that released the spool claim without
+// releasing this would trade a wedged spool for a wedged key gate.
+//
+// ClearBusy rather than SetState: a background operation may still be running, and its
+// line should come back rather than be wiped by the action that was covering it.
+func (m *home) endAsyncAction() {
+	m.actionInFlight = false
+	m.menu.ClearBusy(ui.BusyAction)
+	m.recomputeLayout()
 }
 
 // beginBackgroundAction names an operation on the progress row WITHOUT gating

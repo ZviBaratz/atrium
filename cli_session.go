@@ -162,7 +162,9 @@ func mapKeys(m map[string]json.RawMessage) []string {
 }
 
 // resolveSession finds the one session a selector names, guessing at a substring when
-// no exact name matches. For the read-only and additive verbs: peek, send, ls.
+// no exact name matches. For the read-only and additive verbs that take one: peek and
+// send. `ls` is not among them — it takes no selector at all, so it has nothing to
+// resolve.
 //
 // Identity is the (Title, Path) pair, not the title: titles are unique only
 // within a repo group, so the same title can legitimately exist in two repos —
@@ -191,6 +193,11 @@ func resolveSession(instances []session.InstanceData, selector, pathFilter strin
 // The three tiers that remain are the ones where the selector IS a name: the title, the
 // tmux session name, and either of those case-insensitively. Nothing a caller has to
 // guess at.
+//
+// Both names are folded, and the tmux one had to be added: the tier folded only the
+// title, so a case-variant tmux name was refused by three doc sites' worth of promise
+// that it resolves. An empty TmuxName cannot match a non-empty selector under EqualFold,
+// so the sessions whose state predates that field are unaffected.
 func resolveSessionNamed(instances []session.InstanceData, selector, pathFilter string) (session.InstanceData, error) {
 	return resolveSessionIn(instances, selector, pathFilter, false)
 }
@@ -232,7 +239,7 @@ func resolveSessionIn(instances []session.InstanceData, selector, pathFilter str
 		func(d session.InstanceData) bool { return d.Title == selector },
 		func(d session.InstanceData) bool { return d.TmuxName == selector },
 		func(d session.InstanceData) bool {
-			if strings.EqualFold(d.Title, selector) {
+			if strings.EqualFold(d.Title, selector) || strings.EqualFold(d.TmuxName, selector) {
 				return true
 			}
 			// The display label, case-insensitively, and only for the guessing callers.

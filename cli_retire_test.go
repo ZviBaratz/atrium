@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -139,6 +140,37 @@ func TestKillRefusesAProbeItCouldNotRun(t *testing.T) {
 	assert.Empty(t, spooledRetires(t))
 }
 
+// TestPauseWarnsThatFreeingTheWorktreeDeletesIgnoredFiles: the verb is not gated on that
+// loss, so printing it is the only surface a headless park has for it. pauseConfirmMessage
+// is the copy the TUI is required to show for the same teardown and calls the loss
+// unconditional, while three doc sites said pause "destroys nothing" — a caller told that
+// parks a worker to preserve its work and loses its .env and its installed dependencies.
+//
+// stderr, so a caller parsing stdout is unaffected.
+func TestPauseWarnsThatFreeingTheWorktreeDeletesIgnoredFiles(t *testing.T) {
+	sandboxDataDir(t)
+	seedInstances(t, inst("fix-auth", "/repo/web"))
+
+	stdout, stderr, err := retireCmd(t, outbox.ModePause, refusingProbe(t), "fix-auth", 0)
+
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "git ignores", "the loss the TUI dialog names must be named here too")
+	assert.NotContains(t, stdout, "git ignores", "and not on stdout, which callers parse")
+}
+
+// TestKillDoesNotWarnAboutIgnoredFiles: the note belongs to the verb that is not gated on
+// the loss. A kill establishes safety first, and adding a second caveat to a refusal-heavy
+// command is noise.
+func TestKillDoesNotWarnAboutIgnoredFiles(t *testing.T) {
+	sandboxDataDir(t)
+	seedInstances(t, inst("fix-auth", "/repo/web"))
+
+	_, stderr, err := retireCmd(t, outbox.ModeKill, cleanProbe(), "fix-auth", 0)
+
+	require.NoError(t, err)
+	assert.NotContains(t, stderr, "git ignores")
+}
+
 // TestPauseSpoolsWithoutProbing is why pause ships beside kill. It is the escape
 // valve for everything the gate refuses, so it must not consult the gate — a pause
 // gated on the same conditions would leave an orchestrator with no way to reclaim
@@ -207,9 +239,8 @@ func TestPauseRefusesWhatPauseCannotDo(t *testing.T) {
 	}
 }
 
-// TestRetireRefusesAnUnresolvableSelector: resolveSession's refusals reach the
-// caller unchanged, ambiguity included. That is most of the protection against an
-// agent naming the wrong session — it never guesses between two candidates.
+// TestRetireRefusesAnUnresolvableSelector: a name that matches nothing is refused, and
+// nothing is queued for it.
 func TestRetireRefusesAnUnresolvableSelector(t *testing.T) {
 	sandboxDataDir(t)
 	seedInstances(t, inst("api", "/repo/a"), inst("api-v2", "/repo/a"))
@@ -217,6 +248,45 @@ func TestRetireRefusesAnUnresolvableSelector(t *testing.T) {
 	_, _, err := retireCmd(t, outbox.ModeKill, refusingProbe(t), "nope", 0)
 	require.Error(t, err)
 	assert.Empty(t, spooledRetires(t))
+}
+
+// TestRetireRefusesAnAmbiguousNameRatherThanPicking is the protection that matters most
+// against an agent naming the wrong session, and it needs the one fixture that is
+// actually ambiguous: the same title in two repos. Titles are unique only within a repo
+// group, so that is the shape resolveSessionNamed cannot resolve — "api" and "api-v2" in
+// one repo are two distinct names and never ambiguous for it.
+//
+// Without this, changing resolveSessionIn's ambiguity arm to return the first hit would
+// leave every retire test passing while `atrium kill web` deleted whichever repo's
+// branch state.json happened to list first.
+func TestRetireRefusesAnAmbiguousNameRatherThanPicking(t *testing.T) {
+	for _, mode := range []outbox.Mode{outbox.ModeKill, outbox.ModePause} {
+		t.Run(string(mode), func(t *testing.T) {
+			sandboxDataDir(t)
+			seedInstances(t, inst("web", "/repo/alpha"), inst("web", "/repo/beta"))
+
+			_, _, err := retireCmd(t, mode, refusingProbe(t), "web", 0)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "/repo/alpha", "the candidates are listed")
+			assert.Contains(t, err.Error(), "/repo/beta")
+			assert.Empty(t, spooledRetires(t), "and nothing is queued for either")
+		})
+	}
+}
+
+// TestRetireResolvesAnAmbiguousNameWithPath is the other half of the promise: --path is
+// how a caller breaks the tie it was just told about.
+func TestRetireResolvesAnAmbiguousNameWithPath(t *testing.T) {
+	sandboxDataDir(t)
+	seedInstances(t, inst("web", "/repo/alpha"), inst("web", "/repo/beta"))
+
+	err := runRetire(io.Discard, io.Discard, outbox.ModeKill, cleanProbe(), "web", "/repo/beta", 0)
+
+	require.NoError(t, err)
+	entries := spooledRetires(t)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "/repo/beta", entries[0].Retire.Path, "the one --path named")
 }
 
 // TestRetireRefusesANegativeWait: cobra parses "--wait -5s" happily, and left to a
@@ -285,12 +355,68 @@ func TestBusyProbeReadsThePaneThroughTheAgentAdapter(t *testing.T) {
 	busy, err := busyFromPane(context.Background(), working.exec(), d)
 	require.NoError(t, err)
 	assert.True(t, busy, "claude's busy marker in the footer means working")
-	assert.Contains(t, working.argvFor("capture-pane"), "capture-pane")
+	// The NAME, not the verb. argvFor returns the argv containing what it was handed, so
+	// asserting "capture-pane" is in the capture-pane argv could not fail — and the whole
+	// point of this test is that the read is aimed at this session rather than at a
+	// hardcoded or title-derived target.
+	//
+	// The name enters through the pane-id resolution rather than the capture: the capture
+	// targets the id that resolution returned, which is what keeps it off a split the
+	// user opened (see CapturePaneForSession). So both halves are pinned — the session
+	// this looked up, and that the capture used what the lookup answered.
+	assert.Contains(t, working.argvFor("list-panes"), tmuxSessionName(d),
+		"the panes must be resolved for the session's own tmux name")
+	assert.Contains(t, working.argvFor("capture-pane"), "%1",
+		"and the capture must target the pane that resolution returned")
 
 	idle := &fakeTmux{content: "> \n\n  ? for shortcuts\n"}
 	busy, err = busyFromPane(context.Background(), idle.exec(), d)
 	require.NoError(t, err)
 	assert.False(t, busy)
+}
+
+// TestBusyProbeReadsAnAbsentSessionAsIdle is the end of an agent's life, and it used to
+// be unretirable. When the agent process exits, tmux takes its window and then its
+// session, so capture-pane fails for a session that is not there — which is not a pane
+// that could not be read, and there is no turn in flight in a session that does not
+// exist. Folding the two together refused the kill, and once the TUI's own recovery
+// parked the row, retire.Admits refused both verbs after that: no headless verb could
+// retire it at all.
+//
+// Only the server's own answer counts. The inconclusive probe is the next test.
+func TestBusyProbeReadsAnAbsentSessionAsIdle(t *testing.T) {
+	d := inst("fix-auth", "/repo/web")
+	d.TmuxName = "atrium_web_fix-auth"
+
+	gone := cmd_test.MockCmdExec{
+		// has-session's answer, which is the evidence: tmux reached the socket and said
+		// the session is not there.
+		RunFunc:    func(*exec.Cmd) error { return errors.New("exit status 1: can't find session") },
+		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, errors.New("can't find session") },
+	}
+
+	busy, err := busyFromPane(context.Background(), gone, d)
+
+	require.NoError(t, err, "a session that does not exist is not a session that cannot be read")
+	assert.False(t, busy, "and nothing is running in it")
+}
+
+// TestBusyProbeStillFailsWhenTheProbeCannotAnswer keeps the concession narrow. A tmux
+// that never answered is not a tmux that said the session is gone, and reading the
+// first as the second would clear a kill on a machine whose server was merely busy or
+// whose socket had moved.
+func TestBusyProbeStillFailsWhenTheProbeCannotAnswer(t *testing.T) {
+	d := inst("fix-auth", "/repo/web")
+	d.TmuxName = "atrium_web_fix-auth"
+
+	stuck := cmd_test.MockCmdExec{
+		RunFunc:    func(*exec.Cmd) error { return errors.New("signal: killed") },
+		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, errors.New("signal: killed") },
+	}
+
+	_, err := busyFromPane(context.Background(), stuck, d)
+
+	require.Error(t, err, "an unanswered probe must not read as idle")
 }
 
 // TestBusyProbeFailsRatherThanGuessing: a capture that errors must not answer
@@ -457,7 +583,10 @@ func TestRetireResolvesOnlyAnExactName(t *testing.T) {
 // case-insensitive title all name exactly one session, and all three still work — the
 // same three tiers `atrium send` reaches before it starts guessing.
 func TestRetireStillResolvesTheNamesThatIdentifyASession(t *testing.T) {
-	for _, selector := range []string{"fix-auth", "atrium_web_fix-auth", "FIX-AUTH"} {
+	// ATRIUM_WEB_FIX-AUTH is the case that shipped broken: the tier folded only the
+	// title, so a case-variant TMUX name was refused while `kill --help`, the README and
+	// resolveSessionNamed's own doc all promised "either of those in any case".
+	for _, selector := range []string{"fix-auth", "atrium_web_fix-auth", "FIX-AUTH", "ATRIUM_WEB_FIX-AUTH"} {
 		t.Run(selector, func(t *testing.T) {
 			sandboxDataDir(t)
 			d := inst("fix-auth", "/repo/web")
@@ -501,6 +630,51 @@ func TestRetireRefusesTheCallersOwnSession(t *testing.T) {
 	}
 }
 
+// TestRetireRefusesItsOwnSessionWhoseTmuxNameWasNeverRecorded closes the hole the raw
+// field left. TmuxName is absent from state written before that field existed, and
+// comparing an empty field against a non-empty variable never matches — so the guard
+// passed silently for every one of those sessions and let the agent retire its own pane.
+// tmuxSessionName derives the older title-based name, which is the name those sessions
+// are actually live under and the one their pane's variable holds.
+func TestRetireRefusesItsOwnSessionWhoseTmuxNameWasNeverRecorded(t *testing.T) {
+	sandboxDataDir(t)
+	d := inst("fix-auth", "/repo/web")
+	d.TmuxName = "" // state.json from before the field existed
+	seedInstances(t, d)
+	t.Setenv(sessionNameEnv, tmuxSessionName(d))
+
+	_, _, err := retireCmd(t, outbox.ModeKill, refusingProbe(t), "fix-auth", 0)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "its own session")
+	assert.Empty(t, spooledRetires(t))
+}
+
+// TestRetireRefusesItsOwnSessionAfterADeepRename closes the other one, which no name
+// comparison can. A deep rename moves the tmux session's name; the variable in the
+// already-running pane keeps the name it was launched with, so the two never match again
+// and the guard is dead for the rest of that session's life.
+//
+// The pane id is what survives a rename — tmux mints it once and never reissues it — so
+// the guard asks that first, and TMUX_PANE is tmux's own answer for the caller's half.
+func TestRetireRefusesItsOwnSessionAfterADeepRename(t *testing.T) {
+	sandboxDataDir(t)
+	d := inst("fix-auth", "/repo/web")
+	d.TmuxName = "atrium_web_renamed" // renamed since the agent started
+	seedInstances(t, d)
+	t.Setenv(sessionNameEnv, "atrium_web_fix-auth") // frozen at launch: the OLD name
+	t.Setenv(paneIDEnv, "%1")
+
+	probe := cleanProbe()
+	probe.panes = func(session.InstanceData) []string { return []string{"%1", "%4"} }
+
+	_, _, err := retireCmd(t, outbox.ModeKill, probe, "fix-auth", 0)
+
+	require.Error(t, err, "the name no longer matches, so only the pane id can catch this")
+	assert.Contains(t, err.Error(), "its own session")
+	assert.Empty(t, spooledRetires(t))
+}
+
 // TestRetireActsOnOtherSessionsFromInsideOne is the other half: the self-guard must not
 // become a general refusal to retire anything from inside a session, which is the only
 // place these verbs are ever run from.
@@ -517,6 +691,25 @@ func TestRetireActsOnOtherSessionsFromInsideOne(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, spooledRetires(t), 1)
+}
+
+// TestRetireActsOnAnotherSessionWhosePanesAreNotTheCallers is the pane check's own
+// false-positive guard: being inside SOME pane must not refuse every target, only the
+// one whose panes include this process's.
+func TestRetireActsOnAnotherSessionWhosePanesAreNotTheCallers(t *testing.T) {
+	sandboxDataDir(t)
+	worker := inst("worker-3", "/repo/web")
+	worker.TmuxName = "atrium_web_worker-3"
+	seedInstances(t, worker)
+	t.Setenv(paneIDEnv, "%9")
+
+	probe := cleanProbe()
+	probe.panes = func(session.InstanceData) []string { return []string{"%1", "%2"} }
+
+	_, _, err := retireCmd(t, outbox.ModeKill, probe, "worker-3", 0)
+
+	require.NoError(t, err)
+	assert.Len(t, spooledRetires(t), 1)
 }
 
 // TestBusyProbeConsultsTheLiveSpinner is the hole CanDetectBusy was added to close and

@@ -349,9 +349,12 @@ func TestRejectWritesReceiptBeforeUnlinking(t *testing.T) {
 	assert.Equal(t, "the session was killed", reason)
 }
 
-// TestRejectRemovesMessageEvenIfReceiptFails: an unreported failure beats a
-// message that is re-read, re-rejected and never cleared.
-func TestRejectRemovesMessageEvenIfReceiptFails(t *testing.T) {
+// TestRejectKeepsTheRecordWhenTheReceiptCannotBeWritten is the other half of the
+// ordering above, and the half a destructive verb depends on. A record that vanishes
+// with no receipt beside it is precisely what awaitSpool reads as success, so clearing
+// one whose reason could not be recorded would report a refused `atrium kill` as a
+// completed one. The record stays instead, and the producer's wait times out.
+func TestRejectKeepsTheRecordWhenTheReceiptCannotBeWritten(t *testing.T) {
 	sandbox(t)
 	path, err := Write(msg("t", "/repo", "x"))
 	require.NoError(t, err)
@@ -362,7 +365,31 @@ func TestRejectRemovesMessageEvenIfReceiptFails(t *testing.T) {
 
 	err = Reject(path, "why")
 	require.Error(t, err, "the failure to record a reason must be reported")
-	assert.NoFileExists(t, path, "the message is cleared regardless, so it is not re-rejected forever")
+	assert.FileExists(t, path, "an unanswerable record must not disappear, which reads as done")
+}
+
+// TestReceiptedReportsARecordThatOutlivedItsAnswer covers the pairing Reject cannot
+// make atomic: the receipt landed and the unlink did not, so the record is still on
+// disk while its producer has already been told why it was refused. A walk that
+// re-judged it would act on a request it had answered.
+func TestReceiptedReportsARecordThatOutlivedItsAnswer(t *testing.T) {
+	sandbox(t)
+	dir, err := Dir()
+	require.NoError(t, err)
+
+	live, err := Write(msg("t", "/repo", "x"))
+	require.NoError(t, err)
+	assert.False(t, Receipted(live), "a record nobody has answered is not spent")
+
+	// A record that cannot be unlinked: os.Remove refuses a non-empty directory.
+	stuck := filepath.Join(dir, "0000000000000000002-bbbbbbbb.json")
+	require.NoError(t, os.MkdirAll(stuck, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stuck, "occupant"), []byte("x"), 0o644))
+	require.Error(t, Reject(stuck, "it has uncommitted changes"), "the failed unlink is reported")
+
+	assert.True(t, Receipted(stuck), "the receipt is the durable mark that it was answered")
+	assert.False(t, Receipted(filepath.Join(dir, "0000000000000000003-cccccccc.json")),
+		"a path with no record and no receipt is not spent")
 }
 
 // TestSweepRejectionsKeepsFreshReceipts is the other half of the sweep: a

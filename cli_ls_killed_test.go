@@ -225,14 +225,41 @@ func TestLsKilledPublishesBranchAsAnEmptyStringForADirectSession(t *testing.T) {
 
 // TestLsKilledTableNamesADirectSessionWithoutABranch: the human form has to say
 // something in the branch column for a session that never had one, rather than leave it
-// looking truncated.
+// looking truncated. The same glyph the live table uses, so one listing does not read as
+// a different program from the other.
 func TestLsKilledTableNamesADirectSessionWithoutABranch(t *testing.T) {
 	sandboxDataDir(t)
 	journalEntry(t, undo.Entry{Title: "notes", Path: "/repo/web", Direct: true})
 
 	out := lsKilled(t, false)
 	assert.Contains(t, out, "notes")
-	assert.Contains(t, out, "—", "a direct session's missing branch is stated, not blank")
+	assert.Contains(t, out, orDash(""), "a direct session's missing branch is stated, not blank")
+}
+
+// TestLsKilledTableNamesTheRepoEachEntryCameFrom is the identity column the live table
+// spends a column on for the same reason: a title is unique only within a repo group, so
+// two killed sessions called `web` in two repos are otherwise identical in every visible
+// column — and a reader is being asked which one to restore.
+func TestLsKilledTableNamesTheRepoEachEntryCameFrom(t *testing.T) {
+	sandboxDataDir(t)
+	journalEntry(t, undo.Entry{Title: "web", Path: "/repo/alpha", Branch: "zvi/web"})
+	journalEntry(t, undo.Entry{Title: "web", Path: "/repo/beta", Branch: "zvi/web"})
+
+	out := lsKilled(t, false)
+	assert.Contains(t, out, "alpha")
+	assert.Contains(t, out, "beta", "the two rows must be tellable apart")
+}
+
+// TestLsKilledTableNamesTheTitleNotTheLabel: the display label is cosmetic, freely
+// mutable, and the one name resolveSessionNamed refuses to resolve — so a listing that
+// printed it would name each session by the name no command answers to.
+func TestLsKilledTableNamesTheTitleNotTheLabel(t *testing.T) {
+	sandboxDataDir(t)
+	journalEntry(t, undo.Entry{Title: "fix-auth", Display: "auth work", Path: "/repo/web"})
+
+	out := lsKilled(t, false)
+	assert.Contains(t, out, "fix-auth", "the title is what identifies the session")
+	assert.NotContains(t, out, "auth work", "the cosmetic label is not an identity")
 }
 
 // TestLsKilledGroupsTheEntriesOneUndoWouldRestoreTogether is why batch_id is published.

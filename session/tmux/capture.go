@@ -20,6 +20,46 @@ import (
 	"github.com/ZviBaratz/atrium/log"
 )
 
+// SessionConfirmedAbsent reports whether the tmux SERVER answered that this session is
+// not there — as opposed to a probe that never got an answer.
+//
+// It exists for the headless callers this file is about, which hold a session name and no
+// *Session, and it draws exactly the distinction probeLiveness draws for the poll: the
+// server's own answer is evidence, while a timeout, a cancelled context or a socket tmux
+// could not open is not. Only the strong half returns true, so a caller may act on it.
+//
+// What acts on it is the retire gate. A capture that fails is not an idle pane, and
+// refusing on one is deliberate — but a session whose agent has exited is not an
+// unreadable pane, it is an absent one, and there is no turn in flight in a session that
+// does not exist. Without this the two are the same error, and the ordinary end of an
+// agent's life left its session with no headless way to retire it at all.
+//
+// It reads noLiveSessionMessage, the half of sessionAlreadyGone a server produces, rather
+// than restating it — so a diagnostic this package learns is learned here too. The other
+// half, socketMissingMessage, is deliberately left out: a live server whose socket was
+// unlinked answers exactly like an absent one, which is an inference and not evidence.
+func SessionConfirmedAbsent(ctx context.Context, exec cmd.Executor, sessionName string) bool {
+	if sessionName == "" {
+		return false
+	}
+	// `-t=` is an exact match; plain `-t` is a prefix match, which would answer for a
+	// neighbouring session whose name this one is a prefix of.
+	var stderr strings.Builder
+	probe := tmuxCommand(ctx, "has-session", fmt.Sprintf("-t=%s", sessionName))
+	probe.Stderr = &stderr
+	err := exec.Run(probe)
+	switch {
+	case err == nil:
+		return false
+	// A context-killed probe surfaces as an ExitError ("signal: killed"), so it is
+	// checked first and on ctx.Err() rather than DeadlineExceeded alone: a cancelled
+	// context kills the process just the same. Neither is an answer about the session.
+	case ctx.Err() != nil, errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+		return false
+	}
+	return noLiveSessionMessage(goneHaystack(err, stderr.String()))
+}
+
 // CaptureOpts tunes a headless pane capture.
 type CaptureOpts struct {
 	// Lines, when positive, is how many lines of output to return, reaching back
@@ -83,6 +123,34 @@ func resolvePaneID(ctx context.Context, exec cmd.Executor, sessionName string) (
 		return "", err
 	}
 	return smallestPaneID(listed)
+}
+
+// PaneIDsForSession returns every pane id in a tmux session, for a caller that has to
+// recognise a pane rather than read one.
+//
+// A pane id is the identity a NAME is not: tmux mints it once and never reissues it, so
+// it survives a rename of the session, the window or the pane. That is what makes it the
+// only sound way to answer "am I inside this session?" — the name a process was launched
+// with is frozen in its environment, and a session renamed since then answers to a name
+// nothing in that process knows.
+//
+// Every pane, not the agent's alone: the question is whether the CALLER's pane belongs to
+// this session, and the caller may be a shell the user split off rather than the agent.
+func PaneIDsForSession(ctx context.Context, exec cmd.Executor, sessionName string) ([]string, error) {
+	if sessionName == "" {
+		return nil, errors.New("cannot list panes without a tmux session name")
+	}
+	listed, err := exec.Output(tmuxCommand(ctx, "list-panes", "-s", "-t", sessionName, "-F", "#{pane_id}"))
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for _, line := range strings.Split(strings.TrimSpace(string(listed)), "\n") {
+		if id := strings.TrimSpace(line); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
 }
 
 // trimCapture drops the blank rows tmux pads a partly-filled pane with, then

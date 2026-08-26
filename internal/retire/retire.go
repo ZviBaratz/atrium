@@ -44,6 +44,12 @@ import (
 	"github.com/ZviBaratz/atrium/session/git"
 )
 
+// unrecognizedReason is what Reason falls back to for a Condition it has no wording for.
+// A named constant because it is the one answer a refusal must never actually give: it
+// tells an agent nothing it can act on. Reason returns it rather than "" — which would
+// read as cleared — and the enum walk in the tests is what keeps it unreachable.
+const unrecognizedReason = "it failed an unrecognized safety check"
+
 // Condition is why a session may not be retired, or Clear when it may.
 type Condition int
 
@@ -90,6 +96,12 @@ const (
 	// populated and its tmux session created, so a teardown would race the setup it is
 	// tearing down.
 	Starting
+	// conditionEnd is one past the last condition, and it is not a condition. It exists
+	// so a table test can walk the whole enum and prove it covered every member, rather
+	// than however many somebody remembered to list — which is what let a condition ship
+	// with no wording of its own. Anything added above it is covered automatically;
+	// anything added below it is not, so add above.
+	conditionEnd
 )
 
 // Verb is which retirement is being asked for. The two differ in what they destroy,
@@ -134,6 +146,30 @@ type Verdict struct {
 // Allowed reports whether the session may be retired.
 func (v Verdict) Allowed() bool { return v.Condition == Clear }
 
+// Transient reports whether a refusal describes a MOMENT rather than the session, so a
+// caller holding a durable request should wait rather than answer it.
+//
+// Two conditions qualify and the rest do not, and the split is about who can change
+// the answer. A session that is Starting finishes starting; a tree whose numbers could
+// not be taken is re-measured by the next poll. Neither needs anybody to do anything,
+// and both are states a session passes through on an ordinary launch — the drain's walk
+// can land on either while a row is still coming online. Uncommitted, Unpushed and Busy
+// are refusals a PERSON clears (push the branch, wait for the turn), and they are the
+// answer the request deserves. Direct, Parked and AlreadyParked describe the session
+// itself and never clear on their own.
+//
+// Only a caller that can afford to wait should read this: for a durable spool record,
+// holding costs a tick and answering costs the request. For the command, which has
+// nobody to hold for, a transient refusal is still a refusal.
+func (v Verdict) Transient() bool {
+	switch v.Condition {
+	case Starting, Unestablished:
+		return true
+	default:
+		return false
+	}
+}
+
 // Reason states the refusal as a clause that completes "refusing to retire
 // <session>: …", or "" for a cleared verdict.
 func (v Verdict) Reason() string {
@@ -169,7 +205,7 @@ func (v Verdict) Reason() string {
 	default:
 		// An unnamed condition is a refusal that cannot explain itself, which is
 		// worse than any wording. Say that rather than return "" and read as cleared.
-		return "it failed an unrecognized safety check"
+		return unrecognizedReason
 	}
 }
 

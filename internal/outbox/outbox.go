@@ -278,10 +278,20 @@ const rejectedSuffix = ".rejected"
 
 // Reject records why a record could not be acted on and then removes it.
 //
-// The receipt is written before the record is unlinked so a waiting producer
-// cannot observe the gap as a success. If the receipt cannot be written the
-// record is still removed: an unreported failure is better than a record that is
-// re-read, re-rejected, and never cleared.
+// The receipt is written before the record is unlinked so a waiting producer cannot
+// observe the gap as a success. A receipt that cannot be written aborts the unlink for
+// the same reason, rather than clearing the record anyway: a record that disappears
+// without one is exactly what awaitSpool reads as "done". Removing it regardless — as
+// this did once, on the argument that an unreported failure beats a record re-read
+// forever — turns an unwritable data dir into `atrium kill x --wait` exiting 0 with the
+// session untouched, which is the single answer a destructive verb must never give.
+// What the caller gets instead is the record still there, so the wait times out and says
+// no atrium acted on it.
+//
+// The re-read that argument was about is bounded twice over: the TTL discards the
+// record, and the drains poison a path whose clearing failed for the rest of the run. A
+// later run can pick such a record up again, which for a retirement is a delayed
+// fulfilment rather than a contradiction — its producer was never told anything.
 //
 // The path is screened for validRecord's reason, which the paragraph above ClaimPath
 // spells out for this function in particular: a Reject aimed at a claim would write
@@ -293,9 +303,26 @@ func Reject(path, reason string) error {
 		return err
 	}
 	if err := config.WriteFileAtomic(path+rejectedSuffix, []byte(reason), 0o644); err != nil {
-		return errors.Join(fmt.Errorf("outbox: write rejection receipt: %w", err), Remove(path))
+		return fmt.Errorf("outbox: write rejection receipt: %w", err)
 	}
 	return Remove(path)
+}
+
+// Receipted reports whether a record already carries a rejection receipt, which makes
+// it terminally answered even though it is still on disk.
+//
+// That pairing is the one Reject cannot make atomic: the receipt lands, the unlink
+// fails, and the record outlives the answer its producer has already been given. A
+// walk that re-judged it would act on a request it had refused — for a retirement, up
+// to a TTL later, when the tree condition that justified the refusal may have cleared.
+// A stat rather than Rejection's read, because no caller needs the reason to know the
+// record is spent.
+func Receipted(path string) bool {
+	if err := validRecord(path); err != nil {
+		return false
+	}
+	_, err := os.Stat(path + rejectedSuffix)
+	return err == nil
 }
 
 // Rejection returns the recorded reason a record was discarded, if there is one.

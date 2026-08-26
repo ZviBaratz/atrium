@@ -124,12 +124,37 @@ func TestGateReportsWorkAtRiskAheadOfBusyness(t *testing.T) {
 // TestEveryRefusalNamesItsCondition keeps the refusal wording from going missing
 // for a condition added later: a Verdict a caller cannot explain is one the agent
 // has no way to act on. Clear is the only condition allowed to say nothing.
+//
+// It walks the ENUM rather than a list, because a list is the thing that goes missing:
+// the earlier version named four of the eight conditions, so the four Admits returns
+// were never checked at all. And NotEmpty is not the assertion either — Reason's default
+// arm returns unrecognizedReason for anything it has no wording for, which is non-empty
+// and is precisely the answer this test exists to prevent shipping. Both together are
+// what make a new condition with no `case` of its own fail here.
 func TestEveryRefusalNamesItsCondition(t *testing.T) {
-	for _, c := range []Condition{Unestablished, Uncommitted, Unpushed, Busy} {
+	for c := Unknown; c < conditionEnd; c++ {
 		v := Verdict{Condition: c}
-		assert.False(t, v.Allowed(), "%v is a refusal", c)
-		assert.NotEmpty(t, v.Reason(), "%v must explain itself", c)
+		if c == Clear {
+			assert.True(t, v.Allowed(), "Clear is the one condition that permits")
+			assert.Empty(t, v.Reason(), "and the one allowed to say nothing")
+			continue
+		}
+		assert.False(t, v.Allowed(), "condition %d is a refusal", c)
+		assert.NotEmpty(t, v.Reason(), "condition %d must explain itself", c)
+		assert.NotEqual(t, unrecognizedReason, v.Reason(),
+			"condition %d has no wording of its own, so Reason falls through to the "+
+				"placeholder — add a case for it", c)
 	}
+}
+
+// TestConditionEndIsNotACondition guards the sentinel the walk above depends on. A
+// Condition added BELOW it would be skipped by that walk in silence, which is the
+// failure the walk replaced.
+func TestConditionEndIsNotACondition(t *testing.T) {
+	assert.False(t, Verdict{Condition: conditionEnd}.Allowed(),
+		"the sentinel must not clear a teardown if one ever reaches the gate")
+	assert.Equal(t, unrecognizedReason, Verdict{Condition: conditionEnd}.Reason(),
+		"and it is the one value expected to have no wording, which is what makes it a sentinel")
 }
 
 // TestZeroVerdictIsNotAnApproval is the polarity property, and it is why Clear is not
@@ -217,4 +242,23 @@ func TestGateRefusesStatsWhoseBranchNumbersWereNotMeasured(t *testing.T) {
 
 	assert.False(t, v.Allowed())
 	assert.Equal(t, Unestablished, v.Condition)
+}
+
+// TestTransientNamesOnlyTheRefusalsThatClearThemselves is the split a durable request
+// depends on. A caller holding a spool record must wait on a condition that resolves
+// itself and answer one that does not: answering the first refuses a request for
+// something false a tick later, and waiting on the second holds it until the TTL for a
+// reason nobody was ever going to clear.
+func TestTransientNamesOnlyTheRefusalsThatClearThemselves(t *testing.T) {
+	// Nobody has to act for these: a Start finishes, and the next poll re-measures.
+	for _, c := range []Condition{Starting, Unestablished} {
+		assert.True(t, Verdict{Condition: c}.Transient(), "condition %d clears itself", c)
+	}
+	// A person clears the first three; the last three describe the session itself.
+	for _, c := range []Condition{Uncommitted, Unpushed, Busy, Direct, Parked, AlreadyParked} {
+		assert.False(t, Verdict{Condition: c}.Transient(), "condition %d is the answer, not a wait", c)
+	}
+	assert.False(t, Verdict{Condition: Clear}.Transient(), "a cleared verdict is not a refusal at all")
+	assert.False(t, Verdict{}.Transient(),
+		"and the undecided one must not be waited on forever: it means nothing decided")
 }
