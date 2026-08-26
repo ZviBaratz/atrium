@@ -3,6 +3,7 @@ package agent
 import (
 	"strings"
 	"testing"
+	"unicode"
 
 	"github.com/stretchr/testify/require"
 )
@@ -217,13 +218,69 @@ func TestFlatteningNormalizesNoBreakSpace(t *testing.T) {
 	require.True(t, ok)
 	require.Contains(t, flat, copilotTrustHeadline,
 		"a NO-BREAK SPACE inside the sentence must collapse like any other run of whitespace")
+
+	// And the rest of the Zs class, for the reason isHorizontalRule admits it: whiteSpaceRegex
+	// used to be `[\s\u00a0]+`, one rune wider than plain `\s` and still narrower than the
+	// unicode.IsSpace that strings.TrimSpace applies two lines away. U+00A0 is the one copilot
+	// 1.0.80 happens to emit; a matcher that reconstructs a literal across whitespace should not
+	// depend on which space a vendor picked, and every one of these renders as a gap.
+	for _, sp := range []struct {
+		name string
+		r    rune
+	}{
+		{"U+2007 FIGURE SPACE", '\u2007'},
+		{"U+2009 THIN SPACE", '\u2009'},
+		{"U+202F NARROW NO-BREAK SPACE", '\u202f'},
+		{"U+205F MEDIUM MATHEMATICAL SPACE", '\u205f'},
+		{"U+3000 IDEOGRAPHIC SPACE", '\u3000'},
+	} {
+		t.Run(sp.name, func(t *testing.T) {
+			padded := "  transcript above\n" +
+				"╭──────────────────╮\n" +
+				"│ Do" + string(sp.r) + "you trust the │\n" +
+				"│ files" + string(sp.r) + "in this   │\n" +
+				"│ folder?          │\n" +
+				"╰──────────────────╯"
+			flat, ok := flattenBottomBox(padded)
+			require.True(t, ok)
+			require.Containsf(t, flat, copilotTrustHeadline,
+				"%s must collapse like any other run of whitespace, or the gate misses its own "+
+					"dialog over a space nobody can see", sp.name)
+		})
+	}
 }
 
 func TestHorizontalRuleAcceptsNoBreakSpacePadding(t *testing.T) {
-	require.True(t, isHorizontalRule("╰────────\u00a0───────╯"),
-		"a NO-BREAK SPACE is padding; refusing it costs the box anchor and reports no dialog")
+	// Every Unicode space, not just U+00A0. strings.TrimSpace — which this predicate calls on
+	// its own first line — and the flattening passes around it all go through unicode.IsSpace,
+	// so admitting one rune of that class and rejecting the rest left this scan narrower than
+	// its neighbours in the fail-dangerous direction: a border row carrying any of them takes
+	// bottomBoxBlock down and reports "no dialog on screen".
+	for _, pad := range []struct {
+		name string
+		r    rune
+	}{
+		{"U+0020 SPACE", ' '},
+		{"U+00A0 NO-BREAK SPACE", '\u00a0'}, // copilot 1.0.80 emits this one
+		{"U+2007 FIGURE SPACE", '\u2007'},
+		{"U+2009 THIN SPACE", '\u2009'},
+		{"U+202F NARROW NO-BREAK SPACE", '\u202f'},
+		{"U+205F MEDIUM MATHEMATICAL SPACE", '\u205f'},
+		{"U+3000 IDEOGRAPHIC SPACE", '\u3000'},
+	} {
+		t.Run(pad.name, func(t *testing.T) {
+			require.Truef(t, isHorizontalRule("╰────────"+string(pad.r)+"───────╯"),
+				"%s is padding; refusing it costs the box anchor and reports no dialog", pad.name)
+			require.Truef(t, unicode.IsSpace(pad.r),
+				"%s must be a space to Go as well, or this row is asserting the wrong class",
+				pad.name)
+		})
+	}
+
 	require.False(t, isHorizontalRule("╰──── x ────╯"),
 		"and the predicate must still reject a rule carrying real text")
+	require.False(t, isHorizontalRule("╰────\u200b────╯"),
+		"U+200B ZERO WIDTH SPACE is not a space to Go and has no width, so it is not padding")
 }
 
 // A NUL arriving in the pane must not act as flattenBottomBox's blank-row separator.

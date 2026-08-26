@@ -3,6 +3,7 @@ package agent
 import (
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -19,7 +20,18 @@ import (
 // \u00a0cat /etc/hostname\u00a0 now.") — so this is measured rather than defensive. WHICH
 // fixtures carry them, and how many, is a datum the test reads off the panes rather than a
 // number here: TestFlatteningNormalizesNoBreakSpace.
-var whiteSpaceRegex = regexp.MustCompile("[\\s\u00a0]+")
+//
+// The class is `\p{Zs}`, not the single U+00A0 this first shipped with, because U+00A0 is not
+// the only space Go already treats as one: strings.TrimSpace and the callers around here go
+// through unicode.IsSpace, which spans U+2007, U+2009, U+202F, U+205F and U+3000 too. Fixing one
+// rune left this pass narrower than every neighbour it feeds, and the gap was in the
+// fail-dangerous direction — see isHorizontalRule, where a border row padded with any of them
+// takes the box anchor down and reports "no dialog on screen". Zs rather than IsSpace because
+// the vertical whitespace IsSpace also covers is what `\s` already contributes.
+//
+// U+200B ZERO WIDTH SPACE is deliberately NOT in either class: Go does not call it a space and
+// it has no width, so collapsing it would join two words that render as two words.
+var whiteSpaceRegex = regexp.MustCompile(`[\s\p{Zs}]+`)
 
 // pasteChipRegex matches claude's collapsed-paste placeholder in an input-box readback, e.g.
 // "[Pasted text #1 +29 lines]" — the readback of a ≥4-line bracketed paste (claude renders it
@@ -171,14 +183,19 @@ func isHorizontalRule(line string) bool {
 		switch r {
 		case '─':
 			dashes++
-		case '╭', '╮', '╰', '╯', '│', '┌', '┐', '└', '┘', '├', '┤', ' ', '\u00a0':
-			// box corners/sides and interior padding are allowed. A NO-BREAK SPACE is padding
-			// too: rejecting one costs the whole box anchor, so a single U+00A0 in a border row
-			// would take bottomBoxBlock down and report "no dialog on screen" — the
-			// fail-dangerous direction, on the surface that renders a command and a path.
-			// Copilot 1.0.80 emits NBSP; TestHorizontalRuleAcceptsNoBreakSpacePadding.
+		case '╭', '╮', '╰', '╯', '│', '┌', '┐', '└', '┘', '├', '┤':
+			// box corners and sides
 		default:
-			return false
+			// Any Unicode space is interior padding. Rejecting one costs the whole box anchor,
+			// so a single such rune in a border row would take bottomBoxBlock down and report
+			// "no dialog on screen" — the fail-dangerous direction, on the surface that renders
+			// a command and a path. Copilot 1.0.80 emits U+00A0; this admits the rest of the
+			// class for the same reason whiteSpaceRegex does, since the TrimSpace above already
+			// treats them all as space and it would be strange for the scan between them not to.
+			// TestHorizontalRuleAcceptsNoBreakSpacePadding.
+			if !unicode.IsSpace(r) {
+				return false
+			}
 		}
 	}
 	return dashes >= 3
