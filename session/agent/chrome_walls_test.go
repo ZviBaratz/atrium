@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -185,13 +186,26 @@ func TestFlattenBottomBoxSynthesisSurface(t *testing.T) {
 // TestNoPaneFixtureCarriesTheRowGap is boxRowGap's premise: it can only be a separator no
 // literal spans if no captured pane contains one. Read off the fixtures rather than assumed,
 // because the alternative — a printable rune — is the choice this rules out.
+//
+// It reads this package's SOURCE FILES rather than a capture table, and the difference matters:
+// a table covers the captures somebody remembered to list, and the claim here is about every
+// fixture in the package. An earlier draft walked paneCoverage and its comment said "every
+// committed fixture", which is two different sets.
 func TestNoPaneFixtureCarriesTheRowGap(t *testing.T) {
-	for _, captures := range paneCoverage {
-		for _, c := range captures {
-			require.NotContainsf(t, c.pane, boxRowGap,
-				"%s carries a NUL, so boxRowGap would be indistinguishable from pane text", c.name)
+	entries, err := os.ReadDir(".")
+	require.NoError(t, err)
+	read := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") {
+			continue
 		}
+		body, err := os.ReadFile(e.Name())
+		require.NoError(t, err)
+		read++
+		require.NotContainsf(t, string(body), boxRowGap,
+			"%s carries a NUL, so boxRowGap would be indistinguishable from pane text", e.Name())
 	}
+	require.Positive(t, read, "no source files read, so this asserted nothing")
 }
 
 // TestFlatteningNormalizesNoBreakSpace and TestHorizontalRuleAcceptsNoBreakSpacePadding are the
