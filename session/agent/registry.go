@@ -1242,11 +1242,19 @@ var gemini = &Adapter{
 // TestGeminiTrustGateHeadlineIsUnreachableOnceItWraps pins it.
 //
 // THAT IS A LIMIT OF THE WINDOW, NOT OF THE HEADLINE, and this said "UNREPAIRABLE" until
-// flattenBottomBox existed to disprove it. Measured on these same captures, the wall-stripping
-// scan reaches the headline at 40, 24 AND 20 — including the rung this gate MISSES. So the
-// repair exists and is not applied here: switching this matcher to it is a change to gemini's
-// false-positive surface (a stripped box interior, and this gate has a composer veto reasoning
-// about unstripped lines), which wants its own driven pass rather than a ride on copilot's.
+// flattenBottomBox existed to disprove it. The wall-stripping scan reaches the headline on every
+// wrapped capture where the headline is actually ON the pane — including the rung this gate
+// MISSES. The qualifier is load-bearing and this comment did not have it: the overflow captures
+// are too SHORT to hold the whole dialog, so the headline's first half has scrolled off the top
+// and no scan reaches what is not on screen. Writing it as a flat "at 40, 24 AND 20" was a
+// second unguarded number in the slot the first one had to be retracted from, which is why
+// TestGeminiTrustGateHeadlineIsReachableByWallStripping now derives the premise per capture
+// rather than restating a width list — and it is what found the exception.
+//
+// So the repair exists and is deliberately not applied here: switching this matcher to it is a
+// change to gemini's false-positive surface (a stripped box interior, and this gate has a
+// composer veto reasoning about unstripped lines), which wants its own driven pass rather than a
+// ride on copilot's.
 //
 // The option rows truncate from the right rather than wrapping, so "Trust folder" survives as
 // a left-anchored prefix however long the directory name is — until the row itself is cut,

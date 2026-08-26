@@ -1662,3 +1662,65 @@ func TestGeminiTrustGateCapturesRenderNoComposerGlyphInsideTheDialog(t *testing.
 		})
 	}
 }
+
+// TestGeminiTrustGateHeadlineIsReachableByWallStripping guards the number gemini's decision NOT
+// to switch matchers rests on.
+//
+// The registry entry above said "UNREPAIRABLE" until flattenBottomBox existed to disprove it. The
+// retraction replaced that word with a measurement — the wall-stripping scan reaches the headline
+// at the wrapped rungs, including the one gemini's gate misses — and left the measurement
+// unguarded, in the same slot where the previous claim had to be withdrawn. Nothing fed a gemini
+// trust-gate pane to flattenBottomBox at all.
+//
+// So the property is asserted here rather than asserted in a comment: wherever GateUp's flat
+// window CANNOT reach the headline (the rungs the test above pins as unreachable), the box-aware
+// scan CAN. That is what makes "the repair exists and is deliberately not applied" a disclosure
+// instead of a guess, and what will redden if flattenBottomBox's own behaviour changes under it.
+func TestGeminiTrustGateHeadlineIsReachableByWallStripping(t *testing.T) {
+	const headline = "Do you trust the files in this folder"
+
+	// A capture can fail to yield the headline for two different reasons, and only one of them
+	// is a limit of the scan: the text may be wrapped across box borders (which stripping
+	// repairs), or the pane may be too SHORT to hold the whole dialog, so the headline's first
+	// half has scrolled off the top (which nothing repairs — it is not on screen). The
+	// overflow rungs are the second kind, and the registry's flat "reaches it at 40, 24 AND 20"
+	// did not distinguish them.
+	//
+	// So the premise is derived per capture rather than assumed: strip every line's walls and
+	// squash, and if the headline is present in THAT, the text is on the pane and the only thing
+	// between the matcher and it is the border — exactly the case stripping is claimed to fix.
+	present := func(pane string) bool {
+		var b strings.Builder
+		for _, line := range strings.Split(pane, "\n") {
+			b.WriteString(stripBoxWalls(line))
+			b.WriteString(" ")
+		}
+		return strings.Contains(whiteSpaceRegex.ReplaceAllString(b.String(), " "), headline)
+	}
+
+	repaired, offScreen := 0, 0
+	for _, c := range geminiEveryCapture() {
+		if c.width >= geminiHeadlineFitsAtWidth {
+			continue // the flat window already reaches these
+		}
+		if !present(c.pane) {
+			// Top-truncated: half the headline is not in the capture at all.
+			offScreen++
+			continue
+		}
+		repaired++
+		flat, ok := flattenBottomBox(c.pane)
+		require.Truef(t, ok, "%s: gemini's dialog is a bottom-anchored box, so the scan must "+
+			"find one — if it does not, the repair this comment claims exists does not", c.label())
+		require.Containsf(t, flat, headline,
+			"%s: the headline IS on this pane and only a box border separates its halves, so "+
+				"the wall-stripping scan must reach it. This is the measurement registry.go "+
+				"cites for leaving gemini's matcher alone", c.label())
+	}
+	require.Positive(t, repaired,
+		"no capture has a wrapped-but-present headline, so this asserted nothing — the rungs it "+
+			"exists for are the ones below geminiHeadlineFitsAtWidth")
+	require.Positive(t, offScreen,
+		"no capture has a top-truncated headline, so the skip above is unexercised and the "+
+			"distinction this test draws is untested — the overflow rungs are what it is for")
+}

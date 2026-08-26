@@ -12,7 +12,8 @@ import (
 // wrong about the set.
 //
 // NOT "the last unguarded site", which is what this said when it landed, and not an ordinal
-// either — two other guards in this tree already claim to be the fourth. Adding an agent used
+// either: an ordinal is a count of other files, so it is wrong as soon as one of them moves, and
+// the count this sentence itself first gave was wrong. Adding an agent used
 // to touch four user-facing enumerations and this guard covered one of them: `atrium profiles
 // detect --help`, `atrium doctor --help` and the first-run overlay's no-agents-found line were
 // all still naming four agents two adapters later, and the overlay's is the one shown to a user

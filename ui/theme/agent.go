@@ -28,27 +28,26 @@ import (
 // prCheckGlyph's failing-CI "✗" (ui/row.go), a saltire rather than a plus. A star was
 // the other candidate for agy and would have read as a second gemini.
 //
-// copilot's "⎈" (U+2388 HELM SYMBOL) is a pilot's wheel, and two things this comment used to
-// claim about it were wrong in ways worth keeping written down.
+// copilot's "⎈" (U+2388 HELM SYMBOL) is a pilot's wheel. Three separate claims this comment made
+// about it turned out to be false, so what is left is the reasoning that does not depend on a
+// measurement, and the measurements are gone rather than corrected a fourth time.
 //
-// ADJACENCY IS NOT COVERAGE. It read "one codepoint below Branch's ⎇ (U+2387), so a font
-// rendering one renders the other". Fonts are built by block and by demand, not by neighbour:
-// `fc-list :charset=2387` and `:charset=2388` on a Debian desktop put ⎇ in DejaVu Sans and
-// DejaVu Sans Condensed, and ⎈ in DejaVu Sans MONO — disjoint, and the monospace half is the
-// one a terminal actually resolves. So the conclusion holds for a better reason than the one
-// given, and the neighbour test was not a test. ⎈ is also the LEAST widely covered entry in this
-// table on the machine that measured it — 35 families, against 38 for ✻/✦/✜, 53 for ❖, 84 for ≡
-// and 101 for • — so the honest summary is that it is the most tofu-prone glyph in the plain set,
-// which is what the ascii rung exists for.
+// The deleted ones, named so nobody re-derives them: that U+2388 being one codepoint below
+// Branch's U+2387 means a font rendering one renders the other (fonts are built by block and by
+// demand, not by neighbour); that the two codepoints' font coverage here is "disjoint" (33 of the
+// 35 families covering either cover BOTH — only the DejaVu split is disjoint); and a per-glyph
+// tally of covering families, whose last figure was also wrong. All three were host-specific
+// `fc-list` readings dressed as properties of the glyph, and no test in this repo can hold one.
 //
-// AND THEY BARELY SHARE A FRAME. It also said the branch chip sits on the row's second line
-// beside the agent glyph. There is no branch chip: displayBranch (ui/list_render.go) prints the
-// branch NAME with no glyph, and Glyphs.Branch has exactly one production consumer, the ? legend
-// (app/help.go). So ⎇ and ⎈ appear together only there, in a labelled list — the weakest
-// confusability setting there is. They do not share a shape either: ⎇ is an alternate-key fork,
-// ⎈ is a spoked wheel. The circle family was ruled out first — Ready "●", ReadySeen "○" and
-// AcctAvailable "●" have it — and the diamond family second, for the reason codex's entry
-// already records about "◆".
+// What survives, because it does not need a count: ⎈ is a HELM, ⎇ is an alternate-key fork, and
+// they do not share a shape. Nor do they share much of a frame — displayBranch
+// (ui/list_render.go) prints the branch NAME with no glyph, and Glyphs.Branch has exactly one
+// production consumer, the ? legend (app/help.go), so the two appear together only in a labelled
+// list, the weakest confusability setting there is. The circle family was ruled out first —
+// Ready "●", ReadySeen "○" and AcctAvailable "●" have it — and the diamond family second, for
+// the reason codex's entry already records about "◆". A glyph this far into the box-drawing
+// technical block is the most tofu-prone in the plain set whatever the exact tally, which is
+// what the ascii rung below exists for.
 func plainAgentGlyphs() map[string]string {
 	return map[string]string{
 		"claude":  "✻", // claude code's own spinner glyph
@@ -56,7 +55,7 @@ func plainAgentGlyphs() map[string]string {
 		"gemini":  "✦",
 		"aider":   "≡",
 		"agy":     "✜", // a plus-cross; see the note above on what that was checked against
-		"copilot": "⎈", // U+2388 HELM SYMBOL — a pilot's wheel; see above on the neighbour it was checked against
+		"copilot": "⎈", // U+2388 HELM SYMBOL — a pilot's wheel; see above on what it was checked against
 		"generic": "•",
 	}
 }
