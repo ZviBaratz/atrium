@@ -59,6 +59,13 @@ package config
 // dir, and the same .mcp.json is shared by every member — so a difference there is
 // reported as neither present nor absent.
 //
+// The repo's own .claude/settings.json is unread for the same reason, and it is the
+// one omission that can produce a FALSE difference rather than a missing one: claude
+// merges it under the dir's settings, so a plugin the repo enables for everyone is
+// effectively held by both members even when only one dir names it, and this reports
+// that as drift. Reading it would need the repo a session is bound for, which doctor
+// is not asked about — it reports on config dirs, not on a checkout.
+//
 // allowedMcpServers is unread. Its own description makes it an enterprise allowlist,
 // and the managed setting allowManagedMcpServersOnly can restrict it to managed
 // settings alone, so a per-dir value is not reliably the value in force. Its
