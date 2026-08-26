@@ -56,8 +56,8 @@ func TestReadmeNamesEveryProbedAgent(t *testing.T) {
 	}
 }
 
-// TestKnownAgentBinsTracksTheRegistry is the tie that did not exist. knownAgentBins was a
-// literal, so an adapter added to the registry and forgotten here was missing from BOTH sides of
+// TestKnownAgentBinsTracksTheRegistry is the tie that did not exist. KnownAgentBins was a
+// hand-written literal, so an adapter added to the registry and forgotten there was missing from BOTH sides of
 // every comparison: the glyph guard, the version pin and paneCoverage all passed, this file's
 // README check compared the README against the short list and passed too, and the new agent was
 // simply never probed for. Deriving the list is the fix; this is what holds the derivation.
