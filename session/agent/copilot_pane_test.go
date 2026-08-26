@@ -1494,6 +1494,19 @@ func TestCopilotBusyMarkerIsTheLongestSurvivingPrefix(t *testing.T) {
 		})
 	}
 
+	// Distinctness and membership first. This list is the negative evidence, and it is the
+	// shape that goes vacuous quietly: pointing its width-20 entry at the width-24 pane would
+	// leave both assertions below green while the floor rested on one rung twice.
+	requireDistinctCaptures(t, "copilotBusySplitWordRungs", copilotBusySplitWordRungs)
+	ladderPane := map[string]string{}
+	for _, c := range copilotBusyLadder {
+		ladderPane[c.name] = c.pane
+	}
+	for _, c := range copilotBusySplitWordRungs {
+		require.Equalf(t, ladderPane[c.name], c.pane,
+			"%s must carry the same pane the ladder does, not a second copy of another rung", c.name)
+	}
+
 	for _, c := range copilotBusySplitWordRungs {
 		t.Run(c.label(), func(t *testing.T) {
 			require.NotContains(t, footerRegion(c.pane), "Working",
