@@ -116,6 +116,25 @@ func RunDaemon(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("failed to initialize storage: %w", err)
 	}
 
+	// Launch policy, and it has to be installed HERE — above the load, not merely
+	// somewhere in this function. The daemon is a second process with its own config
+	// load, so a package-level var the TUI sets in newHome is unset here; and the load
+	// below relaunches the agent of every session whose tmux session is gone, which is
+	// the daemon's only launch. tmux.start() reads both of these on the way through, so
+	// installing them after the load would govern nothing the daemon ever does.
+	//
+	// Both defaults are the wrong way round for an unwired process, which is what makes
+	// the omission dangerous rather than untidy. agentOOMMargin's zero value disables the
+	// wrapper while config's default enables it, so the fleet comes back with
+	// oom_score_adj unraised and memory pressure sheds the shared tmux server — every
+	// session at once — instead of one recoverable agent. agentSkillsDisabled is inverted,
+	// so an unwired process INJECTS: an organization whose managed settings refuse
+	// sideloaded plugins is told to set agent_skills false, the TUI honours it, and a
+	// headless relaunch hands every recovered session the flag claude is configured to
+	// reject and kills it at launch.
+	tmux.SetAgentOOMMargin(cfg.GetAgentOOMMargin())
+	tmux.SetAgentSkills(cfg.GetAgentSkills())
+
 	// Load the instance list once for the daemon's whole lifetime. This is
 	// correct, not a missed refresh (issue #210): the daemon and TUI are mutually
 	// exclusive — main.go's RunE calls StopDaemon() before app.Run and only
@@ -160,21 +179,16 @@ func RunDaemon(ctx context.Context, cfg *config.Config) error {
 	// stuck Pending rows on the built-in cap while the TUI used the user's value,
 	// which is one behaviour under two clocks (#799).
 	//
-	// Nothing drives RunDaemon in the suite, so this line's presence is unguarded —
-	// the same disclosed gap the effectivePollInterval call above sits in. What a
-	// test can reach is PendingWatchdogOverride itself, in config.
+	// Below the load on purpose, unlike the two launch policies above: the watchdog is
+	// read by ApplyPaneState in the poll loop, never by tmux.start(), so a recovery that
+	// runs before it is installed reconciles nothing. assembleHome installs it after the
+	// TUI's own load for the same reason.
+	//
+	// Nothing drives RunDaemon in the suite, so this line's presence is unguarded by any
+	// run — the same disclosed gap the effectivePollInterval call above sits in.
+	// TestDaemonInstallsEveryProcessWidePolicy reads it out of the source instead, and
+	// reads the position of the two above it, since for those the position is the claim.
 	session.SetPendingWatchdog(cfg.PendingWatchdogOverride())
-
-	// Same reason, one layer down, and this one is not a cap but a launch flag. The load
-	// above relaunches the agent of every session whose tmux session is gone, so the
-	// daemon reaches tmux.start() and its --plugin-dir append — in a process that has
-	// never called SetAgentSkills. That switch is deliberately inverted so an unwired
-	// process still injects (the safe default for an unconfigured Atrium), which is
-	// exactly what makes the missing wire dangerous here rather than merely wrong: an
-	// organization whose managed settings refuse sideloaded plugins is told to set
-	// agent_skills false, the TUI honours it, and a headless relaunch would hand every
-	// recovered session the flag claude is configured to reject and kill it at launch.
-	tmux.SetAgentSkills(cfg.GetAgentSkills())
 
 	// If we get an error for a session, it's likely that we'll keep getting the error. Log every 30 seconds.
 	everyN := log.NewEvery(60 * time.Second)

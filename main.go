@@ -459,16 +459,18 @@ var (
 			// Agent skills: whether a claude session launched now would be handed
 			// Atrium's own /atrium:spawn skill. Every gate around the injection is
 			// fail-open, so the state where it silently declines is invisible without a
-			// report that asks. A config read, the cached `--help` probe against the
-			// binary the configured program actually runs, and a temp file created and
-			// removed where the plugin's files go — it never writes the plugin itself,
-			// so it cannot rewrite one a live session is reading.
+			// report that asks.
+			//
+			// Asked of the launch path itself (tmux.AgentPluginStatus), once per program
+			// a session could run — the default plus each profile's, because a default of
+			// codex says nothing about a claude profile and an older claude pinned in one
+			// answers the capability probe differently from the one on PATH. Running that
+			// path is what makes the report true rather than a prediction of it, and it
+			// materializes the plugin exactly where a launch would: gated on the program
+			// being claude and the setting being on, and a no-op once the bytes are
+			// current, so it writes nothing under a live session that it is reading.
 			fmt.Println()
-			skillsCfg := config.LoadConfig()
-			fmt.Print(doctor.RenderAgentSkills(doctor.CheckAgentSkills(
-				skillsCfg.GetAgentSkills(),
-				tmux.ClaudeSupportsPluginDir(skillsCfg.GetProgram()),
-				tmux.SpawnSkillInvocation(), tmux.AgentPluginTarget)))
+			fmt.Print(agentSkillsSection(config.LoadConfig()))
 
 			// Orphaned tmux servers: servers Atrium started that outlived their run,
 			// including the ones no socket lookup can reach because the socket file went
@@ -797,6 +799,29 @@ func init() {
 	rootCmd.AddCommand(doctorCmd)
 	rootCmd.AddCommand(reapCmd)
 	rootCmd.AddCommand(hookEventCmd)
+}
+
+// agentSkillsSection renders `atrium doctor`'s Agent skills section.
+//
+// Extracted from the command so a test can drive it, because the first line is the one that
+// was missing. agent_skills lives on a process-wide var, and doctor is a third process that
+// launches nothing — so a report that asks the launch path without installing the setting
+// first reads the built-in default and tells a user who switched the feature OFF that it is
+// injecting. That is the same omission the daemon had, one process over, and it is why this
+// installs the policy before asking rather than passing the setting alongside the answer:
+// two sources for one fact is what let them disagree.
+//
+// The programs asked about are the default plus every profile's, because a default of codex
+// says nothing about a claude profile and an older claude pinned in one answers the
+// capability probe differently from the one on PATH.
+func agentSkillsSection(cfg *config.Config) string {
+	tmux.SetAgentSkills(cfg.GetAgentSkills())
+	programs := []string{cfg.GetProgram()}
+	for _, p := range cfg.GetProfiles() {
+		programs = append(programs, p.Program)
+	}
+	return doctor.RenderAgentSkills(doctor.CheckAgentSkills(
+		tmux.SpawnSkillInvocation(), programs, tmux.AgentPluginStatus))
 }
 
 func main() {

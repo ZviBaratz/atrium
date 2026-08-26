@@ -318,7 +318,10 @@ func TestSpawnSkillNamesOnlyRegisteredCommandsAndFlags(t *testing.T) {
 	// a prohibition on a command that no longer exists is stale advice, and one whose name
 	// has changed protects nothing.
 	for _, name := range []string{"new", "reset", "reap", "update"} {
-		require.Contains(t, doc, "atrium "+name, "the skill is expected to mention %q", name)
+		// strings.Contains rather than require.Contains: the haystack is the whole
+		// skill, and a failed containment assertion prints it.
+		require.Truef(t, strings.Contains(doc, "atrium "+name),
+			"the skill is expected to mention `atrium %s`", name)
 		require.NotNil(t, registered[name],
 			"the skill names `atrium %s`, which rootCmd does not register", name)
 	}

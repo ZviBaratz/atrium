@@ -352,19 +352,21 @@ The page also spells the binary `atrium` throughout, rather than the name it was
 under (`install.sh --name`). [#775](https://github.com/ZviBaratz/atrium/issues/775) tracks that.
 
 Choosing *what a follow-up session runs* is a skill rather than a page, because it is
-something to invoke rather than to read: Atrium hands every claude session a plugin of its
+something to invoke rather than to read: Atrium hands a claude session a plugin of its
 own via `--plugin-dir`, carrying `spawn` — how to pick a new session's model, effort and
 permission mode, whether to continue from this branch, and what a handoff prompt has to
 say. It is reached as `/atrium:spawn`. The plugin is materialized under the data directory,
 never in the worktree (an untracked skill in the agent's own tree is one it could commit)
 and never in the user's claude config directory.
 
-Its gates are the settings file's, plus two. `agent_skills` turns it off; the session's
-own claude binary must advertise `--plugin-dir` in its `--help`, so a CLI that does not
-know the flag is skipped rather than handed one that would kill the launch (the probe
-follows the configured program, because a claude installed at an absolute path outside
-`PATH` answers only under that path); and every failure under the data directory degrades
-to "no skill" with the session still starting. One refusal is deliberately *not*
+Every gate is fail-open, and there are four. `agent_skills` turns the injection off; the
+program has to resolve to claude; that claude has to advertise `--plugin-dir` in its
+`--help`, so a CLI that does not know the flag is skipped rather than handed one that would
+kill the launch; and every failure under the data directory degrades to "no skill" with the
+session still starting. Which binary the `--help` probe asks is the program's own first
+token when its basename is exactly `claude` — which is what reaches a claude installed at an
+absolute path outside `PATH`, since it answers only under that path — and the canonical name
+for anything else, because a launcher wrapper's side effects must not run on a probe. One refusal is deliberately *not*
 predicted: an organization's managed settings can set `disableSideloadFlags`, which makes
 claude reject the flag at startup. That policy is resolved from whichever managed tier the
 organization uses — server-managed settings, an MDM plist, a Windows registry key, or

@@ -133,9 +133,11 @@ Say the request is queued and unconfirmed, and let the person decide.
   commits and the comparison measures the wrong thing.
 - A title is a branch. The branch and tmux names derive from it, a title whose
   names are taken is refused rather than suffixed, and an over-long one is
-  refused with the limit named. Keep it short and imperative. `--variants` is the
-  exception: there the title is a stem, and each member is named from it with a
-  numeric suffix, so report the names the members actually got.
+  refused with the limit named. Keep it short and imperative. A `--variants`
+  fan-out of two or more is the exception: there the title is a stem, each member
+  is named from it with a numeric suffix, and you report the names the members
+  actually got. A fan-out of one is not the exception — it keeps the bare title,
+  derives nothing, and is refused for a taken name like any other create.
 
 `atrium new --help` is the authority on all of it, including exactly when a
 queued create lands.

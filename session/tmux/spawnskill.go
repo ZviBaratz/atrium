@@ -10,7 +10,6 @@ import (
 	"sync/atomic"
 
 	"github.com/ZviBaratz/atrium/config"
-	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session/agent"
 )
 
@@ -128,6 +127,65 @@ func claudeSupportsPluginDir(program string) bool {
 	return binHelpContains(probeTarget(program, agent.KeyClaude), pluginDirFlag)
 }
 
+// AgentPluginDecision is what a launch of one program right now would do about the skill:
+// each gate's answer, and the directory or the IO failure the last of them produced.
+//
+// It exists so that `atrium doctor` can report the decision instead of predicting it. The
+// gates are fail-open and silent by design, so the state worth reporting is exactly the
+// state nothing else surfaces — and a reporter that re-evaluated the same conditions on its
+// own would be a second copy of them, free to disagree with the launch it describes.
+type AgentPluginDecision struct {
+	// Program is the configured program this decision is about, as configured.
+	Program string
+	// Enabled is config.AgentSkills as this process holds it (see SetAgentSkills), and
+	// the first gate. Process-wide, so it is the same in every decision this process
+	// makes — which is what lets a report state it once.
+	Enabled bool
+	// Claude is the second gate: whether Program resolves to the claude adapter. Every
+	// field below a gate that refused is at its zero value, because the ladder
+	// short-circuits — nothing beyond it was probed and nothing was written.
+	Claude bool
+	// FlagSupported is whether the claude this program runs advertises --plugin-dir.
+	FlagSupported bool
+	// Dir is what --plugin-dir would name: the materialized plugin root, or "" when a
+	// gate refused or the write failed.
+	Dir string
+	// Err is the IO failure that cost the materialize, nil when there was none. The
+	// launch logs it and starts the session without the skill.
+	Err error
+}
+
+// Injecting reports whether a launch of this program right now would hand over the skill.
+func (d AgentPluginDecision) Injecting() bool { return d.Dir != "" && d.Err == nil }
+
+// decideAgentPlugin is the gate ladder, and the only copy of it. Both callers below are
+// projections: the launch wants the directory, the report wants to know which gate refused.
+//
+// The two side-effecting gates come last, and that is what the order is for: the setting
+// and isClaude are pure reads, so an Atrium with the feature off and a codex install both
+// exec no --help and create no directory. The setting is read before isClaude only so that
+// Enabled is meaningful in every decision — a report that has to say "the feature is off"
+// cannot learn it from a ladder that short-circuited one rung earlier.
+func decideAgentPlugin(program string) AgentPluginDecision {
+	d := AgentPluginDecision{Program: program, Enabled: !agentSkillsDisabled.Load()}
+	if !d.Enabled {
+		return d
+	}
+	if d.Claude = isClaude(program); !d.Claude {
+		return d
+	}
+	if d.FlagSupported = claudeSupportsPluginDir(program); !d.FlagSupported {
+		return d
+	}
+	if d.Dir, d.Err = materializeAgentPlugin(); d.Err != nil {
+		// Dir means "what --plugin-dir would name", and on a failed write that is
+		// nothing. The path the reader needs is in the error, which names the file that
+		// actually refused rather than the root it sits under.
+		d.Dir = ""
+	}
+	return d
+}
+
 // ensureAgentPlugin materializes the plugin and returns the directory to pass to
 // --plugin-dir, or "" when injection should be skipped: a non-claude program, the setting
 // off, or a claude with no --plugin-dir flag. It returns ("", err) only on a real IO
@@ -135,9 +193,30 @@ func claudeSupportsPluginDir(program string) bool {
 // proceeds — ensureHookSettings' stance, for ensureHookSettings' reason. Nothing about
 // this feature is worth a session that will not start.
 func ensureAgentPlugin(program string) (string, error) {
-	if !isClaude(program) || agentSkillsDisabled.Load() || !claudeSupportsPluginDir(program) {
-		return "", nil
-	}
+	d := decideAgentPlugin(program)
+	return d.Dir, d.Err
+}
+
+// AgentPluginStatus reports what a launch of program would do about the skill, for `atrium
+// doctor`. It IS the launch path — the same ladder, the same write — so the report and the
+// launch cannot disagree.
+//
+// That makes it a writer, which a reporter would rather not be, and the alternative is
+// worse. A temp-file probe standing in for the write is wrong in both directions at once.
+// Too strict: writeFileIfChanged returns before writing when the bytes already match, which
+// is the steady state, so a current-but-unwritable tree launches fine and a probe demanding
+// create-and-unlink calls it broken. Too weak: an empty probe file exercises neither the
+// payload write, the chmod, nor the rename, so a full disk or an unreplaceable target passes
+// the probe and loses the skill at every launch.
+//
+// The side effect is bounded by the gates above it — nothing is written for a non-claude
+// program, for the setting off, or for a claude without the flag — and where it does write,
+// it writes the bytes the next launch would write anyway, over identical bytes in the steady
+// state. A doctor run beside a live session therefore rewrites nothing it is reading.
+func AgentPluginStatus(program string) AgentPluginDecision { return decideAgentPlugin(program) }
+
+// materializeAgentPlugin writes the plugin and returns its root.
+func materializeAgentPlugin() (string, error) {
 	manifest, err := json.MarshalIndent(pluginManifest{
 		Name:        agentPluginName,
 		Description: "Atrium session orchestration skills",
@@ -157,6 +236,15 @@ func ensureAgentPlugin(program string) (string, error) {
 	// replaced by an atomic rename, so a concurrent reader sees the old bytes or the new
 	// ones, never a half-written manifest, and two sessions racing to materialize write
 	// identical content.
+	//
+	// Nothing here deletes, and that is the load-bearing half. A skill this Atrium no
+	// longer ships stays on disk and stays loaded — the accepted cost, because the only
+	// thing that makes rewriting in place safe is that it never removes a file a live
+	// session is pointed at. freezeHookName may sweep because its directory is
+	// per-session and its agent is provably dead; this tree is fleet-shared and its
+	// readers are alive, and two binaries over one data dir would delete each other's
+	// skill on alternating launches. Retiring a skill is a migration, not a launch-time
+	// sweep.
 	if err := writeFileIfChanged(filepath.Join(root, ".claude-plugin", "plugin.json"), manifest); err != nil {
 		return "", err
 	}
@@ -166,84 +254,66 @@ func ensureAgentPlugin(program string) (string, error) {
 			return "", err
 		}
 	}
-	sweepStaleSkills(skills)
 	return root, nil
 }
 
-// shippedSkills is every skill this Atrium writes, keyed by the directory it lands in —
-// and therefore also the whole of what belongs under skills/, which is what lets
-// sweepStaleSkills recognize a predecessor's. One list, two readers.
+// shippedSkills is every skill this Atrium writes, keyed by the directory it lands in. One
+// entry today; a map rather than the single write it currently expands to so that adding a
+// second skill is an entry here and nothing else.
 func shippedSkills() map[string][]byte {
 	return map[string][]byte{spawnSkillDir: []byte(spawnSkillDoc)}
-}
-
-// sweepStaleSkills removes anything under the skills/ tree this Atrium does not ship.
-//
-// Rewriting in place keeps each individual file current, but says nothing about a file
-// whose name is no longer written at all: rename spawnSkillDir, or split this skill in two
-// and later drop one, and the predecessor stays on disk under a --plugin-dir that still
-// names the same root — so claude loads both, the current skill and one advertising flag
-// advice that may no longer parse. freezeHookName sweeps a superseded hook directory
-// for the same reason.
-//
-// Best-effort by design, and the direction matters: a sweep that returned its error would
-// cost the session its skill over a stale sibling, which is the worse of the two outcomes
-// and the opposite of every other gate here. Logged instead, so it is diagnosable without
-// being fatal.
-func sweepStaleSkills(skills string) {
-	entries, err := os.ReadDir(skills)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			log.WarningLog.Printf("could not read %s to sweep stale skills: %v", skills, err)
-		}
-		return
-	}
-	shipped := shippedSkills()
-	for _, e := range entries {
-		if _, ok := shipped[e.Name()]; ok {
-			continue
-		}
-		stale := filepath.Join(skills, e.Name())
-		if err := os.RemoveAll(stale); err != nil {
-			log.WarningLog.Printf("could not remove stale skill %s: %v", stale, err)
-		}
-	}
 }
 
 // writeFileIfChanged writes data to path unless it is already exactly there, creating
 // parents as needed.
 //
 // The comparison is not an optimization: without it every launch rewrites files a live
-// session may be reading, for no change at all. The write itself goes to a temp file in
-// the SAME directory and is renamed over the target, which is what makes the update atomic
-// — rename within a directory is, a write in place is not.
+// session may be reading, for no change at all. It is also what makes this cheap enough
+// for `atrium doctor` to run the real launch path — in the steady state there is no write.
+//
+// config.WriteFileAtomic does the write, rather than a second hand-rolled copy of the same
+// temp-file-then-rename dance: rename within a directory is atomic and a write in place is
+// not, and that primitive already adds the fsync that makes the committed bytes durable.
 func writeFileIfChanged(path string, data []byte) error {
 	if existing, err := os.ReadFile(path); err == nil && string(existing) == string(data) {
 		return nil
 	}
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return writeErr(path, err)
 	}
-	tmp, err := os.CreateTemp(dir, ".tmp-*")
-	if err != nil {
-		return err
-	}
-	// Best-effort cleanup: after a successful rename there is nothing at this name, and
-	// the error is the one case where the temp file must not be left behind.
-	defer func() { _ = os.Remove(tmp.Name()) }()
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
+	return writeErr(path, config.WriteFileAtomic(path, data, 0o644))
 }
+
+// writeErr states a failed write as a fact about the file Atrium meant to write, nil for
+// nil. The atomic writer's error names its own temp file — a path the reader has never seen
+// and cannot act on — and `atrium doctor` prints this verbatim as the one line a write
+// failure gives someone to act on.
+//
+// Both syscall error shapes have to be unwrapped, which is not obvious and is why the
+// guard for this asserts on the message: create, open and chmod fail with *os.PathError,
+// and the rename fails with *os.LinkError, whose two paths are BOTH temp-file noise once
+// the target is stated. Handling only the first leaves the rename — the failure a reader is
+// most likely to hit, since it is the one an unreplaceable target produces — reported as
+// the full three-path original.
+func writeErr(path string, err error) error {
+	if err == nil {
+		return nil
+	}
+	var perr *os.PathError
+	if errors.As(err, &perr) {
+		return fmt.Errorf("%s: %w", path, perr.Err)
+	}
+	var lerr *os.LinkError
+	if errors.As(err, &lerr) {
+		return fmt.Errorf("%s: %w", path, lerr.Err)
+	}
+	return fmt.Errorf("%s: %w", path, err)
+}
+
+// PluginDirFlag is the flag Atrium appends, for a report that has to name it. Exported from
+// the same constant the probe's needle is, so a report cannot name a flag the gate does not
+// look for.
+const PluginDirFlag = pluginDirFlag
 
 // SpawnSkillInvocation is how the shipped skill is typed, for the doctor check and any
 // other reader that has to name it. A projection of the plugin and skill names above
@@ -257,62 +327,3 @@ func SpawnSkillInvocation() string {
 // an agent copies verbatim, so the flags and subcommands it names have to be held to the
 // ones the CLI registers — and the CLI lives in package main, which imports this one.
 func SpawnSkillDoc() string { return spawnSkillDoc }
-
-// ClaudeSupportsPluginDir is the exported form of the capability probe, for `atrium
-// doctor`. Exported rather than duplicated so the report and the launch gate can only ever
-// agree — including on which binary is probed, which is why it takes the program the
-// report is about rather than assuming the one on PATH.
-func ClaudeSupportsPluginDir(program string) bool { return claudeSupportsPluginDir(program) }
-
-// AgentPluginTarget resolves that directory and reports whether the plugin's files could
-// actually be written there, for `atrium doctor`.
-//
-// Writability is the one gate a read-only check cannot see, and the one the launch path
-// hides best: writeFileIfChanged's failure is logged and the session starts without the
-// skill, so a read-only mode ("~/.atrium/plugin" resolved, therefore fine) reports a
-// working feature to someone who has none.
-//
-// Probed with a temp file created and removed in each directory a plugin file lands in,
-// rather than by writing the plugin itself. Materializing from here would let a doctor run
-// on a newer binary than the running TUI rewrite the plugin under a session that is
-// reading it — the one window the write path is arranged to avoid. Creating the
-// directories is not that: it is what the next launch does anyway, and this is only
-// reached once the gates before it have passed.
-func AgentPluginTarget() (string, error) {
-	root, err := agentPluginRoot()
-	if err != nil {
-		return "", err
-	}
-	dirs := []string{filepath.Join(root, ".claude-plugin")}
-	for name := range shippedSkills() {
-		dirs = append(dirs, filepath.Join(root, "skills", name))
-	}
-	for _, dir := range dirs {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return root, writeProbeErr(dir, err)
-		}
-		probe, err := os.CreateTemp(dir, ".probe-*")
-		if err != nil {
-			return root, writeProbeErr(dir, err)
-		}
-		if err := probe.Close(); err != nil {
-			_ = os.Remove(probe.Name())
-			return root, writeProbeErr(dir, err)
-		}
-		if err := os.Remove(probe.Name()); err != nil {
-			return root, writeProbeErr(dir, err)
-		}
-	}
-	return root, nil
-}
-
-// writeProbeErr states a failed write probe as a fact about the directory. The error from
-// the probe names the temp file, which is a path the reader has never seen and cannot act
-// on; what they can act on is which directory refused, and what it said.
-func writeProbeErr(dir string, err error) error {
-	var perr *os.PathError
-	if errors.As(err, &perr) {
-		return fmt.Errorf("%s: %w", dir, perr.Err)
-	}
-	return fmt.Errorf("%s: %w", dir, err)
-}

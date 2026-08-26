@@ -75,56 +75,93 @@ func TestSpawnSkillFrontmatterMatchesItsDirectory(t *testing.T) {
 // is the authority on them. A value that is not in these vocabularies is either a typo or
 // a flag claude rejects at argv parse time — which kills the session it was recommended
 // for, at launch, for a reason no Go test would otherwise see.
+// TestSpawnSkillNamesOnlyRealClaudeValues holds each of the skill's three tables to the
+// vocabulary of the flag that table is about.
+//
+// Per table, not against the union of all three, and that is the whole point. A flat set
+// keyed by value accepted a cell drawn from a sibling flag's vocabulary: `auto` is a
+// permission mode, so adding "| `auto` | when the task should pick its own model |" to the
+// MODEL table passed — and every claude session would then be handed a worked command
+// recommending `--model auto`, which claude rejects at argv parse, killing the session at
+// launch. That is the exact failure this test exists to prevent, so the union had to go.
+//
+// The model table is here rather than in prose so that it is covered at all. ValidModelName
+// — the check the worked commands go through — is a charset rule for embedding a value in a
+// shell command and accepts "opusss"; ClaudeModelAliases is the vocabulary. model.go is
+// explicit that the alias list is "never a validation allowlist", i.e. a full model name
+// outside it still reaches the CLI and works. So this asserts what the skill RECOMMENDS,
+// not what claude would accept: the skill recommends aliases, and a typo in one is what
+// this catches.
 func TestSpawnSkillNamesOnlyRealClaudeValues(t *testing.T) {
-	valid := map[string]string{}
-	for _, e := range agent.ClaudeEffortLevels {
-		valid[e] = "effort"
+	// Keyed by the axis heading each table sits under, which is what binds a cell to its
+	// own flag.
+	vocab := map[string][]string{
+		"Permission mode": agent.ClaudePermissionModes,
+		"Effort":          agent.ClaudeEffortLevels,
+		"Model":           agent.ClaudeModelAliases,
 	}
-	for _, m := range agent.ClaudePermissionModes {
-		valid[m] = "mode"
-	}
-	// Model aliases belong in the same guard, which is why the skill states them in a
-	// table rather than in prose. ValidModelName — the check the worked commands go
-	// through — is a charset rule for embedding a value in a shell command, and
-	// model.go says outright that it is "never a validation allowlist": it passes
-	// "opusss". This vocabulary is the only thing that does not.
-	for _, m := range agent.ClaudeModelAliases {
-		valid[m] = "model"
-	}
-
-	// The first cell of every table row, which is where the two ladders state their
-	// values. A row may name more than one (the mechanical rung names two).
-	rowCell := regexp.MustCompile(`(?m)^\| ([^|]+) \|`)
+	axis := regexp.MustCompile(`^\*\*(Permission mode|Effort|Model) `)
+	// The first cell of every table row, which is where the three ladders state their
+	// values. A row may name more than one (the mechanical effort rung names two).
+	rowCell := regexp.MustCompile(`^\| ([^|]+) \|`)
 	backticked := regexp.MustCompile("`([^`]+)`")
+
+	current := ""
 	seen := map[string]bool{}
-	for _, row := range rowCell.FindAllStringSubmatch(spawnSkillDoc, -1) {
+	for _, line := range strings.Split(spawnSkillDoc, "\n") {
+		if m := axis.FindStringSubmatch(line); m != nil {
+			current = m[1]
+			continue
+		}
+		row := rowCell.FindStringSubmatch(line)
+		if row == nil {
+			continue
+		}
 		for _, tok := range backticked.FindAllStringSubmatch(row[1], -1) {
 			value := tok[1]
-			kind, ok := valid[value]
-			require.Truef(t, ok,
-				"the skill's table names %q, which is none of claude's effort levels, "+
-					"permission modes or model aliases. If a new table was added whose first "+
-					"column is not a flag value, scope this guard to the three ladders rather "+
-					"than deleting it.",
-				value)
-			seen[kind+":"+value] = true
+			// A table outside every axis heading is not a table this guard can check, and
+			// silently skipping it is how the guard stops guarding. If a new table's first
+			// column is not a flag value, give it a heading this ignores rather than
+			// loosening the match.
+			require.NotEmptyf(t, current, "the skill's table names %q before any of the "+
+				"three axis headings, so nothing here checks it", value)
+			assert.Containsf(t, vocab[current], value,
+				"the skill's %s table names %q, which is not one of claude's %s values "+
+					"(%v). A value from another flag's vocabulary is the failure this "+
+					"guard is keyed per-table to catch: the session dies at argv parse.",
+				current, value, current, vocab[current])
+			seen[current+":"+value] = true
 		}
+	}
+
+	// Without this the loop above passes by matching nothing at all — the headings are
+	// prose and prose gets reworded.
+	for axisName := range vocab {
+		found := false
+		for key := range seen {
+			if strings.HasPrefix(key, axisName+":") {
+				found = true
+				break
+			}
+		}
+		require.Truef(t, found, "no table row was attributed to the %q axis: its heading "+
+			"was reworded and that table is now unchecked", axisName)
 	}
 
 	// Every effort level must appear. The table is a ladder over the whole range, so a
 	// level added to the CLI leaves it silently incomplete — recommending "max" for the
 	// hardest work when something above it now exists.
 	for _, e := range agent.ClaudeEffortLevels {
-		assert.Truef(t, seen["effort:"+e],
+		assert.Truef(t, seen["Effort:"+e],
 			"effort level %q is missing from the skill's ladder", e)
 	}
 	// Modes and models are deliberately NOT covered exhaustively: the offered chips
 	// include a mode the skill does not recommend, and two aliases it has no advice
 	// about. Only validity is asserted above for those, plus the presence of the ones it
 	// does recommend — each of which must survive a rename of its vocabulary.
-	assert.True(t, seen["mode:plan"] && seen["mode:acceptEdits"],
+	assert.True(t, seen["Permission mode:plan"] && seen["Permission mode:acceptEdits"],
 		"the skill's mode table must name both modes it recommends")
-	assert.True(t, seen["model:opus"] && seen["model:sonnet"],
+	assert.True(t, seen["Model:opus"] && seen["Model:sonnet"],
 		"the skill's model table must name both models it recommends")
 }
 
@@ -317,58 +354,143 @@ func TestEnsureAgentPluginProbesTheBinaryTheSessionRuns(t *testing.T) {
 	})
 }
 
-// TestEnsureAgentPluginSweepsASkillItNoLongerShips is the case rewriting in place cannot
-// cover. Each file stays current, but a directory whose name is no longer written is never
-// touched again — and --plugin-dir still names the root above it, so claude loads the
-// predecessor beside its replacement.
-func TestEnsureAgentPluginSweepsASkillItNoLongerShips(t *testing.T) {
+// TestEnsureAgentPluginNeverDeletesUnderTheSharedTree pins the absence of a sweep, which is
+// the whole reason rewriting in place is safe.
+//
+// The tempting feature is the opposite one: a directory whose name is no longer shipped is
+// never rewritten, so a retired skill stays on disk and claude loads it beside its
+// replacement. Sweeping it costs more than it buys. This tree is ONE directory shared by
+// every live session — deliberately not versioned — so a delete here removes a file a running
+// agent is pointed at and may re-read, the exact window the atomic-rename write is arranged
+// to avoid; two binaries over one data dir would delete each other's skill on alternating
+// launches; and anything a user put under skills/ themselves would go with it. freezeHookName
+// may sweep because its directory is per-session and its agent is provably dead.
+//
+// So: a stale skill is a migration's problem, and this asserts the launch path leaves the
+// tree alone.
+func TestEnsureAgentPluginNeverDeletesUnderTheSharedTree(t *testing.T) {
 	forceHelpProbe(t, claudeHelpWithPluginDir())
 	enableAgentSkills(t, true)
 
 	dir, err := ensureAgentPlugin("claude")
 	require.NoError(t, err)
 
-	// A predecessor's skill, laid out exactly as this Atrium lays out its own — the only
-	// thing marking it stale is that shippedSkills no longer names it.
+	// Two things a sweep would take: a predecessor's skill, laid out exactly as this Atrium
+	// lays out its own, and something a user added.
 	stale := filepath.Join(dir, "skills", "handoff")
 	require.NoError(t, os.MkdirAll(stale, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(stale, "SKILL.md"),
 		[]byte("---\nname: handoff\n---\n\nadvice for flags that no longer parse"), 0o644))
+	mine := filepath.Join(dir, "skills", "my-own-skill")
+	require.NoError(t, os.MkdirAll(mine, 0o755))
 
 	_, err = ensureAgentPlugin("claude")
 	require.NoError(t, err)
 
-	_, err = os.Stat(stale)
-	assert.True(t, os.IsNotExist(err),
-		"a skill this Atrium does not ship survived, so sessions are handed two")
-	// And the sweep must not be indiscriminate: the skill that IS shipped shares the
-	// directory it walks.
+	assert.DirExists(t, stale, "the launch path deleted inside a tree every live session "+
+		"is pointed at; a retired skill is a migration, not a launch-time sweep")
+	assert.DirExists(t, mine, "a user's own file under the plugin tree is not Atrium's to remove")
+	// And what it does write is still current, which is what makes leaving the rest alone
+	// an acceptable trade rather than simply doing nothing.
 	assert.FileExists(t, filepath.Join(dir, "skills", spawnSkillDir, "SKILL.md"))
 }
 
+// TestAgentPluginStatusIsTheLaunchDecision holds the report to the launch.
+//
+// `atrium doctor` reports this feature by running the launch path rather than predicting it,
+// because a second evaluation of the same gates is free to disagree with it. A write probe
+// is the tempting shortcut and disagrees in both directions at once: it calls a tree whose
+// bytes are already current "unwritable" when a launch would not write to it at all, and
+// calls a full disk fine because an empty temp file never reaches the payload write.
+//
+// So the property is that one ladder answers both callers. Each case below stops the ladder
+// on a different rung and asserts the decision's fields, that everything past the refusing
+// gate is left at its zero value — doctor's report reads those fields to name the gate — and
+// that ensureAgentPlugin returns exactly what the decision says.
+func TestAgentPluginStatusIsTheLaunchDecision(t *testing.T) {
+	onlySettings := map[string]string{string(agent.KeyClaude): "  --settings <file>"}
+
+	for _, tc := range []struct {
+		name                                          string
+		program                                       string
+		help                                          map[string]string
+		enabled                                       bool
+		wantEnabled, wantClaude, wantFlag, wantInject bool
+	}{{
+		name: "every gate open", program: "claude", help: claudeHelpWithPluginDir(), enabled: true,
+		wantEnabled: true, wantClaude: true, wantFlag: true, wantInject: true,
+	}, {
+		name: "the setting off stops the ladder first", program: "claude",
+		help: claudeHelpWithPluginDir(), enabled: false,
+	}, {
+		name: "a non-claude program stops it second", program: "codex",
+		help: claudeHelpWithPluginDir(), enabled: true, wantEnabled: true,
+	}, {
+		name: "a claude without the flag stops it third", program: "claude",
+		help: onlySettings, enabled: true, wantEnabled: true, wantClaude: true,
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			forceHelpProbe(t, tc.help)
+			enableAgentSkills(t, tc.enabled)
+
+			d := AgentPluginStatus(tc.program)
+			assert.Equal(t, tc.program, d.Program, "the decision names what it is about")
+			assert.Equal(t, tc.wantEnabled, d.Enabled)
+			assert.Equal(t, tc.wantClaude, d.Claude)
+			assert.Equal(t, tc.wantFlag, d.FlagSupported)
+			assert.Equal(t, tc.wantInject, d.Injecting())
+			require.NoError(t, d.Err, "no gate here is an IO failure")
+			if !tc.wantInject {
+				assert.Empty(t, d.Dir, "a refused gate names no directory")
+			}
+
+			dir, err := ensureAgentPlugin(tc.program)
+			require.NoError(t, err)
+			assert.Equal(t, d.Dir, dir,
+				"the report and the launch must return the same directory — they are one call")
+		})
+	}
+}
+
 // TestWriteFileIfChangedLeavesNothingBehindOnFailure is the assertion the happy path cannot
-// make. A successful rename consumes the temp file, so a scan of the finished directory
-// stays green with the cleanup deleted; the failure branches are the only place the defer
-// does anything, and an accumulating .tmp-* is inside the tree claude enumerates as the
-// plugin's skills.
+// make. A successful rename consumes the temp file, so a scan of the finished directory stays
+// green with the cleanup deleted; the failure branches are the only place it does anything,
+// and an accumulating temp file is inside the tree claude enumerates as the plugin's skills.
+//
+// The check is on the directory's whole contents rather than on a temp-file naming pattern,
+// because the pattern belongs to config.WriteFileAtomic and is not this test's to know: a
+// guard keyed to one spelling passes vacuously the moment that spelling changes.
 func TestWriteFileIfChangedLeavesNothingBehindOnFailure(t *testing.T) {
 	dir := t.TempDir()
-	// A directory where the file belongs: the write, close and chmod all succeed and the
-	// rename cannot, which is the branch order that leaves a temp file at its most
+	// A directory where the file belongs: the write, sync, close and chmod all succeed and
+	// the rename cannot, which is the branch order that leaves a temp file at its most
 	// finished. Forcing it this way needs no permission games and behaves the same on
 	// every platform the suite runs on.
 	target := filepath.Join(dir, "SKILL.md")
 	require.NoError(t, os.MkdirAll(target, 0o755))
 
-	require.Error(t, writeFileIfChanged(target, []byte("a skill")),
-		"renaming over a directory must not be reported as a successful write")
-
-	entries, err := os.ReadDir(dir)
+	before, err := os.ReadDir(dir)
 	require.NoError(t, err)
-	for _, e := range entries {
-		assert.False(t, strings.HasPrefix(e.Name(), ".tmp-"),
-			"a temp file survived a failed write: %s", e.Name())
+
+	err = writeFileIfChanged(target, []byte("a skill"))
+	require.Error(t, err, "renaming over a directory must not be reported as a successful write")
+	// `atrium doctor` prints this verbatim as the one actionable line a write failure gives
+	// someone, so it has to name the file Atrium meant to write — not the atomic writer's
+	// temp file, which the reader has never seen and cannot act on.
+	assert.Contains(t, err.Error(), target, "the error must name the file it failed to write")
+	assert.NotContains(t, err.Error(), ".tmp-", "and not the temp file it failed on")
+
+	after, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	names := func(entries []os.DirEntry) []string {
+		out := make([]string, 0, len(entries))
+		for _, e := range entries {
+			out = append(out, e.Name())
+		}
+		return out
 	}
+	assert.Equal(t, names(before), names(after),
+		"a failed write left something behind in the tree claude reads as the plugin")
 }
 
 func TestAgentSkillsDefaultsOnAndTheSetterInverts(t *testing.T) {
@@ -433,7 +555,7 @@ func TestStartPassesThePluginDirToClaude(t *testing.T) {
 		"start() never handed the agent the plugin, so the skill ships dead")
 
 	// What the flag POINTS AT, checked against something other than the function that
-	// produced it. Comparing it to AgentPluginDir would move both sides of the assertion
+	// produced it. Comparing it to agentPluginRoot would move both sides of the assertion
 	// together, which is the same shape as asserting the literal "plugin" — a substring of
 	// "--plugin-dir" — and just as unable to fail.
 	arg := regexp.MustCompile(pluginDirFlag + ` '([^']*)'`).FindStringSubmatch(string(out))
