@@ -1066,6 +1066,12 @@ func TestCopilotApprovalOptionExcludesTheSelector(t *testing.T) {
 // them apart, so each matcher's literals must be the ones only its own dialog renders. A
 // crossing failure would surface as a trust gate reported on a live approval, which holds the
 // queued prompt forever, or as an approval reported on a startup gate, which is worse.
+//
+// IT DOES NOT TEST THE CONJUNCTION, and it once read as though it did. The two dialogs differ
+// in BOTH of each matcher's literals, so this reaches the same verdict whether the predicate
+// requires one literal or two — changing "&&" to "||" leaves it green. What tells an AND from
+// an OR is a pane rendering exactly one literal, which no driven capture does:
+// TestCopilotTrustGateNeedsBothLiterals and TestCopilotApprovalNeedsBothLiterals build them.
 func TestCopilotApprovalAndTrustGateDoNotCrossMatch(t *testing.T) {
 	for _, c := range copilotApprovalLadder {
 		t.Run("approval pane is not a gate: "+c.label(), func(t *testing.T) {
