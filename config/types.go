@@ -457,6 +457,14 @@ type Config struct {
 	// feature stays enabled for config files written before it existed. Setting
 	// it false restores the chrome-free fullscreen pane (tmux status off).
 	SessionContextBar *bool `json:"session_context_bar,omitempty"`
+	// AgentSkills, when true, injects Atrium's own plugin into every claude
+	// session it launches, via --plugin-dir. The plugin carries the `spawn` skill:
+	// how to choose a follow-up session's model, effort and permission mode, and
+	// how to hand off to it. nil means use the default (on), so the skill reaches
+	// config files written before it existed. Set it false when claude refuses the
+	// flag — an organization's managed settings can disable sideloading, and the
+	// only symptom is a session that dies at launch saying so.
+	AgentSkills *bool `json:"agent_skills,omitempty"`
 	// HintBar, when true, keeps a one-line key-hint bar at the bottom of the
 	// screen during plain navigation. nil means use the default (on). Setting it
 	// false restores the chrome-free interface, where the bar appears only for

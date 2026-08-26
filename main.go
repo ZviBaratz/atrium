@@ -361,7 +361,11 @@ var (
 			"why: it resolves image_preview against the terminal the environment names and against\n" +
 			"tmux, and reports eligibility only — confirming the pixel rung means transmitting the\n" +
 			"image and waiting for the terminal to hand back an ID, which the running TUI does when a\n" +
-			"picture opens. On Linux, Host\n" +
+			"picture opens. Agent skills reports whether a claude session started now would be\n" +
+			"handed Atrium's own spawn skill — how to choose a follow-up session's model, effort and\n" +
+			"permission mode — and, when it would not, which gate refused. Every gate around that\n" +
+			"injection fails open, so a session that quietly never got the skill looks exactly like\n" +
+			"one that did. On Linux, Host\n" +
 			"pressure is the live counterpart to Host capacity: swap headroom, and space and inode\n" +
 			"headroom for the data dir, the tmux socket directory and the temp directory. It flags a\n" +
 			"path that is a tmpfs, because a tmpfs's contents are charged against RAM rather than to a\n" +
@@ -451,6 +455,21 @@ var (
 			defer cancelOOM()
 			fmt.Println()
 			fmt.Print(doctor.RenderOOM(doctor.CheckOOM(oomCtx)))
+
+			// Agent skills: whether a claude session launched now would be handed
+			// Atrium's own /atrium:spawn skill. Every gate around the injection is
+			// fail-open, so the state where it silently declines is invisible without a
+			// report that asks. A config read plus the cached `claude --help` probe; it
+			// resolves the plugin directory without creating it, so it stays safe beside
+			// a live TUI.
+			fmt.Println()
+			pluginDir, err := tmux.AgentPluginDir()
+			if err != nil {
+				pluginDir = ""
+			}
+			fmt.Print(doctor.RenderAgentSkills(doctor.CheckAgentSkills(
+				config.LoadConfig().GetAgentSkills(), tmux.ClaudeSupportsPluginDir(),
+				tmux.SpawnSkillInvocation(), pluginDir)))
 
 			// Orphaned tmux servers: servers Atrium started that outlived their run,
 			// including the ones no socket lookup can reach because the socket file went

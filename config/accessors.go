@@ -251,6 +251,17 @@ func (c *Config) GetSessionContextBar() bool {
 	return boolOr(c.SessionContextBar, true)
 }
 
+// GetAgentSkills reports whether Atrium's own skills should be injected into
+// claude sessions. A nil AgentSkills — an older config, or a nil Config —
+// defaults to on: the skill is a capability the agent otherwise has to be told
+// about by hand, and every gate around the injection already fails open.
+func (c *Config) GetAgentSkills() bool {
+	if c == nil {
+		return true
+	}
+	return boolOr(c.AgentSkills, true)
+}
+
 // GetNerdFont reports whether vendor Nerd-Font icons should be used. A nil
 // NerdFont (an older config, or a fresh install) — or a nil Config — defaults to
 // off, so the UI never renders tofu boxes without an explicit opt-in.

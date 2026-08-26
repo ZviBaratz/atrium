@@ -94,6 +94,7 @@ func DefaultConfig() *Config {
 	autoAttach := true
 	doubleTap := true
 	sessionContextBar := true
+	agentSkills := true
 	hintBar := true
 	mouse := true
 	osChrome := true
@@ -106,6 +107,7 @@ func DefaultConfig() *Config {
 		DaemonPollInterval:  DefaultDaemonPollIntervalMs,
 		Theme:               DefaultTheme,
 		SessionContextBar:   &sessionContextBar,
+		AgentSkills:         &agentSkills,
 		HintBar:             &hintBar,
 		Mouse:               &mouse,
 		RecordPromptHistory: &recordPromptHistory,

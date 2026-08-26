@@ -546,6 +546,13 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			timingNewSessions, true,
 			(*config.Config).GetSessionContextBar,
 			func(c *config.Config, v bool) { c.SessionContextBar = &v }),
+		boolRow("agent_skills", catSessions, "Agent skills",
+			"Give claude sessions Atrium's own /atrium:spawn skill.",
+			"Turn this off if sessions die at launch: an organization's managed "+
+				"settings can refuse sideloaded plugins.",
+			timingNewSessions, true,
+			(*config.Config).GetAgentSkills,
+			func(c *config.Config, v bool) { c.AgentSkills = &v }),
 
 		// ── Worktrees & git ───────────────────────────────────────────────────
 		{

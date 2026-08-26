@@ -207,6 +207,17 @@ func TestGuideNamesOnlyRegisteredCommands(t *testing.T) {
 // It measures display width rather than rune count, matching ui/list_sanitize_test.go: the page
 // carries em dashes, which are East-Asian Ambiguous, and several lines sit at exactly the limit
 // with no slack for a glyph that turns out to be wide.
+// TestGuideNamesTheSpawnSkill ties the page's spelling of the skill to the skill itself.
+// The guide is where an agent goes to learn how to hand off, so it is where the skill has
+// to be discoverable — and the invocation is a projection of a plugin name and a skill
+// directory, either of which could be renamed in a package this file does not import for
+// any other reason. A page advertising a slash command that no longer resolves is worse
+// than one that never mentioned it.
+func TestGuideNamesTheSpawnSkill(t *testing.T) {
+	require.Contains(t, guidePage, tmux.SpawnSkillInvocation(),
+		"the page must name the skill by the spelling that actually invokes it")
+}
+
 func TestGuideFitsEightyColumns(t *testing.T) {
 	for _, line := range strings.Split(guidePage, "\n") {
 		require.LessOrEqual(t, runewidth.StringWidth(line), 80,

@@ -190,9 +190,9 @@ Two cross-layer pins worth knowing exist, because they fail in surprising places
 - `ui/key_prose_test.go` pins keys named in **free prose** (splash text, the
   empty-list hint) to the registry, each with a `site` label naming what to fix.
 
-## Adding a `Config` field — 4 sites, 3 guarded bidirectionally
+## Adding a `Config` field — 5 sites, 3 guarded bidirectionally
 
-53 json-tagged fields on `Config` itself at last count.
+54 json-tagged fields on `Config` itself at last count.
 
 | # | Site | Guarded by |
 |---|---|---|
@@ -200,6 +200,7 @@ Two cross-layer pins worth knowing exist, because they fail in surprising places
 | 2 | `config/config.go` `DefaultConfig()` — the default value | manual |
 | 3 | `README.md` "Configuration reference" — backtick-wrapped row | `TestReadmeDocumentsEveryConfigField` |
 | 4 | `ui/overlay/settings_schema.go` — a `settingRow`, if user-editable | `TestEveryScalarConfigFieldHasARow` **and** `TestEveryRowKeyIsAConfigFieldOrReadOnly` (both directions) |
+| 5 | `ui/overlay/settings_schema_test.go` — the row's category count **and** the total in `TestCategoryRowCounts` | itself, and it fails in a file you were not editing |
 
 Site 4's guard is the model to copy elsewhere: reflection over
 `reflect.TypeOf(config.Config{})` in **both** directions, so a new scalar field

@@ -289,7 +289,7 @@ func TestEnumRowsGlossEveryOption(t *testing.T) {
 // includes the read-only config-file row.
 func TestCategoryRowCounts(t *testing.T) {
 	want := map[settingCategory]int{
-		catSessions:      4,
+		catSessions:      5,
 		catWorktrees:     6,
 		catAppearance:    6,
 		catSessionList:   9,
@@ -306,7 +306,7 @@ func TestCategoryRowCounts(t *testing.T) {
 		got[r.category]++
 		total++
 	}
-	assert.Equal(t, 45, total, "44 config rows plus the read-only config-file row")
+	assert.Equal(t, 46, total, "45 config rows plus the read-only config-file row")
 	for _, c := range allCategories() {
 		assert.Equalf(t, want[c], got[c], "category %q row count", c.label())
 	}

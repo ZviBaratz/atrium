@@ -92,6 +92,11 @@ const guidePage = "You are an AI agent running inside an Atrium session. Atrium 
 	"  whether on `--program` or in your config.json — which runs the session on one\n" +
 	"  account and records another.\n" +
 	"\n" +
+	"  If you are a claude session, Atrium has already handed you a skill for\n" +
+	"  this: `/atrium:spawn` walks the same choices — what to pin, whether to\n" +
+	"  start from your own branch, and what the first prompt has to say — and\n" +
+	"  asks before it creates anything. Every other agent makes them by hand.\n" +
+	"\n" +
 	"  A title is a branch: the branch and tmux names derive from it, and a title\n" +
 	"  whose names are already taken is refused rather than quietly suffixed — with\n" +
 	"  one exception, `--variants`, which `atrium new --help` owns. An over-long\n" +
