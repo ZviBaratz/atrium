@@ -1,6 +1,7 @@
 package overlay
 
 import (
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -568,10 +569,15 @@ func TestSearchFindsARowByKeyByLabelAndBySummaryWord(t *testing.T) {
 }
 
 // TestSearchRanksTheLabelAndKeyHitFirst pins the ranking bonus, on the one query shape that
-// can tell the difference: without it, "agent" is a three-way tie at 60 that stable-sorts to
-// default_program — which matches only through its summary ("Agent command new sessions
-// launch") — ahead of the row actually called Agent OOM margin. With the label and key
-// bonuses that row scores 180 and leads.
+// can tell the difference: without it, "agent" stable-sorts to default_program — which
+// matches only through its summary ("Agent command new sessions launch") — ahead of every
+// row actually NAMED for an agent. With the label and key bonuses those rows score far
+// higher and one of them leads.
+//
+// Which one is deliberately not asserted. More than one row is named for an agent, so
+// naming a winner pins the row ORDER — a fact this test is not about, and one that moves
+// whenever a row is added to an earlier category. What the bonus is for is that a
+// summary-only match does not lead, and that is what a mutation deleting it breaks.
 //
 // "theme" is NOT the query for this: measured, the theme row wins 60-to-40 on the haystack
 // alone, so the bonus changes nothing and a mutation deleting it would pass.
@@ -579,8 +585,21 @@ func TestSearchRanksTheLabelAndKeyHitFirst(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
 	o.HandleKeyPress(keyRunes("/"))
 	typeFilter(o, "agent")
-	require.NotEmpty(t, resultKeys(o))
-	assert.Equal(t, "agent_oom_margin", resultKeys(o)[0],
+	got := resultKeys(o)
+	require.NotEmpty(t, got)
+
+	assert.NotEqual(t, "default_program", got[0],
+		"a row matching only in its summary must not lead a search whose query names other rows")
+	leader := newSettingRows(config.DefaultConfig())
+	var labelOrKey []string
+	for _, r := range leader {
+		if strings.Contains(strings.ToLower(r.label), "agent") || strings.Contains(r.key, "agent") {
+			labelOrKey = append(labelOrKey, r.key)
+		}
+	}
+	require.Greater(t, len(labelOrKey), 1,
+		"precondition: this test is only meaningful while several rows are named for an agent")
+	assert.Contains(t, labelOrKey, got[0],
 		"a label-and-key hit leads a search over a row that only matches in its summary")
 }
 

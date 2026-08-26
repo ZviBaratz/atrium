@@ -7,7 +7,7 @@
 │  ▎ Sessions          │  • Session limit          4                     live  │
 │    Worktrees & git   │    Attach on create       [x] on                live  │
 │    Appearance        │    In-session status bar  [x] on        new sessions  │
-│    Session list      │                                                       │
+│    Session list      │    Agent skills           [x] on        new sessions  │
 │    Notifications     │                                                       │
 │    Automation        │                                                       │
 │    Input             │                                                       │
@@ -19,7 +19,7 @@
 │  ────────────────────┴─────────────────────────────────────────────────────  │
 │  Agent command new sessions launch. A profile name, or a raw command. ·      │
 │  affects new sessions                                                        │
-│  A name matching a profile launches that profile's command; anything e… 1/4  │
+│  A name matching a profile launches that profile's command; anything e… 1/5  │
 │  ↑/↓ category · → rows · / search · ⇥ pane · esc close                       │
 │                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
@@ -40,7 +40,7 @@
 │          │  ▎ Sessions          │  • Session limit          4                                       live  │          │
 │          │    Worktrees & git   │    Attach on create       [x] on                                  live  │          │
 │          │    Appearance        │    In-session status bar  [x] on                          new sessions  │          │
-│          │    Session list      │                                                                         │          │
+│          │    Session list      │    Agent skills           [x] on                          new sessions  │          │
 │          │    Notifications     │                                                                         │          │
 │          │    Automation        │                                                                         │          │
 │          │    Input             │                                                                         │          │
@@ -52,7 +52,7 @@
 │          │  ────────────────────┴───────────────────────────────────────────────────────────────────────  │          │
 │          │  Agent command new sessions launch. A profile name, or a raw command. · affects new sessions   │          │
 │          │                                                                                                │          │
-│          │  A name matching a profile launches that profile's command; anything else is passed to t… 1/4  │          │
+│          │  A name matching a profile launches that profile's command; anything else is passed to t… 1/5  │          │
 │          │  ↑/↓ category · → rows · / search · ⇥ pane · esc close                                         │          │
 │          │                                                                                                │          │
 │          ╰────────────────────────────────────────────────────────────────────────────────────────────────╯          │

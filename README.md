@@ -454,16 +454,45 @@ compaction, so it is the wrong place to put a manual. Where a fact already has a
 the page names the owner instead of restating it: `atrium new --help` is what answers
 when a queued create actually lands.
 
-That pointer reaches **claude sessions only**, and by more than one gate. `ensureHookSettings`
-injects the settings file solely for an agent whose adapter declares hook support, which claude
-alone does; it also skips injection when the claude binary's `--help` does not advertise
-`--settings`, and the `SessionStart` entry is added only for a session with a worktree and a
-branch — so a *direct* (non-git) session gets no brief either, including the paragraph on this
-page written for it. Any of them can run `atrium guide` perfectly well; they are simply never
-told to. [#773](https://github.com/ZviBaratz/atrium/issues/773) tracks closing the adapter gap.
+That pointer reaches **claude sessions only**, and by more than one gate.
+`ensureHookSettings` injects the settings file solely for an agent whose adapter declares
+hook support, which claude alone does; it also skips injection when the claude it probes
+does not advertise `--settings` in its `--help` — which binary that is follows the same
+rule as the `--plugin-dir` probe below, and a refusal is logged, since no section of
+`atrium doctor` reports this gate. The `SessionStart` entry is added only for a session
+with a worktree and a branch, so a *direct* (non-git) session gets no brief either,
+including the paragraph on this page written for it. Any of them can run `atrium guide`
+perfectly well; they are simply never told to.
+[#773](https://github.com/ZviBaratz/atrium/issues/773) tracks closing the adapter gap.
 
 The page also spells the binary `atrium` throughout, rather than the name it was installed
 under (`install.sh --name`). [#775](https://github.com/ZviBaratz/atrium/issues/775) tracks that.
+
+Choosing *what a follow-up session runs* is a skill rather than a page, because it is
+something to invoke rather than to read: Atrium hands a claude session a plugin of its
+own via `--plugin-dir`, carrying `spawn` — how to pick a new session's model, effort and
+permission mode, whether to continue from this branch, and what a handoff prompt has to
+say. It is reached as `/atrium:spawn`. The plugin is materialized under the data directory,
+never in the worktree (an untracked skill in the agent's own tree is one it could commit)
+and never in the user's claude config directory.
+
+Every gate is fail-open, and there are four. `agent_skills` turns the injection off; the
+program has to resolve to claude; that claude has to advertise `--plugin-dir` in its
+`--help`, so a CLI that does not know the flag is skipped rather than handed one that would
+kill the launch; and every failure under the data directory degrades to "no skill" with the
+session still starting. Which binary the `--help` probe asks is the program's own first
+token when its basename is exactly `claude` — which is what reaches a claude installed at
+an absolute path outside `PATH`, since it answers only under that path, and with a leading
+`~` expanded, since the shell that launches it would — and the canonical name for anything
+else, because a launcher wrapper's side effects must not run on a probe.
+
+One refusal is deliberately *not* predicted: an organization's managed settings can set
+`disableSideloadFlags`, which makes claude reject the flag at startup. That policy is
+resolved from whichever managed tier the organization uses — server-managed settings, an
+MDM plist, a Windows registry key, or `managed-settings.json` — so Atrium reads none of
+them rather than keep a second, staler copy of a rule claude owns. The symptom is a
+session that dies at launch naming the setting, and `atrium doctor`'s **Agent skills**
+section carries the remedy.
 
 <br />
 
@@ -1948,6 +1977,7 @@ Advanced — shown in the Category column below. A key with no panel row carries
 | `image_preview` | Appearance | string | `"auto"` | how an agent-produced image opens when you uppercase-hint its path: `auto` (real pixels on kitty and Ghostty when Atrium is not inside tmux, block glyphs everywhere else — the default; running kitty *inside* tmux gets glyphs, because tmux does not forward the graphics protocol), `kitty` (attempt pixels even where the terminal isn't recognised — a terminal with the graphics protocol but not Unicode placeholders answers and then draws blanks or boxes, which nothing can detect, so switch to `glyph` if that happens; does **not** yet make tmux work either — the payload is not wrapped in tmux's passthrough envelope), `glyph` (never attempt pixels), `off` (no overlay; hinting an image path just copies it) |
 | `nerd_font` | — | bool | `false` | *deprecated* — superseded by `glyph_set`; still read for back-compat (`true` → `glyph_set: nerd` when `glyph_set` is unset) |
 | `session_context_bar` | Sessions | bool | `true` | thin tmux status line inside attached sessions |
+| `agent_skills` | Sessions | bool | `true` | inject Atrium's own `spawn` skill into claude sessions |
 | `hint_bar` | Appearance | bool | `true` | always-on bottom key-hint bar |
 | `os_chrome` | Appearance | bool | `true` | fleet state in the terminal title + OSC 9;4 taskbar progress |
 | `record_prompt_history` | Input | bool | `true` | remember submitted prompts for reuse in the create form and quick-send |
