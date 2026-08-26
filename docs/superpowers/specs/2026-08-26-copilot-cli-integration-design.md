@@ -1,10 +1,12 @@
 # GitHub Copilot CLI Integration
 
 **Date:** 2026-08-26
-**Status:** Stage 0 measurement complete for all three surfaces — the two dialogs, and the
-busy marker on the re-driven ladder of 2026-08-26 that replaced the invalid one. Stage 1
-design settled (2026-08-26): the wall-stripping scan is anchored on `bottomBoxBlock`, not on
-the whole pane.
+**Status:** Stage 1 LANDED (2026-08-26). All three surfaces are driven — the two dialogs, and
+the busy marker on the re-driven ladder that replaced the invalid one — and each is pinned to
+a verbatim width ladder in `copilot_pane_test.go`. The wall-stripping scan
+(`flattenBottomBox`) is anchored on `bottomBoxBlock` rather than the whole pane. What Stage 1
+did NOT close is below under NOT MEASURED; `HookSupport` waits on #773, the transcript
+readers on Stage 3, and adapter-declared launch knobs on #816.
 **Driven against:** GitHub Copilot CLI **1.0.80** (npm `@github/copilot`), Linux
 
 ## Motivation
