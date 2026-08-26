@@ -1,15 +1,20 @@
 package tmux
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	stdlog "log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/cmd/cmd_test"
+	"github.com/ZviBaratz/atrium/log"
+	"github.com/ZviBaratz/atrium/session/agent"
 
 	"github.com/stretchr/testify/require"
 )
@@ -39,13 +44,30 @@ func writeHookState(t *testing.T, s *Session, word string) {
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 }
 
-// forceSettingsFlag overrides the --settings capability probe for the duration of a test so
-// it never execs the real claude binary and is order-independent.
+// forceSettingsFlag makes the --settings capability probe answer `supported` for the
+// duration of a test, so it never execs the real claude binary and is order-independent.
+//
+// It installs a --help fixture through the shared help-probe override rather than a private
+// one, because the gate now reads binHelpContains like every other capability gate. One
+// binary has one --help text, so the fixture answers for the plugin-dir gate too — which is
+// why it advertises both flags: a fixture claiming to be a claude that supports --settings
+// and not --plugin-dir describes a CLI that never shipped, and would silently switch off a
+// feature the test is not about.
+//
+// It is keyed on the canonical name, so it forces the gate only for a program that PROBES
+// as `claude` — the bare name, and the wrapper case that falls back to it. A test whose
+// program is a claude somewhere else (an absolute path outside PATH) probes under that
+// path, which this fixture does not answer for, and the gate refuses however `supported`
+// was passed. Drive those through forceHelpProbe directly, keyed by the path, the way
+// TestEnsureHookSettingsProbesTheBinaryTheSessionRuns does.
 func forceSettingsFlag(t *testing.T, supported bool) {
 	t.Helper()
-	prev := settingsFlagOverride
-	settingsFlagOverride = &supported
-	t.Cleanup(func() { settingsFlagOverride = prev })
+	out := ""
+	if supported {
+		out = "  " + settingsFlag + " <file>   Path to a settings file\n" +
+			"  " + pluginDirFlag + " <path>   Load a plugin"
+	}
+	forceHelpProbe(t, map[string]string{string(agent.KeyClaude): out})
 }
 
 func TestBuildHookSettings(t *testing.T) {
@@ -187,6 +209,9 @@ func TestEnsureHookSettingsClaude(t *testing.T) {
 	name := "claudesquad_" + t.Name()
 	dir, err := hookSessionDir(name)
 	require.NoError(t, err)
+	// The sandbox HOME is shared across a `go test -count=N` run, so what this writes must
+	// not outlive it — the same reason writeHookState cleans up after itself.
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	// A stale state from a prior incarnation must be cleared on (re)launch.
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "state"), []byte(hookStateWorking), 0o644))
@@ -215,6 +240,129 @@ func TestEnsureHookSettingsSkips(t *testing.T) {
 	p, err = ensureHookSettings("claudesquad_"+t.Name()+"_unsupported", "claude", sentinelBrief)
 	require.NoError(t, err)
 	require.Empty(t, p, "no --settings support → no hooks")
+}
+
+// TestEnsureHookSettingsProbesTheBinaryTheSessionRuns pins WHICH claude the --settings gate
+// asks. It is the same question the plugin-dir gate answers with probeTarget, and the more
+// load-bearing of the two: losing this costs a session its status hooks, its SessionStart
+// brief, and accurate status classification with them, for every session in the process,
+// because the answer is cached per binary.
+//
+// A claude installed at an absolute path outside PATH is a real configuration, not a corner
+// case, and binHelpContains caches empty output when a probe cannot be exec'd at all — so
+// "this binary has no such flag" and "there is no such binary" are one answer here. Asking
+// the wrong binary therefore refuses the very session it was meant to qualify, silently, for
+// a reason no error anywhere states.
+func TestEnsureHookSettingsProbesTheBinaryTheSessionRuns(t *testing.T) {
+	const offPath = "/opt/claude/bin/claude"
+	help := "  " + settingsFlag + " <file>   Path to a settings file"
+
+	// hookName gives an arm its own session name and removes what that name's launch
+	// writes. A literal, not t.Name(): inside a subtest that carries a "/", which
+	// hookSessionDir joins into a nested tree whose intermediate level is not the path
+	// any cleanup here removes. The removal itself is for the reason writeHookState's is:
+	// the sandbox HOME is shared across a `go test -count=N` run.
+	hookName := func(t *testing.T, arm string) string {
+		t.Helper()
+		name := "claudesquad_settingsprobe_" + arm
+		dir, err := hookSessionDir(name)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = os.RemoveAll(dir) })
+		return name
+	}
+
+	t.Run("a claude off PATH is probed under its own path", func(t *testing.T) {
+		// Nothing named `claude` is reachable, which is what makes this the failing case
+		// for a gate that probes the bare name.
+		forceHelpProbe(t, map[string]string{offPath: help})
+		p, err := ensureHookSettings(hookName(t, "offpath"), offPath, sentinelBrief)
+		require.NoError(t, err)
+		require.NotEmpty(t, p, "the configured binary advertises the flag; asking a "+
+			"different one costs every session in this process its hooks")
+	})
+
+	t.Run("its own answer is what counts, not the canonical name's", func(t *testing.T) {
+		// The reverse mistake, and the one a bare-name probe hides: `claude` on PATH is
+		// modern, the configured binary is not, and injecting on the strength of the
+		// wrong one hands --settings to a CLI that will reject it at argv parse.
+		forceHelpProbe(t, map[string]string{
+			string(agent.KeyClaude): help,
+			offPath:                 "  --help   Show help",
+		})
+		p, err := ensureHookSettings(hookName(t, "stale"), offPath, sentinelBrief)
+		require.NoError(t, err)
+		require.Empty(t, p, "the flag was read off a binary this session does not run")
+	})
+
+	t.Run("a wrapper is still probed canonically", func(t *testing.T) {
+		// The carve-out probeTarget exists for: a basename that is not exactly `claude`
+		// is a launcher, and its side effects — trust writes, config copies into the cwd
+		// — must not run on a probe. agent.Resolve is a contains-match, so this program
+		// IS claude for the purpose of the gate; only the probe target differs.
+		forceHelpProbe(t, map[string]string{string(agent.KeyClaude): help})
+		p, err := ensureHookSettings(hookName(t, "wrapper"), "launch-claude.sh", sentinelBrief)
+		require.NoError(t, err)
+		require.NotEmpty(t, p, "a wrapper resolves to claude and its hooks come from the "+
+			"canonical binary's answer")
+	})
+
+	t.Run("a tilde path is probed expanded, the way sh -c will launch it", func(t *testing.T) {
+		// A hand-edited program string, and the one shape where the launch and the probe
+		// resolve the same text differently: tmux hands the command to `sh -c`, which
+		// expands the tilde, while exec.Command neither expands it nor falls back to PATH
+		// for a name carrying a separator. Unexpanded this probes ENOENT, which caches as
+		// empty output and is indistinguishable from a claude without the flag.
+		home, err := os.UserHomeDir()
+		require.NoError(t, err)
+		forceHelpProbe(t, map[string]string{filepath.Join(home, ".local/bin/claude"): help})
+		p, err := ensureHookSettings(hookName(t, "tilde"), "~/.local/bin/claude", sentinelBrief)
+		require.NoError(t, err)
+		require.NotEmpty(t, p, "the shell will run the expanded path, so that is the "+
+			"binary whose --help answers for this session")
+	})
+}
+
+// TestEnsureHookSettingsSaysWhyItRefused pins the one thing a fail-open gate owes whoever
+// has to diagnose it. This gate silently costs a session its status hooks, its SessionStart
+// brief and accurate status classification with them, and — unlike the --plugin-dir gate
+// beside it — it has no `atrium doctor` section to be read out of afterwards, so the log
+// line is the only place the reason exists.
+//
+// It asserts the binary is named, because the configured program and the probed binary are
+// different strings in the wrapper case and a message naming the wrong one sends someone to
+// check the flags of a binary that was never asked.
+func TestEnsureHookSettingsSaysWhyItRefused(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.InfoLog
+	log.InfoLog = stdlog.New(&buf, "", 0)
+	t.Cleanup(func() { log.InfoLog = prev })
+
+	// A wrapper, so the probed binary is the canonical name and not the program: a log line
+	// built from the program string would read "launch-claude.sh", which was never probed.
+	const wrapper = "launch-claude.sh"
+	forceHelpProbe(t, map[string]string{string(agent.KeyClaude): "  --help   Show help"})
+	p, err := ensureHookSettings("claudesquad_settingsprobe_refusal", wrapper, sentinelBrief)
+	require.NoError(t, err)
+	require.Empty(t, p, "the probe found no --settings, so injection is skipped")
+
+	logged := buf.String()
+	require.Contains(t, logged, "status hooks disabled", "the consequence is named")
+	require.Contains(t, logged, settingsFlag, "the flag it lacks is named")
+	// Quoted, which is what distinguishes the two candidate names: agent.Resolve is a
+	// contains-match, so the program "launch-claude.sh" contains the canonical name as a
+	// substring and a bare Contains here would pass on either. The quotes are the assertion.
+	require.Contains(t, logged, strconv.Quote(string(agent.KeyClaude)),
+		"the binary that answered is named, not the program that was never probed")
+	require.NotContains(t, logged, strconv.Quote(wrapper),
+		"naming the wrapper sends someone to check the flags of a binary nothing asked")
+
+	// A non-claude program is not a refusal, it is this feature not applying, and a line
+	// per aider session launch would be noise that buries the case above.
+	buf.Reset()
+	p, err = ensureHookSettings("claudesquad_settingsprobe_aider", "aider", sentinelBrief)
+	require.NoError(t, err)
+	require.Empty(t, p)
+	require.Empty(t, buf.String(), "a program with no hook support is silent")
 }
 
 func TestReadHookRecord(t *testing.T) {

@@ -1583,10 +1583,19 @@ func TestResumeCommandProbeGate(t *testing.T) {
 	}
 }
 
-// probeTarget picks which binary's --help the resume probe runs: the program's own first
+// probeTarget picks which binary's --help a capability probe runs: the program's own first
 // token when it is the canonical binary (wherever it lives), the canonical name otherwise —
 // a wrapper's side effects must never run on a probe.
+//
+// The tilde cases are the shape where the launch and the probe would otherwise disagree
+// about one string. tmux hands the launch command to `sh -c`, which expands "~"; a probe
+// reaches exec.Command, which neither expands it nor falls back to PATH for a name carrying
+// a separator, so an unexpanded target probes ENOENT — and a failed probe caches as empty
+// output, which is the same answer as a binary that does not have the flag. Every gate that
+// routes through here (--settings, --plugin-dir, resume) inherits that.
 func TestProbeTarget(t *testing.T) {
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
 	cases := []struct {
 		program string
 		key     agent.Key
@@ -1598,6 +1607,11 @@ func TestProbeTarget(t *testing.T) {
 		{"launch-gemini.sh", agent.KeyGemini, "gemini"},
 		{"/usr/local/bin/codex", agent.KeyCodex, "/usr/local/bin/codex"},
 		{"codex-nightly", agent.KeyCodex, "codex"},
+		{"~/.local/bin/claude", agent.KeyClaude, filepath.Join(home, ".local/bin/claude")},
+		{"~/bin/claude --verbose", agent.KeyClaude, filepath.Join(home, "bin/claude")},
+		// Not a tilde path: "~" is only expanded leading, and this basename is not the
+		// canonical name anyway, so the wrapper carve-out answers first.
+		{"/opt/~claude/launch-claude.sh", agent.KeyClaude, "claude"},
 	}
 	for _, tc := range cases {
 		require.Equal(t, tc.want, probeTarget(tc.program, tc.key), "program %q", tc.program)
