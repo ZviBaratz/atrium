@@ -1,9 +1,10 @@
 # GitHub Copilot CLI Integration
 
 **Date:** 2026-08-26
-**Status:** Stage 0 measurement complete for the two dialogs; the busy-marker ladder below
-60 columns is invalid and Stage 1 re-drives it. Stage 1 design settled (2026-08-26): the
-wall-stripping scan is anchored on `bottomBoxBlock`, not on the whole pane.
+**Status:** Stage 0 measurement complete for all three surfaces — the two dialogs, and the
+busy marker on the re-driven ladder of 2026-08-26 that replaced the invalid one. Stage 1
+design settled (2026-08-26): the wall-stripping scan is anchored on `bottomBoxBlock`, not on
+the whole pane.
 **Driven against:** GitHub Copilot CLI **1.0.80** (npm `@github/copilot`), Linux
 
 ## Motivation
@@ -226,34 +227,57 @@ organization's usage page reported 12 AI credits for the whole of Stage 0.
 `InputBoxPrompts` stays nil. The composer is delimited by horizontal rules above and below
 rather than a box, so there are no vertical borders on its own line.
 
-**Busy marker.** The status row replaces the hint row *below* the composer, so
-`MarkerWindow` stays 0 and the footer anchor finds it — the claude arrangement, not
-codex's. The row reads `<spinner> Working · <N> B esc interrupt`, where the spinner
-animates through at least `◎ ◉ ○ ●` and the byte counter grows during the turn. The
-counter sits *between* the two words, so `Working esc interrupt` is never a contiguous
-literal at any width — a fact a wide capture alone would suggest is fine.
+**Busy marker — DRIVEN at all eight widths, 2026-08-26 (the second ladder).** The status
+row replaces the hint row *below* the composer, so `MarkerWindow` stays 0 and the footer
+anchor finds it — the claude arrangement, not codex's. At the wide rungs the row reads
+`<spinner> Working · <N> B esc interrupt`, the spinner animating through `● ◉ ◎` across the
+sweep and the byte counter growing throughout.
 
-**The busy marker below 60 columns is NOT MEASURED, and an earlier draft of this section
-said otherwise.** That draft carried a width table giving the footer at 40, 28 and 20, and
-concluded a floor of 20 with `Working` splitting mid-word there. No preserved capture holds
-any of it. Of the eight `working-*` panes in the run directory, `Working` appears in exactly
-two — 120 and 60. Both read `Session: 1.52 AIC used`; 40, 34, 28, 26, 24 and 20 all read
-`2.7` and all show the hint row where the status row would be. Identical credit figure and
-the hint row from 40 down means one thing: those six rungs captured an IDLE pane.
+The ladder is valid on the two checks the first one failed: the byte counter grows
+monotonically at every rung — 544 B, 1.0, 1.5, 1.9, 2.4, 2.9, 3.4, 3.8 KiB — and the
+spinner is painted at all eight, so the turn outlived the sweep. Note the unit changes from
+`B` to `KiB` between the first two rungs, which is why no marker may key on it.
 
-That is the measurement artifact this section records three paragraphs below, still in the
-artifacts after the correction was written down. The corrected re-drive's narrow panes were
-not preserved — not in `captures/`, `cat-A/`, `prod/` or `fixtures.go.txt`, all four of
-which derive from the one invalid run. So the numbers above were real readings of a pane
-that was not working, or readings of a run nothing kept; either way nothing can cite them,
-and a floor no artifact backs is the defect this spec's evidence tiers exist to refuse.
+| width | status row, verbatim | `Working` | `esc interrupt` |
+|---|---|---|---|
+| 120 | `● Working · 544 B esc interrupt` | contiguous | contiguous |
+| 60 | `◉ Working · 1.0 KiB esc interrupt` | contiguous | contiguous |
+| 40 | `◎ Working · 1.5 KiB esc interrupt` | contiguous | contiguous |
+| 34 | `◉ Working· 1.9 KiB esc` / `interrupt` | contiguous | **split** |
+| 28 | `◎      · 2.4    esc` / `WorkingKiB      interrupt` | contiguous | **split** |
+| 26 | `◎      · 2.9   esc` / `WorkingKiB     interrupt` | contiguous | **split** |
+| 24 | `◉     · 3.4  esc` / `WorkinKiB    interrup` / `g            t` | **split** | **split** |
+| 20 | `◎    · 3.8 esc` / `WorkiKiB   interr` / `ng         upt` | **split** | **split** |
 
-What survives is what two rungs can carry: `MarkerWindow` 0 is confirmed at 120 and 60, and
-`Working` is present at both. Whether `esc interrupt` breaks at 28, whether `Working` splits
-at 20, and therefore whether `LiveSpinner` is needed at all, are open. Stage 1 re-drives the
-ladder over all eight widths in one turn long enough to outlive the sweep, and asserts
-`Working` present at EVERY rung plus a monotonically growing byte counter — so the fixtures
-themselves refuse an invalid ladder rather than encoding one.
+Three findings, each of which a wide capture alone would have got wrong.
+
+**`Working` alone is the only viable marker, and its floor is 26.** The byte counter sits
+*between* the two words, so `Working esc interrupt` is never contiguous at any width. `esc
+interrupt` on its own stops being contiguous at 34 — one rung earlier than the width at
+which the footer goes multi-column — because the single-column row simply wraps there. So a
+matcher keyed on the hint would miss five of eight rungs. `Working` survives to 26; at 24
+and 20 the multi-column footer splits it mid-word (`Workin`/`g`, then `Worki`/`ng`), and no
+substring and no window value can reach a word that is not on screen as a word.
+
+**Losing 34's space is not a width-monotonic story either.** At 34 the row reads
+`Working·` with no space before the separator, while 40 and every wider rung read
+`Working ·`. A marker of `Working ·` would therefore have passed 120, 60 and 40 and failed
+at 34 — the same non-monotonic shape the approval dialog's selector shows.
+
+**Those two lost rungs are what `LiveSpinner` would be for, and it stays nil.** The spinner
+glyph is present at 24 and 20, so a frame-set detector is the only signal left there. This
+ladder captured one frame per rung, which cannot establish a frame set, so that surface is
+NOT MEASURED and Stage 1 records the two rungs as negative evidence rather than guessing a
+predicate for them. A session at 24 columns or narrower reports idle during a live turn;
+that is the disclosed cost of not driving the spinner.
+
+**Why this section is dated and the first ladder is kept.** The first sweep's turn ended
+after its width-60 rung, so its six narrow rungs captured an IDLE pane while looking like a
+measurement: `Working` in exactly two of eight, an identical `Session: 1.52 AIC used` across
+the other six, and the hint row where the status row belongs. Those captures are preserved
+beside the valid ones under `captures-invalid-working-2026-08-26/` with a `WHY.txt`, because
+this paragraph is a claim about them and deleting them would make it uncheckable. Do not
+emit fixtures from that directory.
 
 **Folder-trust gate.** Headline `Do you trust the files in this folder?`, title
 `Confirm folder trust`, options `1. Yes` / `2. Yes, and remember this folder for future
@@ -352,26 +376,35 @@ a live AI-credit reading, and the footer carries the resolved model name. Both a
 scrapeable without opening the session store, which is worth knowing before building a
 reader for either.
 
-**A measurement artifact worth recording, and the artifacts still carry it.** The first
+**A measurement artifact worth recording, and how it was actually cleared.** The first
 working-state ladder appeared to show the busy marker vanishing below 40 columns. It had
 not: the turn ended partway through the ladder, and the narrow rungs captured an idle pane.
-A ladder is only valid for a transient state if the state outlives the sweep; the corrected
-method restarts a turn at each width. The wrong reading was the more
-interesting-looking one.
+A ladder is only valid for a transient state if the state outlives the sweep. The wrong
+reading was the more interesting-looking one.
 
-Writing that down did not remove it. The run directory still holds the invalid ladder and
-nothing else — see the busy-marker section above, which is what discovered it — so the
-lesson was recorded while the artifact it condemns stayed the only evidence on disk. A
-correction in prose beside an uncorrected capture is worse than no correction, because the
-next reader trusts the prose and cites the capture.
+Writing that down did not remove it. For as long as the correction existed only in prose,
+the run directory held the invalid ladder and nothing else — so the lesson sat beside the
+artifact it condemns, which is worse than no correction, because the next reader trusts the
+prose and cites the capture. What cleared it was re-driving, not re-writing: the ladder in
+the busy-marker section above was swept in one turn whose byte counter grows at every rung,
+and the invalid captures were moved to `captures-invalid-working-2026-08-26/` in the same
+pass, so the two can no longer be confused for each other.
+
+The remedy generalises past this ladder. `Working` present at every rung was the check the
+first sweep lacked, and it would still have passed a sweep whose turn ended between two
+rungs that both happened to be painted. The check that cannot be faked is the byte counter:
+a stalled counter says the turn is over even while the row is still on screen. Any future
+ladder over a transient state needs a monotone quantity the state itself advances, not just
+a marker the state leaves behind.
 
 ## NOT MEASURED
 
-- **The busy marker below 60 columns**, and therefore its width floor, whether
-  `esc interrupt` breaks at 28, whether `Working` splits mid-word at 20, and whether
-  `LiveSpinner` is needed at all. The ladder on disk captured an idle pane at every rung
-  below 60; see the busy-marker section above for how that was established. This is the one
-  entry Stage 1 closes before it writes a fixture rather than after.
+- **`LiveSpinner`'s frame set**, and therefore whether a busy predicate can be written for
+  the two rungs where `Working` splits mid-word (24 and 20). The re-driven ladder in the
+  busy-marker section above closed that section's other three questions — the floor is 26,
+  `esc interrupt` breaks at 34, and `Working ·` is non-monotonic — but it captured one
+  spinner frame per rung, and one frame cannot establish a set. Stage 1 records 24 and 20 as
+  negative evidence instead of guessing a predicate for them.
 - **`ResumeProbe`'s needle.** `--continue` and `-r, --resume` both appear in `--help`, but
   the needle must be pinned to the listing rather than the bare word, and that has not
   been chosen.
@@ -556,9 +589,9 @@ Stage 0 is complete. Every prerequisite is satisfied: the organization's CLI pol
 enabled, its AI-credits budget is raised off zero, the intended account holds a seat, and
 the injected token is proven to be the credential in use.
 
-Stage 1 can be written from the driven captures for the two dialogs. The busy marker needs
-one more drive first — the ladder on disk is the invalid one, and Stage 1 re-drives all
-eight rungs rather than encoding a table nothing can cite.
+Stage 1 can be written from the driven captures for all three surfaces. The busy marker's
+ladder was re-driven over all eight rungs rather than encoding a table nothing could cite;
+the invalid one was moved aside in the same pass, not overwritten.
 
 Four things it must carry that were not obvious before driving:
 
@@ -571,7 +604,8 @@ Four things it must carry that were not obvious before driving:
    and its title scrolls off, so a title-keyed matcher misses a gate that is on screen.
 4. A pinned width floor for the busy marker, as a value a test reads rather than a
    sentence prose repeats — and pinned to the re-driven ladder, not to the table this
-   spec used to carry.
+   spec used to carry. That floor is 26, and the two rungs below it are recorded as
+   misses, because the multi-column footer splits `Working` mid-word there.
 
 Remaining before Stage 1 is finished, not before it starts: the paste-chip capture, the
 `resume` drive and its `RESUME_TABLE` row, and a `ResumeProbe` needle chosen against the
