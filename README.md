@@ -340,13 +340,14 @@ compaction, so it is the wrong place to put a manual. Where a fact already has a
 the page names the owner instead of restating it: `atrium new --help` is what answers
 when a queued create actually lands.
 
-That pointer reaches **claude sessions only**, and by more than one gate. `ensureHookSettings`
-injects the settings file solely for an agent whose adapter declares hook support, which claude
-alone does; it also skips injection when the claude binary's `--help` does not advertise
-`--settings`, and the `SessionStart` entry is added only for a session with a worktree and a
-branch — so a *direct* (non-git) session gets no brief either, including the paragraph on this
-page written for it. Any of them can run `atrium guide` perfectly well; they are simply never
-told to. [#773](https://github.com/ZviBaratz/atrium/issues/773) tracks closing the adapter gap.
+That pointer reaches **claude sessions only**, and by more than one gate.
+`ensureHookSettings` injects the settings file solely for an agent whose adapter declares
+hook support, which claude alone does; it also skips injection when the `--help` of the
+claude that session runs does not advertise `--settings`, and the `SessionStart` entry is
+added only for a session with a worktree and a branch — so a *direct* (non-git) session
+gets no brief either, including the paragraph on this page written for it. Any of them can
+run `atrium guide` perfectly well; they are simply never told to.
+[#773](https://github.com/ZviBaratz/atrium/issues/773) tracks closing the adapter gap.
 
 The page also spells the binary `atrium` throughout, rather than the name it was installed
 under (`install.sh --name`). [#775](https://github.com/ZviBaratz/atrium/issues/775) tracks that.

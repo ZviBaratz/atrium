@@ -86,41 +86,24 @@ func hookSessionDir(sanitizedName string) (string, error) {
 	return filepath.Join(root, sanitizedName), nil
 }
 
-var (
-	settingsFlagOnce      sync.Once
-	settingsFlagSupported bool
-	// settingsFlagOverride forces the probe result in tests (nil = probe normally).
-	settingsFlagOverride *bool
-)
+// settingsFlag is the claude flag the hook settings are handed on, and the needle its
+// capability probe looks for in --help, so the two cannot drift.
+const settingsFlag = "--settings"
 
-// claudeSupportsSettingsFlag reports whether the claude binary accepts --settings. It is
-// probed once per process via `claude --help` and cached; a negative or failed probe
-// disables hook injection entirely so a launch can never fail because of this feature.
+// claudeSupportsSettingsFlag reports whether the claude the session will run accepts
+// --settings, probed once per binary per process through the shared help-probe cache. A
+// negative or failed probe disables hook injection entirely, so a launch can never fail
+// because of this feature.
 //
-// The probe always runs the literal `claude` binary (which the agent ultimately exec's,
-// directly or via a wrapper), never the configured program. Probing a launcher wrapper
-// would run its side effects (trust writes, config copies into the cwd) on every process.
-func claudeSupportsSettingsFlag() bool {
-	if settingsFlagOverride != nil {
-		return *settingsFlagOverride
-	}
-	settingsFlagOnce.Do(func() {
-		claudeBin := string(agent.KeyClaude)
-		// One-shot, process-cached probe with no ctx-bearing caller; Background
-		// capped at probeTimeout is deliberate.
-		ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
-		defer cancel()
-		out, err := exec.CommandContext(ctx, claudeBin, "--help").CombinedOutput()
-		if err != nil {
-			log.InfoLog.Printf("status hooks disabled: probing %q --help failed: %v", claudeBin, err)
-			return
-		}
-		settingsFlagSupported = strings.Contains(string(out), "--settings")
-		if !settingsFlagSupported {
-			log.InfoLog.Printf("status hooks disabled: %q has no --settings flag", claudeBin)
-		}
-	})
-	return settingsFlagSupported
+// probeTarget picks WHAT is probed, and it takes the session's own program for the reason
+// the plugin gate does: a claude installed at an absolute path outside PATH answers `--help`
+// under its own name and not under `claude`, so probing the bare name reports "no such flag"
+// for the very binary the session runs — and then every session in the process silently
+// loses its status hooks, its SessionStart brief, and accurate status classification with
+// them. A wrapper, whose side effects must not run on a probe, still falls back to the
+// canonical name.
+func claudeSupportsSettingsFlag(program string) bool {
+	return binHelpContains(probeTarget(program, agent.KeyClaude), settingsFlag)
 }
 
 var (
@@ -136,14 +119,13 @@ var (
 // binary. A failed probe caches as empty output: the capability reads as absent and the
 // caller degrades (relaunch without resume) rather than failing the launch.
 //
-// WHICH binary is the caller's decision, not this function's, and the two callers decide
-// it differently on purpose. claudeSupportsSettingsFlag hard-codes the canonical name,
-// whose wrapper side effects can then never run on a probe. The gates that route through
-// probeTarget accept the configured program's own first token where its basename is
-// exactly the canonical name, because a binary installed outside PATH answers only under
-// its own path — and fall back to the canonical name for anything else, which is the
-// wrapper case. Read probeTarget before adding a caller: the empty-output cache means a
-// probe of the wrong binary is indistinguishable from a flag that does not exist.
+// WHICH binary is the caller's decision, not this function's, and every claude gate here
+// routes it through probeTarget: the configured program's own first token where its basename
+// is exactly the canonical name, because a binary installed outside PATH answers `--help`
+// only under its own path — and the canonical name for anything else, which is the wrapper
+// case, whose side effects must not run on a probe. Read probeTarget before adding a caller:
+// the empty-output cache means a probe of the wrong binary is indistinguishable from a flag
+// that does not exist, so choosing the wrong target refuses a session silently.
 //
 // The lock covers only the map accesses, never the subprocess — a slow --help (the
 // probe allows up to probeTimeout) must not block concurrent resurrections of other
@@ -300,7 +282,7 @@ func buildHookSettings(binPath, stateFile string, brief SessionBrief) ([]byte, e
 // recover-in-place all route through start(), and a rename between two of them must not leave
 // the second describing the first.
 func ensureHookSettings(sanitizedName, program string, brief SessionBrief) (string, error) {
-	if !agent.Resolve(program).HookSupport || !claudeSupportsSettingsFlag() {
+	if !agent.Resolve(program).HookSupport || !claudeSupportsSettingsFlag(program) {
 		return "", nil
 	}
 	// The hooks re-invoke this very binary. If its path can't be resolved, skip injection
