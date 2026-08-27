@@ -132,7 +132,18 @@ func RenderAgentSkills(r AgentSkillsResult) string {
 		default:
 			skillsRow(&b, "status", "injected for some claude programs, not others")
 		}
-		skillsRow(&b, "invoked as", r.Invocation)
+		// Gated for the reason the remedy at the foot of this arm is: with every claude
+		// program declining, nothing will answer the invocation, so a row naming what to
+		// type is an instruction that cannot work — printed directly under a status line
+		// saying the skill is not there. renderOne states the same rule by returning
+		// before its own invocation row, which is why a one-claude install with this
+		// problem already reports it correctly.
+		//
+		// injecting > 0 rather than r.Injecting(), so the split case keeps the row: there
+		// the invocation does work, in the sessions of the programs that got the skill.
+		if injecting > 0 {
+			skillsRow(&b, "invoked as", r.Invocation)
+		}
 		for _, d := range claudes {
 			if d.Injecting() {
 				fmt.Fprintf(&b, "    → %s: injected from %s\n", d.Program, d.Dir)
