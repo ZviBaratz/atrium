@@ -1,0 +1,10 @@
+The fully configured dir every other fixture is compared against: two plugins, two
+marketplaces, two MCP servers, connectors on, and a denial naming a server it does not
+configure (so the available set is untouched).
+
+Its .claude.json carries MCP servers in BOTH of claude's scopes on purpose. The
+top-level mcpServers key is the `user` scope — dir-wide, and the axis the parity
+section compares. The entry under projects.<path> is the `local` scope, available in
+that one checkout, and it is named scratch-rich so any test that reports it has
+visibly counted something that is not a capability of the dir. Unioning the two
+scopes measured how many repos a dir had been used in rather than what it can do.

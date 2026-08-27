@@ -63,13 +63,21 @@ package config
 //
 // No network, no bearer token, no subprocess. The authoritative source of claude.ai
 // connector GRANT state is an HTTP call carrying the dir's own OAuth token, and
-// three things rule it out here: it would be Atrium's first outbound request, its
-// first handling of token material, and it would not work on macOS at all, where
-// claude keeps credentials in the Keychain rather than in a readable file. So this
-// probe measures file-level parity — what each dir is CONFIGURED with — which is the
-// layer rotation can actually be aligned on, and NOT what claude.ai has granted.
-// A pool whose members differ only in their upstream grants reads as being in parity
-// here; that is a limit of the file layer, not a clean bill.
+// three things rule THAT out: it would be Atrium's first outbound request, its first
+// handling of token material, and it would not work on macOS at all, where claude
+// keeps credentials in the Keychain rather than in a readable file.
+//
+// Shelling out to claude is ruled out by something else, since doctor already runs
+// claude elsewhere and none of those three apply to a subprocess: `CLAUDE_CONFIG_DIR=<dir>
+// claude mcp list` WRITES. Measured against 2.1.247 on an empty directory, it left a
+// .claude.json and a backups/ behind — so asking claude what a dir holds would
+// onboard the dir it was asked about, and the read-only property stated above is the
+// one this probe cannot give up: it runs beside live agents, against their dirs.
+//
+// So this probe measures file-level parity — what each dir is CONFIGURED with — which
+// is the layer rotation can actually be aligned on, and NOT what claude.ai has
+// granted. A pool whose members differ only in their upstream grants reads as being
+// in parity here; that is a limit of the file layer, not a clean bill.
 //
 // # Deliberately does not read claudeAiMcpEverConnected
 //
@@ -84,11 +92,30 @@ package config
 //
 // # Axes deliberately left unread
 //
-// enabledMcpjsonServers and disabledMcpjsonServers (per project, in .claude.json)
-// gate the servers a repo's own .mcp.json offers. They are a real per-dir difference,
-// but naming one means reading a file that belongs to the repo rather than to the
-// dir, and the same .mcp.json is shared by every member — so a difference there is
+// enabledMcpjsonServers and disabledMcpjsonServers gate the servers a repo's own
+// .mcp.json offers. settings.json types both as flat arrays of server names, declared
+// beside the one key this probe already pulls out of that file, so the per-dir value
+// is perfectly readable here. What is not readable is what a name on either list
+// MEANS: it resolves against a .mcp.json belonging to a checkout, which this probe
+// never opens and which every member shares. Two dirs approving different names are
+// not thereby different capabilities — the servers those names stand for exist only
+// once a repo is named, and doctor is not asked about a repo. So a difference there is
 // reported as neither present nor absent.
+//
+// projects.<path>.mcpServers is left unread for a related reason, which mcpServerState
+// states: it is claude's per-project local scope, not a capability of the dir.
+//
+// # Which claude these shapes were read from
+//
+// Every claim here about what claude accepts — the enabledPlugins value types, the
+// deniedMcpServers entry schema and its per-entry rejection, the marketplace alias
+// resolver's non-null check, the mcpServers scopes — was read out of claude 2.1.247's
+// own settings schema, not inferred from a config file's contents. That is worth
+// recording because the failure mode is silent: capabilityObject reads an ABSENT key
+// as measured-and-empty, so if claude renames one of these keys, both members go empty
+// on that axis and the section reports a pool as being in parity rather than reporting
+// that it can no longer tell. Nothing here detects that; a reader checking these
+// claims against a newer claude needs to know which one they were true of.
 //
 // allowedMcpServers is unread. Its own description makes it an enterprise allowlist,
 // and the managed setting allowManagedMcpServersOnly can restrict it to managed
@@ -105,6 +132,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -315,8 +343,15 @@ func ReadDirCapabilities(configDir string) (DirCapabilities, bool) {
 // extraKnownMarketplaces", and ignores the alias with a warning when both appear in
 // one file — so the canonical key wins here too, and a dir spelling it either way
 // compares equal to a dir spelling it the other.
+//
+// "Both appear" is decided on the canonical key holding a NON-NULL value, not on the
+// key being present. claude's alias resolver ignores the alias only when the
+// canonical key is present AND not null, and otherwise promotes the alias into it, so
+// a canonical key spelled as an explicit null is not a value that shadows anything.
+// Keying on presence alone read such a file as configuring no marketplaces and
+// reported two dirs claude resolves identically as drifting apart.
 func marketplaceField(settings map[string]json.RawMessage) json.RawMessage {
-	if raw, ok := settings["extraKnownMarketplaces"]; ok {
+	if raw, ok := settings["extraKnownMarketplaces"]; ok && !isJSONNull(raw) {
 		return raw
 	}
 	return settings["additionalMarketplaces"]
@@ -383,11 +418,15 @@ func pluginState(raw json.RawMessage) DimensionState {
 		case isJSONObject(val):
 			targets[name] = fingerprint(val)
 		case isJSONArray(val):
-			var constraints []string
-			if err := json.Unmarshal(val, &constraints); err != nil {
+			constraints, ok := stringArray(val)
+			if !ok {
 				return DimensionState{} // an array of something other than strings
 			}
-			targets[name] = fingerprint(val)
+			// Sorted before fingerprinting. A constraint list is a set, and
+			// json.Marshal orders object keys but never array elements, so the same
+			// two constraints listed the other way round registered as drift.
+			slices.Sort(constraints)
+			targets[name] = fingerprintOf(constraints)
 		default:
 			return DimensionState{}
 		}
@@ -415,6 +454,10 @@ func namedObjectState(raw json.RawMessage) DimensionState {
 // points at and not merely on the name. It reports false when a value has a shape
 // this build does not understand, which makes the caller's whole dimension
 // unmeasured rather than quietly short.
+//
+// One call reads one JSON object, whose keys are unique, so a name cannot arrive
+// twice and there is no two-spellings case to reconcile. That was not true while the
+// MCP axis unioned every project scope; mcpServerState says why it no longer does.
 func collectNamedObjects(obj map[string]json.RawMessage, into map[string]string) bool {
 	for name, val := range obj {
 		if strings.TrimSpace(name) == "" {
@@ -426,16 +469,7 @@ func collectNamedObjects(obj map[string]json.RawMessage, into map[string]string)
 		if !isJSONObject(val) {
 			return false
 		}
-		fp := fingerprint(val)
-		if prev, seen := into[name]; seen && prev != fp {
-			// One name configured two ways in one dir — two project scopes naming
-			// the same server differently. Neither spelling is the target, so carry
-			// both: a sibling configured the same two ways still compares equal, and
-			// one configured a third way still compares different.
-			into[name] = mergeFingerprints(prev, fp)
-			continue
-		}
-		into[name] = fp
+		into[name] = fingerprint(val)
 	}
 	return true
 }
@@ -477,60 +511,103 @@ func availableMCPServers(claude map[string]json.RawMessage, denied json.RawMessa
 // read here. claude matches a denial by `r.serverName === name`, by the expanded
 // serverCommand argv, or by the expanded serverUrl.
 //
-// Two consequences of that schema are encoded rather than guessed. A list holding any
-// entry that is not one of those three shapes is rejected by claude in its ENTIRETY
-// ("deniedMcpServers was present but invalid and was dropped; its entries cannot be
-// enforced"), so such a list denies nothing: measured and empty, matching what claude
-// enforces rather than what the file appears to ask for. And a valid entry keyed on
-// serverCommand or serverUrl is enforced but cannot be expressed as a server name, so
-// it makes the list unmeasured rather than short — treating it as no denial would
-// report a member as allowing a server it blocks.
+// Rejection is PER ENTRY, not wholesale. claude wraps the list so that each entry
+// failing validation is replaced by a sentinel, warned about individually ("Invalid
+// entry was ignored"), and filtered out — the surviving entries are still enforced.
+// An earlier version here read one bad entry as dropping the whole key, on the
+// strength of the "deniedMcpServers was present but invalid and was dropped" message;
+// that message comes from the catch OUTSIDE the per-entry wrapper, which a list whose
+// entries are each individually caught can only reach by not being a list at all. The
+// difference is not cosmetic: it credited a member with every server the file denies
+// beside one malformed neighbour, which is the direction that reports a gap as parity.
 //
-// Validity is decided over the whole list before any name is collected, because
-// claude's rejection is wholesale: a command-keyed entry followed by a malformed one
-// is a dropped key, not an unnameable denial.
+// So an entry claude ignores is skipped, and only a non-list drops the key. A valid
+// entry keyed on serverCommand or serverUrl is enforced but cannot be expressed as a
+// server name, so it makes the list unmeasured rather than short — treating it as no
+// denial would report a member as allowing a server it blocks. An INVALID one is
+// enforced against nothing, and must not take the axis with it.
 func denialNames(raw json.RawMessage) DimensionState {
 	if len(raw) == 0 || isJSONNull(raw) {
-		return DimensionState{Measured: true, Targets: map[string]string{}}
+		return deniesNothing()
 	}
 	var entries []json.RawMessage
 	if err := json.Unmarshal(raw, &entries); err != nil {
-		return deniesNothing()
+		return deniesNothing() // not a list: the whole key is dropped
 	}
 
 	names := map[string]string{}
 	unnameable := false
 	for _, entry := range entries {
-		if !isJSONObject(entry) {
-			return deniesNothing()
-		}
-		var obj map[string]json.RawMessage
-		if err := json.Unmarshal(entry, &obj); err != nil {
-			return deniesNothing()
-		}
-		nameRaw, hasName := obj["serverName"]
-		_, hasCommand := obj["serverCommand"]
-		_, hasURL := obj["serverUrl"]
-		if countSet(hasName, hasCommand, hasURL) != 1 {
-			return deniesNothing() // the schema refines to exactly one of the three
-		}
-		if !hasName {
+		name, kind := denialEntry(entry)
+		switch kind {
+		case denialIgnored:
+			continue
+		case denialUnnameable:
 			unnameable = true
-			continue
+		case denialNamed:
+			names[name] = ""
 		}
-		var name string
-		if err := json.Unmarshal(nameRaw, &name); err != nil {
-			return deniesNothing()
-		}
-		if strings.TrimSpace(name) == "" {
-			continue
-		}
-		names[name] = ""
 	}
 	if unnameable {
 		return DimensionState{}
 	}
 	return DimensionState{Measured: true, Targets: names}
+}
+
+// denialKind is what one deniedMcpServers entry does to the available set.
+type denialKind int
+
+const (
+	// denialIgnored is an entry claude drops on its own. It denies nothing, and it
+	// leaves every other entry standing.
+	denialIgnored denialKind = iota
+	// denialNamed is a valid serverName denial, which subtracts that name.
+	denialNamed
+	// denialUnnameable is a valid serverCommand or serverUrl denial: enforced, but
+	// not expressible as a name, so the axis becomes unmeasured.
+	denialUnnameable
+)
+
+// denialEntry classifies one entry the way claude's schema does.
+//
+// serverName is refined three times over — non-empty, not whitespace-only, and equal
+// to its own trim, the last carrying the message "has leading or trailing whitespace
+// and will never match (names are compared verbatim)". An untrimmed name is therefore
+// an entry claude ignores, not a denial: stored verbatim after only a blank check, it
+// subtracted a server the member can actually run.
+func denialEntry(entry json.RawMessage) (string, denialKind) {
+	if !isJSONObject(entry) {
+		return "", denialIgnored
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(entry, &obj); err != nil {
+		return "", denialIgnored
+	}
+	nameRaw, hasName := obj["serverName"]
+	cmdRaw, hasCommand := obj["serverCommand"]
+	urlRaw, hasURL := obj["serverUrl"]
+	if countSet(hasName, hasCommand, hasURL) != 1 {
+		return "", denialIgnored // the schema refines to exactly one of the three
+	}
+	switch {
+	case hasName:
+		name, ok := jsonString(nameRaw)
+		if !ok || name == "" || name != strings.TrimSpace(name) {
+			return "", denialIgnored
+		}
+		return name, denialNamed
+	case hasCommand:
+		// The schema is a string array of at least one element (the command).
+		if argv, ok := stringArray(cmdRaw); !ok || len(argv) == 0 {
+			return "", denialIgnored
+		}
+		return "", denialUnnameable
+	default:
+		if _, ok := jsonString(urlRaw); !ok {
+			return "", denialIgnored
+		}
+		return "", denialUnnameable
+	}
 }
 
 // deniesNothing is the answer for a deniedMcpServers value claude rejects: the key is
@@ -551,50 +628,32 @@ func countSet(flags ...bool) int {
 	return n
 }
 
-// mcpServerState reads .claude.json's configured MCP servers, before denials.
+// mcpServerState reads the MCP servers .claude.json configures for the WHOLE dir,
+// before denials: the top-level mcpServers key, which is claude's `user` scope.
 //
-// They are recorded per project, under projects.<path>.mcpServers — measured on a
-// live onboarded dir, where the top-level mcpServers key was absent and every
-// projects entry carried one. The top-level key is read too, since claude's scopes
-// (local, user, project) are not all per-project and only the local one was
-// observed. The result is the union across scopes, so a difference means one dir
-// configures the server SOMEWHERE and the other configures it nowhere. Two dirs that
-// both have it, under different project paths, compare equal — the union
-// deliberately does not claim per-project availability, because doctor is not asked
-// about a repo.
+// projects.<path>.mcpServers is deliberately not folded in. That is claude's `local`
+// scope — it labels the location "local-scope MCP servers for this project" — and a
+// server there is available in one checkout and nowhere else. An earlier version
+// unioned every project scope into the dir's capability set, which measured how much
+// each dir had been USED rather than what it can do: on a real pair, one dir carrying
+// ten project entries and a fresh one carrying none, every server the busier dir had
+// ever configured locally printed as a capability the other lacked, under a remedy
+// ("align the config dirs") that cannot be followed — there is no dir-level place to
+// put a local-scope server.
+//
+// Dropping it loses no signal about the question this section asks. Rotation is about
+// the NEXT session, which lands in a path neither member has a local scope for, so a
+// local-scope difference cannot change what that session can do. Pool members also
+// keep their own dirs and work in their own worktrees, so their project keys are
+// different paths and could never have agreed.
 func mcpServerState(claude map[string]json.RawMessage) DimensionState {
-	targets := map[string]string{}
-
 	top, ok := capabilityObject(claude["mcpServers"])
-	if !ok || !collectNamedObjects(top, targets) {
+	if !ok {
 		return DimensionState{}
 	}
-
-	projectsRaw := claude["projects"]
-	if len(projectsRaw) == 0 || isJSONNull(projectsRaw) {
-		return DimensionState{Measured: true, Targets: targets}
-	}
-	var projects map[string]json.RawMessage
-	if err := json.Unmarshal(projectsRaw, &projects); err != nil {
+	targets := map[string]string{}
+	if !collectNamedObjects(top, targets) {
 		return DimensionState{}
-	}
-	for _, raw := range projects {
-		// A null scope is a project entry with nothing configured under it, which is
-		// an answer. This arm is explicit because without it the value fell through
-		// json.Unmarshal into a nil map and read the same way by accident, making
-		// `null` the one unrecognised shape that did not force the dimension
-		// unmeasured.
-		if isJSONNull(raw) {
-			continue
-		}
-		var scope map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &scope); err != nil {
-			return DimensionState{}
-		}
-		servers, ok := capabilityObject(scope["mcpServers"])
-		if !ok || !collectNamedObjects(servers, targets) {
-			return DimensionState{}
-		}
 	}
 	return DimensionState{Measured: true, Targets: targets}
 }
@@ -649,19 +708,121 @@ func fingerprint(raw json.RawMessage) string {
 	if err := dec.Decode(&v); err != nil {
 		return ""
 	}
-	out, err := json.Marshal(v)
+	// Keeping the literal digits is only half of comparing numbers: json.Marshal
+	// re-emits a json.Number verbatim, so 100 and 1e2 — the same number, two
+	// spellings — fingerprinted apart and reported dirs that agree as drifting. Every
+	// number is rewritten into one canonical spelling first, by digit arithmetic
+	// rather than through a float, so the 2^53 property above survives it.
+	out, err := json.Marshal(canonicalNumbers(v))
 	if err != nil {
 		return ""
 	}
 	return string(out)
 }
 
-// mergeFingerprints combines two fingerprints for one name into a sorted, stable
-// composite, so a dir configuring a server two ways has one comparable value.
-func mergeFingerprints(a, b string) string {
-	parts := append(strings.Split(a, "\n"), strings.Split(b, "\n")...)
-	slices.Sort(parts)
-	return strings.Join(slices.Compact(parts), "\n")
+// fingerprintOf canonicalises a value the caller had to reshape — sorting a version
+// constraint list — before it could be compared.
+func fingerprintOf(v any) string {
+	out, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return fingerprint(out)
+}
+
+// canonicalNumbers rewrites every json.Number in a decoded value into one spelling
+// per numeric value, leaving everything else alone.
+func canonicalNumbers(v any) any {
+	switch t := v.(type) {
+	case json.Number:
+		return json.Number(canonicalNumber(string(t)))
+	case map[string]any:
+		for k, val := range t {
+			t[k] = canonicalNumbers(val)
+		}
+	case []any:
+		for i, val := range t {
+			t[i] = canonicalNumbers(val)
+		}
+	}
+	return v
+}
+
+// canonicalNumber is one JSON number literal rewritten as <significand>e<exponent>,
+// with no leading or trailing zeros in the significand — so 100, 1e2 and 1.0e2 all
+// come out "1e2", and 1.0, 1 and 1e0 all come out "1e0".
+//
+// It is deliberately digit arithmetic and never a float: parsing to float64 to
+// re-print is what collided values past 2^53 in the first place, and a literal like
+// 1e400 has no float64 to be parsed into at all. Values are only ever compared with
+// each other, so the form need not be readable, only unique per number. An input this
+// cannot decompose is returned unchanged, which compares as the raw literal did.
+func canonicalNumber(lit string) string {
+	sign, rest := "", lit
+	if strings.HasPrefix(rest, "-") {
+		sign, rest = "-", rest[1:]
+	}
+
+	mantissa, exp := rest, 0
+	if i := strings.IndexAny(rest, "eE"); i >= 0 {
+		parsed, err := strconv.Atoi(strings.TrimPrefix(rest[i+1:], "+"))
+		if err != nil {
+			return lit
+		}
+		mantissa, exp = rest[:i], parsed
+	}
+	intPart, fracPart := mantissa, ""
+	if i := strings.IndexByte(mantissa, '.'); i >= 0 {
+		intPart, fracPart = mantissa[:i], mantissa[i+1:]
+	}
+
+	// Fold the fraction into the digit string by charging it to the exponent, so what
+	// is left is an integer significand times a power of ten.
+	digits := intPart + fracPart
+	exp -= len(fracPart)
+	if digits == "" || strings.TrimFunc(digits, func(r rune) bool { return r >= '0' && r <= '9' }) != "" {
+		return lit
+	}
+	digits = strings.TrimLeft(digits, "0")
+	if digits == "" {
+		return "0" // every spelling of zero, sign included
+	}
+	trimmed := strings.TrimRight(digits, "0")
+	exp += len(digits) - len(trimmed)
+	return sign + trimmed + "e" + strconv.Itoa(exp)
+}
+
+// jsonString decodes a value claude's schema types as a string, reporting false for
+// every other shape — null included, which json.Unmarshal would otherwise accept
+// into a string as "".
+func jsonString(raw json.RawMessage) (string, bool) {
+	if isJSONNull(raw) {
+		return "", false
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return "", false
+	}
+	return s, true
+}
+
+// stringArray decodes a value claude's schema types as an array of strings. Each
+// element is checked on its own, because json.Unmarshal reads a null element into a
+// string without error: `[null]` decoded as [""] and passed for a constraint list.
+func stringArray(raw json.RawMessage) ([]string, bool) {
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, false
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		s, ok := jsonString(item)
+		if !ok {
+			return nil, false
+		}
+		out = append(out, s)
+	}
+	return out, true
 }
 
 // isJSONTrue, isJSONFalse, isJSONNull, isJSONObject and isJSONArray test a raw value
@@ -700,8 +861,12 @@ type CapabilityReadFunc func(configDir string) (DirCapabilities, bool)
 // normalizing its config_dir (expanding ~) first. An inherit-env account — config_dir
 // "" — reads nothing and reports ok=false: it injects no CLAUDE_CONFIG_DIR, so it has
 // no dir of its own whose capabilities could be compared against a pool sibling's.
-// Callers that must tell that account apart from a dir that merely failed to read
-// should check NormalizedConfigDir first, the way CheckParity does.
+//
+// The two answers are indistinguishable in the return, so a caller that must tell
+// that account apart from a dir which merely failed to read has to check
+// NormalizedConfigDir itself first. CheckParity needs exactly that distinction and so
+// resolves the dir and calls ReadDirCapabilities directly; this method is the
+// convenience form for a caller that does not, and mirrors ReadIdentity beside it.
 func (a ClaudeAccount) ReadCapabilities() (DirCapabilities, bool) {
 	return ReadDirCapabilities(a.NormalizedConfigDir())
 }

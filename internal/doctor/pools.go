@@ -16,12 +16,15 @@ type PoolWarning struct {
 
 // CheckPools reports pools whose members resolve to the same config_dir.
 //
-// Membership and the bucket key both match CheckParity, deliberately. Membership
-// comes from config.PoolMembers, so an account with no pool of its own whose NAME is
-// another account's pool counts as the member rotation treats it as; scanning for a
+// Membership and the bucket key both match CheckParity, deliberately, and so does how
+// members are named. Membership comes from config.PoolMembers, so an account with no
+// pool of its own whose NAME is another account's pool is counted; scanning for a
 // matching Pool field skipped it, and `{name: work}` plus `{name: work-alt, pool:
-// work}` on one dir — a rotation that is entirely a no-op — was reported by neither
-// section. The key is NormalizedConfigDir for the reason that method's own doc gives:
+// work}` on one dir — a rotation that is a no-op wherever it is live — was reported by
+// neither section. CheckParity's own doc carries when rotation does and does not
+// resolve through PoolMembers; this section does not restate it.
+//
+// The key is NormalizedConfigDir for the reason that method's own doc gives:
 // config_dir is hand-written, so left raw "/h/x" and "/h/x/" bucket apart and the one
 // shape this check exists to catch hid behind a trailing slash.
 func CheckPools(cfg *config.Config) []PoolWarning {
@@ -29,28 +32,23 @@ func CheckPools(cfg *config.Config) []PoolWarning {
 		return nil
 	}
 
-	// Pool names in the config order of their first mention, so the section does not
-	// reorder between runs on an unchanged config.
-	var pools []string
-	seenPool := map[string]bool{}
-	for _, a := range cfg.ClaudeAccounts {
-		if a.Pool == "" || seenPool[a.Pool] {
-			continue
-		}
-		seenPool[a.Pool] = true
-		pools = append(pools, a.Pool)
-	}
-
 	var warns []PoolWarning
-	for _, p := range pools {
+	for _, p := range poolNames(cfg) {
+		members := cfg.PoolMembers(p)
+		// Named through memberLabels, the same way the parity section names them. The
+		// raw Name is not printable: config.json is hand-editable and the non-blank
+		// guard runs only in the accounts overlay, so a blank one rendered this very
+		// sentence with a hole where its subject belongs — the defect poolCollision was
+		// written to fix for the dir half of the same sentence.
+		labels := memberLabels(members)
 		byDir := map[string][]string{}
 		var dirOrder []string
-		for _, a := range cfg.PoolMembers(p) {
+		for i, a := range members {
 			dir := a.NormalizedConfigDir()
 			if _, seen := byDir[dir]; !seen {
 				dirOrder = append(dirOrder, dir)
 			}
-			byDir[dir] = append(byDir[dir], a.Name)
+			byDir[dir] = append(byDir[dir], labels[i])
 		}
 		// Walked in the order the dirs were first mentioned rather than over the map,
 		// so a pool with two separate collisions renders the same way twice.
@@ -70,11 +68,28 @@ func CheckPools(cfg *config.Config) []PoolWarning {
 // inherits the ambient CLAUDE_CONFIG_DIR, which makes them the same login for the
 // same reason — and naming it as a directory printed the sentence with a hole in it.
 func poolCollision(names []string, dir string) string {
-	joined := strings.Join(names, " and ")
 	if dir == "" {
-		return fmt.Sprintf("%s inherit the ambient CLAUDE_CONFIG_DIR — same login, rotation is a no-op", joined)
+		return fmt.Sprintf("%s inherit the ambient CLAUDE_CONFIG_DIR — same login, rotation is a no-op",
+			quotedList(names))
 	}
-	return fmt.Sprintf("%s share %s — same login, rotation is a no-op", joined, dir)
+	return fmt.Sprintf("%s share %s — same login, rotation is a no-op", quotedList(names), dir)
+}
+
+// poolNames is every pool with at least one member, in the config order of its first
+// mention, so neither section reorders between runs on an unchanged config. Shared
+// with CheckParity because the two sections must agree on what a pool is; they had a
+// byte-identical copy of this loop each.
+func poolNames(cfg *config.Config) []string {
+	var pools []string
+	seen := map[string]bool{}
+	for _, a := range cfg.ClaudeAccounts {
+		if a.Pool == "" || seen[a.Pool] {
+			continue
+		}
+		seen[a.Pool] = true
+		pools = append(pools, a.Pool)
+	}
+	return pools
 }
 
 // RenderPools formats pool warnings for `atrium doctor` (empty string when none).

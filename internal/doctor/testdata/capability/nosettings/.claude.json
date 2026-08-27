@@ -1,11 +1,26 @@
 {
   "numStartups": 7,
-  "oauthAccount": { "emailAddress": "nosettings@example.com", "accountUuid": "u-nosettings" },
+  "oauthAccount": {
+    "emailAddress": "nosettings@example.com",
+    "accountUuid": "u-nosettings"
+  },
+  "mcpServers": {
+    "linear": {
+      "type": "http",
+      "url": "https://mcp.linear.app/mcp"
+    },
+    "slack": {
+      "type": "http",
+      "url": "https://slack.example/mcp"
+    }
+  },
   "projects": {
     "/home/tester/Projects/atrium": {
       "mcpServers": {
-        "linear": { "type": "http", "url": "https://mcp.linear.app/mcp" },
-        "slack": { "type": "http", "url": "https://slack.example/mcp" }
+        "scratch-nosettings": {
+          "type": "http",
+          "url": "https://local-scope.example/mcp"
+        }
       }
     }
   }

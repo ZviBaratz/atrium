@@ -1,3 +1,10 @@
-A config dir claude was never onboarded in: it holds no settings.json,
-settings.local.json or .claude.json, so ReadDirCapabilities cannot answer for it at
-all. The file is here only because git does not track empty directories.
+A config dir claude was never onboarded in: it holds neither of the two files
+ReadDirCapabilities probes — settings.json and .claude.json — so the dir cannot be
+spoken for at all, and every axis is unknown rather than empty. An earlier version
+also read settings.local.json; that read was removed, because claude resolves its
+local settings source against the project root and never looks for it here.
+
+This is the shape a pool member takes when its config_dir was typed correctly but
+never logged into, so the remedy is to set it up (CLAUDE_CONFIG_DIR=<dir> claude, then
+/login) rather than to check the path. The file is here only because git does not
+track empty directories.

@@ -1,13 +1,24 @@
 {
   "numStartups": 3,
-  "oauthAccount": { "emailAddress": "bare@example.com", "accountUuid": "u-bare" },
+  "oauthAccount": {
+    "emailAddress": "bare@example.com",
+    "accountUuid": "u-bare"
+  },
   "claudeAiMcpEverConnected": [
     "claude.ai Gmail",
     "claude.ai Google Calendar",
     "claude.ai Google Drive",
     "claude.ai Linear"
   ],
+  "mcpServers": {},
   "projects": {
-    "/home/tester/Projects/atrium": { "mcpServers": {} }
+    "/home/tester/Projects/atrium": {
+      "mcpServers": {
+        "scratch-bare": {
+          "type": "http",
+          "url": "https://local-scope.example/mcp"
+        }
+      }
+    }
   }
 }

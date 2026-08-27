@@ -74,8 +74,8 @@ func TestReadDirCapabilities(t *testing.T) {
 		settings: body(`{"enabledPlugins":{"b@m":true,"a@m":true},
 		                 "extraKnownMarketplaces":{"m":{"source":{"source":"github"}}},
 		                 "disableClaudeAiConnectors":true}`),
-		claude: body(`{"projects":{"/p":{"mcpServers":{"linear":{"type":"http"},
-		                                               "slack":{"type":"http"}}}}}`),
+		claude: body(`{"mcpServers":{"linear":{"type":"http"},
+		                             "slack":{"type":"http"}}}`),
 		plugins:      measured("a@m", "b@m"),
 		marketplaces: measured("m"),
 		mcp:          measured("linear", "slack"),
@@ -111,25 +111,29 @@ func TestReadDirCapabilities(t *testing.T) {
 		// turned the common case into three "unverified" lines against an identical
 		// sibling, and masked a real connector split behind one of them.
 		name:         "only .claude.json still answers the settings dimensions",
-		claude:       body(`{"projects":{"/p":{"mcpServers":{"linear":{}}}}}`),
+		claude:       body(`{"mcpServers":{"linear":{}}}`),
 		plugins:      measured(),
 		marketplaces: measured(),
 		mcp:          measured("linear"),
 		connectors:   ConnectorsOn,
 		ok:           true,
 	}, {
-		// A top-level mcpServers key is read as well as the per-project scopes, so a
-		// dir written either way answers.
-		name:         "mcpServers at the top level and under projects",
+		// The compared axis is the dir-wide scope — the top-level key. A
+		// projects.<path>.mcpServers entry is claude's LOCAL scope, available in that
+		// one checkout, so it is not a capability of the dir; mcpServerState says why
+		// counting it measured how much each dir had been used instead.
+		name:         "a project scope is local to that project and is not counted",
 		claude:       body(`{"mcpServers":{"top":{}},"projects":{"/a":{"mcpServers":{"a":{}}},"/b":{"mcpServers":{"b":{}}}}}`),
 		plugins:      measured(),
 		marketplaces: measured(),
-		mcp:          measured("a", "b", "top"),
+		mcp:          measured("top"),
 		connectors:   ConnectorsOn,
 		ok:           true,
 	}, {
-		name:         "a project scope with no mcpServers contributes nothing",
-		claude:       body(`{"projects":{"/a":{"allowedTools":[]},"/b":{"mcpServers":{}}}}`),
+		// And a dir whose only MCP servers are local-scope is measured and EMPTY, not
+		// unknown: the file was read and it declares nothing dir-wide.
+		name:         "local scopes alone leave the dir-wide set empty, not unknown",
+		claude:       body(`{"projects":{"/a":{"allowedTools":[]},"/b":{"mcpServers":{"b":{}}}}}`),
 		plugins:      measured(),
 		marketplaces: measured(),
 		mcp:          measured(),
@@ -251,16 +255,20 @@ func TestReadDirCapabilities(t *testing.T) {
 		connectors:   ConnectorsOn,
 		ok:           true,
 	}, {
-		name:         "a reshaped projects map makes MCP unknown",
-		claude:       body(`{"projects":["/a"]}`),
+		// The projects key is not read at all now, so no shape it takes can make the
+		// dir-wide axis unknown — including one this build would not recognise.
+		name:         "a reshaped projects map does not reach the compared axis",
+		claude:       body(`{"mcpServers":{"top":{}},"projects":["/a"]}`),
 		plugins:      measured(),
 		marketplaces: measured(),
-		mcp:          unmeasured,
+		mcp:          measured("top"),
 		connectors:   ConnectorsOn,
 		ok:           true,
 	}, {
-		name:         "a reshaped project mcpServers makes MCP unknown",
-		claude:       body(`{"projects":{"/a":{"mcpServers":["linear"]}}}`),
+		// The top-level key is the one that still must: a shape this build cannot read
+		// there is an unanswered question, never an empty set.
+		name:         "a reshaped top-level mcpServers makes MCP unknown",
+		claude:       body(`{"mcpServers":["linear"]}`),
 		plugins:      measured(),
 		marketplaces: measured(),
 		mcp:          unmeasured,
@@ -410,7 +418,7 @@ func TestReadDirCapabilities(t *testing.T) {
 // altogether. Comparing names alone certified those as interchangeable.
 func TestTargetsCompareTheConfiguredValue(t *testing.T) {
 	linear := func(url string) string {
-		return `{"projects":{"/p":{"mcpServers":{"linear":{"type":"http","url":"` + url + `"}}}}}`
+		return `{"mcpServers":{"linear":{"type":"http","url":"` + url + `"}}}`
 	}
 	genuine, ok := ReadDirCapabilities(capDirWith(t, map[string]*string{
 		".claude.json": body(linear("https://mcp.linear.app/mcp")),
@@ -461,32 +469,127 @@ func TestTargetsIgnoreKeyOrderAndWhitespace(t *testing.T) {
 	}
 }
 
+// Nor is the SPELLING of a number. UseNumber keeps a literal's digits, which is what
+// stops two values past 2^53 from colliding — and, left there, made 100 and 1e2
+// fingerprint apart, so two dirs configuring one server identically were reported as
+// "same name, different target" and the user was sent to align dirs that agree.
+func TestTargetsIgnoreNumberSpelling(t *testing.T) {
+	target := func(n string) string {
+		t.Helper()
+		got, ok := ReadDirCapabilities(capDirWith(t, map[string]*string{
+			".claude.json": body(`{"mcpServers":{"linear":{"timeout":` + n + `}}}`),
+		}))
+		if !ok {
+			t.Fatalf("dir with timeout %s did not read", n)
+		}
+		if got.MCPServers.Target("linear") == "" {
+			t.Fatalf("timeout %s produced no target, which a differ reads as no difference", n)
+		}
+		return got.MCPServers.Target("linear")
+	}
+
+	for _, same := range [][2]string{
+		{"100", "1e2"},
+		{"100", "1.0e2"},
+		{"1", "1.0"},
+		{"0.1", "0.10"},
+		{"0", "-0"},
+		{"0", "0.000"},
+		{"-5", "-5.0"},
+		{"12345678901234567890", "1.234567890123456789e19"},
+	} {
+		if a, b := target(same[0]), target(same[1]); a != b {
+			t.Errorf("%s and %s are the same number but fingerprinted %q vs %q", same[0], same[1], a, b)
+		}
+	}
+	// Canonicalising must not go through a float, or it re-collides what UseNumber was
+	// added to keep apart. TestTargetsDoNotRoundNumbers holds the wider range; these
+	// are the pairs one canonical spelling could most easily merge.
+	for _, differ := range [][2]string{
+		{"1e2", "1e3"},
+		{"0.1", "0.01"},
+		{"5", "-5"},
+		{"9007199254740993", "9007199254740992"},
+	} {
+		if a, b := target(differ[0]), target(differ[1]); a == b {
+			t.Errorf("%s and %s are different numbers but both fingerprinted %q", differ[0], differ[1], a)
+		}
+	}
+}
+
+// The canonical key wins over its alias only when it holds a value. claude's resolver
+// promotes the alias unless the canonical key is present AND non-null, so a file
+// spelling the canonical key `null` beside a populated alias configures those
+// marketplaces — read as "the canonical key is present, so use it", it configured
+// none of them and the dir was reported as lacking what a sibling had.
+func TestNullCanonicalKeyDoesNotShadowTheAlias(t *testing.T) {
+	const market = `{"obra":{"source":{"source":"github","repo":"obra/x"}}}`
+	read := func(settings string) DimensionState {
+		t.Helper()
+		got, ok := ReadDirCapabilities(capDirWith(t, map[string]*string{"settings.json": body(settings)}))
+		if !ok {
+			t.Fatalf("dir with %s did not read", settings)
+		}
+		return got.Marketplaces
+	}
+
+	canonical := read(`{"extraKnownMarketplaces":` + market + `}`)
+	shadowed := read(`{"extraKnownMarketplaces":null,"additionalMarketplaces":` + market + `}`)
+	if !reflect.DeepEqual(shadowed.Names(), canonical.Names()) {
+		t.Errorf("a null canonical key shadowed the alias: %v, want %v",
+			shadowed.Names(), canonical.Names())
+	}
+	if shadowed.Target("obra") != canonical.Target("obra") {
+		t.Errorf("the promoted alias produced a different target: %q vs %q",
+			shadowed.Target("obra"), canonical.Target("obra"))
+	}
+
+	// And a canonical key that DOES hold a value still wins, which is the case the
+	// warning claude emits is about.
+	both := read(`{"extraKnownMarketplaces":{"canonical":{"source":{}}},"additionalMarketplaces":` + market + `}`)
+	if !reflect.DeepEqual(both.Names(), []string{"canonical"}) {
+		t.Errorf("names = %v, want [canonical] — the alias must be ignored, not merged", both.Names())
+	}
+}
+
 // One server configured under two project scopes has no single target, so the two
 // are carried together. Two dirs written the same way must still compare equal —
 // otherwise every multi-project dir reports drift against its own twin.
-func TestTargetsMergeAcrossProjectScopes(t *testing.T) {
-	twoScopes := `{"projects":{
-		"/a":{"mcpServers":{"linear":{"url":"https://one.example"}}},
-		"/b":{"mcpServers":{"linear":{"url":"https://two.example"}}}}}`
-	one, ok := ReadDirCapabilities(capDirWith(t, map[string]*string{".claude.json": body(twoScopes)}))
-	if !ok {
-		t.Fatal("first dir did not read")
+// A local-scope server belongs to one checkout, not to the dir, so it must not enter
+// the compared set. Unioning the project scopes in made the axis a record of how much
+// each dir had been USED: the dir that had been driven through more repos was reported
+// as holding capabilities its sibling lacked, under a remedy naming no place to put
+// them. The two dirs below differ in every project scope and agree dir-wide, which is
+// the shape that produced that noise.
+func TestLocalScopeServersAreNotDirCapabilities(t *testing.T) {
+	read := func(claude string) DimensionState {
+		t.Helper()
+		got, ok := ReadDirCapabilities(capDirWith(t, map[string]*string{".claude.json": body(claude)}))
+		if !ok {
+			t.Fatalf("dir with %s did not read", claude)
+		}
+		return got.MCPServers
 	}
-	two, ok := ReadDirCapabilities(capDirWith(t, map[string]*string{".claude.json": body(twoScopes)}))
-	if !ok {
-		t.Fatal("second dir did not read")
+
+	busy := read(`{"mcpServers":{"shared":{"url":"https://same.example"}},"projects":{
+		"/repo-one":{"mcpServers":{"linear":{"url":"https://one.example"}}},
+		"/repo-two":{"mcpServers":{"slack":{"url":"https://two.example"}}}}}`)
+	fresh := read(`{"mcpServers":{"shared":{"url":"https://same.example"}},"projects":{}}`)
+
+	if !busy.Measured || !fresh.Measured {
+		t.Fatalf("a readable dir came back unmeasured: busy %+v fresh %+v", busy, fresh)
 	}
-	if one.MCPServers.Target("linear") != two.MCPServers.Target("linear") {
-		t.Error("identical multi-scope dirs produced different targets")
+	if !reflect.DeepEqual(busy.Names(), fresh.Names()) {
+		t.Errorf("local scopes changed the dir's capability set: busy %v, fresh %v",
+			busy.Names(), fresh.Names())
 	}
-	single, ok := ReadDirCapabilities(capDirWith(t, map[string]*string{
-		".claude.json": body(`{"projects":{"/a":{"mcpServers":{"linear":{"url":"https://one.example"}}}}}`),
-	}))
-	if !ok {
-		t.Fatal("single-scope dir did not read")
+	if busy.Target("shared") != fresh.Target("shared") {
+		t.Errorf("the dir-wide target differed: %q vs %q", busy.Target("shared"), fresh.Target("shared"))
 	}
-	if single.MCPServers.Target("linear") == one.MCPServers.Target("linear") {
-		t.Error("a dir configuring linear once matched one configuring it two ways")
+	// And the dir-wide key is still compared on its value, not merely on its name.
+	elsewhere := read(`{"mcpServers":{"shared":{"url":"https://other.example"}}}`)
+	if elsewhere.Target("shared") == busy.Target("shared") {
+		t.Error("two dirs pointing shared at different URLs produced one target")
 	}
 }
 
@@ -548,7 +651,7 @@ func TestReadDirCapabilitiesUnreadableFileIsNotEmpty(t *testing.T) {
 func TestReadDirCapabilitiesRefusesRelativeDir(t *testing.T) {
 	t.Chdir(capDirWith(t, map[string]*string{
 		"settings.json": body(`{"enabledPlugins":{"bait@m":true}}`),
-		".claude.json":  body(`{"projects":{"/p":{"mcpServers":{"bait":{}}}}}`),
+		".claude.json":  body(`{"mcpServers":{"bait":{}}}`),
 	}))
 
 	// Control: the bait is real and readable when addressed absolutely.
@@ -686,7 +789,7 @@ func TestDimensionsIsTheWholeConstRange(t *testing.T) {
 // halves of that are pinned below, because the suite was previously green over a list
 // claude ignores.
 func TestReadDirCapabilitiesDeniedMCPServers(t *testing.T) {
-	const configured = `{"projects":{"/p":{"mcpServers":{"linear":{"type":"http"},"slack":{"type":"http"}}}}}`
+	const configured = `{"mcpServers":{"linear":{"type":"http"},"slack":{"type":"http"}}}`
 	both := measured("linear", "slack")
 	cases := []struct {
 		name     string
@@ -706,8 +809,21 @@ func TestReadDirCapabilitiesDeniedMCPServers(t *testing.T) {
 		// "unverified" line for a list claude simply ignores.
 		{"bare strings are the shape claude drops, so nothing is denied",
 			`{"deniedMcpServers":["slack"]}`, both},
-		{"one malformed entry drops the whole key",
-			`{"deniedMcpServers":[{"serverName":"slack"},7]}`, both},
+		// claude catches each entry on its own, so a malformed neighbour costs the
+		// entry and nothing else. Read as dropping the key, this credited the member
+		// with every server the file denies.
+		{"a malformed entry is ignored alone, and its neighbours still deny",
+			`{"deniedMcpServers":[{"serverName":"slack"},7]}`, measured("linear")},
+		{"a valid entry beside one breaking exactly-one-of still denies",
+			`{"deniedMcpServers":[{"serverName":"slack"},{"serverName":"linear","serverUrl":"https://x"}]}`,
+			measured("linear")},
+		// The schema refines serverName to equal its own trim, with the message that an
+		// untrimmed name "will never match (names are compared verbatim)". Stored
+		// verbatim after only a blank check, it subtracted a server the member can run.
+		{"an untrimmed serverName is an entry claude ignores",
+			`{"deniedMcpServers":[{"serverName":" pad "}]}`, both},
+		{"a null serverName is ignored rather than read as blank",
+			`{"deniedMcpServers":[{"serverName":null}]}`, both},
 		{"two of the three keys in one entry is invalid",
 			`{"deniedMcpServers":[{"serverName":"slack","serverUrl":"https://x"}]}`, both},
 		{"an entry with none of the three keys is invalid",
@@ -723,10 +839,20 @@ func TestReadDirCapabilitiesDeniedMCPServers(t *testing.T) {
 			`{"deniedMcpServers":[{"serverCommand":["/bin/sketchy"]}]}`, unmeasured},
 		{"a serverUrl denial cannot be named either",
 			`{"deniedMcpServers":[{"serverUrl":"https://sketchy.example/mcp"}]}`, unmeasured},
-		// Validity is decided over the whole list first, because claude's rejection is
-		// wholesale: this is a dropped key, not an unnameable denial.
-		{"an unnameable entry beside a malformed one is a dropped key",
-			`{"deniedMcpServers":[{"serverCommand":["/bin/sketchy"]},7]}`, both},
+		// A malformed neighbour does not rescue the axis either: the command-keyed entry
+		// is still enforced, and still cannot be named.
+		{"an unnameable entry survives a malformed neighbour",
+			`{"deniedMcpServers":[{"serverCommand":["/bin/sketchy"]},7]}`, unmeasured},
+		// An INVALID command-keyed entry is enforced against nothing, so it must not
+		// take the axis with it: claude ignores it and the set stays fully knowable.
+		{"a null serverCommand is ignored, not an unnameable denial",
+			`{"deniedMcpServers":[{"serverCommand":null}]}`, both},
+		{"an empty serverCommand array is below the schema's minimum",
+			`{"deniedMcpServers":[{"serverCommand":[]}]}`, both},
+		{"a serverCommand of non-strings is ignored",
+			`{"deniedMcpServers":[{"serverCommand":[7]}]}`, both},
+		{"a non-string serverUrl is ignored",
+			`{"deniedMcpServers":[{"serverUrl":7}]}`, both},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -750,7 +876,7 @@ func TestReadDirCapabilitiesDeniedMCPServers(t *testing.T) {
 func TestUnreadableDenialListMakesMCPUnknown(t *testing.T) {
 	dir := capDirWith(t, map[string]*string{
 		"settings.json": body(`{"enabledPlugins":{"a@m":true},"deniedMcpServers":[{"serverCommand":["/bin/x"]}]}`),
-		".claude.json":  body(`{"projects":{"/p":{"mcpServers":{"linear":{"type":"http"}}}}}`),
+		".claude.json":  body(`{"mcpServers":{"linear":{"type":"http"}}}`),
 	})
 	got, ok := ReadDirCapabilities(dir)
 	if !ok {
@@ -774,7 +900,7 @@ func TestUnreadableDenialListMakesMCPUnknown(t *testing.T) {
 // reads as "no difference" rather than as "not comparable".
 func TestTargetsDoNotRoundNumbers(t *testing.T) {
 	server := func(n string) string {
-		return `{"projects":{"/p":{"mcpServers":{"linear":{"type":"http","timeout":` + n + `}}}}}`
+		return `{"mcpServers":{"linear":{"type":"http","timeout":` + n + `}}}`
 	}
 	read := func(n string) DimensionState {
 		t.Helper()
@@ -864,5 +990,27 @@ func TestPluginVersionConstraintsAreComparable(t *testing.T) {
 	obj := read(`{"version":"2.0"}`)
 	if obj.Target("pinned@m") == "" {
 		t.Error("an extended-format object recorded no target")
+	}
+	// A constraint list is a SET. json.Marshal orders object keys but never array
+	// elements, so fingerprinting the raw array reported one dir as diverging from
+	// another that pins the same plugin to the same two constraints.
+	if a, b := read(`["^1.0",">=1.2"]`), read(`[">=1.2","^1.0"]`); a.Target("pinned@m") != b.Target("pinned@m") {
+		t.Errorf("constraint order read as drift: %q vs %q", a.Target("pinned@m"), b.Target("pinned@m"))
+	}
+	// Sorting must not flatten a genuine difference into agreement.
+	if a, b := read(`["^1.0",">=1.2"]`), read(`["^1.0",">=1.3"]`); a.Target("pinned@m") == b.Target("pinned@m") {
+		t.Errorf("two different constraint sets both fingerprinted %q", a.Target("pinned@m"))
+	}
+	// An array of something other than strings is a shape this build does not
+	// understand, and null is one: json.Unmarshal reads a null element into a string
+	// without error, so `[null]` was accepted as a pin to the constraint "".
+	for _, val := range []string{`[null]`, `[7]`, `["1.0",null]`, `[{}]`} {
+		if got := read(val); got.Measured {
+			t.Errorf("enabledPlugins %s was measured, with targets %v", val, got.Names())
+		}
+	}
+	// An empty list is a shape this build DOES understand: enabled, unconstrained.
+	if got := read(`[]`); !got.Measured || !got.Has("pinned@m") {
+		t.Errorf("an empty constraint list was not read as enabled: %+v", got)
 	}
 }

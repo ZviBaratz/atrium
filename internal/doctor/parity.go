@@ -33,6 +33,7 @@ package doctor
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -51,7 +52,9 @@ const (
 	// dir of its own to compare. Not a dir that failed to read: there is no dir.
 	ParityNoConfigDir
 	// ParityUnreadable means the member's config dir could not be read at all, so it
-	// was left out of the comparison. Never evidence that it lacks anything.
+	// took no part in the comparison — and with only two members, there was no
+	// comparison left to take part in, which is what Compared distinguishes. Never
+	// evidence that the member lacks anything.
 	ParityUnreadable
 	// ParityUnmeasured means one dimension could not be read for some members — the
 	// file that records it was absent, or held a shape this build does not
@@ -68,6 +71,19 @@ const (
 	// members, so the pool is unverified on that axis.
 	ParityConnectorsUnknown
 )
+
+// parityKindLast is the highest real kind, and it is what the exhaustiveness test
+// ranges to instead of a hand-written list, so a new kind is covered without anyone
+// remembering to add it.
+//
+// Declared OUTSIDE the block above for the reason config's dimensionLast is: inside
+// it, a const appended after this line with no value of its own would repeat this
+// expression rather than continue the iota, and come out equal to its neighbour.
+//
+// TestEveryParityKindRendersALineAndAHint is what it buys. RenderParity chooses a
+// remedy from a switch with no default, so a kind added with a line() case and no
+// hint arm printed a warning with no fix under it and the suite stayed green.
+const parityKindLast = ParityConnectorsUnknown
 
 // ParityWarning is one way the members of a pool are not known to be substitutes.
 //
@@ -96,12 +112,19 @@ type ParityWarning struct {
 	// the members an unanswered question is about.
 	Have []string
 	Lack []string
-	// Compared lists the members that WERE compared on this axis, and is set only for
-	// ParityUnmeasured. It is what separates "this member was left out of a comparison
-	// that still happened" from "nothing was compared at all" — one sentence claimed
-	// the latter in both cases, and with three or more members it printed "nothing was
-	// compared" directly above the comparison it denied.
+	// Compared lists the members that WERE compared on this axis, and is set for the
+	// kinds that report a member being left out: ParityUnmeasured and ParityUnreadable.
+	// It is what separates "this member was left out of a comparison that still
+	// happened" from "nothing was compared at all" — one sentence claimed the latter in
+	// both cases, and with three or more members it printed "nothing was compared"
+	// directly above the comparison it denied.
 	Compared []string
+	// Groups is set only for ParityDivergent: the compared members partitioned into
+	// the sets that agree with each other, each set in config order, the sets in the
+	// order their first member appears. Two groups is the ordinary case and names the
+	// odd member out, which one flat list of every compared member could not — a name
+	// two of three members configure identically rendered as all three differing.
+	Groups [][]string
 }
 
 // parityMember pairs a member's display label with what its dir turned out to hold.
@@ -116,36 +139,31 @@ type parityMember struct {
 // A nil reader (or nil config) reports nothing, which is how a caller that has not
 // wired a reader renders exactly as it did before this section existed.
 //
-// Membership comes from config.PoolMembers, which is the function rotation itself
-// resolves through, and NOT from a local scan for accounts whose Pool matches. The
-// difference is load-bearing: PoolMembers also counts an account with no pool of its
-// own whose NAME is used as another account's pool, so `{name: work}` plus
-// `{name: work-alt, pool: work}` is a real two-member rotation. A local scan skipped
-// the first of those for having an empty Pool, left one member, and went silent on
-// the one shape where rotation was live and drifted.
+// Membership comes from config.PoolMembers, and NOT from a local scan for accounts
+// whose Pool field matches this name. The difference is load-bearing: PoolMembers also
+// counts an account with no pool of its own whose NAME is another account's pool, so
+// `{name: work}` plus `{name: work-alt, pool: work}` is a two-member rotation. A local
+// scan skipped the first of those for having an empty Pool, left one member, and went
+// silent on a shape where rotation was live and drifted.
+//
+// Rotation reaches that pair through PoolMembers on some routes and not others:
+// ResolveClaudePool calls it only when the MATCHED account carries a pool, and
+// returns a singleton when the matched account is the one whose bare name the pool is
+// named after. Reporting on the pair regardless is deliberate — this section is asked
+// whether the members are substitutes, not which route happens to be live.
 func CheckParity(cfg *config.Config, read config.CapabilityReadFunc) []ParityWarning {
 	if cfg == nil || read == nil {
 		return nil
 	}
 
-	// Pool names in the config order of their first mention, so the section does not
-	// reorder between runs on an unchanged config.
-	var pools []string
-	seen := map[string]bool{}
-	for _, a := range cfg.ClaudeAccounts {
-		if a.Pool == "" || seen[a.Pool] {
-			continue
-		}
-		seen[a.Pool] = true
-		pools = append(pools, a.Pool)
-	}
+	pools := poolNames(cfg)
 
 	// One cache for the whole report: two accounts naming one directory cost a single
 	// read and, more to the point, cannot be made to disagree with each other by a
 	// file rewritten between two of them. That pair is not hypothetical — it is the
 	// configuration CheckPools flags, which resolves membership and cleans the dir the
 	// same way this does.
-	cached := cachedCapabilityRead(read)
+	cached := cachedByDir(read)
 
 	var warns []ParityWarning
 	for _, pool := range pools {
@@ -155,6 +173,8 @@ func CheckParity(cfg *config.Config, read config.CapabilityReadFunc) []ParityWar
 		}
 		labels := memberLabels(accounts)
 		var members []parityMember
+		var leftOut []int
+		poolWarns := []ParityWarning{}
 		for i, a := range accounts {
 			dir := a.NormalizedConfigDir()
 			if dir == "" {
@@ -162,20 +182,33 @@ func CheckParity(cfg *config.Config, read config.CapabilityReadFunc) []ParityWar
 				// the identity section skips it outright. Here it still needs saying:
 				// a pool one of whose members rides the ambient env is a pool whose
 				// interchangeability cannot be established at all.
-				warns = append(warns, ParityWarning{
+				poolWarns = append(poolWarns, ParityWarning{
 					Pool: pool, Kind: ParityNoConfigDir, Lack: []string{labels[i]},
 				})
 				continue
 			}
 			caps, ok := cached(dir)
 			if !ok {
-				warns = append(warns, ParityWarning{
+				poolWarns = append(poolWarns, ParityWarning{
 					Pool: pool, Kind: ParityUnreadable, Dir: dir, Lack: []string{labels[i]},
 				})
+				leftOut = append(leftOut, len(poolWarns)-1)
 				continue
 			}
 			members = append(members, parityMember{label: labels[i], caps: caps})
 		}
+		// Whether a comparison happened is only known once every member has been
+		// tried, and the lines saying a member was left out are written before that. So
+		// they are filled in on a second pass rather than asserting a comparison this
+		// loop cannot yet have seen: with two members and one unreadable, diffPool
+		// returns nothing and "it was left out of the comparison" named a comparison
+		// that never ran.
+		if compared := labelsOf(members); len(compared) >= 2 {
+			for _, i := range leftOut {
+				poolWarns[i].Compared = compared
+			}
+		}
+		warns = append(warns, poolWarns...)
 		warns = append(warns, diffPool(pool, members)...)
 	}
 	return warns
@@ -188,6 +221,14 @@ func CheckParity(cfg *config.Config, read config.CapabilityReadFunc) []ParityWar
 // "work" rendered as `"work" has it, "work" does not` — the section that exists to
 // make a bad pool diagnosable being the one place a duplicate name made it
 // undiagnosable.
+//
+// The dir does not always settle it. Two entries can share a name AND a dir — which
+// is precisely the shape CheckPools flags, so this section is expected to meet it —
+// and two blank-named members riding the ambient env collide the same way. Qualifying
+// by dir alone reproduced the defect it was added to fix, one step further in:
+// `"work at /d" and "work at /d" have it`. Whatever is left identical after that is
+// separated by its position in the pool, which is also what the user needs to find
+// the entry in config.json.
 func memberLabels(accounts []config.ClaudeAccount) []string {
 	count := map[string]int{}
 	for _, a := range accounts {
@@ -206,6 +247,21 @@ func memberLabels(accounts []config.ClaudeAccount) []string {
 			labels[i] = fmt.Sprintf("%s at %s", a.Name, where)
 		default:
 			labels[i] = a.Name
+		}
+	}
+	return positionallyUnique(labels)
+}
+
+// positionallyUnique appends a pool position to any label that is still not unique,
+// so no rendered list can name one member twice and mean two.
+func positionallyUnique(labels []string) []string {
+	count := map[string]int{}
+	for _, l := range labels {
+		count[l]++
+	}
+	for i, l := range labels {
+		if count[l] > 1 {
+			labels[i] = fmt.Sprintf("%s, pool entry %d", l, i+1)
 		}
 	}
 	return labels
@@ -261,7 +317,7 @@ func diffDimension(pool string, dim config.Dimension, members []parityMember) []
 			names[n] = true
 		}
 	}
-	for _, name := range sortedKeys(names) {
+	for _, name := range slices.Sorted(maps.Keys(names)) {
 		var have, lack []string
 		for _, m := range measured {
 			if m.caps.State(dim).Has(name) {
@@ -281,39 +337,47 @@ func diffDimension(pool string, dim config.Dimension, members []parityMember) []
 		// substitutes here: the same marketplace name pointing at a different repo,
 		// or the same MCP server name pointing at a different URL or command, is a
 		// member that cannot do the work while looking identical by name.
-		if diverges(dim, name, measured) {
+		if groups := targetGroups(dim, name, measured); len(groups) > 1 {
 			warns = append(warns, ParityWarning{
 				Pool: pool, Kind: ParityDivergent, Dimension: dim,
-				Feature: name, Have: labelsOf(measured),
+				Feature: name, Have: have, Groups: groups,
 			})
 		}
 	}
 	return warns
 }
 
-// diverges reports whether the members configure name to point at different things.
+// targetGroups partitions the members that have a comparable target for name into the
+// sets that agree with each other. One group (or none) means nothing diverges; more
+// than one IS the divergence, and naming the groups is what tells the reader which
+// member is the odd one out.
 //
-// A member carrying no comparable target answers no: enabledPlugins maps a name to a
-// bool, so there is nothing for it to point at, and a value that could not be
-// canonicalised is not evidence of a difference either. Every target is collected
-// before any is compared, so one uncomparable member cannot change the answer by
-// where the pool happens to list it — checking as it went, the same three members in
-// a different order gave a different verdict.
-func diverges(dim config.Dimension, name string, members []parityMember) bool {
-	targets := make([]string, 0, len(members))
+// A member carrying no comparable target is left OUT of the partition rather than
+// answering for the pool: enabledPlugins maps a name to a bool, so a bare true has
+// nothing to point at, and a value that could not be canonicalised is not evidence of
+// a difference either. It is left out rather than vetoing the comparison. Returning
+// "no divergence" on the first such member kept the answer order-independent, but did
+// it by letting one permissive member DELETE a difference the others really had: two
+// dirs pinning a plugin to different versions went silent as soon as a third enabled
+// it with `true`, in the one section whose contract is that silence means agreement.
+func targetGroups(dim config.Dimension, name string, members []parityMember) [][]string {
+	var order []string
+	byTarget := map[string][]string{}
 	for _, m := range members {
 		target := m.caps.State(dim).Target(name)
 		if target == "" {
-			return false
+			continue
 		}
-		targets = append(targets, target)
-	}
-	for _, t := range targets[1:] {
-		if t != targets[0] {
-			return true
+		if _, seen := byTarget[target]; !seen {
+			order = append(order, target)
 		}
+		byTarget[target] = append(byTarget[target], m.label)
 	}
-	return false
+	groups := make([][]string, 0, len(order))
+	for _, target := range order {
+		groups = append(groups, byTarget[target])
+	}
+	return groups
 }
 
 // diffConnectors splits the members by whether claude.ai connectors are available,
@@ -344,21 +408,16 @@ func diffConnectors(pool string, members []parityMember) []ParityWarning {
 	return warns
 }
 
-// cachedCapabilityRead memoises read per directory for the life of one report.
-func cachedCapabilityRead(read config.CapabilityReadFunc) config.CapabilityReadFunc {
-	type result struct {
-		caps config.DirCapabilities
-		ok   bool
+// groupList renders a divergence as `"a" and "b" vs "c"`: the members that agree with
+// each other, and then the ones that do not. One undifferentiated list of every
+// compared member named three dirs when only one was wrong, and the remedy under it
+// then pointed at all three.
+func groupList(groups [][]string) string {
+	out := make([]string, len(groups))
+	for i, g := range groups {
+		out[i] = quotedList(g)
 	}
-	seen := map[string]result{}
-	return func(dir string) (config.DirCapabilities, bool) {
-		got, cached := seen[dir]
-		if !cached {
-			got.caps, got.ok = read(dir)
-			seen[dir] = got
-		}
-		return got.caps, got.ok
-	}
+	return strings.Join(out, " vs ")
 }
 
 // labelsOf is the members' labels in config order.
@@ -367,17 +426,6 @@ func labelsOf(members []parityMember) []string {
 	for i, m := range members {
 		out[i] = m.label
 	}
-	return out
-}
-
-// sortedKeys is the set's members in sorted order, so a union walked out of a map
-// does not reorder between runs.
-func sortedKeys(set map[string]bool) []string {
-	out := make([]string, 0, len(set))
-	for k := range set {
-		out = append(out, k)
-	}
-	slices.Sort(out)
 	return out
 }
 
@@ -396,7 +444,11 @@ func (w ParityWarning) line() string {
 		return fmt.Sprintf("%s injects no CLAUDE_CONFIG_DIR, so what it brings to a session cannot be compared",
 			quotedList(w.Lack))
 	case ParityUnreadable:
-		return fmt.Sprintf("capabilities unreadable for %s (%s) — it was left out of the comparison",
+		if len(w.Compared) >= 2 {
+			return fmt.Sprintf("capabilities unreadable for %s (%s) — it was left out, and %s were compared without it",
+				quotedList(w.Lack), w.Dir, quotedList(w.Compared))
+		}
+		return fmt.Sprintf("capabilities unreadable for %s (%s), so nothing was compared",
 			quotedList(w.Lack), w.Dir)
 	case ParityUnmeasured:
 		if len(w.Compared) >= 2 {
@@ -412,16 +464,17 @@ func (w ParityWarning) line() string {
 			quotedList(w.Have), plural(len(w.Have), "has", "have"),
 			quotedList(w.Lack), plural(len(w.Lack), "does", "do"))
 	case ParityDivergent:
-		return fmt.Sprintf("%s %q is configured differently across %s — same name, different target",
-			w.Dimension.Noun(), w.Feature, quotedList(w.Have))
+		return fmt.Sprintf("%s %q is configured differently — same name, different target: %s",
+			w.Dimension.Noun(), w.Feature, groupList(w.Groups))
 	case ParityConnectors:
 		// Stated as what the dirs DECLARE, not as the state in force.
 		// disableClaudeAiConnectors is any-source-true — "a project can opt out, but a
 		// project-level false cannot override a user-level true" — so a project or
 		// managed source can switch connectors off for every member here, and only
 		// the dir's own setting is knowable from a config dir.
-		return fmt.Sprintf("%s %s claude.ai connectors in its own settings.json and %s %s not",
+		return fmt.Sprintf("%s %s claude.ai connectors in %s own settings.json and %s %s not",
 			quotedList(w.Lack), plural(len(w.Lack), "disables", "disable"),
+			plural(len(w.Lack), "its", "their"),
 			quotedList(w.Have), plural(len(w.Have), "does", "do"))
 	case ParityConnectorsUnknown:
 		return fmt.Sprintf("the claude.ai connector setting could not be read for %s", quotedList(w.Lack))
@@ -442,10 +495,16 @@ func (w ParityWarning) line() string {
 // is a non-sequitur for two dirs that were read and disagree.
 //
 // The two unanswered causes are split for the same reason. A dir that would not open
-// and a field whose SHAPE this build does not compare are different problems, and one
-// hint telling the reader to check that the files "are present and parse" was the
-// wrong diagnosis for the second: the file is present and parses fine, and it is the
-// value inside it that went unread.
+// and an axis this build could not compare are different problems, and one hint
+// telling the reader to check that the files "are present and parse" was the wrong
+// diagnosis for the second.
+//
+// The second hint names both of ITS causes, which the kind's own doc lists and an
+// earlier wording did not: an axis goes unmeasured when a value is held in a shape
+// this build does not compare, and ALSO when the file recording it is absent, as
+// .claude.json is in any dir configured but never logged into. Telling that reader to
+// "check the value of the named setting" named a setting that was not there, in a line
+// that names no setting either.
 //
 // The drift hint states the consequence rather than the fact, because "these dirs
 // differ" is a curiosity until it is spelled out as rotation placing sessions on a
@@ -481,11 +540,13 @@ func RenderParity(warns []ParityWarning) string {
 	if unreadable {
 		b.WriteString("    → what could not be read is not evidence of parity. Check the dir exists,\n")
 		b.WriteString("      is an absolute path, and that its settings.json and .claude.json parse.\n")
+		b.WriteString("      A dir claude was never run in has neither file: set one up with\n")
+		b.WriteString("      `CLAUDE_CONFIG_DIR=<dir> claude`, then /login inside it.\n")
 	}
 	if unrecognised {
-		b.WriteString("    → what could not be read is not evidence of parity. A setting was present in\n")
-		b.WriteString("      a shape this build does not compare, so that axis is unknown rather than\n")
-		b.WriteString("      empty. Check the value of the named setting.\n")
+		b.WriteString("    → what could not be read is not evidence of parity. Either the file that\n")
+		b.WriteString("      records that axis is absent, or a value in it is held in a shape this\n")
+		b.WriteString("      build does not compare — so the axis is unknown rather than empty.\n")
 	}
 	if ambient {
 		b.WriteString("    → give that member its own config_dir, or rotation cannot be told what it\n")

@@ -45,7 +45,7 @@ func TestCheckPoolsSeesThroughATrailingSlash(t *testing.T) {
 	}}
 	warns := CheckPools(cfg)
 	require.Len(t, warns, 1, "a trailing slash hid a rotation no-op: %+v", warns)
-	assert.Contains(t, warns[0].Detail, "a and b share /d")
+	assert.Contains(t, warns[0].Detail, `"a" and "b" share /d`)
 }
 
 // PoolMembers counts an account with no pool of its own whose NAME is another
@@ -60,7 +60,7 @@ func TestCheckPoolsIncludesTheUnpooledAnchor(t *testing.T) {
 	warns := CheckPools(cfg)
 	require.Len(t, warns, 1, "the unpooled anchor was skipped: %+v", warns)
 	assert.Equal(t, "work", warns[0].Pool)
-	assert.Contains(t, warns[0].Detail, "work and work-alt share /d")
+	assert.Contains(t, warns[0].Detail, `"work" and "work-alt" share /d`)
 }
 
 // Two members with no config_dir are the same login for a different reason: both
@@ -73,7 +73,7 @@ func TestCheckPoolsNamesTheAmbientCollision(t *testing.T) {
 	}}
 	warns := CheckPools(cfg)
 	require.Len(t, warns, 1)
-	assert.Contains(t, warns[0].Detail, "a and b inherit the ambient CLAUDE_CONFIG_DIR")
+	assert.Contains(t, warns[0].Detail, `"a" and "b" inherit the ambient CLAUDE_CONFIG_DIR`)
 	assert.NotContains(t, warns[0].Detail, "share  ", "an empty dir rendered as a path")
 }
 
