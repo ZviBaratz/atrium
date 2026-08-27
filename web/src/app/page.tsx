@@ -37,7 +37,10 @@ export default function Home() {
         
         
         <p className={styles.tagline}>
-          Manage multiple AI agents like <span className={styles.highlight}>Claude Code</span>, <span className={styles.highlight}>Codex</span>, and <span className={styles.highlight}>Aider</span>. <br/><span className={styles.tenx}>10x</span> your productivity
+          Manage multiple AI coding agents like <span className={styles.highlight}>Claude Code</span>, <span className={styles.highlight}>Codex</span>, <span className={styles.highlight}>Gemini CLI</span>, <span className={styles.highlight}>Aider</span>, and <span className={styles.highlight}>Antigravity</span>.
+        </p>
+        <p className={styles.subtagline}>
+          Each agent works in its own isolated git worktree, so you can drive several tasks at once from a single panel.
         </p>
 
         <div className={styles.installation}>

@@ -21,8 +21,8 @@ export const viewport: Viewport = {
 
 export const metadata: Metadata = {
   title: "Atrium - Manage Multiple AI Code Assistants",
-  description: "A terminal app that manages multiple AI code assistants (Claude Code, Codex, Aider, etc.) in separate workspaces, allowing you to work on multiple tasks simultaneously.",
-  keywords: ["atrium", "ai", "code assistant", "terminal", "tmux", "claude code", "codex", "aider"],
+  description: "A terminal app that manages multiple AI code assistants (Claude Code, Codex, Gemini CLI, Aider, Antigravity) in separate workspaces, allowing you to work on multiple tasks simultaneously.",
+  keywords: ["atrium", "ai", "code assistant", "terminal", "tmux", "claude code", "codex", "gemini cli", "aider", "antigravity"],
   authors: [{ name: "Zvi Baratz" }],
   openGraph: {
     title: "Atrium",

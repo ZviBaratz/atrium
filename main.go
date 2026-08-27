@@ -19,6 +19,7 @@ import (
 	"github.com/ZviBaratz/atrium/internal/profile"
 	"github.com/ZviBaratz/atrium/internal/update"
 	"github.com/ZviBaratz/atrium/log"
+	"github.com/ZviBaratz/atrium/session/agent"
 	"github.com/ZviBaratz/atrium/session/tmux"
 	"github.com/ZviBaratz/atrium/ui/imageview"
 	"github.com/ZviBaratz/atrium/ui/theme"
@@ -56,7 +57,8 @@ var (
 	quitSignals = []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP}
 	rootCmd     = &cobra.Command{
 		Use:   "atrium",
-		Short: "Atrium - A command center for orchestrating multiple AI coding agents like Claude Code, Aider, Codex, and Amp.",
+		Short: "Atrium - A command center for orchestrating multiple AI coding agents: " + supportedAgentSentence() + ".",
+		Long:  rootLong(),
 		// A runtime failure is not a usage error: let main() be the single
 		// error printer (exit 1, message to stderr) rather than Cobra also
 		// printing its own "Error: ..." line. SilenceUsage drops the usage
@@ -211,7 +213,7 @@ var (
 	profilesDetectCmd = &cobra.Command{
 		Use:   "detect",
 		Short: "Probe for installed agent CLIs and add missing profiles",
-		Long: "Probes the machine for known agent CLIs (claude, codex, gemini, aider) and appends a\n" +
+		Long: "Probes the machine for known agent CLIs (" + knownAgentBinList() + ") and appends a\n" +
 			"profile for each newly found one. Existing profiles and the default program are never\n" +
 			"modified, so hand-edited entries always survive a re-detect.",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -340,7 +342,7 @@ var (
 			"required, and one that is missing — or present but older than the version Atrium\n" +
 			"needs — exits nonzero so scripts/CI can gate; gh is optional, needed\n" +
 			"only for push/PR flows, and its authentication is reported but never fatal. Agent\n" +
-			"heuristics probes installed agent CLIs (claude, codex, gemini, aider) and reports whether\n" +
+			"heuristics probes installed agent CLIs (" + knownAgentBinList() + ") and reports whether\n" +
 			"each one's version has drifted past the version Atrium's pane-classification heuristics\n" +
 			"were verified against; drift means a session's status may be misread (re-verify the\n" +
 			"matcher strings in session/agent/registry.go). Feature gates covers what a version\n" +
@@ -575,6 +577,62 @@ var (
 		},
 	}
 )
+
+// supportedAgentSentence lists the adapters Atrium recognizes as English prose
+// ("Claude Code, Codex, … and X"), derived from agent.DisplayNames so the root
+// command's Short cannot name an agent no adapter supports — which is what it
+// did until #887, advertising one no alias in the registry matches while
+// omitting two adapters that ship.
+func supportedAgentSentence() string {
+	names := agent.DisplayNames()
+	switch len(names) {
+	case 0:
+		return ""
+	case 1:
+		return names[0]
+	}
+	return strings.Join(names[:len(names)-1], ", ") + ", and " + names[len(names)-1]
+}
+
+// knownAgentBinList is the same derivation one layer down, for the two help
+// strings that name the BINARIES `atrium profiles detect` probes rather than the
+// agents Atrium classifies. The two sets are kept in step by
+// TestKnownAgentBinsMatchTheRegistry, but they are different vocabularies: one
+// is what a user types, the other what Atrium calls it.
+func knownAgentBinList() string {
+	return strings.Join(config.KnownAgentBins(), ", ")
+}
+
+// rootLong is the human-facing page behind `atrium --help`. It is deliberately
+// short: what Atrium is, which agents it drives, the two commands a first run
+// needs, the one command that is NOT for a human, and where the reference
+// lives. Every backticked command it names is held to rootCmd's registered set
+// by TestRootLongNamesOnlyRegisteredCommands.
+//
+// It carries the agent list as well as the Short, because cobra's default help
+// template renders `{{with (or .Long .Short)}}` and nothing here calls
+// SetHelpTemplate: a command with both shows only the Long, so a Short naming
+// the agents reaches nobody. The list gets its own indented line rather than
+// being folded into the sentence — it is the one part of this text whose length
+// the registry decides, and a hand-wrapped line around it would be wrong the
+// moment an adapter is added. TestRootHelpFitsEightyColumns is what says so.
+func rootLong() string {
+	return "Atrium runs several AI coding agents at once:\n" +
+		"\n" +
+		"  " + supportedAgentSentence() + ".\n" +
+		"\n" +
+		"Each session is a branch in its own git worktree, driven by an agent in its own\n" +
+		"tmux session, so parallel work never collides — and you supervise all of it from\n" +
+		"one list.\n" +
+		"\n" +
+		"Start with `atrium doctor`, which checks what a first run needs and says what to\n" +
+		"fix; then run `atrium` with no arguments to open the TUI.\n" +
+		"\n" +
+		"`atrium guide` is not for you: it prints the headless-CLI briefing an agent\n" +
+		"reads from inside a session it was handed.\n" +
+		"\n" +
+		"Documentation: https://github.com/ZviBaratz/atrium#readme"
+}
 
 // initAppearanceAndTmux activates the configured theme and THEN materializes the
 // managed tmux config, in that order, for both processes that render one: the

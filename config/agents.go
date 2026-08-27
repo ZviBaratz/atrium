@@ -15,6 +15,16 @@ import (
 // Name and matches the binary's adapter in session/agent by basename.
 var knownAgentBins = []string{"claude", "codex", "gemini", "aider", "agy"}
 
+// KnownAgentBins returns the probed binary names, in picker order. It is the
+// single source for every "install one of these" hint — `atrium profiles detect
+// --help`, `atrium doctor --help`, and the welcome overlay's zero-agents line —
+// so a name added above cannot leave three help strings naming the old set,
+// which is what #887 found. The slice is copied because those callers render
+// it and none of them may reorder detection.
+func KnownAgentBins() []string {
+	return append([]string(nil), knownAgentBins...)
+}
+
 // detectAgentCommand resolves an agent binary name to a runnable program
 // string, or an error when it is not installed. claude keeps the
 // shell-profile-aware probe (its installer commonly defines an alias rather

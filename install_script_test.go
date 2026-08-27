@@ -52,6 +52,16 @@ import (
 // TestInstallScriptRestoresErrexit belongs to the same change and guards the one-line
 // decision none of the above can see.
 //
+// And against the script as it stood before #887, which is what the two dependency
+// cases are measured against — both fail there:
+//
+//	a host without gh   — took the install-gh ladder, reaching sudo/apt-get, and
+//	                      exited 1 on a host where it could not install it
+//	a host without git  — installed silently: git was never checked at all
+//
+// Both need narrowSystemPath. `command -v` is a bash builtin, so unlike curl or tmux
+// a missing command cannot be stubbed into being missing — only removed from PATH.
+//
 // Two cases that predate #662 also go red against #660, and both are guards doing their
 // job rather than surprises: "upgrade over an existing install" fails because `which` is
 // now a recorder stub and the old check_command_exists called it, and "asset missing after
@@ -288,7 +298,8 @@ type installFixture struct {
 	shell      string   // SHELL env var, which picks $PROFILE and its syntax
 	args       []string // command-line arguments for install.sh
 	extraEnv   []string // appended verbatim to the child environment
-	pathPrefix []string // prepended to systemPathDirs
+	pathPrefix []string // prepended to systemPath
+	systemPath []string // the PATH below the stubs; systemPathDirs unless a case narrows it
 	timeout    time.Duration
 }
 
@@ -317,6 +328,7 @@ func newInstallFixture(t *testing.T) *installFixture {
 		shell:   "/bin/bash",
 	}
 	f.pathPrefix = []string{f.stubDir}
+	f.systemPath = systemPathDirs
 
 	f.writeStub(t, "curl", stubCurlScript)
 	f.writeStub(t, "tmux", stubTmuxScript)
@@ -357,6 +369,60 @@ func (f *installFixture) writeStub(t *testing.T, name, body string) {
 	require.NoError(t, err, "stub %s does not parse: %s", name, out)
 }
 
+// hideStub removes one of the stubs newInstallFixture installs, so a case can run
+// against a host that does not have that command at all. Only meaningful together
+// with narrowSystemPath below — the stub is the *upper* layer of the PATH, and the
+// system dirs beneath it carry the real thing.
+func (f *installFixture) hideStub(t *testing.T, name string) {
+	t.Helper()
+	require.NoError(t, os.Remove(filepath.Join(f.stubDir, name)))
+}
+
+// pathTools are the commands install.sh and the stubs reach for by name. A
+// narrowed PATH has to carry all of them, or a case testing what happens without
+// `gh` fails somewhere else entirely.
+//
+// Two commands install.sh names are deliberately absent, because no run here
+// takes their branch: sysctl is macOS's Rosetta probe and unzip is the Windows
+// archive path.
+// Two entries are there for something other than a call in install.sh: `bash`,
+// because every stub's shebang is `#!/usr/bin/env bash` and env resolves that name
+// through this PATH, and `gzip`, which GNU tar execs to read a .tar.gz — without it
+// the archive validation fails as a corrupt download.
+var pathTools = []string{
+	"bash",
+	"uname", "tr", "mktemp", "tar", "gzip", "grep", "sed", "head",
+	"mkdir", "mv", "cp", "rm", "ln", "chmod", "cat", "basename",
+}
+
+// narrowSystemPath replaces the system half of the run's PATH with a directory of
+// symlinks to pathTools and nothing else — so `command -v git` and `command -v gh`
+// find nothing, on a machine where both are installed.
+//
+// This is the only way to reach those branches: `command -v` is a bash builtin, so
+// unlike curl or tmux they cannot be stubbed into answering "missing". Shadowing is
+// the other half of that — a case hands back the one it is NOT about by writing a
+// stub for it, which sits above this directory on PATH.
+func (f *installFixture) narrowSystemPath(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	for _, tool := range pathTools {
+		var src string
+		for _, sysDir := range systemPathDirs {
+			candidate := filepath.Join(sysDir, tool)
+			if _, err := os.Stat(candidate); err == nil {
+				src = candidate
+				break
+			}
+		}
+		if src == "" {
+			t.Skipf("%s is not under %v, so a narrowed PATH cannot be built here", tool, systemPathDirs)
+		}
+		require.NoError(t, os.Symlink(src, filepath.Join(dir, tool)))
+	}
+	f.systemPath = []string{dir}
+}
+
 func (f *installFixture) control(t *testing.T, name, body string) {
 	t.Helper()
 	require.NoError(t, os.WriteFile(filepath.Join(f.ctlDir, name), []byte(body), 0o644))
@@ -370,7 +436,7 @@ func (f *installFixture) run(t *testing.T) installResult {
 		"SHELL=" + f.shell,
 		"BIN_DIR=" + f.binDir,
 		"TMPDIR=" + f.tmpDir,
-		"PATH=" + strings.Join(append(append([]string{}, f.pathPrefix...), systemPathDirs...), string(os.PathListSeparator)),
+		"PATH=" + strings.Join(append(append([]string{}, f.pathPrefix...), f.systemPath...), string(os.PathListSeparator)),
 		"CTL_DIR=" + f.ctlDir,
 	}
 	if f.version != "" {
@@ -878,6 +944,56 @@ func TestInstallScriptInstallsAndUpgrades(t *testing.T) {
 
 		require.Equal(t, 0, res.exitCode, "stderr was: %s", res.stderr)
 		require.NotContains(t, res.stderr, "No releases found in the repository")
+		require.FileExists(t, filepath.Join(f.binDir, "atrium"))
+	})
+
+	t.Run("a host without gh installs anyway", func(t *testing.T) {
+		// #887. gh is optional — README's "Prerequisites" says so and internal/doctor
+		// marks it DepOptional — but this script used to install it with sudo, and on
+		// the hosts where it could not (a Mac with no Homebrew, an unknown package
+		// manager, Windows) it exited 1 over a tool no session needs. The install has
+		// to complete, and the run has to say gh is missing rather than say nothing.
+		//
+		// The global forbidden-command assertion in run() carries the other half: with
+		// the old script this case reaches `sudo apt-get`, which is recorded and fails
+		// there.
+		f := newInstallFixture(t)
+		f.narrowSystemPath(t)
+		f.hideStub(t, "gh")
+		// git is the subject of the next case, not this one: hand it back so the only
+		// thing missing here is gh.
+		f.writeStub(t, "git", "#!/usr/bin/env bash\nexit 0\n")
+
+		res := f.run(t)
+
+		require.Equal(t, 0, res.exitCode, "a missing gh must not fail the install; stderr was: %s", res.stderr)
+		require.Contains(t, res.stdout, "GitHub CLI (gh) is not installed")
+		require.Contains(t, res.stdout, "optional",
+			"the line has to say gh is optional, or a missing one reads as a broken install")
+		require.NotContains(t, res.stdout, "Installing GitHub CLI",
+			"the script no longer installs gh")
+		require.Contains(t, res.stdout, "Installed as 'atrium':")
+		require.FileExists(t, filepath.Join(f.binDir, "atrium"))
+	})
+
+	t.Run("a host without git is warned and still installs", func(t *testing.T) {
+		// #887's other half: git is required — every session is a branch in a worktree
+		// — and the script never looked for it, so a host without git installed cleanly
+		// and failed at the first `atrium new`. Warned rather than refused: the binary
+		// works, `atrium doctor` is where a missing git becomes a nonzero exit, and this
+		// is only the earliest hint.
+		f := newInstallFixture(t)
+		f.narrowSystemPath(t)
+
+		res := f.run(t)
+
+		require.Equal(t, 0, res.exitCode, "a missing git warns, it does not refuse; stderr was: %s", res.stderr)
+		require.Contains(t, res.stdout, "WARNING: git is not installed")
+		require.Contains(t, res.stdout, "https://git-scm.com/downloads",
+			"a warning with no way to act on it is noise")
+		require.Contains(t, res.stdout, "atrium doctor",
+			"the hint names the command that re-checks it")
+		require.Contains(t, res.stdout, "Installed as 'atrium':")
 		require.FileExists(t, filepath.Join(f.binDir, "atrium"))
 	})
 
