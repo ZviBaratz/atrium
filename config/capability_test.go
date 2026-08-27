@@ -824,6 +824,11 @@ func TestReadDirCapabilitiesDeniedMCPServers(t *testing.T) {
 			`{"deniedMcpServers":[{"serverName":" pad "}]}`, both},
 		{"a null serverName is ignored rather than read as blank",
 			`{"deniedMcpServers":[{"serverName":null}]}`, both},
+		// An unknown key does NOT invalidate the entry: claude's object schema strips
+		// what it does not declare, so the denial is still enforced. Measured against the
+		// shipped binary, which lists linear alone for exactly this file.
+		{"an unknown key beside a valid serverName is stripped, not fatal",
+			`{"deniedMcpServers":[{"serverName":"slack","junk":1}]}`, measured("linear")},
 		{"two of the three keys in one entry is invalid",
 			`{"deniedMcpServers":[{"serverName":"slack","serverUrl":"https://x"}]}`, both},
 		{"an entry with none of the three keys is invalid",
