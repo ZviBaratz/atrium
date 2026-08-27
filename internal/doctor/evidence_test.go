@@ -548,7 +548,7 @@ func evidenceCases() []evidenceCase {
 			why:     "a denial this build cannot express, dropped rather than reported, credits the member with a server claude blocks for it",
 		},
 		{
-			name:   "a member's connector setting could not be read",
+			name:   "a member has no recorded connector state at all",
 			covers: nil,
 			render: func(t *testing.T) string {
 				return RenderParity(CheckParity(parityPool(), func(dir string) (config.DirCapabilities, bool) {
@@ -561,8 +561,8 @@ func evidenceCases() []evidenceCase {
 			},
 			// Folded into either bucket it would fabricate a split, or hide one.
 			forbids: []string{"in its own settings.json"},
-			names:   []string{"connector setting could not be read", "not evidence of parity"},
-			why:     "a setting that is neither JSON true nor false is not a state, and a tri-state exists so it cannot be reported as one",
+			names:   []string{"no claude.ai connector state was recorded", "not evidence of parity"},
+			why:     "ConnectorsUnknown is the zero value, and a DirCapabilities nobody filled in must render as a fault rather than as connectors on",
 		},
 	}
 }

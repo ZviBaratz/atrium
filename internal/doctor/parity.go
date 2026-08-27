@@ -19,10 +19,12 @@ package doctor
 // is not in any file (ReadDirCapabilities says why it is not fetched), so a pool
 // whose members are configured identically and differ only in what claude.ai granted
 // them reads as being in parity here. What this section catches is the configuration
-// half: a plugin, a marketplace or an MCP server one member has and another does
-// not, one they both have that points somewhere different, and an MCP server one
-// member can run while another cannot — whether because it is not configured there
-// or because that member's deniedMcpServers blocks it.
+// half, on four axes: a plugin, a marketplace or an MCP server one member has and
+// another does not, one they both have that points somewhere different, an MCP server
+// one member can run while another cannot — whether because it is not configured there
+// or because that member's deniedMcpServers blocks it — and a member whose own
+// settings.json switches claude.ai connectors off while its siblings leave them on,
+// which is the shape the incident above actually took.
 //
 // The section is silent when a pool is in parity, so it must never be silent when a
 // member could not be read. Every unanswered question gets a line of its own —
@@ -56,9 +58,12 @@ const (
 	// comparison left to take part in, which is what Compared distinguishes. Never
 	// evidence that the member lacks anything.
 	ParityUnreadable
-	// ParityUnmeasured means one dimension could not be read for some members — the
-	// file that records it was absent, or held a shape this build does not
-	// recognise — so that dimension is unverified for the pool.
+	// ParityUnmeasured means one dimension could not be compared for some members, so
+	// it is unverified for the pool. Two things produce it, both on the MCP axis:
+	// .claude.json is absent, so nothing records what the dir configures; or the dir
+	// denies a server by command or URL, which claude enforces and this build cannot
+	// restate as a name. Neither is the member reporting nothing — the second reports
+	// a full server list and cannot say which of it survives.
 	ParityUnmeasured
 	// ParityMissing means a capability some members have and others lack.
 	ParityMissing
@@ -67,8 +72,12 @@ const (
 	ParityDivergent
 	// ParityConnectors means claude.ai connectors are enabled for some members only.
 	ParityConnectors
-	// ParityConnectorsUnknown means the connector setting could not be read for some
-	// members, so the pool is unverified on that axis.
+	// ParityConnectorsUnknown means no connector state was recorded for a member at
+	// all. ReadDirCapabilities does not produce it: a disableClaudeAiConnectors value
+	// claude rejects is fatal to the dir's whole settings.json and comes back as
+	// ParityUnreadable instead. It stays because ConnectorsUnknown is the zero value,
+	// and a DirCapabilities nobody filled in must render as an obvious fault rather
+	// than as "connectors on".
 	ParityConnectorsUnknown
 )
 
@@ -331,12 +340,16 @@ func diffDimension(pool string, dim config.Dimension, members []parityMember) []
 				Pool: pool, Kind: ParityMissing, Dimension: dim,
 				Feature: name, Have: have, Lack: lack,
 			})
-			continue
 		}
-		// Every measured member has the name. Two dirs can still fail to be
-		// substitutes here: the same marketplace name pointing at a different repo,
-		// or the same MCP server name pointing at a different URL or command, is a
-		// member that cannot do the work while looking identical by name.
+		// Both can be true of one name, which is why this is not an else. Two dirs
+		// can fail to be substitutes without either of them lacking the name: the
+		// same marketplace name pointing at a different repo, or the same MCP server
+		// name pointing at a different URL or command, is a member that cannot do the
+		// work while looking identical by name. Skipping this whenever a THIRD member
+		// merely lacked the name deleted that difference from the report — and the
+		// ParityMissing line that survived listed the two divergent members side by
+		// side as the ones that have it, which reads as agreement. A member that
+		// lacks the name has no target, so targetGroups leaves it out on its own.
 		if groups := targetGroups(dim, name, measured); len(groups) > 1 {
 			warns = append(warns, ParityWarning{
 				Pool: pool, Kind: ParityDivergent, Dimension: dim,
@@ -451,13 +464,17 @@ func (w ParityWarning) line() string {
 		return fmt.Sprintf("capabilities unreadable for %s (%s), so nothing was compared",
 			quotedList(w.Lack), w.Dir)
 	case ParityUnmeasured:
+		// "could not be compared on it" rather than "does not report one": a member
+		// whose denial this build cannot name reports its full server list and simply
+		// cannot say which of it survives, and telling that reader the dir reports
+		// nothing sent them looking for a file that is present and parsing.
 		if len(w.Compared) >= 2 {
-			return fmt.Sprintf("%s parity is unverified: %s %s not report one and %s left out of the comparison",
-				w.Dimension.Noun(), quotedList(w.Lack),
-				plural(len(w.Lack), "does", "do"), plural(len(w.Lack), "was", "were"))
+			return fmt.Sprintf("%s parity is unverified: %s could not be compared on it, and %s %s compared without %s",
+				w.Dimension.Noun(), quotedList(w.Lack), quotedList(w.Compared),
+				plural(len(w.Compared), "was", "were"), plural(len(w.Lack), "it", "them"))
 		}
-		return fmt.Sprintf("%s parity is unverified: %s %s not report one, so nothing was compared",
-			w.Dimension.Noun(), quotedList(w.Lack), plural(len(w.Lack), "does", "do"))
+		return fmt.Sprintf("%s parity is unverified: %s could not be compared on it, so nothing was compared",
+			w.Dimension.Noun(), quotedList(w.Lack))
 	case ParityMissing:
 		return fmt.Sprintf("%s %q: %s %s it, %s %s not",
 			w.Dimension.Noun(), w.Feature,
@@ -477,7 +494,7 @@ func (w ParityWarning) line() string {
 			plural(len(w.Lack), "its", "their"),
 			quotedList(w.Have), plural(len(w.Have), "does", "do"))
 	case ParityConnectorsUnknown:
-		return fmt.Sprintf("the claude.ai connector setting could not be read for %s", quotedList(w.Lack))
+		return fmt.Sprintf("no claude.ai connector state was recorded for %s", quotedList(w.Lack))
 	case parityKindUnset:
 		return "internal error: parity warning with no kind"
 	default:
@@ -500,11 +517,19 @@ func (w ParityWarning) line() string {
 // diagnosis for the second.
 //
 // The second hint names both of ITS causes, which the kind's own doc lists and an
-// earlier wording did not: an axis goes unmeasured when a value is held in a shape
-// this build does not compare, and ALSO when the file recording it is absent, as
-// .claude.json is in any dir configured but never logged into. Telling that reader to
-// "check the value of the named setting" named a setting that was not there, in a line
-// that names no setting either.
+// earlier wording did not: an axis goes unmeasured when .claude.json is absent, as it
+// is in any dir configured but never logged into, and ALSO when the dir carries an MCP
+// denial keyed on a command or a URL. Telling that reader to "check the value of the
+// named setting" named a setting that was not there, in a line that names no setting
+// either; telling them a value was "held in a shape this build does not compare" was
+// the wrong diagnosis for the denial case, whose settings.json parses and whose value
+// claude and this build both read fine.
+//
+// ParityConnectorsUnknown gets a remedy of its own rather than sharing that one,
+// because it no longer shares a cause with it: a rejected connector value costs the
+// dir its whole settings.json and arrives as ParityUnreadable, so the kind now means
+// only that a DirCapabilities was never filled in. Under the shared hint it sent the
+// reader to look for an absent file for a dir that has one.
 //
 // The drift hint states the consequence rather than the fact, because "these dirs
 // differ" is a curiosity until it is spelled out as rotation placing sessions on a
@@ -518,7 +543,7 @@ func RenderParity(warns []ParityWarning) string {
 	}
 	var b strings.Builder
 	b.WriteString("Account pool parity:\n")
-	var drifted, unreadable, unrecognised, ambient bool
+	var drifted, unreadable, unrecognised, connectorsUnknown, ambient bool
 	for _, w := range warns {
 		fmt.Fprintf(&b, "  ⚠ pool %q: %s\n", w.Pool, w.line())
 		switch w.Kind {
@@ -526,8 +551,10 @@ func RenderParity(warns []ParityWarning) string {
 			drifted = true
 		case ParityUnreadable:
 			unreadable = true
-		case ParityUnmeasured, ParityConnectorsUnknown:
+		case ParityUnmeasured:
 			unrecognised = true
+		case ParityConnectorsUnknown:
+			connectorsUnknown = true
 		case ParityNoConfigDir:
 			ambient = true
 		}
@@ -542,11 +569,21 @@ func RenderParity(warns []ParityWarning) string {
 		b.WriteString("      is an absolute path, and that its settings.json and .claude.json parse.\n")
 		b.WriteString("      A dir claude was never run in has neither file: set one up with\n")
 		b.WriteString("      `CLAUDE_CONFIG_DIR=<dir> claude`, then /login inside it.\n")
+		b.WriteString("      A settings.json claude itself rejects lands here too, and claude is\n")
+		b.WriteString("      throwing the whole file away: `CLAUDE_CONFIG_DIR=<dir> claude doctor`\n")
+		b.WriteString("      names the offending key under \"Invalid settings\".\n")
 	}
 	if unrecognised {
-		b.WriteString("    → what could not be read is not evidence of parity. Either the file that\n")
-		b.WriteString("      records that axis is absent, or a value in it is held in a shape this\n")
-		b.WriteString("      build does not compare — so the axis is unknown rather than empty.\n")
+		b.WriteString("    → what could not be compared is not evidence of parity. Either the file\n")
+		b.WriteString("      that records that axis is absent — .claude.json is, in a dir configured\n")
+		b.WriteString("      but never logged into — or that dir denies an MCP server by command or\n")
+		b.WriteString("      URL, which claude enforces and this cannot restate as a server name.\n")
+	}
+	if connectorsUnknown {
+		b.WriteString("    → what could not be read is not evidence of parity. No connector state at\n")
+		b.WriteString("      all was recorded for that member, which a normal read does not produce:\n")
+		b.WriteString("      a setting claude rejects is reported as an unreadable dir instead.\n")
+		b.WriteString("      Re-run, and report it if it persists.\n")
 	}
 	if ambient {
 		b.WriteString("    → give that member its own config_dir, or rotation cannot be told what it\n")

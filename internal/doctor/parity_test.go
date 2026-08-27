@@ -299,7 +299,7 @@ func TestCheckParityUnnameableDenialLeavesMCPUnknown(t *testing.T) {
 	warns := CheckParity(cfg, config.ReadDirCapabilities)
 	out := RenderParity(warns)
 
-	assert.Contains(t, out, `MCP server parity is unverified: "cmd" does not report one`)
+	assert.Contains(t, out, `MCP server parity is unverified: "cmd" could not be compared on it`)
 	// The member must not be credited with the servers it configures, since one of
 	// them is blocked by a rule this build cannot name. The fixture is rich plus that
 	// one key, so ANY per-name line here is a fabrication — and `MCP server "` with the
@@ -328,7 +328,7 @@ func TestCheckParityUnmeasuredDimensionIsNotDrift(t *testing.T) {
 	assert.Empty(t, warns[0].Have, "an unmeasured dimension is not evidence of anything")
 
 	out := RenderParity(warns)
-	assert.Contains(t, out, `MCP server parity is unverified: "nomcp" does not report one`)
+	assert.Contains(t, out, `MCP server parity is unverified: "nomcp" could not be compared on it`)
 	// The two dirs configure the same plugins and marketplaces, so those are silent —
 	// and critically, nomcp is never said to LACK a server.
 	assert.NotContains(t, out, `MCP server "linear"`)
@@ -561,7 +561,7 @@ func TestCheckParityConnectorsUnknownIsItsOwnLine(t *testing.T) {
 	assert.Equal(t, []string{"b"}, warns[0].Lack)
 
 	out := RenderParity(warns)
-	assert.Contains(t, out, `the claude.ai connector setting could not be read for "b"`)
+	assert.Contains(t, out, `no claude.ai connector state was recorded for "b"`)
 	assert.NotContains(t, out, "in its own settings.json")
 	assert.Contains(t, out, "not evidence of parity")
 	assert.NotContains(t, out, "Align the config dirs")
@@ -744,7 +744,7 @@ func TestUnmeasuredLineSaysWhetherAnythingWasCompared(t *testing.T) {
 				"/a": measuredCaps([]string{"p@m"}, nil, nil),
 				"/b": blind,
 			})))
-		assert.Contains(t, out, `plugin parity is unverified: "b" does not report one, so nothing was compared`)
+		assert.Contains(t, out, `plugin parity is unverified: "b" could not be compared on it, so nothing was compared`)
 		assert.NotContains(t, out, "has it", "there was no second measured member to compare against")
 	})
 
@@ -759,23 +759,23 @@ func TestUnmeasuredLineSaysWhetherAnythingWasCompared(t *testing.T) {
 			"/b": measuredCaps(nil, nil, nil),
 			"/c": blind,
 		})))
-		assert.Contains(t, out, `plugin parity is unverified: "c" does not report one and was left out of the comparison`)
+		assert.Contains(t, out, `plugin parity is unverified: "c" could not be compared on it, and "a" and "b" were compared without it`)
 		// The comparison the old sentence denied had happened.
 		assert.Contains(t, out, `plugin "p@m": "a" has it, "b" does not`)
 		assert.NotContains(t, out, "nothing was compared")
 	})
 }
 
-// A dir that would not open and a setting held in a shape this build cannot compare
-// are different problems with different remedies. One hint told the reader to check
-// that files "are present and parse" — the wrong diagnosis for the second, where the
-// file is present, parses fine, and it is the value inside it that went unread.
+// A dir that would not open and an axis that could not be compared are different
+// problems with different remedies. One hint told the reader to check that files
+// "are present and parse" — the wrong diagnosis for the second, where the file is
+// present, parses fine, and claude reads it as happily as this does.
 func TestUnansweredRemediesSplitByCause(t *testing.T) {
 	// The phrase unique to each remedy, so a test asserting one is not satisfied by
 	// the other's opening sentence, which they share.
 	const (
 		dirRemedy  = "Check the dir exists"
-		axisRemedy = "the axis is unknown rather than empty"
+		axisRemedy = "denies an MCP server by command or"
 	)
 
 	unreadable := RenderParity(CheckParity(twoMemberPool("/a", "/b"), func(dir string) (config.DirCapabilities, bool) {
@@ -805,14 +805,24 @@ func TestUnansweredRemediesSplitByCause(t *testing.T) {
 	assert.NotContains(t, unrecognised, "A setting was present")
 	assert.Contains(t, unrecognised, "records that axis is absent")
 
-	// Both causes at once get both remedies, since a report can hold both.
-	both := RenderParity(CheckParity(twoMemberPool("/a", "/b"), func(dir string) (config.DirCapabilities, bool) {
-		if dir == "/b" {
+	// Both causes at once get BOTH remedies, since a report can hold both.
+	//
+	// Three members, not two. With one dir unreadable and one blind, a two-member
+	// pool leaves a single readable member and diffPool returns at its own guard
+	// before any dimension is walked — so the second cause never fires and this case
+	// asserted the first remedy against a report that could only ever hold it. The
+	// third member is what leaves two readable dirs for diffDimension to reach.
+	both := RenderParity(CheckParity(twoMemberPool("/a", "/b", "/c"), func(dir string) (config.DirCapabilities, bool) {
+		switch dir {
+		case "/b":
 			return config.DirCapabilities{}, false
+		case "/c":
+			return blind, true
 		}
-		return blind, true
+		return measuredCaps(nil, nil, nil), true
 	}))
 	assert.Contains(t, both, dirRemedy)
+	assert.Contains(t, both, axisRemedy, "a report holding both causes printed only one remedy")
 
 	// Whichever cause fired, the reader is told the gap is not parity.
 	for _, out := range []string{unreadable, unrecognised, both} {
@@ -852,6 +862,48 @@ func TestAPermissiveMemberCannotEraseADivergence(t *testing.T) {
 	// A pool where every member is uncomparable has nothing to report, which is the
 	// case the early return was right about.
 	assert.Empty(t, CheckParity(twoMemberPool("/a", "/a"), staticReader(caps)))
+}
+
+// The sibling of the case above, and the one that shipped: a member that does not have
+// the capability AT ALL, rather than having it with nothing to compare.
+//
+// Both warnings are true of one name, so emitting the first must not skip the second.
+// Reporting only "b and c have it, a does not" states that b and c are alike over a
+// plugin one of them is pinned to a version the other is not, in the one section whose
+// contract is that silence means agreement — and it does it by ADDING a member, so a
+// pool that reported the divergence correctly goes quiet when it grows.
+func TestALackingMemberDoesNotEraseADivergence(t *testing.T) {
+	withPlugin := func(target string) config.DirCapabilities {
+		caps := measuredCaps(nil, nil, nil)
+		caps.Plugins = config.DimensionState{
+			Measured: true, Targets: map[string]string{"x@m": target},
+		}
+		return caps
+	}
+	caps := map[string]config.DirCapabilities{
+		"/b":       withPlugin(`["1.0"]`),
+		"/c":       withPlugin(`["2.0"]`),
+		"/lacking": measuredCaps(nil, nil, nil), // enables no plugin at all
+	}
+
+	pinned := CheckParity(twoMemberPool("/b", "/c"), staticReader(caps))
+	require.Len(t, pinned, 1, "two dirs pinning one plugin differently: %+v", pinned)
+	require.Equal(t, ParityDivergent, pinned[0].Kind)
+
+	grown := CheckParity(twoMemberPool("/b", "/c", "/lacking"), staticReader(caps))
+	kinds := map[ParityKind]ParityWarning{}
+	for _, w := range grown {
+		kinds[w.Kind] = w
+	}
+	require.Contains(t, kinds, ParityMissing, "the third member's gap went unreported: %+v", grown)
+	require.Contains(t, kinds, ParityDivergent, "adding a member that LACKS the plugin erased the divergence between the two that have it: %+v", grown)
+	assert.Equal(t, [][]string{{"b"}, {"c"}}, kinds[ParityDivergent].Groups)
+	assert.Equal(t, []string{"lacking"}, kinds[ParityMissing].Lack)
+
+	// And it renders as two lines, not as one line that has absorbed the other.
+	out := RenderParity(grown)
+	assert.Contains(t, out, "same name, different target")
+	assert.Contains(t, out, `"lacking" does not`)
 }
 
 // A divergence has to name which member is the odd one out. Reporting every compared
@@ -988,4 +1040,15 @@ func TestEveryParityKindRendersALineAndAHint(t *testing.T) {
 		assert.Contains(t, out, "→", "kind %d renders no remedy", int(kind))
 		assert.Contains(t, out, "Account pool parity:\n", "kind %d: no section header")
 	}
+
+	// Nothing past the sentinel, which is the hole the loop above cannot see. A kind
+	// appended at the natural place — the bottom of the const block — is not reached
+	// by it, so one shipped with a line() case and no hint arm printed a ⚠ with no →
+	// under it and the suite stayed green. config's dimensionLast is guarded this way
+	// and this was not; the sentinel relocated the remembering rather than removing
+	// it, and only this assertion collects on that.
+	past := ParityWarning{Pool: "p", Kind: parityKindLast + 1}
+	assert.Contains(t, past.line(), "unknown kind",
+		"ParityKind(%d) renders a line of its own, so a kind exists past parityKindLast "+
+			"and the sweep above never reaches it", int(parityKindLast+1))
 }
