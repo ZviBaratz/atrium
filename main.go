@@ -361,9 +361,8 @@ var (
 			"quietly goes without one. A config dir is claude's user settings source alone, so a\n" +
 			"checkout or a managed policy file can still change what a session runs under; the MCP\n" +
 			"axis is the dir-wide mcpServers key and not claude's per-project local scope; it reads\n" +
-			"files only, so it measures\n" +
-			"configuration and not what claude.ai has granted; and a member it could not measure is\n" +
-			"reported rather than counted as having nothing.\n" +
+			"files only, so it measures configuration and not what claude.ai has granted; and a\n" +
+			"member it could not measure is reported rather than counted as having nothing.\n" +
 			"Terminal background detection reports which rung of the light/dark ladder can answer here,\n" +
 			"for anyone whose theme: auto did not adapt: it reads COLORFGBG, and names OSC 11 as the\n" +
 			"rung that outranks it but cannot be probed from a one-shot command — that query needs the\n" +
@@ -521,10 +520,13 @@ var (
 			// only one that can see two genuinely distinct logins that are not
 			// substitutes for each other. Identity catches one login wearing two
 			// names; pools catches two names on one dir; parity diffs what each
-			// member's dir DECLARES — plugins, marketplaces, and the MCP servers it
-			// can run once its own denials are taken out — since rotation spends the
-			// pool's interchangeability promise on every unpinned session without
-			// ever checking it. Two things bound the claim: a config dir is claude's
+			// member's dir DECLARES — plugins, marketplaces, the MCP servers it can
+			// run once its own denials are taken out, and whether it switches
+			// claude.ai connectors off — since rotation spends the pool's
+			// interchangeability promise on every unpinned session without ever
+			// checking it. The connector axis is the one the original incident was,
+			// so leaving it out of a list of what this diffs describes a section that
+			// cannot produce the line that motivated it. Two things bound the claim: a config dir is claude's
 			// user settings source alone, so a checkout or a policy file can still
 			// decide what a session runs under, and grant state is in no file, so a
 			// pool whose members differ only in what claude.ai granted them reads as

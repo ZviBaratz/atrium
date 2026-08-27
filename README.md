@@ -1713,6 +1713,7 @@ instead of pinning every session in a repo to one account:
   marketplace repo, MCP URL or command in both. A server a member configures but blocks
   with `deniedMcpServers` is counted as one that member does not have, since it cannot
   run it either way.
+
   Three limits worth knowing. A config dir is claude's `user` settings source and only
   that, so what is compared is what each dir itself **declares** — a checkout's
   `.claude/settings.json`, its `settings.local.json`, or a managed policy file can
@@ -1723,9 +1724,19 @@ instead of pinning every session in a repo to one account:
   used in. It reads files only — no network call and no token — so it measures
   configuration, never what claude.ai has **granted**; a pool differing only in its
   grants reads as being in parity. And anything it could not measure gets a line of its
-  own — a dir that would not read, an axis whose file is absent or whose value is held
-  in a shape it does not compare, a member with no `config_dir` at all — because
-  silence in this section means "these agree" and must never mean "nobody looked".
+  own — a dir that would not read, a member with no `config_dir` at all, or an MCP axis
+  left unanswerable because `.claude.json` is absent or because the dir denies a server
+  by command or URL rather than by name — because silence in this section means "these
+  agree" and must never mean "nobody looked".
+
+  One shape it reports as unreadable rather than as a difference: a `settings.json`
+  claude itself **rejects**. `enabledPlugins` and `disableClaudeAiConnectors` are on
+  claude's strict path, so a value it will not accept there costs the dir the whole
+  file — every setting in it, not just that one — and a dir in that state is reported
+  as unreadable, with `CLAUDE_CONFIG_DIR=<dir> claude doctor` named as what will point
+  at the offending key. This is sound but not complete: other keys are on that same
+  strict path and Atrium does not read them, so it can tell you claude is ignoring the
+  file, never that claude is honouring it.
 - **Renaming a pool** means retyping the same `pool` name on each of its members
   (a pool is just that shared string — there is no pool entity to rename). Open
   sessions follow the rename, and the cluster keeps the position `[` / `]` gave it.
