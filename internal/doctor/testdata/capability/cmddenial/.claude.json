@@ -18,6 +18,10 @@
     "slack": {
       "type": "http",
       "url": "https://slack.example/mcp"
+    },
+    "sketchy": {
+      "command": "/usr/bin/sketchy",
+      "args": ["--serve"]
     }
   },
   "projects": {

@@ -144,13 +144,24 @@ func TestReadDirCapabilities(t *testing.T) {
 		// plugin the dir has. Counting it would credit the dir with a capability it
 		// does not have and, worse, hide the drift where one member has it on and
 		// another has it off.
-		name:         "a plugin set to false or null is not enabled",
-		settings:     body(`{"enabledPlugins":{"on@m":true,"off@m":false,"nulled@m":null}}`),
+		name:         "a plugin set to false is not enabled",
+		settings:     body(`{"enabledPlugins":{"on@m":true,"off@m":false}}`),
 		plugins:      measured("on@m"),
 		marketplaces: measured(),
 		mcp:          unmeasured,
 		connectors:   ConnectorsOn,
 		ok:           true,
+	}, {
+		// null is NOT false here. enabledPlugins is on claude's strict path and its
+		// value type is boolean | array<string>, so a null entry fails the schema and
+		// costs the dir its whole settings.json — "enabledPlugins.nulled@m: Invalid
+		// input" on 2.1.247, with the denials in the same file then unenforced. An
+		// earlier version read it as the plugin being off and went on reporting the
+		// other three axes off a file claude had thrown away.
+		name:     "a plugin set to null is a shape claude rejects, and it is fatal",
+		settings: body(`{"enabledPlugins":{"on@m":true,"nulled@m":null}}`),
+		claude:   body(`{"mcpServers":{"linear":{}}}`),
+		ok:       false,
 	}, {
 		name:         "connectors absent reads as on",
 		settings:     body(`{"enabledPlugins":{"a@m":true}}`),
@@ -168,16 +179,22 @@ func TestReadDirCapabilities(t *testing.T) {
 		connectors:   ConnectorsOn,
 		ok:           true,
 	}, {
-		// A value that is neither JSON true nor false cannot be read as either state.
-		// Guessing "on" here would fabricate a split against a sibling that really is
-		// off, and guessing "off" would hide one.
-		name:         "a reshaped connector setting is unknown, not a state",
-		settings:     body(`{"disableClaudeAiConnectors":"true"}`),
-		plugins:      measured(),
-		marketplaces: measured(),
-		mcp:          unmeasured,
-		connectors:   ConnectorsUnknown,
-		ok:           true,
+		// A value that is neither JSON true nor false is not an unreadable setting: it
+		// is the second key on claude's strict path, so it fails the schema and the
+		// whole settings.json is discarded. Reporting the dir as merely
+		// connector-unknown understated that by three axes, all of which were being
+		// read off a file claude ignores.
+		name:     "a reshaped connector setting is fatal to the file",
+		settings: body(`{"disableClaudeAiConnectors":"true"}`),
+		claude:   body(`{"mcpServers":{"linear":{}}}`),
+		ok:       false,
+	}, {
+		// null with it, for the reason the plugin case above states: the key is
+		// optional, and claude's optional rejects an explicit null rather than
+		// reading it as absent ("Expected boolean, but received null").
+		name:     "a null connector setting is fatal too",
+		settings: body(`{"disableClaudeAiConnectors":null}`),
+		ok:       false,
 	}, {
 		// Names arrive from a map, whose iteration order is randomized per run, so an
 		// unsorted result would make two dirs holding the same plugins compare
@@ -212,37 +229,55 @@ func TestReadDirCapabilities(t *testing.T) {
 		connectors:   ConnectorsOn,
 		ok:           true,
 	}, {
-		name:         "a null field reads as configured with nothing",
-		settings:     body(`{"enabledPlugins":null,"extraKnownMarketplaces":null}`),
+		// A null marketplace field is on the salvage path: claude deletes the key
+		// ("must be an object mapping marketplace names to declarations; received
+		// null. This field was ignored.") and carries on, so the dir configures none
+		// of them — an answer, not a gap.
+		name:         "a null marketplace field reads as configured with nothing",
+		settings:     body(`{"extraKnownMarketplaces":null}`),
 		plugins:      measured(),
 		marketplaces: measured(),
 		mcp:          unmeasured,
 		connectors:   ConnectorsOn,
 		ok:           true,
 	}, {
-		// A field reshaped between claude versions makes ITS dimension unknown, not
-		// empty, and must not take the still-readable dimensions down with it: a
-		// silent parity section reads as "these accounts agree".
-		name:         "a reshaped field is unknown and loses only itself",
-		settings:     body(`{"enabledPlugins":["a@m","b@m"],"extraKnownMarketplaces":{"m":{}}}`),
-		plugins:      unmeasured,
-		marketplaces: measured("m"),
-		mcp:          unmeasured,
-		connectors:   ConnectorsOn,
-		ok:           true,
+		// The strict path does not salvage: a null enabledPlugins is "Expected
+		// record, but received null", which takes the file with it.
+		name:     "a null enabledPlugins field is fatal",
+		settings: body(`{"enabledPlugins":null}`),
+		ok:       false,
 	}, {
-		name:         "an unrecognised plugin value is unknown, not off",
-		settings:     body(`{"enabledPlugins":{"a@m":7}}`),
-		plugins:      unmeasured,
-		marketplaces: measured(),
-		mcp:          unmeasured,
-		connectors:   ConnectorsOn,
-		ok:           true,
+		// A reshaped enabledPlugins is not a dimension going quiet: "Expected record,
+		// but received array" is fatal, and the marketplace beside it is not in force
+		// either. Reporting that marketplace as configured is the direction that
+		// invents a difference against a sibling dir which really does lack it.
+		name:     "a reshaped enabledPlugins takes the file with it",
+		settings: body(`{"enabledPlugins":["a@m","b@m"],"extraKnownMarketplaces":{"m":{}}}`),
+		ok:       false,
 	}, {
-		name:         "an unrecognised marketplace value is unknown, not off",
-		settings:     body(`{"extraKnownMarketplaces":{"m":7}}`),
+		name:     "an unrecognised plugin value is fatal, not merely unknown",
+		settings: body(`{"enabledPlugins":{"a@m":7}}`),
+		ok:       false,
+	}, {
+		// claude drops the offending ENTRY and registers every sibling beside it
+		// ("Invalid marketplace entry was ignored: expected object, received number"),
+		// so the dir really does have `good` and not `m`. Reading the junk entry as
+		// voiding the axis turned a knowable difference into an unanswered question,
+		// and diffDimension then dropped the axis rather than naming the member.
+		name:         "an unrecognised marketplace entry loses only itself",
+		settings:     body(`{"extraKnownMarketplaces":{"m":7,"good":{"source":{}}}}`),
 		plugins:      measured(),
-		marketplaces: unmeasured,
+		marketplaces: measured("good"),
+		mcp:          unmeasured,
+		connectors:   ConnectorsOn,
+		ok:           true,
+	}, {
+		// And a marketplace FIELD claude cannot read at all is deleted whole, which
+		// leaves the dir configuring none — measured and empty, not unknown.
+		name:         "a reshaped marketplace field is empty, not unknown",
+		settings:     body(`{"extraKnownMarketplaces":[]}`),
+		plugins:      measured(),
+		marketplaces: measured(),
 		mcp:          unmeasured,
 		connectors:   ConnectorsOn,
 		ok:           true,
@@ -265,13 +300,24 @@ func TestReadDirCapabilities(t *testing.T) {
 		connectors:   ConnectorsOn,
 		ok:           true,
 	}, {
-		// The top-level key is the one that still must: a shape this build cannot read
-		// there is an unanswered question, never an empty set.
-		name:         "a reshaped top-level mcpServers makes MCP unknown",
+		// A top-level mcpServers claude cannot read as a map is zero servers, not an
+		// unanswered question: 2.1.247 reports "No MCP servers configured" for it.
+		name:         "a reshaped top-level mcpServers is empty, not unknown",
 		claude:       body(`{"mcpServers":["linear"]}`),
 		plugins:      measured(),
 		marketplaces: measured(),
-		mcp:          unmeasured,
+		mcp:          measured(),
+		connectors:   ConnectorsOn,
+		ok:           true,
+	}, {
+		// One bad ENTRY beside a good one is skipped by claude's .claude.json loader
+		// too — "Skipped — invalid MCP server config" — and the good one stays
+		// connectable.
+		name:         "an unreadable mcpServers entry loses only itself",
+		claude:       body(`{"mcpServers":{"junk":7,"good":{"type":"http","url":"https://x/mcp"}}}`),
+		plugins:      measured(),
+		marketplaces: measured(),
+		mcp:          measured("good"),
 		connectors:   ConnectorsOn,
 		ok:           true,
 	}, {
@@ -297,25 +343,28 @@ func TestReadDirCapabilities(t *testing.T) {
 		local: body(`{"enabledPlugins":{"local@m":true}}`),
 		ok:    false,
 	}, {
-		// enabledPlugins values are typed array<string> | boolean | object: an array
-		// carries version constraints and an object is the extended format. Accepting
-		// only true/false/null made ONE such entry take the whole dimension
-		// unmeasured and discard every readable entry beside it.
-		name:         "a version constraint and an extended-format object are enabled",
-		settings:     body(`{"enabledPlugins":{"plain@m":true,"pinned@m":["^1.2"],"extended@m":{"version":"2.0"}}}`),
-		plugins:      measured("extended@m", "pinned@m", "plain@m"),
+		// enabledPlugins values are typed boolean | array<string>. The array IS the
+		// extended format the setting's description advertises; accepting only
+		// true/false made one constraint list take the whole dimension unmeasured and
+		// discard every readable entry beside it.
+		name:         "a version constraint list is enabled, and carries a target",
+		settings:     body(`{"enabledPlugins":{"plain@m":true,"pinned@m":["^1.2"],"none@m":[]}}`),
+		plugins:      measured("none@m", "pinned@m", "plain@m"),
 		marketplaces: measured(),
 		mcp:          unmeasured,
 		connectors:   ConnectorsOn,
 		ok:           true,
 	}, {
-		name:         "an array of non-strings is a shape this build cannot read",
-		settings:     body(`{"enabledPlugins":{"a@m":[7]}}`),
-		plugins:      unmeasured,
-		marketplaces: measured(),
-		mcp:          unmeasured,
-		connectors:   ConnectorsOn,
-		ok:           true,
+		// The object form is not a shape claude accepts anywhere. Reading it as the
+		// plugin being enabled credited the dir with a plugin claude refuses to load
+		// AND kept reporting the file claude had discarded because of it.
+		name:     "an extended-format object is not a value claude accepts",
+		settings: body(`{"enabledPlugins":{"extended@m":{"version":"2.0"}}}`),
+		ok:       false,
+	}, {
+		name:     "an array of non-strings is a shape claude rejects",
+		settings: body(`{"enabledPlugins":{"a@m":[7]}}`),
+		ok:       false,
 	}, {
 		// additionalMarketplaces is claude's documented alias, "read exactly as if it
 		// were spelled extraKnownMarketplaces". Reading only the canonical key made
@@ -767,14 +816,45 @@ func TestDimensionsIsTheWholeConstRange(t *testing.T) {
 
 	// Nothing past the sentinel. A const added below dimensionLast is walked
 	// automatically; one added above it is not, and this is what says so.
+	//
+	// The state half reads a DirCapabilities whose every DimensionState field is
+	// filled in by reflection, not the literal above. That literal names the three
+	// fields this test already knows, so a new axis wired to a NEW field left
+	// State(past) reading a zero value and the assertion could not fail for the case
+	// it exists for — verified by declaring one: a Dimension past the sentinel, its
+	// field, and its State arm all shipped with this test green.
+	//
+	// The noun half is not redundant with it, and neither half subsumes the other: a
+	// new axis can be wired to a field with no noun, or given a noun before its field
+	// exists, and only one assertion fires in each case.
 	past := dimensionLast + 1
 	if past.Noun() != DimensionUnspecified.Noun() {
 		t.Errorf("Dimension(%d) has the noun %q, so a dimension exists past dimensionLast "+
 			"and Dimensions() never walks it", int(past), past.Noun())
 	}
-	if caps.State(past).Measured {
+	if allDimensionsMeasured().State(past).Measured {
 		t.Errorf("Dimension(%d) is wired to a field but is past dimensionLast, so it is never compared", int(past))
 	}
+}
+
+// allDimensionsMeasured is a DirCapabilities with every DimensionState field measured,
+// found by reflection so that a field added later is populated without this file being
+// touched. Hand-listing the fields is what made the past-the-sentinel guard above
+// inert for the one case it is there to catch.
+func allDimensionsMeasured() DirCapabilities {
+	var caps DirCapabilities
+	v := reflect.ValueOf(&caps).Elem()
+	filled := 0
+	for i := range v.NumField() {
+		if v.Field(i).Type() == reflect.TypeOf(DimensionState{}) {
+			v.Field(i).Set(reflect.ValueOf(DimensionState{Measured: true}))
+			filled++
+		}
+	}
+	if filled == 0 {
+		panic("no DimensionState fields found on DirCapabilities: the guard reads nothing")
+	}
+	return caps
 }
 
 // deniedMcpServers decides which of the CONFIGURED servers a dir can actually run, so
@@ -783,13 +863,25 @@ func TestDimensionsIsTheWholeConstRange(t *testing.T) {
 //
 // Its entries are objects carrying exactly one of serverName, serverCommand or
 // serverUrl — claude matches on r.serverName, on the expanded serverCommand argv, or
-// on the expanded serverUrl. An earlier version read bare strings, which is the one
-// shape claude REJECTS: it drops the whole key ("was present but invalid and was
-// dropped; its entries cannot be enforced"), so such a list denies nothing. Both
-// halves of that are pinned below, because the suite was previously green over a list
-// claude ignores.
+// on the expanded serverUrl. An earlier version read bare strings, which claude
+// rejects; the outcome is that such a list denies nothing, and that outcome is what
+// the table pins.
+//
+// It does NOT pin the mechanism, and an earlier version of this comment got the
+// mechanism wrong — it said a list of bare strings drops the whole key, which
+// denialNames contradicts and the row two below refutes from inside this same
+// function: `[{"serverName":"slack"},7]` still denies slack, and 7 fails the element
+// schema exactly as "slack" does. claude catches each ENTRY and filters it; the
+// "was present but invalid and was dropped" message belongs to the catch on the array
+// itself, which a value that IS an array never reaches. The two spellings agree on
+// every row here, which is why the suite stayed green over a false explanation.
 func TestReadDirCapabilitiesDeniedMCPServers(t *testing.T) {
-	const configured = `{"mcpServers":{"linear":{"type":"http"},"slack":{"type":"http"}}}`
+	// Both servers are declared with a url and neither with a command, which is what
+	// makes the two unnameable-denial kinds separable below: a serverUrl denial could
+	// match one of these, and a serverCommand denial provably could not.
+	const configured = `{"mcpServers":` +
+		`{"linear":{"type":"http","url":"https://mcp.linear.app/mcp"},` +
+		`"slack":{"type":"http","url":"https://slack.example/mcp"}}}`
 	both := measured("linear", "slack")
 	cases := []struct {
 		name     string
@@ -837,17 +929,24 @@ func TestReadDirCapabilitiesDeniedMCPServers(t *testing.T) {
 			`{"deniedMcpServers":[{"serverName":7}]}`, both},
 		{"an object instead of a list is invalid",
 			`{"deniedMcpServers":{"slack":true}}`, both},
-		// Enforced, and not expressible as a server name. Unmeasured rather than
-		// short: reported as the configured set, this dir would be credited with a
-		// server it blocks.
-		{"a serverCommand denial cannot be named, so the axis is unknown",
-			`{"deniedMcpServers":[{"serverCommand":["/bin/sketchy"]}]}`, unmeasured},
-		{"a serverUrl denial cannot be named either",
+		// Enforced, and not expressible as a server name — and this dir configures a
+		// server it could reach. Unmeasured rather than short: reported as the
+		// configured set, this dir would be credited with a server it blocks.
+		{"a serverUrl denial cannot be named, so the axis is unknown",
 			`{"deniedMcpServers":[{"serverUrl":"https://sketchy.example/mcp"}]}`, unmeasured},
-		// A malformed neighbour does not rescue the axis either: the command-keyed entry
+		// A malformed neighbour does not rescue the axis either: the url-keyed entry
 		// is still enforced, and still cannot be named.
 		{"an unnameable entry survives a malformed neighbour",
-			`{"deniedMcpServers":[{"serverCommand":["/bin/sketchy"]},7]}`, unmeasured},
+			`{"deniedMcpServers":[{"serverUrl":"https://sketchy.example/mcp"},7]}`, unmeasured},
+		// But a denial of a kind nothing here can match subtracts provably nothing.
+		// serverCommand is "a command array [command, ...args] to match exactly for
+		// blocked stdio servers", and every server this dir declares is http — 2.1.247
+		// lists them all with exactly this file in place. An earlier version made ANY
+		// valid argv- or URL-keyed denial unmeasured on the spot, which put a
+		// permanent "MCP server parity is unverified" on a pool that is in parity,
+		// under a remedy naming a file that is present and parsing fine.
+		{"a serverCommand denial that nothing here can match leaves the axis knowable",
+			`{"deniedMcpServers":[{"serverCommand":["/bin/sketchy"]}]}`, both},
 		// An INVALID command-keyed entry is enforced against nothing, so it must not
 		// take the axis with it: claude ignores it and the set stays fully knowable.
 		{"a null serverCommand is ignored, not an unnameable denial",
@@ -878,10 +977,14 @@ func TestReadDirCapabilitiesDeniedMCPServers(t *testing.T) {
 // case that matters is the one where the SERVER list is unknown: an unreadable
 // denial list must take the MCP axis with it rather than leaving the configured set
 // standing in for the available one.
+//
+// The stdio server is what makes the argv-keyed denial reachable here. Against an
+// http-only dir the same denial subtracts provably nothing and the axis stays
+// knowable, which the table above pins separately.
 func TestUnreadableDenialListMakesMCPUnknown(t *testing.T) {
 	dir := capDirWith(t, map[string]*string{
 		"settings.json": body(`{"enabledPlugins":{"a@m":true},"deniedMcpServers":[{"serverCommand":["/bin/x"]}]}`),
-		".claude.json":  body(`{"mcpServers":{"linear":{"type":"http"}}}`),
+		".claude.json":  body(`{"mcpServers":{"linear":{"command":"/bin/x","args":[]}}}`),
 	})
 	got, ok := ReadDirCapabilities(dir)
 	if !ok {
@@ -895,6 +998,29 @@ func TestUnreadableDenialListMakesMCPUnknown(t *testing.T) {
 	// one unreadable field silences the whole section.
 	if !got.Plugins.Measured || !got.Plugins.Has("a@m") {
 		t.Errorf("the plugin axis was lost with the MCP axis: %+v", got.Plugins)
+	}
+}
+
+// An exponent big enough to wrap the arithmetic that folds a fraction into it would
+// make two DIFFERENT numbers fingerprint the same — the one failure canonicalNumber
+// exists to prevent, arrived at from the other side. Out of reach of any real config
+// file, which is why the remedy is to refuse the literal rather than to widen the type.
+func TestExtremeExponentsDoNotCollide(t *testing.T) {
+	const (
+		tiny = "1.5e-9223372036854775808"
+		huge = "15e9223372036854775807"
+	)
+	if canonicalNumber(tiny) == canonicalNumber(huge) {
+		t.Errorf("%s and %s both canonicalised to %q", tiny, huge, canonicalNumber(tiny))
+	}
+	// Refused, not decomposed: an unparseable exponent comes back as the literal.
+	if got := canonicalNumber(tiny); got != tiny {
+		t.Errorf("canonicalNumber(%s) = %q, want the literal unchanged", tiny, got)
+	}
+	// And the bound does not reach anything a file could plausibly hold: 1e308 is
+	// float64's ceiling, and both spellings of it still agree with each other.
+	if a, b := canonicalNumber("1e308"), canonicalNumber("100e306"); a != b {
+		t.Errorf("1e308 and 100e306 canonicalised apart: %q vs %q", a, b)
 	}
 }
 
@@ -991,11 +1117,6 @@ func TestPluginVersionConstraintsAreComparable(t *testing.T) {
 	if one.Target("keep@m") != "" {
 		t.Errorf("a bare true acquired the target %q", one.Target("keep@m"))
 	}
-	// An extended-format object is comparable for the same reason.
-	obj := read(`{"version":"2.0"}`)
-	if obj.Target("pinned@m") == "" {
-		t.Error("an extended-format object recorded no target")
-	}
 	// A constraint list is a SET. json.Marshal orders object keys but never array
 	// elements, so fingerprinting the raw array reported one dir as diverging from
 	// another that pins the same plugin to the same two constraints.
@@ -1006,12 +1127,17 @@ func TestPluginVersionConstraintsAreComparable(t *testing.T) {
 	if a, b := read(`["^1.0",">=1.2"]`), read(`["^1.0",">=1.3"]`); a.Target("pinned@m") == b.Target("pinned@m") {
 		t.Errorf("two different constraint sets both fingerprinted %q", a.Target("pinned@m"))
 	}
-	// An array of something other than strings is a shape this build does not
-	// understand, and null is one: json.Unmarshal reads a null element into a string
-	// without error, so `[null]` was accepted as a pin to the constraint "".
+	// An array of something other than strings is a shape claude rejects, and null is
+	// one: json.Unmarshal reads a null element into a string without error, so
+	// `[null]` was accepted here as a pin to the constraint "". claude does not accept
+	// it, and rejecting it costs the dir its whole settings.json rather than this one
+	// entry — so the dir stops being answerable, not merely this axis.
 	for _, val := range []string{`[null]`, `[7]`, `["1.0",null]`, `[{}]`} {
-		if got := read(val); got.Measured {
-			t.Errorf("enabledPlugins %s was measured, with targets %v", val, got.Names())
+		_, ok := ReadDirCapabilities(capDirWith(t, map[string]*string{
+			"settings.json": body(`{"enabledPlugins":{"keep@m":true,"pinned@m":` + val + `}}`),
+		}))
+		if ok {
+			t.Errorf("enabledPlugins %s read as answerable", val)
 		}
 	}
 	// An empty list is a shape this build DOES understand: enabled, unconstrained.
