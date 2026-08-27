@@ -113,6 +113,28 @@ func (w *WelcomeOverlay) SelectedProfile() config.Profile {
 // Detected returns the profiles detection found (for the caller to merge on confirm).
 func (w *WelcomeOverlay) Detected() []config.Profile { return w.detected }
 
+// installableAgents renders the binaries detection probes as "a, b, c, d or e",
+// derived from config.KnownAgentBins rather than written out: the zero-agents
+// line is the one screen that tells a user what to install, and it named four of
+// the five until #887. It is the only site here that needs the "or" spelling —
+// the two help strings in main.go want a plain comma list — so the conjunction
+// lives at the site that reads it rather than in a shared joiner.
+//
+// The line it feeds is wrapped by the modal's box, not truncated, so a sixth
+// agent costs a row rather than a word — which is why
+// TestWelcomeOverlay_ZeroAgentsLineNamesEveryBin reads the render at the authored
+// width and pins the modal's height as well as the names.
+func installableAgents() string {
+	bins := config.KnownAgentBins()
+	switch len(bins) {
+	case 0:
+		return "an agent CLI"
+	case 1:
+		return bins[0]
+	}
+	return strings.Join(bins[:len(bins)-1], ", ") + " or " + bins[len(bins)-1]
+}
+
 // Render draws the bordered welcome modal. The trailing hint line is the one place
 // the modal names its keys — the profile picker above it deliberately carries none,
 // since a second spelling of ↑/↓ two lines up is noise, not guidance (#466; the same
@@ -132,8 +154,8 @@ func (w *WelcomeOverlay) Render() string {
 	case len(w.detected) == 0:
 		b.WriteString("⚠ No supported agent CLIs found on PATH.\n")
 		b.WriteString(overlayDimStyle().Render(fmt.Sprintf(
-			"Install claude, codex, gemini, or aider (or press %s later).",
-			keys.LabelOf(keys.KeySettings))))
+			"Install %s (or press %s later).",
+			installableAgents(), keys.LabelOf(keys.KeySettings))))
 		hint = "enter continue · esc skip"
 	default:
 		b.WriteString("Choose your default agent:\n\n")

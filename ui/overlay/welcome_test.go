@@ -148,6 +148,37 @@ func TestWelcomeOverlay_ContentWidthFloor(t *testing.T) {
 	_ = w.Render()
 }
 
+// TestWelcomeOverlay_ZeroAgentsLineNamesEveryBin holds the one screen that tells a
+// first-run user what to install to the list detection actually probes. It named
+// four of config.KnownAgentBins' five until #887, so the agent a user was most
+// likely to be missing was the one the modal never mentioned.
+//
+// It reads the RENDER, not installableAgents, because a copy change here is a
+// width change: the line is wrapped by the modal's box, so a name that lands on a
+// wrap boundary would still be in the string and no longer be readable as a name.
+// The height assertion is the other half — at the authored width the sentence
+// costs two rows, and a sixth agent that pushes it to three is a taller modal
+// than the one this state was designed at.
+func TestWelcomeOverlay_ZeroAgentsLineNamesEveryBin(t *testing.T) {
+	w := NewWelcomeOverlay()
+	w.SetSize(56, 0)
+	w.SetDetected(nil)
+
+	out := w.Render()
+	flow := flowText(out)
+	for _, bin := range config.KnownAgentBins() {
+		if !strings.Contains(flow, bin) {
+			t.Errorf("the zero-agents line does not name %q:\n%s", bin, out)
+		}
+	}
+
+	const wantRows = 15
+	if got := len(strings.Split(strings.TrimRight(out, "\n"), "\n")); got != wantRows {
+		t.Errorf("modal is %d rows at width 56, want %d — the install line has changed how many rows it wraps to:\n%s",
+			got, wantRows, out)
+	}
+}
+
 func TestWelcomeOverlay_EmptyDetection(t *testing.T) {
 	w := NewWelcomeOverlay()
 	w.SetSize(56, 0)

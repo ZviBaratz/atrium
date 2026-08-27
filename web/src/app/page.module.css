@@ -102,10 +102,13 @@ html[data-theme="dark"] .page {
   color: var(--accent-color);
 }
 
-.tenx {
-  font-size: 1.8em;
-  font-weight: 700;
-  text-decoration: underline;
+.subtagline {
+  font-size: 20px;
+  text-align: center;
+  margin: 16px auto 0;
+  max-width: 640px;
+  line-height: 1.5;
+  opacity: 0.8;
 }
 
 .demoVideo {

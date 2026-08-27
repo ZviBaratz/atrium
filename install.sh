@@ -457,55 +457,39 @@ check_and_install_dependencies() {
     # A warning, not a failure: Atrium itself installs fine, and the user can upgrade
     # tmux afterwards.
     check_tmux_version
-    # Check for GitHub CLI (gh)
+
+    # git is required — a session is a branch in a worktree, so without git no session
+    # can start — but it is checked rather than installed. A second sudo
+    # package-manager ladder is a lot of script for a tool nearly every host already
+    # has, and the one above exists only because Atrium can fall back to nothing else
+    # for tmux. A warning also keeps the install itself working: `atrium doctor` is
+    # where a missing git becomes a refusal (its table marks git DepRequired, and
+    # RequiredUnmet exits nonzero), and this is the earliest hint that it will.
+    if ! command -v git &> /dev/null; then
+        echo ""
+        echo "WARNING: git is not installed, and Atrium requires it."
+        echo "         Every session runs its agent in a git worktree on its own branch,"
+        echo "         so no session can start without it. Install git, then re-check with"
+        echo "         '$INSTALL_NAME doctor':"
+        echo "         https://git-scm.com/downloads"
+        echo ""
+    else
+        echo "git is already installed."
+    fi
+
+    # gh is OPTIONAL, and installing it is not this script's business. It is needed
+    # only for pushing a branch and opening a PR; README's "Prerequisites" says so and
+    # internal/doctor marks it DepOptional, while this script used to install it with
+    # sudo and exit 1 when it could not — on a Mac without Homebrew, on a distro whose
+    # package manager it does not know, and on Windows, that refused the whole install
+    # over a tool Atrium never requires (#887).
     if ! command -v gh &> /dev/null; then
-        echo "GitHub CLI (gh) is not installed. Installing GitHub CLI..."
-
-        if [[ "$PLATFORM" == "darwin" ]]; then
-            # macOS
-            if command -v brew &> /dev/null; then
-                ensure brew install gh
-            else
-                echo "Homebrew is not installed. Please install Homebrew first to install GitHub CLI."
-                echo "Visit https://brew.sh for installation instructions."
-                exit 1
-            fi
-        elif [[ "$PLATFORM" == "linux" ]]; then
-            # Linux
-            if command -v apt-get &> /dev/null; then
-                echo "Installing GitHub CLI on Debian/Ubuntu..."
-                ensure curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-                ensure sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
-                ensure echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-                ensure sudo apt-get update
-                ensure sudo apt-get install -y gh
-            elif command -v dnf &> /dev/null; then
-                ensure sudo dnf install -y 'dnf-command(config-manager)'
-                ensure sudo dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo
-                ensure sudo dnf install -y gh
-            elif command -v yum &> /dev/null; then
-                ensure sudo yum install -y yum-utils
-                ensure sudo yum-config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo
-                ensure sudo yum install -y gh
-            elif command -v pacman &> /dev/null; then
-                ensure sudo pacman -S --noconfirm github-cli
-            else
-                echo "Could not determine package manager. Please install GitHub CLI manually."
-                echo "Visit https://github.com/cli/cli#installation for installation instructions."
-                exit 1
-            fi
-        elif [[ "$PLATFORM" == "windows" ]]; then
-            echo "For Windows, please install GitHub CLI manually."
-            echo "Visit https://github.com/cli/cli#installation for installation instructions."
-            exit 1
-        fi
-
-        echo "GitHub CLI (gh) installed successfully."
+        echo "GitHub CLI (gh) is not installed — it is optional, needed only to push branches and open PRs: https://github.com/cli/cli#installation"
     else
         echo "GitHub CLI (gh) is already installed."
     fi
 
-    echo "All dependencies are installed."
+    echo "Dependency check complete."
 }
 
 main() {

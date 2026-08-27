@@ -375,6 +375,20 @@ func Adapters() []*Adapter {
 	return registry
 }
 
+// DisplayNames returns the recognized adapters' human-readable names, in
+// registry order. Prose that lists the agents Atrium supports derives from
+// this instead of restating it: the root command's Short in main.go builds its
+// sentence here, and TestSupportedAgentsAreNamedInTheDocs holds the website and
+// the README's tagline to the same set, so an adapter added to the registry
+// cannot ship with docs that name one fewer.
+func DisplayNames() []string {
+	names := make([]string, 0, len(registry))
+	for _, a := range registry {
+		names = append(names, a.DisplayName)
+	}
+	return names
+}
+
 // CanDetectBusy reports whether this adapter has any way to recognise a turn in
 // flight from a single pane capture — a busy marker, or a live spinner.
 //
