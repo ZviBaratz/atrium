@@ -83,6 +83,14 @@ type SettingsOverlay struct {
 	// TestGroupModeHasNoConfigOnlyInertPredicate.
 	clusteringVisible *bool
 
+	// repoLayer is home's answer to "does the selected session's repository add to the
+	// repo-layerable rows?" — nil until home injects it, and nil means "unknown, show
+	// nothing", the same contract clusteringVisible keeps and for the same reason. The
+	// panel is a global surface with no repository of its own, and its render path may
+	// not touch the filesystem (see settingRow.defaultDisplay), so the fact has to
+	// arrive from outside. See SetRepoLayer.
+	repoLayer *RepoLayer
+
 	// handoff is the sibling surface a rail entry asked home to open in this panel's place.
 	// Read once, as the panel closes — see Handoff.
 	handoff SettingsHandoff
@@ -178,6 +186,52 @@ func (s *SettingsOverlay) OpenAt(key string) bool {
 // list must not guess. See TestGroupModeHasNoConfigOnlyInertPredicate.
 func (s *SettingsOverlay) SetAccountClusteringVisible(visible bool) {
 	s.clusteringVisible = &visible
+}
+
+// RepoLayer is what one repository's own trusted .atrium.json adds to the
+// repo-layerable rows (#815), as the enforcement gate last resolved it. Lists are
+// what the REPO contributes, not the effective union — the row already shows the
+// user's own value, and the point of the annotation is that it is not the whole
+// story in this repo.
+type RepoLayer struct {
+	// Repo is the repository the lists came from, for the help line. Displayed, so
+	// callers pass something a user recognizes (the repo path).
+	Repo string
+
+	// Lists is what the repo adds, keyed by the settingRow key it layers over —
+	// repocfg.RepoLocalLayerKeys' vocabulary. A map rather than one field per key
+	// because a hardcoded switch here was a THIRD unguarded copy of that list: the
+	// two bridge guards (schema row scopes ↔ RepoLocalLayerKeys ↔ repoLocalWire)
+	// both passed while a third layered key rendered no badge, no provenance line
+	// and no help entry, because the switch returned nil for anything outside its
+	// two cases. The render path asks the row's scope whether to look here now — and
+	// the map arrives from repocfg.RepoLocalLayers rather than being rebuilt key by
+	// key, which is the producer half. Both were needed: closing only the renderer
+	// left the producer omitting the key instead, one layer down.
+	Lists map[string][]string
+}
+
+// forKey is the repo's contribution to one row.
+func (l *RepoLayer) forKey(key string) []string {
+	if l == nil {
+		return nil
+	}
+	return l.Lists[key]
+}
+
+// SetRepoLayer records what the selected session's repository adds to the
+// repo-layerable rows, so those rows can say their value is not the whole story
+// there. nil clears it.
+//
+// home computes this from the selected session's last resolution
+// (session.Instance.RepoLocalSeeds), which the poll sweep already did — so opening
+// the panel forks no git and reads no file, and a repo whose grant was revoked
+// stops being advertised on the next sweep. Until home calls this, and whenever
+// there is no session to ask (an empty list, a paused session with no worktree),
+// the rows render exactly as they did before #815: nil is "unknown", never "the
+// repo adds nothing".
+func (s *SettingsOverlay) SetRepoLayer(l *RepoLayer) {
+	s.repoLayer = l
 }
 
 // RailIndex reports which rail entry is current, so home can restore it the next time the panel

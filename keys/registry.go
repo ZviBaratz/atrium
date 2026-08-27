@@ -60,7 +60,8 @@ const (
 //     reachable THROUGH that surface, unless another gate on this same
 //     classification already covers it. The command palette is the one that
 //     shows this is not just "openers are Mutate": runPaletteAction (app/palette.go)
-//     re-enters dispatchAction, so every row it can run is classified on its own.
+//     re-enters the keypress tail (the focus router, then dispatchAction), so
+//     every row it can run is classified on its own.
 type Effect int
 
 const (
@@ -424,6 +425,13 @@ var Registry = []Entry{
 		key.WithKeys("3"),
 		key.WithHelp("3", "terminal tab"),
 	)},
+	// The inspector tab renders a constant placeholder until #805 feeds it —
+	// nothing lazy starts on the way in, so unlike the terminal tab above it
+	// observes. Re-read this classification when the real content lands.
+	{Name: KeyTabInspector, Action: "tab_inspector", Effect: EffectObserve, Binding: key.NewBinding(
+		key.WithKeys("4"),
+		key.WithHelp("4", "inspector tab"),
+	)},
 	// Both panels write config.json, which is why neither is EffectView: what they
 	// change is the configuration, not the arrangement of the view.
 	{Name: KeySettings, Action: "settings", Effect: EffectMutate, Binding: key.NewBinding(
@@ -436,8 +444,9 @@ var Registry = []Entry{
 	)},
 	// The one opener that does NOT inherit what its surface can do, because this
 	// classification already covers it: runPaletteAction (app/palette.go) re-enters
-	// dispatchAction, so every row the palette can run is an Entry with an Effect of
-	// its own. Opening the picker changes nothing.
+	// the keypress tail (focus router, then dispatchAction), so every row the
+	// palette can run is an Entry with an Effect of its own. Opening the picker
+	// changes nothing.
 	{Name: KeyCommandPalette, Action: "command_palette", Effect: EffectObserve, Binding: key.NewBinding(
 		key.WithKeys("ctrl+k"),
 		key.WithHelp("ctrl-k", "command palette"),
@@ -499,9 +508,9 @@ var Registry = []Entry{
 		key.WithKeys("ctrl+pgup", "ctrl+pgdown"),
 		key.WithHelp("ctrl-pgup/pgdn", "cycle sessions"),
 	)},
-	// EffectView, not Observe, and the help text is why it reads wrong: esc has a
-	// THIRD role neither this desc nor keys.go's comment mentions. Its last branch
-	// in handleKeyPress (app/app_update.go) backs out of focus mode via
+	// EffectView, not Observe, and the help text is why it reads wrong: esc's
+	// roles are the app package's escLadder, and the desc names only the first
+	// and third rungs. The last rung backs out of the focus LAYOUT preset via
 	// exitFocusLayout -> applyLayoutPreset -> appState.SetLayout, which saves
 	// state.json — the same write that makes the layout and split keys EffectView.
 	// Classify the handler, not the label: reachable as layout-key-into-focus, then
@@ -676,6 +685,53 @@ func DiffCommentModeHints() []key.Binding {
 		key.NewBinding(key.WithHelp(extend, "extend")),
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "comment")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "exit")),
+	}
+}
+
+// PaneFocusHints teaches the bar while the active pane is scroll-captured: the
+// nav keys scroll the pane and esc leaves scroll mode. Unlike its siblings
+// above this is not a MenuState's vocabulary — the app derives the capture
+// from the pane state and pushes it into the menu at render time
+// (Menu.SetPaneFocus), so the bar cannot outlive a scroll mode that exits
+// inside the pane, and it never renders when the capture is absent (the app
+// gates the push on ActivePaneInScrollMode, not on focus alone).
+//
+// The move label names the keys the focus router actually resolves
+// (routeFocusKey, app package); esc is reserved, so it needs no lookup. Esc's
+// description names the mechanism, not a destination: in the focus layout the
+// list is hidden, so "back to list" would promise a frame esc does not
+// produce, while leaving scroll mode is — by that push gate — always what the
+// first esc does while this bar shows. Explicit focus without scroll capture
+// (esc pops focus instead) keeps the default bar; its vocabulary is #806's.
+func PaneFocusHints() []key.Binding {
+	hints := make([]key.Binding, 0, 2)
+	// With both nav actions unbound the entry drops out whole rather than
+	// rendering a keyless " scroll" segment (VisualModeHints' rule): scroll
+	// mode stays reachable by wheel and shift+↑, but the bar can only teach
+	// keys that exist.
+	if move := Label(append(keysOf(KeyUp), keysOf(KeyDown)...)); move != "" {
+		hints = append(hints, key.NewBinding(key.WithHelp(move, "scroll")))
+	}
+	return append(hints, key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "exit scroll")))
+}
+
+// ModeHintTables enumerates every mode hint table above, keyed by the bar
+// variant that renders it. The drift guards consume this one list — the bar
+// scan in the ui package seeds its known keys from it, demands a scan arm per
+// entry, and requires each table to render in its own arm's bar; the app
+// package's click-synthesis sweep checks every key it carries. What forces an
+// entry INTO this list differs by variant kind: a new MenuState trips the
+// scan's menuStateCount sentinel, and its bar then fails the unknown-token
+// direction until its table lands here; a variant behind a render-time bool
+// (the pane-focus bar's shape) is rendered by no state the scan walks, so it
+// must be added here by hand — the residual gap the scan's header names.
+func ModeHintTables() map[string][]key.Binding {
+	return map[string][]key.Binding{
+		"filter":       FilterModeHints(),
+		"hints":        HintModeHints(),
+		"visual":       VisualModeHints(),
+		"diff-comment": DiffCommentModeHints(),
+		"pane-focus":   PaneFocusHints(),
 	}
 }
 

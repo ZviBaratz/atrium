@@ -192,10 +192,22 @@ func TestGuideNamesOnlyRegisteredCommands(t *testing.T) {
 		names[c.Name()] = true
 	}
 
-	for _, name := range []string{"guide", "ls", "peek", "send", "new", "reset", "reap", "update"} {
+	for _, name := range []string{"guide", "ls", "peek", "send", "new", "kill", "pause",
+		"reset", "reap", "update"} {
 		require.Contains(t, guidePage, "atrium "+name, "the page is expected to mention %q", name)
 		require.True(t, names[name], "the page names `atrium %s`, which rootCmd does not register", name)
 	}
+}
+
+// TestGuideNamesTheSpawnSkill ties the page's spelling of the skill to the skill itself.
+// The guide is where an agent goes to learn how to hand off, so it is where the skill has
+// to be discoverable — and the invocation is a projection of a plugin name and a skill
+// directory, either of which could be renamed in a package this file does not import for
+// any other reason. A page advertising a slash command that no longer resolves is worse
+// than one that never mentioned it.
+func TestGuideNamesTheSpawnSkill(t *testing.T) {
+	require.Contains(t, guidePage, tmux.SpawnSkillInvocation(),
+		"the page must name the skill by the spelling that actually invokes it")
 }
 
 // TestGuideFitsEightyColumns keeps the command table's alignment meaningful: the columns are runs
@@ -278,4 +290,91 @@ func TestGuideDelegationTargetsDocumentTheirFlag(t *testing.T) {
 		"the page must name the owner of the --variants rules it declines to state")
 	require.Contains(t, newCmd.Long, "--variants",
 		"the page defers the --variants rules to `atrium new --help`, which does not state them")
+}
+
+// TestGuideStatesTheConditionsOnKill is the one guard on this page's newest hazard.
+// `kill` is the first DESTRUCTIVE command listed under WHAT YOU CAN RUN, a section
+// whose closing sentence generalises to "anything here is yours" — so the page has to
+// carry the conditions with it. An agent told it owns a teardown and not told what the
+// teardown refuses will aim it at dirty sessions and read the refusals as breakage.
+//
+// It asserts the load-bearing clauses, not the wording: that the two conditions on the
+// tree are named, that the alternative when they fail is named, and that neither verb
+// is presented as immediate.
+func TestGuideStatesTheConditionsOnKill(t *testing.T) {
+	section := guideSection(t, "RETIRING A SESSION", "NOT YOURS TO RUN")
+
+	require.Contains(t, section, "uncommitted", "the page must name the uncommitted-changes condition")
+	require.Contains(t, section, "unpushed", "and the unpushed-commits condition")
+	require.Contains(t, section, "idle", "and that a working agent is not killed")
+	require.Contains(t, section, "`pause`", "and what to reach for when kill refuses")
+	// Deferred, not described — the same discipline TestGuideDefersTheTimingRules
+	// enforces for `new`. A retirement is spooled, so when it actually lands has the
+	// parked-TUI case that only a live lock probe answers, and killCmd's Long owns it.
+	require.Contains(t, section, "atrium kill --help",
+		"and must point at the help that owns when a queued retirement lands")
+}
+
+// TestSpawnSkillNamesOnlyRegisteredCommandsAndFlags is TestGuideAdvertisesRegisteredFlags
+// pointed at the other artifact that tells an agent what to run. The skill ships inside the
+// binary, is handed to every claude session, and its two worked commands are `atrium new`
+// lines meant to be copied verbatim — so it is strictly more load-bearing than the page, and
+// until now it was the one with no such guard: the tests beside it in session/tmux check flag
+// VALUES against claude's enums and never the flag NAMES against Atrium's own CLI.
+//
+// The guard cannot live beside the skill. session/tmux cannot import package main, where the
+// commands are registered; this file already imports session/tmux, so the check belongs on
+// this side of that edge, which is why the skill's text is exported for it.
+//
+// The pairs are written out for TestGuideNamesOnlyRegisteredCommands' reason, and inherit its
+// one-directional caveat. `grep -o -- '--[a-z-]*' session/tmux/spawn_skill.md` enumerates what
+// the skill actually names; --help is every command's and is not listed.
+func TestSpawnSkillNamesOnlyRegisteredCommandsAndFlags(t *testing.T) {
+	doc := tmux.SpawnSkillDoc()
+	require.NotEmpty(t, doc)
+
+	registered := map[string]*cobra.Command{}
+	for _, c := range rootCmd.Commands() {
+		registered[c.Name()] = c
+	}
+
+	// Every subcommand the skill names, including the three it tells an agent NOT to run:
+	// a prohibition on a command that no longer exists is stale advice, and one whose name
+	// has changed protects nothing.
+	for _, name := range []string{"new", "reset", "reap", "update"} {
+		// strings.Contains rather than require.Contains: the haystack is the whole
+		// skill, and a failed containment assertion prints it.
+		require.Truef(t, strings.Contains(doc, "atrium "+name),
+			"the skill is expected to mention `atrium %s`", name)
+		require.NotNil(t, registered[name],
+			"the skill names `atrium %s`, which rootCmd does not register", name)
+	}
+
+	for _, tc := range []struct {
+		command string
+		flag    string
+	}{
+		{"new", "path"},
+		{"new", "branch"},
+		{"new", "model"},
+		{"new", "effort"},
+		{"new", "permission-mode"},
+		{"new", "wait"},
+		{"new", "account"},
+		{"new", "variants"},
+		{"reap", "kill"},
+	} {
+		t.Run(tc.command+"/"+tc.flag, func(t *testing.T) {
+			require.Contains(t, doc, "--"+tc.flag, "the skill is expected to name --%s", tc.flag)
+
+			cmd := registered[tc.command]
+			require.NotNil(t, cmd, "rootCmd registers no %q command", tc.command)
+			f := cmd.Flags().Lookup(tc.flag)
+			require.NotNil(t, f, "the skill hands every claude session a command passing "+
+				"--%s to `atrium %s`, which registers no such flag", tc.flag, tc.command)
+			require.False(t, f.Hidden, "the skill points an agent at --%s, so `atrium %s "+
+				"--help` — which it names as the authority — must document it",
+				tc.flag, tc.command)
+		})
+	}
 }

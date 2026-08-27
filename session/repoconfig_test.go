@@ -411,15 +411,19 @@ func TestRepoLocal_DecoyEntriesRefuseTheWholeFile(t *testing.T) {
 }
 
 // TestRepoLocal_NothingDeclaredIsSilent: a committed file that declares nothing
-// executable — an empty list, or only keys a future atrium reads (#815's
-// carry_files) — gates nothing, so it must read as None even UNGRANTED: no
-// permanent "untrusted" row, no modal, and no remedy pointing at `atrium trust
-// allow`, which would refuse it ("nothing to trust").
+// at all — an empty repo_scripts list, or only keys a newer atrium will read —
+// gates nothing, so it must read as None even UNGRANTED: no permanent "untrusted"
+// row, no modal, and no remedy pointing at `atrium trust allow`, which would
+// refuse it ("nothing to trust"). The counter-case lives in
+// TestRepoSeeds_UntrustedNeverMaterialize and in repotrust's
+// TestAssessRepo_SeedLists: a file declaring only carry_files DOES declare
+// something, so it is grantable and reads untrusted until granted. link_paths is
+// on THIS side of the boundary, not that one — an unread key declares nothing.
 func TestRepoLocal_NothingDeclaredIsSilent(t *testing.T) {
 	for name, content := range map[string]string{
 		"an empty object":       `{}`,
 		"an empty list":         `{"repo_scripts":[]}`,
-		"a future-shape file":   `{"carry_files":[".env"]}`,
+		"a future-shape file":   `{"session_defaults":{"model":"opus"}}`,
 		"an empty entry object": `{"repo_scripts":[{}]}`,
 	} {
 		t.Run(name, func(t *testing.T) {

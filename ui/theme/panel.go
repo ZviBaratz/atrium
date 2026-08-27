@@ -2,6 +2,7 @@ package theme
 
 import (
 	"strings"
+	"unicode"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -227,4 +228,39 @@ func clipContent(content string, w, h int) string {
 		lines[i] = ansi.Truncate(l, w, "")
 	}
 	return strings.Join(lines, "\n")
+}
+
+// SanitizeUntrusted makes text somebody ELSE authored safe to interpolate into a
+// frame, and bounds it: every rune that is not plainly printable becomes a 1-cell
+// '·', the cluster-forming codepoints SanitizeWidth removes are removed, and the
+// result is truncated to width cells. Both halves are needed and the order matters
+// — sanitizing first is what makes the truncation measure what will actually
+// render.
+//
+// "Not plainly printable" is !unicode.IsPrint plus the Mn/Me combining marks. The
+// combining marks are the subtle half: they are printable, and they are legitimate
+// in a filename (macOS stores names decomposed, so "café" is "cafe" plus U+0301) —
+// but three hundred of them on one base character measure ONE cell in every
+// library and render as a smear that overruns the row. A per-rune predicate cannot
+// see a grapheme cluster, so the display boundary maps them rather than trying to
+// judge them.
+//
+// It measures with x/ansi, the measurer lipgloss v2 lays out with. go-runewidth
+// disagrees on exactly this input class — it scores a regional-indicator pair
+// (printable, not Mn/Me, so nothing here removes it) at 1 cell where x/ansi and a
+// terminal give 2, and thirty of them at 41 against 71 — and a budget enforced with
+// a measurer the layout does not use bounds a different string than the one composed.
+//
+// This is the boundary for repo-authored and user-authored TEXT (a seed-list entry,
+// an entry name, a script preview). Captured pane content goes through
+// SanitizeWidth, which does not replace runes because a diff's own bytes have to
+// survive it.
+func SanitizeUntrusted(s string, width int) string {
+	cleaned := strings.Map(func(r rune) rune {
+		if !unicode.IsPrint(r) || unicode.In(r, unicode.Mn, unicode.Me) {
+			return '·'
+		}
+		return r
+	}, SanitizeWidth(s))
+	return ansi.Truncate(cleaned, width, "…")
 }

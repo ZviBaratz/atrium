@@ -153,7 +153,9 @@ func (m *home) resolveFrameTarget() frameTarget {
 		}
 		return frameTarget{terminal: sess, termKey: key, termInstance: selected, termTitle: selected.Title()}
 	default:
-		// The diff tab renders from cached git metadata and captures nothing.
+		// The diff tab renders from cached git metadata and the inspector tab
+		// renders its constant placeholder (#805 lands its content); neither
+		// captures anything.
 		return frameTarget{}
 	}
 }
@@ -386,8 +388,8 @@ func (m *home) noteFrameTargetChange() {
 
 // tabChanged is the shared tail of every tab switch: sync the hint bar's tab
 // state, restamp preview freshness (a tab switch changes which pane is being
-// captured — only the diff tab captures nothing — so arriving is arriving at a
-// new frame source), and re-render the panes.
+// captured — the diff and inspector tabs capture nothing — so arriving is
+// arriving at a new frame source), and re-render the panes.
 func (m *home) tabChanged() tea.Cmd {
 	m.menu.SetActiveTab(m.tabbedWindow.GetActiveTab())
 	m.noteFrameTargetChange()

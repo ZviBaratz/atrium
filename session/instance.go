@@ -454,6 +454,15 @@ type Instance struct {
 	// memoized with it. Guarded by mu.
 	repoKey      string
 	repoKeyKnown bool
+	// repoSeeds is the seed lists the last resolution took, keyed by the config key
+	// from a TRUSTED .atrium.json (#815) — empty after any refusal — with
+	// repoSeedsKnown marking that a resolution ran at all. Display API only, read
+	// through RepoLocalSeeds by the settings panel so it can name the rows this
+	// repo contributes to without forking git on the update thread; the seeding
+	// site takes its lists from the resolution's return value, not from here.
+	// Guarded by mu: the Start goroutine and the poll goroutine write them.
+	repoSeeds      map[string][]string
+	repoSeedsKnown bool
 
 	// port is the session's managed dev-server port (#389), or 0 when its repo declares
 	// no port_range — or declares one that had nothing free. Unlike the setup fields
@@ -731,15 +740,17 @@ func (i *Instance) ToInstanceData() InstanceData {
 		// Copy to a local before taking its address: &i.diffStats.Unpushed would
 		// alias the live struct the poll keeps mutating into the serialized data.
 		unpushed := i.diffStats.Unpushed
+		measured := i.diffStats.BranchStatsMeasured
 		data.DiffStats = DiffStatsData{
-			Added:        i.diffStats.Added,
-			Removed:      i.diffStats.Removed,
-			Content:      i.diffStats.Content,
-			FilesChanged: i.diffStats.FilesChanged,
-			Commits:      i.diffStats.Commits,
-			Behind:       i.diffStats.Behind,
-			Unpushed:     &unpushed,
-			Dirty:        i.diffStats.Dirty,
+			Added:               i.diffStats.Added,
+			Removed:             i.diffStats.Removed,
+			Content:             i.diffStats.Content,
+			FilesChanged:        i.diffStats.FilesChanged,
+			Commits:             i.diffStats.Commits,
+			Behind:              i.diffStats.Behind,
+			Unpushed:            &unpushed,
+			Dirty:               i.diffStats.Dirty,
+			BranchStatsMeasured: &measured,
 		}
 	}
 
@@ -852,6 +863,7 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 		// an isolated session would silently start linking again after the first app
 		// restart or the first pause/resume (#481).
 		instance.gitWorktree.SetIsolateDeps(instance.isolateDeps)
+		instance.gitWorktree.SetRepoLocalSeeds(instance.repoLocalSeedResolver)
 		// A state.json predating the unpushed field omits it. Resolve that gap
 		// conservatively — assume none of the ahead commits are pushed, which is the
 		// pre-field behavior — rather than as a literal 0, which would claim nothing
@@ -861,15 +873,19 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 		if data.DiffStats.Unpushed != nil {
 			unpushed = *data.DiffStats.Unpushed
 		}
+		// Absent means nobody recorded whether the numbers were taken, which the gate
+		// must read as "not taken" rather than assume: see DiffStatsData.
+		measured := data.DiffStats.BranchStatsMeasured != nil && *data.DiffStats.BranchStatsMeasured
 		instance.diffStats = &git.DiffStats{
-			Added:        data.DiffStats.Added,
-			Removed:      data.DiffStats.Removed,
-			Content:      data.DiffStats.Content,
-			FilesChanged: data.DiffStats.FilesChanged,
-			Commits:      data.DiffStats.Commits,
-			Behind:       data.DiffStats.Behind,
-			Unpushed:     unpushed,
-			Dirty:        data.DiffStats.Dirty,
+			Added:               data.DiffStats.Added,
+			Removed:             data.DiffStats.Removed,
+			Content:             data.DiffStats.Content,
+			FilesChanged:        data.DiffStats.FilesChanged,
+			Commits:             data.DiffStats.Commits,
+			Behind:              data.DiffStats.Behind,
+			Unpushed:            unpushed,
+			Dirty:               data.DiffStats.Dirty,
+			BranchStatsMeasured: measured,
 		}
 	}
 
@@ -1527,6 +1543,7 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		// other goroutines, so the writes happen-before any poll-loop read behind i.mu.
 		gitWorktree.SetGHConfigDir(i.ghConfigDir)
 		gitWorktree.SetIsolateDeps(i.isolateDeps)
+		gitWorktree.SetRepoLocalSeeds(i.repoLocalSeedResolver)
 		i.mu.Lock()
 		i.gitWorktree = gitWorktree
 		i.mu.Unlock()

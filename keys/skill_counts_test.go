@@ -44,7 +44,7 @@ func TestSkillCountsMatchTheTree(t *testing.T) {
 	// Site 2: one line per Registry entry.
 	registry := strings.Count(moduleFile(t, "keys/registry.go"), "\n\t{Name: ")
 	// Site 4: dispatch-case LINES, which is below the number of actions because several
-	// cases carry two or three names — the skill says so, and that is why it is lines.
+	// cases carry more than one name — the skill says so, and that is why it is lines.
 	dispatch := dispatchCaseLines(t)
 
 	for _, tc := range []struct {

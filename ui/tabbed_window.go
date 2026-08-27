@@ -14,6 +14,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	xansi "github.com/charmbracelet/x/ansi"
 	zone "github.com/lrstanley/bubblezone/v2"
 )
 
@@ -38,9 +39,9 @@ func tabBorderWithBottom(th *theme.Theme, left, middle, right string) lipgloss.B
 // one that composed a frame is the one the memo keyed on — see tabbedKey. Border
 // color carries focus: the right pane's chrome is faint by default (the list
 // panel, which owns the selection, keeps the accent border) and lights up accent
-// only while a pane is in scroll mode — the one state where keyboard input is
-// captured by this pane. focused is that scroll-mode flag; frame metrics are
-// identical either way, so size computations may pass false.
+// only while the ACTIVE tab's pane is in a key-capturing mode — scroll mode, or
+// the preview's hint overlay. focused carries activePaneCaptured; frame metrics
+// are identical either way, so size computations may pass false.
 func inactiveTabStyle(th *theme.Theme) lipgloss.Style {
 	return lipgloss.NewStyle().
 		Border(tabBorderWithBottom(th, "┴", "─", "┴"), true).
@@ -74,28 +75,43 @@ func windowStyle(th *theme.Theme, focused bool) lipgloss.Style {
 		Border(th.Borders.Style, false, true, true, true)
 }
 
-// Indices of the right pane's tabs, in display order.
+// Indices of the right pane's tabs, in display order. The order is mirrored by
+// the KeyTabPreview..KeyTabInspector run in the keys package — the direct-jump
+// dispatch turns a key's offset in that run into an index here, and
+// TestTabJumpKeys is what fails when either side moves alone.
 const (
 	PreviewTab int = iota
 	DiffTab
 	TerminalTab
+	InspectorTab
 )
 
-// Tab pairs a tab's display name with the function that renders its content.
+// Tab pairs a tab's display name with the functions that render and size its
+// content. Render takes no arguments because every pane is sized separately
+// via SetSize and renders from its own state; String() invokes the active
+// tab's Render before building the memo key, so its output enters the cache
+// as bytes. SetSize lives on the entry so the slice is the pane's whole
+// registration: a pane sized by hand outside it could be forgotten, and the
+// omission is silent — a 0×0 pane renders "" behind a working label, zone and
+// jump key. A nil SetSize panics on the first resize instead.
 type Tab struct {
-	Name   string
-	Render func(width int, height int) string
+	Name    string
+	Render  func() string
+	SetSize func(width, height int)
 }
 
 // TabbedWindow has tabs at the top of a pane which can be selected. The tabs
 // take up one rune of height.
 type TabbedWindow struct {
-	tabs []string
+	tabs []Tab
 
 	activeTab int
 	height    int
 	width     int
 
+	// The panes with per-tab behaviour arms (copy, scroll, update proxies).
+	// The inspector pane has none yet, so only the tabs slice holds it; #805
+	// gives it a field back along with its update proxy.
 	preview  *PreviewPane
 	diff     *DiffPane
 	terminal *TerminalPane
@@ -139,13 +155,20 @@ type tabbedKey struct {
 	theme     *theme.Theme
 }
 
-// NewTabbedWindow assembles the right pane from its three tab panes.
+// NewTabbedWindow assembles the right pane from its tab panes. The inspector
+// pane is built here rather than injected: unlike its siblings it needs
+// nothing from the app yet (#805 will feed it through an Update proxy, like
+// the diff pane's). The slice order is the display order and must match the
+// tab index constants above (SetActiveTab and the direct-jump keys address by
+// index).
 func NewTabbedWindow(preview *PreviewPane, diff *DiffPane, terminal *TerminalPane) *TabbedWindow {
+	inspector := NewInspectorPane()
 	return &TabbedWindow{
-		tabs: []string{
-			"Preview",
-			"Diff",
-			"Terminal",
+		tabs: []Tab{
+			{Name: "Preview", Render: preview.String, SetSize: preview.SetSize},
+			{Name: "Diff", Render: diff.String, SetSize: diff.SetSize},
+			{Name: "Terminal", Render: terminal.String, SetSize: terminal.SetSize},
+			{Name: "Inspector", Render: inspector.String, SetSize: inspector.SetSize},
 		},
 		preview:  preview,
 		diff:     diff,
@@ -159,8 +182,8 @@ func (w *TabbedWindow) SetInstance(instance *session.Instance) {
 	w.instance = instance
 }
 
-// SetSize resizes the window and propagates the resulting content area to all
-// three tab panes.
+// SetSize resizes the window and propagates the resulting content area to
+// every tab pane.
 func (w *TabbedWindow) SetSize(width, height int) {
 	// w.width is the inner (pre-border) width; the window border adds its
 	// horizontal frame back, so the pane's total rendered width equals the given
@@ -178,9 +201,11 @@ func (w *TabbedWindow) SetSize(width, height int) {
 	contentHeight := height - tabHeight - windowStyle(th, false).GetVerticalFrameSize()
 	contentWidth := w.width - windowStyle(th, false).GetHorizontalFrameSize()
 
-	w.preview.SetSize(contentWidth, contentHeight)
-	w.diff.SetSize(contentWidth, contentHeight)
-	w.terminal.SetSize(contentWidth, contentHeight)
+	// Sized through the slice, so the Tab entry is the pane's whole
+	// registration — see the Tab doc for what a hand-kept list here misses.
+	for _, t := range w.tabs {
+		t.SetSize(contentWidth, contentHeight)
+	}
 }
 
 // SetSplashFrame advances the empty-state splash animation clock on the panes
@@ -276,11 +301,18 @@ func (w *TabbedWindow) ResetPreviewToNormalMode(instance *session.Instance) erro
 //   - Diff tab: the raw `git diff` output the pane rendered FROM — or, in comment
 //     mode, just the rows the cursor has selected.
 //   - Preview / Terminal: the captured pane with its ANSI stripped.
+//   - Inspector: nothing — the skeleton renders only its placeholder (#805).
 //
 // ok is false when there is nothing to copy (an empty diff, a pane that has never
 // captured, a fallback state), so the caller can say so rather than copying "".
 func (w *TabbedWindow) CopyableContent(instance *session.Instance) (text, what string, ok bool) {
 	switch w.activeTab {
+	case PreviewTab:
+		content, live := w.preview.LiveContent()
+		if !live {
+			return "", "", false
+		}
+		return hints.StripANSI(content), "pane", true
 	case DiffTab:
 		if sel := w.diff.SelectedText(); sel != "" {
 			return sel, "selected diff lines", true
@@ -300,11 +332,11 @@ func (w *TabbedWindow) CopyableContent(instance *session.Instance) (text, what s
 		}
 		return hints.StripANSI(content), "terminal", true
 	default:
-		content, live := w.preview.LiveContent()
-		if !live {
-			return "", "", false
-		}
-		return hints.StripANSI(content), "pane", true
+		// Fail closed: a tab with no case of its own — the inspector skeleton,
+		// and any future tab whose author forgets one — copies nothing, and the
+		// caller says so. When the preview pane held this arm, that omission
+		// silently copied the preview capture instead.
+		return "", "", false
 	}
 }
 
@@ -498,11 +530,64 @@ func (w *TabbedWindow) IsTerminalInScrollMode() bool {
 	return w.terminal.IsScrolling()
 }
 
-// paneScrolling reports whether any tab pane is in a key-capturing mode
-// (scroll or hint) — the state that renders the window's chrome as focused.
-// The diff tab scrolls live without a mode, so it never claims focus.
-func (w *TabbedWindow) paneScrolling() bool {
-	return w.preview.IsScrolling() || w.preview.InHintMode() || w.terminal.IsScrolling()
+// ActivePaneInScrollMode reports whether the ACTIVE tab's pane is in scroll
+// mode — the one predicate behind "the tabs own the nav keys": the app's
+// derived focus and its esc ladder's scroll rung read it directly, and the
+// chrome accent reads it through activePaneCaptured (this plus the preview's
+// hint overlay), so none of them can disagree about scroll capture. Tab-scoped
+// on purpose: a preview snapshot left scrolled in the background must not
+// claim the diff tab's keys. The diff pane scrolls live without a mode, so it
+// never appears here.
+func (w *TabbedWindow) ActivePaneInScrollMode() bool {
+	switch w.activeTab {
+	case PreviewTab:
+		return w.preview.IsScrolling()
+	case TerminalTab:
+		return w.terminal.IsScrolling()
+	}
+	return false
+}
+
+// activePaneCaptured reports whether the active tab's pane is in a
+// key-capturing mode — scroll mode, or the preview's hint overlay — the state
+// that renders the window's chrome as focused. Tab-scoped like
+// ActivePaneInScrollMode so the border and the hint bar tell the same story: a
+// background snapshot must not keep the border lit while the bar and the nav
+// keys say the list has focus.
+func (w *TabbedWindow) activePaneCaptured() bool {
+	return w.ActivePaneInScrollMode() ||
+		(w.activeTab == PreviewTab && w.preview.InHintMode())
+}
+
+// ActivePaneScrollAtBottom reports whether the active tab's pane is in scroll
+// mode with its viewport resting at the snapshot's bottom — the position where
+// one more ScrollDown would exit the mode. Position only: the hold-vs-exit
+// policy lives at the caller (app routeFocusKey), which holds the nav key
+// there when scrollback exists above (so a held j cannot overshoot the exit
+// into a list move) and lets a zero-travel snapshot exit; the wheel and
+// shift+↓ keep their deliberate bottom exit.
+func (w *TabbedWindow) ActivePaneScrollAtBottom() bool {
+	switch w.activeTab {
+	case PreviewTab:
+		return w.preview.ScrollAtBottom()
+	case TerminalTab:
+		return w.terminal.ScrollAtBottom()
+	}
+	return false
+}
+
+// ActivePaneScrollAtTop is ActivePaneScrollAtBottom's mirror. A snapshot that
+// is at top and bottom at once has no travel at all — scrollback shorter than
+// the viewport — which is how the focus router tells "resting at the end of a
+// long scrollback" (hold) from "nothing to scroll" (let the exit through).
+func (w *TabbedWindow) ActivePaneScrollAtTop() bool {
+	switch w.activeTab {
+	case PreviewTab:
+		return w.preview.ScrollAtTop()
+	case TerminalTab:
+		return w.terminal.ScrollAtTop()
+	}
+	return false
 }
 
 // ResetTerminalToNormalMode exits scroll mode on the terminal pane
@@ -518,35 +603,32 @@ func (w *TabbedWindow) String() string {
 	// of on the pane state behind them. That render is the one part of this method
 	// no hit can skip, and its cost depends on which tab is showing: ~1% of the
 	// method on the preview tab (where the 40%-of-a-frame-build figure was measured),
-	// materially more on the other two, since DiffPane re-colours the whole diff and
-	// TerminalPane takes a lock and rebuilds from its session map. The memo is worth
-	// most on the tab Atrium sits on by default, and less on the other two.
+	// materially more on the diff and terminal tabs, since DiffPane re-colours the
+	// whole diff and TerminalPane takes a lock and rebuilds from its session map
+	// (the inspector renders a constant). The memo is worth most on the tab Atrium
+	// sits on by default, and less elsewhere.
 	k := tabbedKey{
 		content:   w.activePaneContent(),
 		width:     w.width,
 		height:    w.height,
 		activeTab: w.activeTab,
-		// Scroll mode is the one state where this pane captures keyboard input, so
-		// it is what lights the pane's chrome up as focused.
-		focused: w.paneScrolling(),
+		// A key-capturing mode on the ACTIVE pane is what lights the chrome up
+		// as focused — the same tab-scoped reading the app's focus model uses.
+		focused: w.activePaneCaptured(),
 		theme:   theme.Current(),
 	}
 	return w.memo.Get(k, func() string { return w.compose(k) })
 }
 
-// activePaneContent renders whichever tab is showing. An index outside the three
-// tabs yields "", exactly as the switch this was lifted from did; Toggle wraps and
-// SetActiveTab range-checks, so that arm is unreachable rather than a fallback.
+// activePaneContent renders whichever tab is showing. An index outside the tab
+// list yields "", exactly as the switch this was lifted from did; Toggle wraps
+// and SetActiveTab range-checks, so the guard is unreachable rather than a
+// fallback.
 func (w *TabbedWindow) activePaneContent() string {
-	switch w.activeTab {
-	case PreviewTab:
-		return w.preview.String()
-	case DiffTab:
-		return w.diff.String()
-	case TerminalTab:
-		return w.terminal.String()
+	if w.activeTab < 0 || w.activeTab >= len(w.tabs) {
+		return ""
 	}
-	return ""
+	return w.tabs[w.activeTab].Render()
 }
 
 // ComposeRuns reports how many times the window has actually been composed, and
@@ -606,7 +688,15 @@ func (w *TabbedWindow) compose(k tabbedKey) string {
 		// v2's Width is the total including the frame, so the frame size is no
 		// longer subtracted here — see the note in theme.Panel.
 		style = style.Width(width)
-		renderedTabs = append(renderedTabs, zone.Mark(tabZoneID(i), style.Render(t)))
+		// Truncate rather than overflow: lipgloss wraps a label wider than the
+		// tab's inner cells, growing the strip a second row, and the MaxHeight
+		// clamp below then eats the window's bottom border. Narrow strips are
+		// reachable — the monitor preset pins the list at its widest, and what
+		// remains at the 80-column floor is asserted by the truncation tests.
+		// Truncate carries the edge cases itself: a label that fits passes
+		// through unchanged, and a tab with no inner cells yields "".
+		name := xansi.Truncate(t.Name, width-style.GetHorizontalFrameSize(), "…")
+		renderedTabs = append(renderedTabs, zone.Mark(tabZoneID(i), style.Render(name)))
 	}
 
 	row := lipgloss.JoinHorizontal(lipgloss.Top, renderedTabs...)

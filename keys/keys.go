@@ -104,11 +104,15 @@ const (
 	KeyShrinkList
 	KeyGrowList
 
-	// KeyTabPreview/KeyTabDiff/KeyTabTerminal jump straight to a tab by number,
-	// complementing Tab/Shift+Tab cycling.
+	// KeyTabPreview through KeyTabInspector jump straight to a tab by number,
+	// complementing Tab/Shift+Tab cycling. The four names must stay consecutive
+	// and in the tabs' display order: dispatchAction turns a key's offset from
+	// KeyTabPreview into the tab index, and app's TestTabJumpKeys is what fails
+	// when a name moves out of the run.
 	KeyTabPreview
 	KeyTabDiff
 	KeyTabTerminal
+	KeyTabInspector
 
 	KeySettings // Open the settings panel to view and edit the configuration
 
@@ -196,10 +200,10 @@ const (
 	// the repo group. Honored only while attached, by the attach layer's
 	// escape-sequence scanner (session/tmux/detach.go); the TUI never sees it.
 	KeySessionCycle
-	// KeyEscape is esc's contextual role on the list: exit scroll mode /
-	// clear the committed filter. Handled before dispatch (app/app_update.go),
-	// like ctrl+l below — routing either through the dispatch map would put
-	// it behind the busy-gate.
+	// KeyEscape is esc's contextual unwind in plain navigation — the app
+	// package's escLadder (scroll exit, focus pop, filter clear, layout exit).
+	// Handled before dispatch (app/app_update.go), like ctrl+l below — routing
+	// either through the dispatch map would put it behind the busy-gate.
 	KeyEscape
 	// KeyRedraw is ctrl+l, the universal manual-repaint escape hatch.
 	KeyRedraw

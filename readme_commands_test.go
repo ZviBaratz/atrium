@@ -10,6 +10,7 @@ import (
 
 	"github.com/ZviBaratz/atrium/internal/doctor"
 	"github.com/ZviBaratz/atrium/internal/handover"
+	"github.com/ZviBaratz/atrium/internal/outbox"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 )
@@ -174,7 +175,7 @@ func TestHeadlessCommandsRunWhileTheTUIHoldsItsLock(t *testing.T) {
 
 	seedInstances(t, inst("fix-auth", "/repo/web"))
 
-	require.NoError(t, runLs(io.Discard, true), "ls must work while a TUI holds the lock")
+	require.NoError(t, runLs(io.Discard, true, false), "ls must work while a TUI holds the lock")
 
 	_, _, err = send(t, "fix-auth", "", "hello", 0)
 	require.NoError(t, err, "send must work while a TUI holds the lock")
@@ -185,6 +186,18 @@ func TestHeadlessCommandsRunWhileTheTUIHoldsItsLock(t *testing.T) {
 	f := &fakeTmux{content: "pane\n"}
 	require.NoError(t, runPeek(context.Background(), io.Discard, f.exec(), "fix-auth", "", 0, false),
 		"peek must work while a TUI holds the lock")
+
+	// Both retirement verbs, for the same reason and with more at stake: they exist so
+	// an orchestrator does not need somebody at the keyboard, so refusing while a TUI
+	// holds its locks would refuse in exactly the situation they were added for. A
+	// parked TUI is why `pause` is here too and not only `kill` — that is the state an
+	// agent handing off is usually in, since somebody is watching the session it runs in.
+	_, _, err = retireCmd(t, outbox.ModeKill, cleanProbe(), "fix-auth", 0)
+	require.NoError(t, err, "kill must work while a TUI holds the lock")
+	_, _, err = retireCmd(t, outbox.ModePause, refusingProbe(t), "fix-auth", 0)
+	require.NoError(t, err, "pause must work while a TUI holds the lock")
+
+	require.NoError(t, runLs(io.Discard, true, true), "ls --killed must work while a TUI holds the lock")
 
 	// Stubbed rather than left to the real scan: it probes the ambient tmux socket,
 	// and package main has no TestMain sandboxing TMUX_TMPDIR, so an unstubbed call

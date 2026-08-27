@@ -77,15 +77,29 @@ func TestTabbedWindowMemo_EveryKeyedScalarInvalidates(t *testing.T) {
 		// sameFrame marks an input the key covers CONSERVATIVELY: it invalidates,
 		// but this pane's own output does not depend on it.
 		sameFrame bool
-		change    func(t *testing.T, w *TabbedWindow)
+		// setup re-seats the fixture before the first render, for the one case
+		// whose isolating poke only exists on another tab.
+		setup  func(w *TabbedWindow)
+		change func(t *testing.T, w *TabbedWindow)
 	}{
 		{name: "width", change: func(_ *testing.T, w *TabbedWindow) { w.SetSize(80, 20) }},
 		{name: "height", change: func(_ *testing.T, w *TabbedWindow) { w.SetSize(60, 24) }},
 		{name: "activeTab", change: func(_ *testing.T, w *TabbedWindow) { w.Toggle() }},
-		// Scroll mode on the TERMINAL pane, while the preview tab is showing: it
-		// flips paneScrolling (and so the pane's accent chrome) without touching the
-		// content the key already covers, which is the only way to isolate focused.
-		{name: "focused", change: func(_ *testing.T, w *TabbedWindow) { w.terminal.isScrolling = true }},
+		// Scroll mode on the ACTIVE (terminal) tab, poked directly so the pane's
+		// rendered bytes stay identical (asserted below — a real entry snapshots
+		// content and would invalidate through the content field instead). The
+		// capture predicate is tab-scoped (#803), so the old poke — a background
+		// terminal scroll under the preview tab — no longer flips focused, and
+		// that is the point of the scoping, not a hole in it.
+		{name: "focused",
+			setup: func(w *TabbedWindow) { w.SetActiveTab(TerminalTab) },
+			change: func(t *testing.T, w *TabbedWindow) {
+				before := w.activePaneContent()
+				w.terminal.viewport.SetContent(before)
+				w.terminal.isScrolling = true
+				require.Equal(t, before, w.activePaneContent(),
+					"the poke must leave content identical, or this case stops isolating focused")
+			}},
 		{name: "theme palette", change: func(t *testing.T, _ *TabbedWindow) { t.Cleanup(theme.Set("tokyo-night")) }},
 		// The glyph set gets a fresh *Theme from theme.compose, so it invalidates —
 		// but the window's chrome is borders and colours with no glyph in it, so the
@@ -101,6 +115,9 @@ func TestTabbedWindowMemo_EveryKeyedScalarInvalidates(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newMemoWindow(t)
+			if tc.setup != nil {
+				tc.setup(w)
+			}
 			first := w.String()
 			require.Equal(t, 1, w.ComposeRuns())
 

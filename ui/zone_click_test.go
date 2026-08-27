@@ -99,7 +99,7 @@ func TestTabAtZone(t *testing.T) {
 	w := NewTabbedWindow(NewPreviewPane(), NewDiffPane(), NewTerminalPane(context.Background()))
 	w.SetSize(60, 20)
 
-	for i := range []int{PreviewTab, DiffTab, TerminalTab} {
+	for i := range []int{PreviewTab, DiffTab, TerminalTab, InspectorTab} {
 		// Landing on a *different* tab is a miss, not a pass: the tabs abut, so
 		// stale bounds resolve to a neighbour rather than to nothing.
 		clickZone(t, w.String, tabZoneID(i), func(z *zone.ZoneInfo) bool {

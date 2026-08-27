@@ -92,6 +92,8 @@ if one is missing from this table.
 | `peek` | Print what a session's pane is showing, without attaching |
 | `send` | Queue a prompt for a session |
 | `new` | Create one or more sessions without a TUI |
+| `kill` | Retire a session whose work is provably safe to discard |
+| `pause` | Park a session: stop its agent, free its worktree, keep the branch |
 | `guide` | Print what an agent running inside a session can do |
 | `doctor` | Check core dependencies (tmux, git, gh) and agent CLI heuristic versions |
 | `reap` | List tmux servers Atrium left behind, and stop them on request |
@@ -127,10 +129,10 @@ Global flags:
 
 #### Scripting Atrium
 
-`ls`, `peek`, `send` and `new` are the headless surface: four primitives — list
-the fleet, read a screen, send a message, create a session — that let a script or
-an orchestrator agent drive Atrium without a TTY. None of them start the TUI, hold
-its lock, or need a terminal.
+`ls`, `peek`, `send`, `new`, `kill` and `pause` are the headless surface: list the
+fleet, read a screen, send a message, create a session, retire one — the primitives
+that let a script or an orchestrator agent drive Atrium without a TTY. None of them
+start the TUI, hold its lock, or need a terminal.
 
 **`atrium ls`** prints a table; `--json` emits an array for `jq`. It reads stored
 state and never touches tmux, so it works with no tmux server running at all.
@@ -166,6 +168,32 @@ To ask how long a session has held its status, subtract `status_changed_at` — 
 | `diff` | `added`, `removed`, `files_changed`, `commits`, `behind`, `dirty`, and `unpushed` (`null` when not yet computed) |
 
 The schema evolves additively: fields may be added, never removed or repurposed.
+
+**`atrium ls --killed`** switches `ls` to the other list: sessions that have been
+killed and are still restorable from the undo journal, newest first. It is a
+strictly wider view than the TUI's undo key, which offers only the most recent
+*batch* — the entries one kill produced — so a human returning to several
+agent-initiated retirements can see all of them rather than only the last kill.
+
+```bash
+atrium ls --killed
+atrium ls --killed --json | jq -r '.[] | select(.uncommitted_work_lost) | .title'
+```
+
+| Field | Notes |
+|-------|-------|
+| `id` | The journal entry, which is what identifies one killed session |
+| `title`, `display_name`, `path`, `branch` | What the session was; `branch` is empty for a direct session |
+| `direct` | It was a direct (non-git) session, so it had no branch or worktree |
+| `batch_id` | The kill this entry belonged to, present when it came from a batch kill (visual-mode `x` or the marked set) and absent for a single-session kill. The undo key restores a whole batch, so entries sharing one come back together |
+| `killed_at` | RFC 3339 |
+| `uncommitted_work_lost` | Restoring this entry comes back **incomplete**: it had uncommitted changes, nothing committed them, and removing the worktree took them with it. False for the usual dirty kill, where the teardown folds that work into the retained commits — but **true by design** for a session adopted onto a branch you own (`--branch <existing>`), which the teardown deliberately does not commit to |
+
+Restoring is still a TUI action; this only says what there is to restore. It never
+deletes a journal entry, however old — an entry past the retention horizon is
+omitted from the listing, not swept, because sweeping means running
+`git update-ref -d` inside your repositories and that is the TUI's call, not a
+headless command's.
 
 **`atrium peek`** captures a session's pane. It is read-only — it never attaches,
 sends keys, or otherwise disturbs the session — but it does need a live tmux
@@ -285,7 +313,94 @@ Without it the command is honestly fire-and-forget: it prints what it queued, an
 *result* — a request the drain refuses leaves no session and no row, and the refusal is
 written as a receipt that only `--wait` reads.
 
-Both spools are drained by the TUI's poll loop, which is **suspended while you
+**`atrium kill`** and **`atrium pause`** retire a session, which is the other end
+of the lifecycle `new` opens ([#835](https://github.com/ZviBaratz/atrium/issues/835)).
+Without them an orchestrator agent could open sessions indefinitely and close none,
+and the cost of never closing one is not just a row in a list. Every Atrium start
+brings every stored non-paused session back online: one whose tmux pane survived is
+reattached, and one whose pane did not has its agent launched again. After anything
+that takes the tmux server down — a reboot, `reap --kill` — that is the whole fleet
+relaunching at once, and the rationing that would otherwise stage it applies only
+when `max_sessions` is unset, so an explicit value (including an explicit unlimited)
+opts out of it.
+
+```bash
+atrium kill fix-auth              # refuses unless the tree is provably safe
+atrium kill fix-auth --wait 60s   # block on the outcome, not on the dispatch
+atrium pause fix-auth             # park it instead: branch kept, nothing discarded
+```
+
+`kill` runs the same teardown as the TUI's kill key — worktree removed, branch
+deleted, undo journal written — and refuses unless safety is **established** rather
+than merely un-contradicted. The tree is recomputed at call time and must report no
+uncommitted changes and no unpushed commits, and the agent must be idle. That
+distinction is the whole gate: the figures involved have no way to say "I don't know",
+so a session whose stats were never computed decodes as clean, and nothing refreshes
+them while no TUI is running — which is exactly the condition an agent-driven kill
+runs under. Recomputing is not on its own enough for that, either: git's own
+best-effort counters leave a failed measurement at zero rather than reporting it, so a
+worktree whose repository has moved reads exactly like a clean one. A session whose
+numbers cannot be *established* — as opposed to established and found clean — is
+therefore refused, which is also why a paused, starting or direct session is refused:
+none of them has a worktree to read.
+
+The idle half has the same shape and one more consequence. Atrium reads "a turn is
+running" off the pane, using the busy marker or live spinner its agent's adapter
+declares — and aider declares neither, as does the `Generic` adapter any program
+Atrium does not recognise falls back to. For those, "no marker" means "there was
+never anything to look for" rather than "nothing is happening", so `kill` refuses
+them outright instead of reading an absent signal as idleness. Use `pause`, or the
+TUI. The refusal names the condition that failed, in every case.
+
+There is no `--force`. Nothing can distinguish a human who has looked from an agent
+that has not, so a flag meaning "I looked" is a flag agents would pass; the TUI is
+where a person overrides the gate.
+
+Both verbs also address a session more strictly than the read-only commands do. `peek`
+and `send` fall back to a substring of the title or of the display label when no
+exact name matches, which is a good trade when a wrong answer costs a misdirected
+message; here it deletes a branch, so only the names that *identify* a session resolve —
+its title, its tmux session name, or either of those in any case. `atrium kill fix` does
+not find `fix-auth`. And neither verb will retire the session it is being run from: an
+agent that tears down its own pane cannot report what happened, and a `--wait` dies with
+the pane, so the outcome would reach nobody.
+
+`pause` is deliberately **not** gated, because nothing git tracks is at risk: it stops
+the agent and frees the worktree while keeping the branch, committing whatever was
+uncommitted as a marker Atrium unwinds on resume. That makes it the verb to reach
+for when a kill is refused — an orchestrator whose worker has unpushed work can
+still reclaim it.
+
+It is not free, and the gate's absence is not a claim that it is. Freeing the worktree
+deletes the directory, so files git ignores that lived in it are gone for good — a local
+`.env`, a build cache, a session's installed dependencies — and resume rebuilds the
+worktree without them (only the paths named by `carry_files` and `link_paths` are
+re-seeded, the latter unless the session was created dependency-isolated). This is the same loss
+the TUI's pause dialog warns about, and `atrium pause` prints it too. It does refuse what a park cannot do: an already-paused session,
+a direct session, which runs in your own checkout with no worktree to free, and one
+whose startup is still in flight, where the park would race the setup it is removing.
+
+Neither verb is scoped to sessions the caller created. What makes a teardown
+destructive is the *target's* tree state, not the caller's relation to it — a
+caller's own worker can be sitting on unpushed commits while a stranger's session is
+provably clean — so the gate is on the axis that correlates with harm rather than on
+parentage.
+
+Both are producers on the same terms as `send` and `new`: `state.json` has one
+writer, so retiring a session is spooled to `outbox/retire/` and executed by the
+running Atrium through the same path the kill and pause keys reach. Every check is
+re-run there before the teardown — the tree gate and the lifecycle one both — because
+at least a poll tick passes in between and the target keeps living through it: a
+session that was clean when the command looked can be dirty, parked or restarting by
+the time the teardown runs.
+
+`--wait` blocks on the *outcome* rather than on the dispatch: the queued request is
+answered when the teardown reports back, so a kill the TUI turns down — its branch is
+checked out in your main repo, say — comes back as a non-zero exit carrying that reason
+rather than as a success. Without `--wait` the command is honestly fire-and-forget and
+says so; `atrium ls` is what shows whether the session is gone.
+
+Every spool is drained by the TUI's poll loop, which is **suspended while you
 are attached to a session** — Atrium has handed the terminal to tmux and its
 event loop is parked until you detach. Nothing is lost, and the wait is bounded by
 that one attach rather than by a relaunch: the drain runs on the first poll tick
@@ -302,35 +417,35 @@ deliberately: the warning goes to the pane of the session that ran the command, 
 an agent in session B handing off while you watch session A prints where nobody is
 looking.
 
-None of the four holds Atrium's lock or writes `state.json`, so running them on a
-loop alongside a live Atrium is safe. `ls` and `peek` only read it; `send` and `new`
-add one file each — the request they spool — and then read `tui.lock` and
-`handover.lock` to work out what to warn you about: whether a TUI is there at all,
+None of them holds Atrium's lock or writes `state.json`, so running them on a
+loop alongside a live Atrium is safe. `ls` and `peek` only read it; the producers —
+`send`, `new`, `kill` and `pause` — add one file each, the request they spool, and
+then read `tui.lock` and `handover.lock` to work out what to warn you about: whether a TUI is there at all,
 and whether the one that is has its terminal handed to a session. Both probes ask
 for a *shared* lock, briefly and without blocking, and neither creates the file it
 reads — so a held lock changes the warning rather than the outcome, and two of these
-running at once cannot mistake each other for Atrium. All four append to the shared,
-rotating `atrium.log` in the data directory.
+running at once cannot mistake each other for Atrium. All of them append to the
+shared, rotating `atrium.log` in the data directory.
 
-A queued request is state, so `atrium reset` discards both spools along with
+A queued request is state, so `atrium reset` discards every spool along with
 everything else it wipes. Without that, a create request made before the reset
 would still be there afterwards, and — with no session left for its title to
 collide with — the next Atrium would build it. Each discarded request leaves the
 same rejection receipt any other refusal would, so a `--wait` blocked on one is
 told the reset took it rather than reading the file's disappearance as success.
 
-If a title exists in more than one repo, `peek` and `send` will report the
-ambiguity and list the candidates; `--path <repo>` picks one. (`ls` takes no title
+If a title exists in more than one repo, `peek`, `send`, `kill` and `pause` will
+report the ambiguity and list the candidates; `--path <repo>` picks one. (`ls` takes no title
 at all — it lists every session, so it has nothing to disambiguate. `new` takes
 `--path`, but to choose where the session is created, not to disambiguate.)
 
-All four exit 0 on success and 1 on failure, with the reason on stderr.
+All of them exit 0 on success and 1 on failure, with the reason on stderr.
 
-**`atrium guide`** is the fifth, and the only one written for a reader rather than a
-script: it prints what an agent running *inside* a session can do — the four commands
-above, the rule that Atrium owns the worktree and reclaims it, how to hand off to the
-next session, and which commands belong to the person at the keyboard rather than to
-the agent. It is static text, takes no locks and reads no state.
+**`atrium guide`** is the odd one out, and the only one written for a reader rather
+than a script: it prints what an agent running *inside* a session can do — the
+commands above, the rule that Atrium owns the worktree and reclaims it, how to hand
+off to the next session, and which commands belong to the person at the keyboard
+rather than to the agent. It is static text, takes no locks and reads no state.
 
 It exists because the surface above was undiscoverable to the agents it was built for.
 The `SessionStart` brief Atrium injects into a session (`sessionBriefTemplate`) spends
@@ -340,16 +455,45 @@ compaction, so it is the wrong place to put a manual. Where a fact already has a
 the page names the owner instead of restating it: `atrium new --help` is what answers
 when a queued create actually lands.
 
-That pointer reaches **claude sessions only**, and by more than one gate. `ensureHookSettings`
-injects the settings file solely for an agent whose adapter declares hook support, which claude
-alone does; it also skips injection when the claude binary's `--help` does not advertise
-`--settings`, and the `SessionStart` entry is added only for a session with a worktree and a
-branch — so a *direct* (non-git) session gets no brief either, including the paragraph on this
-page written for it. Any of them can run `atrium guide` perfectly well; they are simply never
-told to. [#773](https://github.com/ZviBaratz/atrium/issues/773) tracks closing the adapter gap.
+That pointer reaches **claude sessions only**, and by more than one gate.
+`ensureHookSettings` injects the settings file solely for an agent whose adapter declares
+hook support, which claude alone does; it also skips injection when the claude it probes
+does not advertise `--settings` in its `--help` — which binary that is follows the same
+rule as the `--plugin-dir` probe below, and a refusal is logged, since no section of
+`atrium doctor` reports this gate. The `SessionStart` entry is added only for a session
+with a worktree and a branch, so a *direct* (non-git) session gets no brief either,
+including the paragraph on this page written for it. Any of them can run `atrium guide`
+perfectly well; they are simply never told to.
+[#773](https://github.com/ZviBaratz/atrium/issues/773) tracks closing the adapter gap.
 
 The page also spells the binary `atrium` throughout, rather than the name it was installed
 under (`install.sh --name`). [#775](https://github.com/ZviBaratz/atrium/issues/775) tracks that.
+
+Choosing *what a follow-up session runs* is a skill rather than a page, because it is
+something to invoke rather than to read: Atrium hands a claude session a plugin of its
+own via `--plugin-dir`, carrying `spawn` — how to pick a new session's model, effort and
+permission mode, whether to continue from this branch, and what a handoff prompt has to
+say. It is reached as `/atrium:spawn`. The plugin is materialized under the data directory,
+never in the worktree (an untracked skill in the agent's own tree is one it could commit)
+and never in the user's claude config directory.
+
+Every gate is fail-open, and there are four. `agent_skills` turns the injection off; the
+program has to resolve to claude; that claude has to advertise `--plugin-dir` in its
+`--help`, so a CLI that does not know the flag is skipped rather than handed one that would
+kill the launch; and every failure under the data directory degrades to "no skill" with the
+session still starting. Which binary the `--help` probe asks is the program's own first
+token when its basename is exactly `claude` — which is what reaches a claude installed at
+an absolute path outside `PATH`, since it answers only under that path, and with a leading
+`~` expanded, since the shell that launches it would — and the canonical name for anything
+else, because a launcher wrapper's side effects must not run on a probe.
+
+One refusal is deliberately *not* predicted: an organization's managed settings can set
+`disableSideloadFlags`, which makes claude reject the flag at startup. That policy is
+resolved from whichever managed tier the organization uses — server-managed settings, an
+MDM plist, a Windows registry key, or `managed-settings.json` — so Atrium reads none of
+them rather than keep a second, staler copy of a rule claude owns. The symptom is a
+session that dies at launch naming the setting, and `atrium doctor`'s **Agent skills**
+section carries the remedy.
 
 <br />
 
@@ -390,7 +534,7 @@ in-app keymap and this section ever drift apart, so it stays complete.
 | `↑/k` `↓/j` | move selection |
 | `u` / `b` | jump to next unread / blocked session |
 | `tab` / `shift-tab` | next / prev pane |
-| `1` / `2` / `3` | jump to preview / diff / terminal |
+| `1` `2` `3` `4` | jump to preview / diff / terminal / inspector |
 | `shift-↑` `shift-↓` | scroll the active pane |
 | `<` / `>` | shrink / grow the session list (or drag the divider) |
 | `\` | cycle layout presets (monitor / default / review / focus) |
@@ -523,36 +667,37 @@ but tmux's own prefix.
 
 | Action | Default | Action | Default |
 |--------|---------|--------|---------|
-| `accounts` | `@` | `mute` | `M` |
-| `approve` | `a` | `new` | `n` |
-| `attach_toggle` | `ctrl-q` | `new_pick_project` | `N` |
-| `auto_name` | `A` | `next_blocked` | `b` |
-| `checkpoints` | `H` | `next_tab` | `tab` |
-| `collapse_all` | `Z` | `next_unread` | `u` |
-| `collapse_group` | `←` | `open` | `↵/o` |
-| `command_log` | `L` | `open_pr` | `w` |
-| `command_palette` | `ctrl-k` | `pause` | `p` |
-| `copy_branch` | `y` | `pause_all` | `ctrl-p` |
-| `copy_content` | `Y` | `prev_tab` | `shift-tab` |
-| `create_pr` | `c` | `push_branch` | `P` |
-| `custom_commands` | `!` | `queue` | `Q` |
-| `diff_comment` | `C` | `quit` | `q` |
-| `down` | `↓/j` | `rename` | `R` |
-| `expand_group` | `→` | `resume` | `r` |
-| `filter` | `/` | `resume_all` | `ctrl-r` |
-| `grow_list` | `>` | `run_command` | `d` |
-| `help` | `?` | `scroll_down` | `shift-↓` |
-| `hints` | `f` | `scroll_up` | `shift-↑` |
-| `kill` | `ctrl-x` | `send` | `s` |
-| `layout_preset` | `\` | `settings` | `,` |
-| `merge_pr` | `m` | `shrink_list` | `<` |
-| `move_account_down` | `]` | `smart_new` | `i` |
-| `move_account_up` | `[` | `tab_diff` | `2` |
+| `accounts` | `@` | `new` | `n` |
+| `approve` | `a` | `new_pick_project` | `N` |
+| `attach_toggle` | `ctrl-q` | `next_blocked` | `b` |
+| `auto_name` | `A` | `next_tab` | `tab` |
+| `checkpoints` | `H` | `next_unread` | `u` |
+| `collapse_all` | `Z` | `open` | `↵/o` |
+| `collapse_group` | `←` | `open_pr` | `w` |
+| `command_log` | `L` | `pause` | `p` |
+| `command_palette` | `ctrl-k` | `pause_all` | `ctrl-p` |
+| `copy_branch` | `y` | `prev_tab` | `shift-tab` |
+| `copy_content` | `Y` | `push_branch` | `P` |
+| `create_pr` | `c` | `queue` | `Q` |
+| `custom_commands` | `!` | `quit` | `q` |
+| `diff_comment` | `C` | `rename` | `R` |
+| `down` | `↓/j` | `resume` | `r` |
+| `expand_group` | `→` | `resume_all` | `ctrl-r` |
+| `filter` | `/` | `run_command` | `d` |
+| `grow_list` | `>` | `scroll_down` | `shift-↓` |
+| `help` | `?` | `scroll_up` | `shift-↑` |
+| `hints` | `f` | `send` | `s` |
+| `kill` | `ctrl-x` | `settings` | `,` |
+| `layout_preset` | `\` | `shrink_list` | `<` |
+| `merge_pr` | `m` | `smart_new` | `i` |
+| `move_account_down` | `]` | `tab_diff` | `2` |
+| `move_account_up` | `[` | `tab_inspector` | `4` |
 | `move_down` | `J` | `tab_preview` | `1` |
 | `move_group_down` | `}` | `tab_terminal` | `3` |
 | `move_group_up` | `{` | `toggle_mark` | `space` |
 | `move_up` | `K` | `undo_kill` | `U` |
 | `multi_select` | `v` | `up` | `↑/k` |
+| `mute` | `M` | | |
 
 
 
@@ -961,6 +1106,12 @@ Carried files are re-seeded from the original checkout whenever the worktree
 is created, including on resume after a pause — edits made to them inside a
 session do not survive a pause/resume cycle.
 
+A repository can also carry entries of its own, in a
+[`.atrium.json` you have trusted](#repo-local-config-and-trust). Its entries are
+added to this list for that repo's sessions and never replace yours, and the
+Settings panel's `Carry files` row says when the repo the selected session belongs
+to is adding to it.
+
 #### Linked paths
 
 Some gitignored paths should not be copied at all. An installed dependency tree
@@ -1143,27 +1294,53 @@ root, so a fresh clone already knows how to install and run itself:
     "setup_script": "npm ci && npm run db:migrate",
     "run_command": "npm run dev -- --port {{.Session.Port}}",
     "port_range": "3000-3099"
-  }]
+  }],
+  "carry_files": [".dev.vars"]
 }
 ```
 
-The entry is the same `repo_scripts` shape as above, minus the routing: the file
-already belongs to exactly one repo, so `remote_matches`/`path_matches` are refused
-in it — and for the same reason the file carries **exactly one** entry. With no
-routing, only the first entry could ever run, so a second one could only differ
-from what the trust prompt showed you; a file declaring more than one is refused
-whole. Once trusted, the entry **wins over** any `config.json` entry that also
-matches the repo: the repo knows its own environment, and your global entry stays
-the fallback.
+Two keys, and they layer over your `config.json` differently because they are
+different shapes.
+
+**`repo_scripts`** is the same shape as above, minus the routing: the file already
+belongs to exactly one repo, so `remote_matches`/`path_matches` are refused in it —
+and for the same reason the file carries **exactly one** entry. With no routing,
+only the first entry could ever run, so a second one could only differ from what
+the trust prompt showed you; a file declaring more than one is refused whole. Once
+trusted, the entry **wins over** any `config.json` entry that also matches the
+repo: the repo knows its own environment, and your global entry stays the fallback.
+
+**[`carry_files`](#carried-files) is ADDED to yours, never substituted for it.**
+This is a set of independent paths, not a single value, so replacement would silently
+drop your own entries — the default `.claude/settings.local.json` carry included —
+in whichever repo declared a list.
+The repo's entries go first, and a path both sides name is seeded once. This is what
+lets the lists stop being a dump: an entry that belongs to one project *moves* out of
+your `config.json` into that project's file, and your global list keeps only what is
+genuinely yours. What overrides a repo's additions is withdrawing its grant, which is
+already per-repo — there is no per-repo section in `config.json` and no environment
+escape hatch.
+
+The list carries at most 64 entries. That bound is on work rather than size: every
+entry that actually exists costs a `git check-ignore` probe inside each worktree of
+that repo, every time one is materialized, and a file past the cap is refused whole
+rather than truncated. Entries are slash-separated on every platform and must stay
+inside the repo: a backslash, an unprintable character, or a path that escapes is
+refused — and the whole file with it, so a granted file never seeds a set the prompt
+did not describe. Duplicate spellings of one path (`node_modules`,
+`./node_modules/`) count once.
 
 **Nothing in this file applies until you trust the repo.** Repo config is
-repo-authored content, and `setup_script` is arbitrary code running as you — so the
-first session you create from a repo whose committed `.atrium.json` declares
-anything usable opens a prompt naming what it declares. Trust is for the file as
-a whole, direnv-style, not per field. Trusting records a
-grant for the file's **exact content**; declining still creates the session, just
-with the repo's config inert. Headless creates (`atrium new`) never prompt: they
-start untrusted and say so, and `atrium trust allow <path>` is the headless grant.
+repo-authored content: `setup_script` is arbitrary code running as you, `session_env`
+reaches the agent's environment (so `NODE_OPTIONS` or `GIT_SSH_COMMAND` is execution
+too, with no script in the file at all), and `carry_files` decides which of *your*
+gitignored files are copied in front of an agent. So the first session you create
+from a repo whose committed `.atrium.json` declares anything usable opens a prompt
+naming what it declares — all of it. Trust is for the file as a whole,
+direnv-style, not per field or per key. Trusting records a grant for the file's
+**exact content**; declining still creates the session, just with the repo's config
+inert. Headless creates (`atrium new`) never prompt: they start untrusted and say so,
+and `atrium trust allow <path>` is the headless grant.
 
 The grant is direnv-shaped, and its edges are deliberate:
 
@@ -1175,6 +1352,17 @@ The grant is direnv-shaped, and its edges are deliberate:
   until you re-allow, and the next create re-prompts. Sessions check the bytes in
   their *own worktree* at the moment of use, so nothing that happens between the
   prompt and the run can smuggle different content past it.
+- **It names one set of powers.** A grant covers what its prompt described, so a
+  grant made before Atrium read `carry_files` does not silently start applying it
+  when you upgrade — even though the bytes are unchanged. Such a repo asks once more,
+  saying that the file is the one you trusted and what it also declares, and
+  re-allowing settles it. The check is made where it counts: a worktree applies the
+  file only if the ledger covers what that file declares, so an unanswered prompt, a
+  declined one, or a resume that never prompts all leave it inert. Note what "inert"
+  means on this path — the file is refused **whole**, as it is for every other
+  refusal here. On a file carrying both a script and `carry_files`, an older grant
+  stops running the script too until you re-allow, rather than narrowing to the part
+  the original prompt did describe.
 - **Only committed content counts — at the ref your session will start from.**
   A worktree checks out the session's *base*: with `update_base_on_create` (the
   default) that is origin's tip whenever it is ahead of your local branch, and
@@ -1186,9 +1374,27 @@ The grant is direnv-shaped, and its edges are deliberate:
 When a session's repo config is withheld — untrusted, changed since its grant, or
 unusable — the session still starts; its row says so, a one-time modal explains and
 names the remedy, and `atrium doctor` reports every grant against the repo's
-current state. `atrium trust status` lists them, `atrium trust revoke [path|--all]`
-withdraws them. Direct (non-git) sessions ignore repo-local config entirely: they
-run in your own checkout, where no worktree materializes anything.
+current state. `atrium trust status` lists them — its `COVERS` column names what
+each grant would actually put into a session — and `atrium trust revoke [path|--all]`
+withdraws them. A repo's entries are confined to the repo even through symlinks: a gitignored
+symlink in your checkout that points elsewhere (a shared package store, a `deps` you
+keep pointing at something convenient) cannot be used by a repo's list to reach out
+of it. Your *own* entries still may — pointing `link_paths` at a shared store
+outside the repo is a supported setup, and trusting a repo does not extend it that
+reach. And where a repo's `carry_files` entry sits inside a path your `link_paths`
+symlinks, your link wins and the carry is refused: carrying it would create a real
+directory there and silently cost you the link.
+
+**`link_paths` is not a repo-layerable key yet.** A repo may commit one and this
+release ignores it, the way it ignores any key it does not read. A linked path is
+your own tree under another name — writable by the agent, shared with every sibling
+session at once — and that write direction needs its own design pass rather than
+riding along with the copy half. A copy has none of it: private to the session, no
+symlink target to resolve.
+
+In the Settings panel, `Carry files` shows what the selected session's repo adds to
+it, so a list that is not the whole story in that repo says so. Direct (non-git) sessions ignore repo-local config entirely: they run
+in your own checkout, where no worktree materializes anything.
 
 #### Managed ports
 
@@ -1796,6 +2002,7 @@ Advanced — shown in the Category column below. A key with no panel row carries
 | `image_preview` | Appearance | string | `"auto"` | how an agent-produced image opens when you uppercase-hint its path: `auto` (real pixels on kitty and Ghostty when Atrium is not inside tmux, block glyphs everywhere else — the default; running kitty *inside* tmux gets glyphs, because tmux does not forward the graphics protocol), `kitty` (attempt pixels even where the terminal isn't recognised — a terminal with the graphics protocol but not Unicode placeholders answers and then draws blanks or boxes, which nothing can detect, so switch to `glyph` if that happens; does **not** yet make tmux work either — the payload is not wrapped in tmux's passthrough envelope), `glyph` (never attempt pixels), `off` (no overlay; hinting an image path just copies it) |
 | `nerd_font` | — | bool | `false` | *deprecated* — superseded by `glyph_set`; still read for back-compat (`true` → `glyph_set: nerd` when `glyph_set` is unset) |
 | `session_context_bar` | Sessions | bool | `true` | thin tmux status line inside attached sessions |
+| `agent_skills` | Sessions | bool | `true` | inject Atrium's own `spawn` skill into claude sessions |
 | `hint_bar` | Appearance | bool | `true` | always-on bottom key-hint bar |
 | `os_chrome` | Appearance | bool | `true` | fleet state in the terminal title + OSC 9;4 taskbar progress |
 | `record_prompt_history` | Input | bool | `true` | remember submitted prompts for reuse in the create form and quick-send |
@@ -1803,7 +2010,7 @@ Advanced — shown in the Category column below. A key with no panel row carries
 | `max_sessions` | Sessions | int | auto (½ CPU threads) | session cap. Unset = host-aware soft cap on *live* sessions: a create or a resume that crosses it warns once, and a startup that would relaunch past it leaves the overflow paused instead (`r` / `ctrl+r` brings them back); `N` = hard cap on *every* session, paused included, refused when creating; `0` = unlimited (no warning) |
 | `agent_oom_margin` | Advanced | int | `on (300)` | Linux only: raise each agent's `oom_score_adj` this far above the shared tmux server's so a kernel OOM kill sheds one recoverable session, not the server (every session). Unset = on (default margin); `N` = margin; `0` = off |
 | `trust_worktrees_root` | Automation | bool | `false` | pre-accept Claude's workspace-trust for the worktrees root |
-| `carry_files` | Worktrees & git | array | `[".claude/settings.local.json"]` | gitignored files copied into each worktree ([Carried files](#carried-files)) |
+| `carry_files` | Worktrees & git | array | `[".claude/settings.local.json"]` | gitignored files copied into each worktree ([Carried files](#carried-files)). A trusted repo's own `.atrium.json` adds to this list for its sessions; your entries are never replaced, and revoking the grant stops the repo's from being seeded into new worktrees ([Repo-local config](#repo-local-config-and-trust)) |
 | `link_paths` | Worktrees & git | array | `[]` | gitignored paths symlinked into each worktree, e.g. `node_modules` ([Linked paths](#linked-paths)) |
 | `repo_scripts` | — | array | `[]` | per-repository setup script, run command, port range and session environment, routed by remote/path ([Setup scripts](#setup-scripts)) |
 | `pr_create_draft` | Worktrees & git | bool | `true` | `c` opens a draft PR |

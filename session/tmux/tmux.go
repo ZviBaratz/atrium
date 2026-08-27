@@ -453,20 +453,27 @@ func (t *Session) resumeCommand() string {
 	return a.Resume(t.program)
 }
 
-// probeTarget returns the binary whose --help is probed for a resume capability. The
-// program's first token is preferred when it *is* the canonical agent binary — possibly at
-// an absolute path outside PATH, where probing the bare name would fail and silently
-// disable resume for the very binary the session runs. Anything whose basename is not
+// probeTarget returns the binary whose --help is probed for a capability. The program's
+// first token is preferred when it *is* the canonical agent binary — possibly at an
+// absolute path outside PATH, where probing the bare name would fail and silently disable
+// the capability for the very binary the session runs. Anything whose basename is not
 // exactly the canonical name (a launcher wrapper, a same-agent alias script) is never
 // probed — a wrapper's side effects must not run on a probe — so the canonical name is
 // probed instead, accepting the PATH-miss degradation for that case.
+//
+// A leading "~" is expanded because the two consumers of this string resolve it
+// differently: tmux hands the launch command to `sh -c`, which expands the tilde, while a
+// probe reaches exec.Command directly, which neither expands it nor falls back to PATH for
+// a name containing a separator. Unexpanded, a hand-written "~/.local/bin/claude" launches
+// fine and probes ENOENT — and because a failed probe caches as empty output, that reads
+// as "this binary has no such flag" and refuses the session silently.
 func probeTarget(program string, key agent.Key) string {
 	bin := program
 	if i := strings.IndexByte(bin, ' '); i >= 0 {
 		bin = bin[:i]
 	}
 	if filepath.Base(bin) == string(key) {
-		return bin
+		return config.ExpandHomePath(bin)
 	}
 	return string(key)
 }
@@ -503,7 +510,19 @@ func (t *Session) start(workDir string, program string) error {
 		// tmux hands the launch command to `sh -c`, and the path embeds the session name,
 		// which can carry shell metacharacters (a title like "Surya's comment"). Unquoted,
 		// the apostrophe killed the window's shell at launch and start timed out.
-		program = program + " --settings " + shellSingleQuote(settingsPath)
+		program = program + " " + settingsFlag + " " + shellSingleQuote(settingsPath)
+	}
+
+	// Hand the agent Atrium's own skills (see spawnskill.go): a plugin loaded for the life
+	// of this process, carrying the `spawn` skill. A no-op for every non-claude agent, when
+	// the setting is off, and when this claude has no --plugin-dir flag. Single-quoted for
+	// the reason the settings path is — tmux hands the launch command to `sh -c` — though
+	// this path holds no session name and so carries no metacharacter of its own. Like the
+	// settings file, a failure here only costs the skill: the launch proceeds without it.
+	if pluginDir, err := ensureAgentPlugin(t.program); err != nil {
+		log.ErrorLog.Printf("agent skills disabled for %s: %v", hookName, err)
+	} else if pluginDir != "" {
+		program = program + " " + pluginDirFlag + " " + shellSingleQuote(pluginDir)
 	}
 
 	// Isolate a routed Antigravity (agy) account's config directory via bwrap. Keyed

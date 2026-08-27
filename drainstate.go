@@ -8,18 +8,18 @@ import (
 
 // Who, if anyone, is draining the outbox spools.
 //
-// `atrium send` and `atrium new` are producers: they spool a file and the TUI's
-// metadata tick drains it. Neither can do anything about a tick that is not running,
-// so this exists only to phrase a message — never to decide whether to spool, which
-// has already happened by the time anything here is asked. Both probes are advisory
-// and inherently racy in the way tuiRunning's doc comment describes.
+// `atrium send`, `atrium new`, `atrium kill` and `atrium pause` are producers: they
+// spool a file and the TUI's metadata tick drains it. None can do anything about a tick
+// that is not running, so this exists only to phrase a message — never to decide whether
+// to spool, which has already happened by the time anything here is asked. Both probes
+// are advisory and inherently racy in the way tuiRunning's doc comment describes.
 //
 // It reads two locks, because one does not answer the question. tui.lock says a TUI
 // process is alive; handover.lock says that TUI has handed its terminal to a child,
 // which blocks the Bubble Tea event loop and with it the tick. A TUI that is alive and
 // parked drains nothing until the user detaches — the case #760 is about, and the case
-// `atrium new` is most often in, since an agent handing off runs inside a session and
-// somebody is usually watching that session.
+// every producer an agent runs is most often in, since an agent runs inside a session
+// and somebody is usually watching that session.
 type drainVerdict int
 
 const (

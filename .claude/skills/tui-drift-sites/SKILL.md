@@ -24,7 +24,7 @@ grep -c '^func Test' app/dispatch_coverage_test.go   # the site-4 guards
 awk '/^type Config struct/,/^}/' config/types.go | grep -cE '`json:'   # Config fields
 ```
 
-The dispatch count is *lines*, and several cases carry two or three names
+The dispatch count is *lines*, and several cases carry more than one name
 (`case keys.KeyMoveUp, keys.KeyMoveDown:`), so it is always below the number of
 actions — that is expected, not a shortfall.
 
@@ -60,7 +60,7 @@ cannot install it. Once per machine:
 
 ## Adding a keybinding — 10 sites, every one guarded
 
-At last count: **63 registry entries** and **52 dispatch-case lines**, with a dozen-odd
+At last count: **64 registry entries** and **52 dispatch-case lines**, with a dozen-odd
 drift guards in `keys/*_test.go` and **4** in `app/dispatch_coverage_test.go`.
 
 Those two numbers, and the `Config` field count below, are checked against the tree by
@@ -163,8 +163,9 @@ explains itself with the wrong one. A new chip-sized reason also belongs in
 `TestPaletteGateReasonsFitTheRow`'s list, which is hand-maintained.
 
 **Site 4 was the gap until #374 closed it.** The count mismatch is why nobody had
-written the obvious assertion: 63 entries against 52 case *lines* is not 11
-missing cases, because several cases carry two or three names at once, 3 entries
+written the obvious assertion: the entry count sitting above the case-line count
+(both stated and guarded at the top of the keybinding section) is not a tally of
+missing cases, because several cases carry more than one name at once, 3 entries
 are `DocOnly`, the screensaver is deliberately absent from the registry, and
 `space` is consumed by the multi-select handler rather than the switch — so
 "every entry has a case" would false-positive on all of them.
@@ -189,9 +190,9 @@ Two cross-layer pins worth knowing exist, because they fail in surprising places
 - `ui/key_prose_test.go` pins keys named in **free prose** (splash text, the
   empty-list hint) to the registry, each with a `site` label naming what to fix.
 
-## Adding a `Config` field — 4 sites, 3 guarded bidirectionally
+## Adding a `Config` field — 5 sites, 3 guarded bidirectionally
 
-53 json-tagged fields on `Config` itself at last count.
+54 json-tagged fields on `Config` itself at last count.
 
 | # | Site | Guarded by |
 |---|---|---|
@@ -199,6 +200,7 @@ Two cross-layer pins worth knowing exist, because they fail in surprising places
 | 2 | `config/config.go` `DefaultConfig()` — the default value | manual |
 | 3 | `README.md` "Configuration reference" — backtick-wrapped row | `TestReadmeDocumentsEveryConfigField` |
 | 4 | `ui/overlay/settings_schema.go` — a `settingRow`, if user-editable | `TestEveryScalarConfigFieldHasARow` **and** `TestEveryRowKeyIsAConfigFieldOrReadOnly` (both directions) |
+| 5 | `ui/overlay/settings_schema_test.go` — the row's category count **and** the total in `TestCategoryRowCounts` | itself, and it fails in a file you were not editing |
 
 Site 4's guard is the model to copy elsewhere: reflection over
 `reflect.TypeOf(config.Config{})` in **both** directions, so a new scalar field
@@ -451,10 +453,17 @@ unbounded list, user-authored text with no natural width.
   every registered `keys` handler before its globals — so it cannot be got wrong per
   state; what `q` or esc *means inside* the surface is the entry's own comment in
   `surfaceSpecs`, and keeping that rationale beside the entry is still on you.
-- `ui/menu_scan_test.go`'s enum-count tripwire (`require.Equal(t, 5, int(StateVisual))`)
+- `ui/menu_scan_test.go`'s enum tripwire (`require.Equal(t, 7, int(menuStateCount))`)
   pins **`ui.MenuState`**, not `app.state` — so an app state does *not* trip it, whatever
-  the neighbouring prose implies. It fires only if the new surface also needs its own
-  hint-bar variant, which a modal overlay does not: those hide the bar entirely.
+  the neighbouring prose implies. The sentinel fires on ANY appended MenuState (that is
+  its whole advantage over the old pin on a named value, which an append never moved);
+  the scan then makes you classify the new state: key hints (add it to the walk, and its
+  table to `keys.ModeHintTables()`) or progress text (StateBusy's exemption). A bar
+  variant that is NOT a MenuState — a render-time bool, the pane-focus bar's shape —
+  trips nothing: it must be added to `keys.ModeHintTables()` by hand, which seeds both
+  drift guards (the ui bar scan and `app/menu_click_test.go`'s click synthesis) and
+  whose arms table then demands a scan arm. That hand-add is the one unguarded step;
+  the scan's header names it.
 
 ## Changing user-visible copy
 

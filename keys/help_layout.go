@@ -50,7 +50,9 @@ func HelpGroups() []HelpGroup {
 			{Keys: []KeyName{KeyUp, KeyDown}, Compact: true, Desc: "move selection"},
 			{Keys: []KeyName{KeyNextUnread, KeyNextNeedsInput}, Desc: "jump to next unread / blocked"},
 			{Keys: []KeyName{KeyTab, KeyShiftTab}, Desc: "next / prev pane"},
-			{Keys: []KeyName{KeyTabPreview, KeyTabDiff, KeyTabTerminal}, Desc: "jump to preview / diff / terminal"},
+			// Compact: "1 / 2 / 3 / 4" is 13 cells, one over the cheatsheet's
+			// key column; the space-joined form fits with room to spare.
+			{Keys: []KeyName{KeyTabPreview, KeyTabDiff, KeyTabTerminal, KeyTabInspector}, Compact: true, Desc: "jump to preview / diff / terminal / inspector"},
 			{Keys: []KeyName{KeyShiftUp, KeyShiftDown}, Compact: true, Desc: "scroll the active pane"},
 			{Keys: []KeyName{KeyShrinkList, KeyGrowList}, Desc: "shrink / grow the session list (or drag the divider)"},
 			{Keys: []KeyName{KeyLayoutPreset}, Desc: "cycle layout presets (monitor / default / review / focus)"},

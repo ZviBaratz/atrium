@@ -38,7 +38,7 @@ func TestGrantThenLoadRoundTrip(t *testing.T) {
 
 	l, err := Load()
 	require.NoError(t, err)
-	assert.True(t, l.Granted("/repo/a", "hash-a"))
+	assert.True(t, l.GrantedFor("/repo/a", "hash-a", GrantScope{}))
 	rec, ok := l.Lookup("/repo/a")
 	require.True(t, ok)
 	assert.Equal(t, "hash-a", rec.Hash)
@@ -46,8 +46,8 @@ func TestGrantThenLoadRoundTrip(t *testing.T) {
 	assert.Equal(t, "git@example.com:a.git", rec.Remote)
 
 	// The grant is for exactly that repo and exactly that content.
-	assert.False(t, l.Granted("/repo/a", "hash-b"))
-	assert.False(t, l.Granted("/repo/b", "hash-a"))
+	assert.False(t, l.GrantedFor("/repo/a", "hash-b", GrantScope{}))
+	assert.False(t, l.GrantedFor("/repo/b", "hash-a", GrantScope{}))
 }
 
 // TestGrantReplacesTheOldHash pins the one-hash-per-repo rule: a repo is trusted for
@@ -60,8 +60,8 @@ func TestGrantReplacesTheOldHash(t *testing.T) {
 
 	l, err := Load()
 	require.NoError(t, err)
-	assert.True(t, l.Granted("/repo/a", "hash-new"))
-	assert.False(t, l.Granted("/repo/a", "hash-old"), "an older grant must not survive a newer one")
+	assert.True(t, l.GrantedFor("/repo/a", "hash-new", GrantScope{}))
+	assert.False(t, l.GrantedFor("/repo/a", "hash-old", GrantScope{}), "an older grant must not survive a newer one")
 }
 
 // TestLoadOfAMissingLedgerIsEmptyAndWritesNothing pins the property that separates
@@ -73,7 +73,7 @@ func TestLoadOfAMissingLedgerIsEmptyAndWritesNothing(t *testing.T) {
 
 	l, err := Load()
 	require.NoError(t, err)
-	assert.False(t, l.Granted("/repo/a", "hash-a"))
+	assert.False(t, l.GrantedFor("/repo/a", "hash-a", GrantScope{}))
 	assert.Empty(t, l.Repos)
 
 	_, statErr := os.Stat(path)
@@ -91,7 +91,7 @@ func TestCorruptLedgerReadsAsZeroGrantsAndIsLeftInPlace(t *testing.T) {
 	l, err := Load()
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrCorrupt))
-	assert.False(t, l.Granted("/repo/a", "anything"))
+	assert.False(t, l.GrantedFor("/repo/a", "anything", GrantScope{}))
 
 	data, readErr := os.ReadFile(path)
 	require.NoError(t, readErr)
@@ -108,7 +108,7 @@ func TestGrantOverACorruptLedgerStartsFresh(t *testing.T) {
 	require.NoError(t, Grant("/repo/a", "hash-a", "", time.Now()))
 	l, err := Load()
 	require.NoError(t, err)
-	assert.True(t, l.Granted("/repo/a", "hash-a"))
+	assert.True(t, l.GrantedFor("/repo/a", "hash-a", GrantScope{}))
 }
 
 // TestFutureVersionLedgerRefusesReadsAndWrites: records a newer atrium wrote cannot be
@@ -125,7 +125,7 @@ func TestFutureVersionLedgerRefusesReadsAndWrites(t *testing.T) {
 	l, loadErr := Load()
 	require.Error(t, loadErr)
 	assert.True(t, errors.Is(loadErr, ErrFutureVersion))
-	assert.False(t, l.Granted("/repo/a", "hash-a"), "a future-version grant must not be honored")
+	assert.False(t, l.GrantedFor("/repo/a", "hash-a", GrantScope{}), "a future-version grant must not be honored")
 
 	assert.Error(t, Grant("/repo/b", "hash-b", "", time.Now()))
 	_, revokeErr := Revoke("/repo/a")
@@ -157,8 +157,8 @@ func TestRevoke(t *testing.T) {
 
 	l, err := Load()
 	require.NoError(t, err)
-	assert.False(t, l.Granted("/repo/a", "hash-a"))
-	assert.True(t, l.Granted("/repo/b", "hash-b"), "revoking one repo must not touch another")
+	assert.False(t, l.GrantedFor("/repo/a", "hash-a", GrantScope{}))
+	assert.True(t, l.GrantedFor("/repo/b", "hash-b", GrantScope{}), "revoking one repo must not touch another")
 }
 
 func TestRevokeAll(t *testing.T) {
@@ -204,9 +204,9 @@ func TestGrantedRefusesEmptyInputs(t *testing.T) {
 	l := Ledger{Repos: map[string]Record{
 		"": {Hash: ""},
 	}}
-	assert.False(t, l.Granted("", ""))
-	assert.False(t, l.Granted("/repo/a", ""))
-	assert.False(t, l.Granted("", "hash-a"))
+	assert.False(t, l.GrantedFor("", "", GrantScope{}))
+	assert.False(t, l.GrantedFor("/repo/a", "", GrantScope{}))
+	assert.False(t, l.GrantedFor("", "hash-a", GrantScope{}))
 }
 
 func TestCanonicalRoot(t *testing.T) {
@@ -249,4 +249,33 @@ func TestHashBytes(t *testing.T) {
 		HashBytes([]byte("test")))
 	// The property enforcement leans on: different bytes, different hash.
 	assert.NotEqual(t, HashBytes([]byte("a")), HashBytes([]byte("b")))
+}
+
+// TestGrantedForRequiresTheSeedScope: the ledger's answer depends on what the
+// caller is about to DO with the file, not only on the bytes. A record written
+// before GrantVersionSeeds matches a hash perfectly and still must not authorize
+// the seed lists.
+//
+// This is the check the enforcement funnel makes. It is asserted here, at the
+// ledger, because that is the layer both the funnel and the prompt share — the
+// defect it replaces was the two of them asking DIFFERENT questions, with only
+// the advisory one version-aware.
+func TestGrantedForRequiresTheSeedScope(t *testing.T) {
+	l := Ledger{Version: currentVersion, Repos: map[string]Record{
+		"/repo/old": {Hash: "h", GrantedAt: time.Now()},                                    // pre-#815
+		"/repo/new": {Hash: "h", GrantedAt: time.Now(), GrantVersion: currentGrantVersion}, // current
+	}}
+
+	// Script-only scope: both records authorize it.
+	assert.True(t, l.GrantedFor("/repo/old", "h", GrantScope{}))
+	assert.True(t, l.GrantedFor("/repo/new", "h", GrantScope{}))
+
+	// Seed scope: only the record whose prompt described them.
+	assert.False(t, l.GrantedFor("/repo/old", "h", GrantScope{Seeds: true}),
+		"a grant made before the seed lists were read cannot authorize them, however well the hash matches")
+	assert.True(t, l.GrantedFor("/repo/new", "h", GrantScope{Seeds: true}))
+
+	// The hash still governs in both scopes.
+	assert.False(t, l.GrantedFor("/repo/new", "other", GrantScope{Seeds: true}))
+	assert.False(t, l.GrantedFor("/repo/new", "other", GrantScope{}))
 }

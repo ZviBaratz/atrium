@@ -269,6 +269,22 @@ type DiffStatsData struct {
 	// never 0, so every save written from here on carries the key.
 	Unpushed *int `json:"unpushed,omitempty"`
 	Dirty    bool `json:"dirty"`
+	// BranchStatsMeasured is a pointer for Unpushed's reason, and it guards a worse
+	// gap than Unpushed does. It separates "measured, and nothing is at risk" from
+	// "the git commands never ran", which is the one thing a zero DiffStats cannot say
+	// for itself — git.RepoStats swallows a subprocess failure into a zero value. The
+	// retire gate refuses a session it cannot establish, so leaving this out of the
+	// serialized shape made every rehydrated instance read as unmeasured: a kill an
+	// agent spooled while no TUI was up was refused by the next TUI's first tick, with
+	// a receipt saying its tree state could not be established.
+	//
+	// A state.json predating this field omits it, and nil resolves to false — not
+	// measured — which is the conservative direction: it withholds a teardown rather
+	// than clearing one on numbers nobody took. Active sessions self-correct on the
+	// next poll, and a paused one is refused by retire.Admits before any of this is
+	// read. omitempty drops only nil, never false, so every save written from here on
+	// carries the key.
+	BranchStatsMeasured *bool `json:"branch_stats_measured,omitempty"`
 }
 
 // Storage handles saving and loading instances using the state interface

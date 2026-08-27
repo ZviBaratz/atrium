@@ -72,6 +72,7 @@ func TestGlobalKeyStringsMap_GoldenInventory(t *testing.T) {
 		"1":          KeyTabPreview,
 		"2":          KeyTabDiff,
 		"3":          KeyTabTerminal,
+		"4":          KeyTabInspector,
 		",":          KeySettings,
 		"@":          KeyAccounts,
 		"ctrl+k":     KeyCommandPalette,
@@ -257,8 +258,8 @@ func TestActionVocabulary_Golden(t *testing.T) {
 		"next_tab", "next_unread", "open", "open_pr", "pause", "pause_all",
 		"prev_tab", "push_branch", "queue", "quit", "rename", "resume",
 		"resume_all", "run_command", "scroll_down", "scroll_up", "send",
-		"settings", "shrink_list", "smart_new", "tab_diff", "tab_preview",
-		"tab_terminal", "toggle_mark", "undo_kill", "up",
+		"settings", "shrink_list", "smart_new", "tab_diff", "tab_inspector",
+		"tab_preview", "tab_terminal", "toggle_mark", "undo_kill", "up",
 	}
 	var got []string
 	for _, e := range Registry {

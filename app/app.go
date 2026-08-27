@@ -404,6 +404,16 @@ type home struct {
 	// when it lifts rather than twice a second for as long as it lasts. State about
 	// the log line only — the hold itself is decided fresh each tick by probing.
 	createTmuxHeld bool
+	// retireTmuxHeld is createTmuxHeld for the retire drain (#835), which holds a
+	// teardown for the same reason and needs its own flag so the two holds log
+	// independently. State about the log line only.
+	retireTmuxHeld bool
+	// pendingRetirement is the spooled retirement currently between its dispatch and its
+	// outcome, or nil. In-memory only: a claim that does not survive the process is the
+	// right shape, because a restart re-reads the record and re-judges it, which is what
+	// a retirement whose fate nobody witnessed should get. See the type's own comment for
+	// why the record cannot be answered at dispatch.
+	pendingRetirement *pendingRetirement
 	// createAdoptHeld is createTmuxHeld's sibling for the other condition that holds a
 	// request instead of refusing it: a repo git could not be read, so the pin that
 	// licenses an adoption cannot be re-checked (see recheckAdoption). State about the log
@@ -613,6 +623,15 @@ type home struct {
 	// draggingDivider is true while the user holds the list/preview seam and drags
 	// it; motion events then map the cursor column to the split (see handleMouse).
 	draggingDivider bool
+
+	// focus is the EXPLICIT keyboard-focus target for the stateDefault frame;
+	// read through currentFocus (focus.go), which also derives focusTabs from
+	// the active pane's scroll mode. Zero value focusList, so assembleHome
+	// needs no seeding; the esc ladder's pop rung is the one reset — a future
+	// writer that points this at a pane owns clearing it when that pane goes
+	// away. Not to be confused with the focused field (terminal-window focus)
+	// or the "focus" layout preset (layoutIndex, app_presets.go).
+	focus focusTarget
 
 	// composingDiffComment is true while the diff-comment composer overlay is up
 	// (#383): it routes handlePromptState to the diff-comment submit/cancel and
@@ -912,6 +931,10 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 	// (every session). Off Linux / when disabled this resolves to a harmless no-op.
 	tmux.SetAgentOOMMargin(appConfig.GetAgentOOMMargin())
 
+	// Resolve the agent-skills switch on the same terms: every launch reads the current
+	// value, so a session relaunched after a Settings change picks it up.
+	tmux.SetAgentSkills(appConfig.GetAgentSkills())
+
 	// Pre-accept Claude's workspace trust for the worktrees root before any
 	// session starts (opt-in; best-effort — on failure the trust dialog simply
 	// appears per worktree, as it would without the feature). Done once here on
@@ -1124,6 +1147,16 @@ func (m *home) viewContent() string {
 	// read the same menuVisible bit — computeBudget charges the menu row off it —
 	// so the row the menu occupies here is exactly the row the layout reserved.
 	if m.menuVisible() {
+		// Pushed at render time so the bar always shows the same frame's
+		// derived focus: scroll mode can exit inside a pane (wheel at the
+		// bottom, snapshot owner change), and no imperative writer could
+		// cover those paths without staling. Gated on scroll capture, not on
+		// focusTabs alone, so the bar only swaps when its esc copy is true —
+		// under explicit focus with a live pane, esc pops focus rather than
+		// exiting scroll, and that bar variant is #806's to design
+		// (focusInspector likewise pushes nothing: routeFocusKey routes
+		// nothing for the scroll-less inspector skeleton).
+		m.menu.SetPaneFocus(m.currentFocus() == focusTabs && m.tabbedWindow.ActivePaneInScrollMode())
 		k.menu, k.hasMenu = m.menu.String(), true
 	}
 	if m.errBox.HasContent() {

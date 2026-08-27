@@ -109,17 +109,34 @@ type envEntry struct {
 // the configured list, so a user with several entries can find it even when none of
 // them is named.
 type Problem struct {
-	Index int
-	Name  string
-	Msg   string
+	// Section is the config key the entry sits under. The zero value means
+	// repo_scripts, which is every Problem the global config produces — a default
+	// rather than a required field so the existing construction sites keep
+	// naming the section they always named.
+	Section string
+	Index   int
+	Name    string
+	Msg     string
+}
+
+// where names the entry the problem is about: `<section>[N]`, plus the entry's own
+// name when it has one. Split out from Error because the repo-local parser reports
+// some refusals as a whole-file error rather than a Problem and must still say
+// which entry it choked on, in one spelling.
+func (p Problem) where() string {
+	section := p.Section
+	if section == "" {
+		section = "repo_scripts"
+	}
+	if p.Name == "" {
+		return fmt.Sprintf("%s[%d]", section, p.Index)
+	}
+	return fmt.Sprintf("%s[%d] (%q)", section, p.Index, p.Name)
 }
 
 // Error renders the problem as the user sees it.
 func (p Problem) Error() string {
-	if p.Name == "" {
-		return fmt.Sprintf("repo_scripts[%d]: %s", p.Index, p.Msg)
-	}
-	return fmt.Sprintf("repo_scripts[%d] (%q): %s", p.Index, p.Name, p.Msg)
+	return fmt.Sprintf("%s: %s", p.where(), p.Msg)
 }
 
 // Validate turns configured entries into renderable scripts, reporting the ones it

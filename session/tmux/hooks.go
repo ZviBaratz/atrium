@@ -86,41 +86,28 @@ func hookSessionDir(sanitizedName string) (string, error) {
 	return filepath.Join(root, sanitizedName), nil
 }
 
-var (
-	settingsFlagOnce      sync.Once
-	settingsFlagSupported bool
-	// settingsFlagOverride forces the probe result in tests (nil = probe normally).
-	settingsFlagOverride *bool
-)
+// settingsFlag is the claude flag the hook settings are handed on, and the needle its
+// capability probe looks for in --help, so the two cannot drift.
+const settingsFlag = "--settings"
 
-// claudeSupportsSettingsFlag reports whether the claude binary accepts --settings. It is
-// probed once per process via `claude --help` and cached; a negative or failed probe
-// disables hook injection entirely so a launch can never fail because of this feature.
+// claudeSettingsProbe reports whether the claude the session will run accepts --settings,
+// probed once per binary per process through the shared help-probe cache, and returns the
+// binary that answered. A negative or failed probe disables hook injection entirely, so a
+// launch can never fail because of this feature — which is exactly why the caller reports
+// the refusal against the name returned here rather than against the configured program:
+// the two differ in the wrapper case, and a message naming the wrong one sends someone to
+// check the flags of a binary that was never asked.
 //
-// The probe always runs the literal `claude` binary (which the agent ultimately exec's,
-// directly or via a wrapper), never the configured program. Probing a launcher wrapper
-// would run its side effects (trust writes, config copies into the cwd) on every process.
-func claudeSupportsSettingsFlag() bool {
-	if settingsFlagOverride != nil {
-		return *settingsFlagOverride
-	}
-	settingsFlagOnce.Do(func() {
-		claudeBin := string(agent.KeyClaude)
-		// One-shot, process-cached probe with no ctx-bearing caller; Background
-		// capped at probeTimeout is deliberate.
-		ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
-		defer cancel()
-		out, err := exec.CommandContext(ctx, claudeBin, "--help").CombinedOutput()
-		if err != nil {
-			log.InfoLog.Printf("status hooks disabled: probing %q --help failed: %v", claudeBin, err)
-			return
-		}
-		settingsFlagSupported = strings.Contains(string(out), "--settings")
-		if !settingsFlagSupported {
-			log.InfoLog.Printf("status hooks disabled: %q has no --settings flag", claudeBin)
-		}
-	})
-	return settingsFlagSupported
+// probeTarget picks WHAT is probed, and it takes the session's own program for the reason
+// the plugin gate does: a claude installed at an absolute path outside PATH answers `--help`
+// under its own name and not under `claude`, so probing the bare name reports "no such flag"
+// for the very binary the session runs — and then every session in the process silently
+// loses its status hooks, its SessionStart brief, and accurate status classification with
+// them. A wrapper, whose side effects must not run on a probe, still falls back to the
+// canonical name.
+func claudeSettingsProbe(program string) (bin string, supported bool) {
+	bin = probeTarget(program, agent.KeyClaude)
+	return bin, binHelpContains(bin, settingsFlag)
 }
 
 var (
@@ -131,12 +118,18 @@ var (
 )
 
 // binHelpContains reports whether bin's --help output contains needle. Used as a
-// capability gate before applying a version-sensitive flag (e.g. gemini --resume). Like
-// claudeSupportsSettingsFlag, it probes the literal canonical binary — never the
-// configured program, whose wrapper side effects must not run on a probe — and caches the
-// output per process so resurrecting many sessions costs one subprocess per binary. A
-// failed probe caches as empty output: the capability reads as absent and the caller
-// degrades (relaunch without resume) rather than failing the launch.
+// capability gate before applying a version-sensitive flag (e.g. gemini --resume). It
+// caches the output per process, so resurrecting many sessions costs one subprocess per
+// binary. A failed probe caches as empty output: the capability reads as absent and the
+// caller degrades (relaunch without resume) rather than failing the launch.
+//
+// WHICH binary is the caller's decision, not this function's, and every claude gate here
+// routes it through probeTarget: the configured program's own first token where its basename
+// is exactly the canonical name, because a binary installed outside PATH answers `--help`
+// only under its own path — and the canonical name for anything else, which is the wrapper
+// case, whose side effects must not run on a probe. Read probeTarget before adding a caller:
+// the empty-output cache means a probe of the wrong binary is indistinguishable from a flag
+// that does not exist, so choosing the wrong target refuses a session silently.
 //
 // The lock covers only the map accesses, never the subprocess — a slow --help (the
 // probe allows up to probeTimeout) must not block concurrent resurrections of other
@@ -293,7 +286,25 @@ func buildHookSettings(binPath, stateFile string, brief SessionBrief) ([]byte, e
 // recover-in-place all route through start(), and a rename between two of them must not leave
 // the second describing the first.
 func ensureHookSettings(sanitizedName, program string, brief SessionBrief) (string, error) {
-	if !agent.Resolve(program).HookSupport || !claudeSupportsSettingsFlag() {
+	if !agent.Resolve(program).HookSupport {
+		return "", nil
+	}
+	// Say so, and name the binary that answered. This is a claude that was asked and
+	// refused, which is the one outcome here nothing else records: an unresolvable
+	// executable below logs, a probe that could not be exec'd logs inside binHelpContains,
+	// an IO failure is logged by the caller — and unlike the --plugin-dir gate beside it,
+	// this gate has no `atrium doctor` section to be read out of afterwards. Silent, it
+	// costs the session its status hooks, its brief and accurate classification with them
+	// for a reason stated nowhere. The gate above is not a refusal and stays silent: a
+	// program with no hook support is this feature not applying, and a line per aider
+	// launch would bury this one.
+	//
+	// Hedged for the reason doctor's plugin-dir wording is: a failed probe caches as empty
+	// output, so "no such flag" and "no such binary" arrive here as one answer, and naming
+	// only the first sends someone to upgrade a claude that was already current.
+	if bin, ok := claudeSettingsProbe(program); !ok {
+		log.InfoLog.Printf("status hooks disabled for %s: %q --help does not advertise %s "+
+			"(an older CLI, or a binary the probe could not run)", sanitizedName, bin, settingsFlag)
 		return "", nil
 	}
 	// The hooks re-invoke this very binary. If its path can't be resolved, skip injection

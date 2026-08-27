@@ -11,8 +11,13 @@ import (
 
 // RepoTrustEntry is one recorded grant held up against the repo as it is now.
 type RepoTrustEntry struct {
-	Key     string
-	State   string
+	Key   string
+	State string
+	// Covers is what a session created now would take from the granted file, in
+	// repocfg.RepoLocalSurfaces' words. Empty for every state but "current"
+	// (repotrust.LiveState's contract), which is why it renders on its own
+	// continuation line rather than as a column: most rows would leave it blank.
+	Covers  string
 	Granted string
 	Hash    string
 }
@@ -43,9 +48,11 @@ func CheckRepoTrust(ctx context.Context, updateBase bool) ([]RepoTrustEntry, err
 		if len(hash) > 12 {
 			hash = hash[:12]
 		}
+		state, covers := repotrust.LiveState(ctx, key, rec, updateBase)
 		entries = append(entries, RepoTrustEntry{
 			Key:     key,
-			State:   repotrust.LiveState(ctx, key, rec, updateBase),
+			State:   state,
+			Covers:  covers,
 			Granted: rec.GrantedAt.Format("2006-01-02"),
 			Hash:    hash,
 		})
@@ -71,6 +78,9 @@ func RenderRepoTrust(entries []RepoTrustEntry, ledgerErr error) string {
 	// alignment for naming the ref.
 	for _, e := range entries {
 		fmt.Fprintf(&b, "  %-12s %-25s granted %s  %s\n", e.Hash, e.State, e.Granted, e.Key)
+		if e.Covers != "" {
+			fmt.Fprintf(&b, "  %-12s covers: %s\n", "", e.Covers)
+		}
 	}
 	return b.String()
 }

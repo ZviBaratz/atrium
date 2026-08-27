@@ -6,7 +6,6 @@ import (
 	"github.com/ZviBaratz/atrium/internal/testutil"
 	"github.com/ZviBaratz/atrium/keys"
 
-	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	zone "github.com/lrstanley/bubblezone/v2"
 	"github.com/stretchr/testify/require"
@@ -150,14 +149,12 @@ func TestEveryBarKeyIsSynthesizable(t *testing.T) {
 	for k := range keys.GlobalKeyStringsMap {
 		check(k)
 	}
-	// The mode bars (filter / hints / multi-select / diff-comment) render from
-	// their own tables and never enter the dispatch map, so the loop above
-	// cannot see them. Entries carrying no key are label-only ranges like
-	// "a–z" that map to no single action and stay inert by design.
-	for _, table := range [][]key.Binding{
-		keys.FilterModeHints(), keys.HintModeHints(),
-		keys.VisualModeHints(), keys.DiffCommentModeHints(),
-	} {
+	// The mode bars and the pane-focus variant render from their own tables
+	// and never enter the dispatch map, so the loop above cannot see them.
+	// Sourced from keys.ModeHintTables so a new table is swept without this
+	// list knowing about it. Entries carrying no key are label-only ranges
+	// like "a–z" that map to no single action and stay inert by design.
+	for _, table := range keys.ModeHintTables() {
 		for _, b := range table {
 			for _, k := range b.Keys() {
 				check(k)

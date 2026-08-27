@@ -5,10 +5,12 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/repocfg"
 	"github.com/mattn/go-runewidth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -145,18 +147,56 @@ func TestSummaryFitsOneLine(t *testing.T) {
 }
 
 // TestEveryRowHasAKnownCategoryAndScope pins that no row carries a category outside
-// allCategories() (which would render under no section header at all) and that the
-// scope seam is uniform. The scope assertion is also what keeps the `unused` linter
-// from flagging a field PR A stores but does not yet render.
+// allCategories() (which would render under no section header at all), nor a scope
+// outside allScopes() — a scope with no label projection, which since #815 the
+// renderer reads.
 func TestEveryRowHasAKnownCategoryAndScope(t *testing.T) {
 	known := map[settingCategory]bool{}
 	for _, c := range allCategories() {
 		known[c] = true
 	}
+	knownScope := map[settingScope]bool{}
+	for _, sc := range allScopes() {
+		knownScope[sc] = true
+	}
 	for _, r := range newSettingRows(config.DefaultConfig()) {
 		assert.Truef(t, known[r.category], "row %q has a category outside allCategories()", r.key)
-		assert.Equalf(t, scopeGlobal, r.scope, "row %q must be scopeGlobal until #477 adds a layer", r.key)
+		assert.Truef(t, knownScope[r.scope], "row %q has a scope outside allScopes()", r.key)
 	}
+}
+
+// TestEveryScopeHasALabel is allScopes()'s completeness sweep, the discipline
+// TestEveryCategoryHasALabel carries for categories: a member added without a label
+// falls through to scopeGlobal's wording and silently describes itself as global.
+func TestEveryScopeHasALabel(t *testing.T) {
+	scopes := allScopes()
+	require.Len(t, scopes, 2, "update this test (and the label switch) when a scope is added")
+	seen := map[string]bool{}
+	for _, sc := range scopes {
+		label := sc.label()
+		require.NotEmptyf(t, label, "scope %d has no label", int(sc))
+		assert.Falsef(t, seen[label], "two scopes share the label %q", label)
+		seen[label] = true
+	}
+}
+
+// TestRepoLayeredRowsMatchTheRepoLocalSchema is the bridge #815 needs in both
+// directions: a key .atrium.json can layer over must have a row that SAYS so (or the
+// panel shows a value that is not the effective one and never admits it), and a row
+// claiming to be layered must be a key the file can actually carry (or it advertises
+// provenance that can never arrive). repocfg holds the other end of this to its own
+// wire struct by reflection, so the chain runs from the file's schema to this panel.
+func TestRepoLayeredRowsMatchTheRepoLocalSchema(t *testing.T) {
+	var layered []string
+	for _, r := range newSettingRows(config.DefaultConfig()) {
+		if r.scope == scopeRepoLayered {
+			layered = append(layered, r.key)
+		}
+	}
+	sort.Strings(layered)
+	want := repocfg.RepoLocalLayerKeys()
+	sort.Strings(want)
+	assert.Equal(t, want, layered)
 }
 
 // glossExemptDynamic are the enum rows exempt from the gloss guard because their
@@ -249,7 +289,7 @@ func TestEnumRowsGlossEveryOption(t *testing.T) {
 // includes the read-only config-file row.
 func TestCategoryRowCounts(t *testing.T) {
 	want := map[settingCategory]int{
-		catSessions:      4,
+		catSessions:      5,
 		catWorktrees:     6,
 		catAppearance:    6,
 		catSessionList:   9,
@@ -266,7 +306,7 @@ func TestCategoryRowCounts(t *testing.T) {
 		got[r.category]++
 		total++
 	}
-	assert.Equal(t, 45, total, "44 config rows plus the read-only config-file row")
+	assert.Equal(t, 46, total, "45 config rows plus the read-only config-file row")
 	for _, c := range allCategories() {
 		assert.Equalf(t, want[c], got[c], "category %q row count", c.label())
 	}

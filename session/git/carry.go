@@ -2,12 +2,12 @@ package git
 
 import (
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/log"
+	"github.com/ZviBaratz/atrium/repocfg"
 )
 
 // seedLocalPaths materializes the configured gitignored paths from the origin
@@ -62,23 +62,189 @@ import (
 // a property of the SESSION, chosen once when the session was created, so freezing it
 // is the correct behaviour and a later settings edit must not reach it. That is why it
 // rides the Worktree (pushed in by the Instance) while the lists are read here.
+//
+// The repository's own trusted .atrium.json layers over carry_files (#815), through
+// the repoLocalSeeds resolver the Instance installed. The resolver's link half is
+// part of the seam but production supplies nothing for it — link_paths is not a
+// repo-layerable key yet, see repocfg.RepoLocalLayerKeys — so today only the carry
+// union has a repo side. Repo entries come FIRST and the union is deduplicated on
+// the canonical spelling, which matters only where the two sides name the same path:
+// the never-clobber guards below make the first entry to materialize the one that
+// wins, so ordering is how "the repo knows its own layout" is expressed. Union
+// rather than replacement is the recorded #815 decision — these values are sets of
+// independent paths, so a repo naming the local-config files its developers already
+// name must not silently drop the user's personal carry (the default
+// .claude/settings.local.json) in that one repo. What overrides a repo's additions
+// is revoking its trust grant.
 func (g *Worktree) seedLocalPaths() {
 	cfg := config.LoadConfig()
-	for _, rel := range cfg.GetCarryFiles() {
-		g.carryLocalFile(rel)
+	repoCarry, repoLink := g.resolveRepoLocalSeeds()
+
+	carries := unionSeedEntries(repoCarry, cfg.GetCarryFiles(), "carry_files")
+	links := unionSeedEntries(repoLink, cfg.GetLinkPaths(), "link_paths")
+	if !g.isolateDeps {
+		carries = dropCarriesUnderLinks(carries, links)
 	}
+	for _, e := range carries {
+		g.carryLocalFile(e)
+	}
+
 	if g.isolateDeps {
-		if paths := cfg.GetLinkPaths(); len(paths) > 0 {
-			log.InfoLog.Printf("link_paths: session is dependency-isolated, so %v are not linked — this worktree starts without them and whatever installs into it stays private to it", paths)
-			for _, rel := range paths {
-				g.warnIsolatedPathNotIgnored(rel)
+		if len(links) > 0 {
+			log.InfoLog.Printf("link_paths: session is dependency-isolated, so %v are not linked — this worktree starts without them and whatever installs into it stays private to it", seedEntryPaths(links))
+			for _, e := range links {
+				g.warnIsolatedPathNotIgnored(e.kind, e.rel)
 			}
 		}
 		return
 	}
-	for _, rel := range cfg.GetLinkPaths() {
-		g.linkLocalPath(rel)
+	for _, e := range links {
+		g.linkLocalPath(e)
 	}
+}
+
+// seedEntry is one entry to seed plus the config key to blame in a warning about
+// it. kind carries the entry's PROVENANCE, not just its key name, which is #477's
+// third complaint answered: a refusal caused by a project's own committed entry
+// used to read as a problem with the global list the user maintains by hand.
+//
+// repo says the same thing in a form code can branch on, and one guard does: a
+// repo-authored entry is confined to the repo through resolved symlinks
+// (seedSourceEscapes), where the user's own entry is deliberately allowed to point
+// at a shared store outside it. The string is for humans, this is for the gate —
+// deriving the gate from the string would make a copy-edit a security change.
+type seedEntry struct {
+	kind string
+	rel  string
+	repo bool
+}
+
+// unionSeedEntries lays the repo's entries ahead of the user's and drops the
+// duplicates, comparing canonical spellings so "node_modules/" and
+// "./node_modules" are recognized as one path rather than seeded twice (the second
+// attempt would warn about clobbering the first).
+//
+// An entry the canonical rule refuses is kept, keyed by its raw text: it must reach
+// its own leaf function to be warned about there, in the one place that names why.
+// Only the repo side can be pre-canonicalized — repocfg did it at parse time — so
+// this is the global list's first canonicalization. It feeds the dedupe key AND the
+// user-set below, which decides provenance and so decides whether seedSourceEscapes
+// judges an entry at all — it is not inert, and a reader who trusts an older
+// "dedupe key alone" here would take a security-bearing value for a scratch one.
+// The raw spelling is what travels, so every warning quotes what the user actually
+// wrote.
+func unionSeedEntries(repo, global []string, key string) []seedEntry {
+	out := make([]seedEntry, 0, len(repo)+len(global))
+	seen := make(map[string]bool, len(repo)+len(global))
+	canon := func(rel string) string {
+		if c, err := repocfg.CanonicalSeedPath(rel); err == nil {
+			return c
+		}
+		return rel
+	}
+	// The user's own set, by canonical spelling. A path the user ALSO declares is
+	// not repo-authored for the purpose of the containment guard, however the dedupe
+	// orders it: the user asked for that path independently, so the repo is not the
+	// reason it is being seeded. Without this, a repo naming a path the user already
+	// names — the likely overlap, since a repo names the same local-config paths its
+	// developers do — silently transferred repo provenance onto the user's entry, and
+	// seedSourceEscapes then refused the user's own documented setup and blamed the
+	// repo for it.
+	userSet := make(map[string]bool, len(global))
+	for _, rel := range global {
+		userSet[canon(rel)] = true
+	}
+	add := func(rel, kind string, fromRepo bool) {
+		dedupe := canon(rel)
+		if seen[dedupe] {
+			return
+		}
+		seen[dedupe] = true
+		out = append(out, seedEntry{kind: kind, rel: rel, repo: fromRepo && !userSet[dedupe]})
+	}
+	for _, rel := range repo {
+		add(rel, key+" ("+repocfg.RepoLocalFileName+")", true)
+	}
+	for _, rel := range global {
+		add(rel, key, false)
+	}
+	return out
+}
+
+// dropCarriesUnderLinks removes any carry entry that lands INSIDE a path the link
+// list will symlink, and says so. Ordering alone cannot resolve this collision, in
+// either direction: carrying first has os.MkdirAll create a real directory at the
+// link's path, so linkLocalPath's never-clobber guard finds something there and
+// skips the link with only a log line — a repo's `carry_files: ["node_modules/.x"]`
+// silently costs the user their whole linked node_modules, in every session in that
+// repo, which is exactly the suppression union semantics exist to prevent ("your
+// entries are never replaced", in the README and on the carry_files settings row —
+// the link_paths row lost that sentence when the key stopped being repo-layerable).
+// Linking first
+// is worse: the carry would then write THROUGH the symlink into the user's own
+// checkout.
+//
+// So the link wins and the carry is refused. That is the conservative side — the
+// file is reachable through the link anyway, where a lost dependency tree has to be
+// reinstalled — and it is the side that keeps the never-replaced promise, since a
+// link entry is the larger artifact and the likelier one to be the user's.
+//
+// Not applied to a dependency-isolated session: no link is created there, so
+// nothing collides and the carry is the only way that file arrives.
+func dropCarriesUnderLinks(carries, links []seedEntry) []seedEntry {
+	if len(links) == 0 {
+		return carries
+	}
+	linkCanon := make([]string, 0, len(links))
+	for _, l := range links {
+		if canon, err := repocfg.CanonicalSeedPath(l.rel); err == nil {
+			linkCanon = append(linkCanon, canon)
+		}
+	}
+	out := make([]seedEntry, 0, len(carries))
+	for _, c := range carries {
+		canon, err := repocfg.CanonicalSeedPath(c.rel)
+		if err != nil {
+			out = append(out, c) // unusable: let its own leaf function say why
+			continue
+		}
+		under := ""
+		for _, l := range linkCanon {
+			if canon == l || strings.HasPrefix(canon, l+"/") {
+				under = l
+				break
+			}
+		}
+		if under == "" {
+			out = append(out, c)
+			continue
+		}
+		log.WarningLog.Printf("%s: skipping %q: it is inside %q, which link_paths symlinks — carrying it would create a real directory there and silently cost you the link. It is already reachable through the link", c.kind, c.rel, under)
+	}
+	return out
+}
+
+// seedEntryPaths is the entries' raw spellings, for a log line about the set.
+func seedEntryPaths(entries []seedEntry) []string {
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, e.rel)
+	}
+	return out
+}
+
+// resolveRepoLocalSeeds asks the installed resolver what this repository's own
+// trusted .atrium.json adds. It is the one call, made after checkout and before
+// any seeding, so the bytes judged are the bytes this worktree holds.
+//
+// Best-effort like everything else here: no resolver (a test literal, a session
+// created before the field existed) means no repo-local layer, which is the
+// pre-#815 behavior exactly.
+func (g *Worktree) resolveRepoLocalSeeds() (carry, link []string) {
+	if g.repoLocalSeeds == nil {
+		return nil, nil
+	}
+	return g.repoLocalSeeds(g.worktreePath)
 }
 
 // warnIsolatedPathNotIgnored is the isolated session's half of the worktree-side ignore
@@ -101,13 +267,13 @@ func (g *Worktree) seedLocalPaths() {
 // Warn-only, like everything else here: the session is materially fine — its tree really
 // is private, which is what was asked for — and the never-error contract above forbids
 // turning this into a Setup failure regardless.
-func (g *Worktree) warnIsolatedPathNotIgnored(rel string) {
-	canon, _, _, ok := g.resolveSeedPaths("link_paths", rel)
+func (g *Worktree) warnIsolatedPathNotIgnored(kind, rel string) {
+	canon, _, _, ok := g.resolveSeedPaths(kind, rel)
 	if !ok {
 		return // resolveSeedPaths already warned
 	}
 	if _, err := g.runGitCommand(g.worktreePath, "check-ignore", "-q", "--", canon+"/"); err != nil {
-		log.WarningLog.Printf("link_paths: %q is not ignored in this dependency-isolated session's worktree, and it is about to be filled by a real install: whatever lands there would be committed on pause. The rule must reach the worktree — committed on this session's base, or in .git/info/exclude", rel)
+		log.WarningLog.Printf("%s: %q is not ignored in this dependency-isolated session's worktree, and it is about to be filled by a real install: whatever lands there would be committed on pause. The rule must reach the worktree — committed on this session's base, or in .git/info/exclude", kind, rel)
 	}
 }
 
@@ -125,30 +291,78 @@ func (g *Worktree) warnIsolatedPathNotIgnored(rel string) {
 // and, being a file to git, is not matched by it. The ignore guard would report
 // "ignored" and the link would still leak into pause's `git add .`.
 func (g *Worktree) resolveSeedPaths(kind, rel string) (canon, src, dst string, ok bool) {
-	// path.Clean, not filepath.Clean: git pathspecs are always slash-separated,
-	// including on Windows, and ToSlash first folds an entry a Windows user spelled
-	// with backslashes into that same form.
-	canon = path.Clean(filepath.ToSlash(rel))
-	if rel == "" || !filepath.IsLocal(canon) {
-		log.WarningLog.Printf("%s: skipping %q: entries must be repo-relative paths inside the repo", kind, rel)
+	// The lexical rule itself lives in repocfg, which applies it to a repo-local
+	// list at parse time — before any grant, so it may touch neither the filesystem
+	// nor the template engine. One definition because a divergence would let a
+	// repo-local entry be granted here and refused there, or the reverse.
+	canon, err := repocfg.CanonicalSeedPath(rel)
+	if err != nil {
+		log.WarningLog.Printf("%s: skipping %q: %v — entries must be repo-relative paths inside the repo", kind, rel, err)
 		return "", "", "", false
 	}
 
 	src = filepath.Join(g.repoPath, canon)
 	dst = filepath.Join(g.worktreePath, canon)
-	// IsLocal above already rejects escapes; verify the joined results stayed
-	// inside their roots anyway (also marks the paths clean for taint analysis).
-	// This is also what refuses an entry naming the repo root: IsLocal accepts ".",
-	// but Join collapses it to the root itself, which is not strictly inside.
-	// Both checks are lexical: a symlinked path component could still point
-	// elsewhere, but the repo, the worktree, and the seed lists are all the
-	// user's own content — no trust boundary is crossed.
+	// CanonicalSeedPath already rejects escapes and the repo root; verify the joined
+	// results stayed inside their roots anyway (also marks the paths clean for taint
+	// analysis).
+	//
+	// A seed list is no longer necessarily the user's own content: since #815 a
+	// repository's own trusted .atrium.json contributes entries, so the lexical rule
+	// above is what confines a repo-authored entry to the repo, and this is its
+	// second opinion. Both checks here are purely LEXICAL, and that is not
+	// sufficient on its own for a repo-authored entry: a symlinked path component
+	// inside the origin checkout can point anywhere, and neither check follows one.
+	// seedSourceEscapes is the half that does, and the callers apply it — this
+	// function cannot, because it is also the isolated session's probe path, where
+	// no source is read.
 	if !strings.HasPrefix(src, g.repoPath+string(filepath.Separator)) ||
 		!strings.HasPrefix(dst, g.worktreePath+string(filepath.Separator)) {
 		log.WarningLog.Printf("%s: skipping %q: resolves outside the repo or worktree", kind, rel)
 		return "", "", "", false
 	}
 	return canon, src, dst, true
+}
+
+// seedSourceEscapes reports whether src leaves the repository once symlinks are
+// followed, and is the guard that makes a repo-authored entry's confinement real
+// rather than lexical.
+//
+// The lexical checks above cannot see this, and neither can the worktree-side
+// check-ignore probe that a comment here used to name as the guard for it. That
+// reasoning was circular twice over: the paths a repo may seed are exactly the
+// gitignored ones, which are exactly the untracked ones that CAN be a symlink to
+// anywhere — and the repo authors the ignore rule too. Worse, the probe runs in the
+// WORKTREE, where the symlink does not exist: with `deps/` committed in .gitignore,
+// `git check-ignore -q -- deps/id_rsa` exits 0 there even though `deps` is absent,
+// while os.Stat in the ORIGIN follows a user's convenience symlink (deps → ~/.ssh,
+// .venv → /opt/..., a pnpm store) and reports a regular file. A trusted repo could
+// then name any file the user can read and have it copied in front of the agent, or
+// handed over as a writable symlink — powers no trust dialog describes.
+//
+// Applied to repo-authored entries only, and that asymmetry is deliberate: the
+// user's own link_paths entry pointing at a shared package store outside the repo
+// is a documented, working configuration (linkLocalPath Lstats rather than Stats
+// for exactly that reason), and narrowing it would break setups that predate #815.
+// The repo side has no such history and no such claim.
+//
+// A source that does not exist is not an escape — EvalSymlinks fails on it and the
+// callers' own absence checks handle it, which keeps "the file simply is not there"
+// the silent common case it has always been.
+func (g *Worktree) seedSourceEscapes(kind, rel, src string) bool {
+	resolved, err := filepath.EvalSymlinks(src)
+	if err != nil {
+		return false
+	}
+	root, err := filepath.EvalSymlinks(g.repoPath)
+	if err != nil {
+		root = g.repoPath
+	}
+	if resolved == root || strings.HasPrefix(resolved, root+string(filepath.Separator)) {
+		return false
+	}
+	log.WarningLog.Printf("%s: refusing %q: it resolves through a symlink to %q, outside this repository. A repository's own seed list may only name paths inside it — the trust grant covers the repo's files, not everything you can read", kind, rel, resolved)
+	return true
 }
 
 // carryLocalFile copies one repo-relative file from repoPath into the
@@ -179,9 +393,13 @@ func (g *Worktree) resolveSeedPaths(kind, rel string) (canon, src, dst string, o
 // is therefore shared by every linked worktree, and core.excludesFile is global —
 // a rule in either reaches the worktree without being committed anywhere. The
 // warning below must not promise otherwise.
-func (g *Worktree) carryLocalFile(rel string) {
-	canon, src, dst, ok := g.resolveSeedPaths("carry_files", rel)
+func (g *Worktree) carryLocalFile(e seedEntry) {
+	kind, rel := e.kind, e.rel
+	canon, src, dst, ok := g.resolveSeedPaths(kind, rel)
 	if !ok {
+		return
+	}
+	if e.repo && g.seedSourceEscapes(kind, rel, src) {
 		return
 	}
 
@@ -190,7 +408,7 @@ func (g *Worktree) carryLocalFile(rel string) {
 		return // not present in the origin checkout: nothing to carry
 	}
 	if !info.Mode().IsRegular() {
-		log.WarningLog.Printf("carry_files: skipping %q: not a regular file (a directory belongs in link_paths, which symlinks it)", rel)
+		log.WarningLog.Printf("%s: skipping %q: not a regular file (a directory belongs in link_paths, which symlinks it)", kind, rel)
 		return
 	}
 	if _, err := os.Lstat(dst); err == nil {
@@ -201,22 +419,22 @@ func (g *Worktree) carryLocalFile(rel string) {
 		// ignore rule at all, so lead with the state and give that fix first. The
 		// uncommitted-rule case is the same warning (the check runs in the worktree),
 		// and .git/info/exclude satisfies it without touching the branch.
-		log.WarningLog.Printf("carry_files: skipping %q: git would not ignore it in the session worktree (it would be committed on pause) — add it to .gitignore and commit that on this session's base, or add it to .git/info/exclude. A .gitignore edit left uncommitted in %s does not reach the worktree", rel, g.repoPath)
+		log.WarningLog.Printf("%s: skipping %q: git would not ignore it in the session worktree (it would be committed on pause) — add it to .gitignore and commit that on this session's base, or add it to .git/info/exclude. A .gitignore edit left uncommitted in %s does not reach the worktree", kind, rel, g.repoPath)
 		return
 	}
 
 	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
-		log.WarningLog.Printf("carry_files: create parent dirs for %q: %v", rel, err)
+		log.WarningLog.Printf("%s: create parent dirs for %q: %v", kind, rel, err)
 		return
 	}
 	data, err := os.ReadFile(src)
 	if err != nil {
-		log.WarningLog.Printf("carry_files: read %q: %v", src, err)
+		log.WarningLog.Printf("%s: read %q: %v", kind, src, err)
 		return
 	}
 	// Preserve the source mode: local config may hold secrets kept at 0600.
 	if err := os.WriteFile(dst, data, info.Mode().Perm()); err != nil {
-		log.WarningLog.Printf("carry_files: write %q: %v", dst, err)
+		log.WarningLog.Printf("%s: write %q: %v", kind, dst, err)
 		return
 	}
 }
@@ -242,9 +460,13 @@ func (g *Worktree) carryLocalFile(rel string) {
 // diff stages every poll tick. Checking the not-yet-created path in the worktree is
 // conservative in exactly the right direction: git cannot match a dir-only pattern
 // there either, so only a slash-less pattern is accepted.
-func (g *Worktree) linkLocalPath(rel string) {
-	canon, src, dst, ok := g.resolveSeedPaths("link_paths", rel)
+func (g *Worktree) linkLocalPath(e seedEntry) {
+	kind, rel := e.kind, e.rel
+	canon, src, dst, ok := g.resolveSeedPaths(kind, rel)
 	if !ok {
+		return
+	}
+	if e.repo && g.seedSourceEscapes(kind, rel, src) {
 		return
 	}
 
@@ -259,7 +481,7 @@ func (g *Worktree) linkLocalPath(rel string) {
 	// entries also create directories under the worktree, and a link silently not
 	// made leaves the session without the dependencies it was configured to get.
 	if _, err := os.Lstat(dst); err == nil {
-		log.WarningLog.Printf("link_paths: skipping %q: something already exists at that path in the worktree (tracked content, or a directory an earlier carry_files/link_paths entry created) — never clobbered", rel)
+		log.WarningLog.Printf("%s: skipping %q: something already exists at that path in the worktree (tracked content, or a directory an earlier carry_files/link_paths entry created) — never clobbered", kind, rel)
 		return
 	}
 	if _, err := g.runGitCommand(g.worktreePath, "check-ignore", "-q", "--", canon); err != nil {
@@ -269,19 +491,19 @@ func (g *Worktree) linkLocalPath(rel string) {
 		// the session branched off a base predating it. Naming only the dir-only
 		// pattern would misdiagnose those into a dead end, so lead with the state
 		// and offer the most common cause as a hint.
-		log.WarningLog.Printf("link_paths: skipping %q: git would not ignore a symlink at that path in the session worktree (it would be committed on pause). The rule must reach the worktree — committed on this session's base, or in .git/info/exclude — and must not end in a slash: %q ignores the symlink, %q only the directory", rel, canon, canon+"/")
+		log.WarningLog.Printf("%s: skipping %q: git would not ignore a symlink at that path in the session worktree (it would be committed on pause). The rule must reach the worktree — committed on this session's base, or in .git/info/exclude — and must not end in a slash: %q ignores the symlink, %q only the directory", kind, rel, canon, canon+"/")
 		return
 	}
 
 	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
-		log.WarningLog.Printf("link_paths: create parent dirs for %q: %v", rel, err)
+		log.WarningLog.Printf("%s: create parent dirs for %q: %v", kind, rel, err)
 		return
 	}
 	// An absolute target keeps the link valid regardless of how deep the worktree
 	// sits under the data dir. Symlink creation needs a privilege on Windows, so
 	// a failure here is logged and skipped like any other best-effort miss.
 	if err := os.Symlink(src, dst); err != nil {
-		log.WarningLog.Printf("link_paths: symlink %q -> %q: %v", dst, src, err)
+		log.WarningLog.Printf("%s: symlink %q -> %q: %v", kind, dst, src, err)
 		return
 	}
 }

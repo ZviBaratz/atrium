@@ -60,6 +60,8 @@ const guidePage = "You are an AI agent running inside an Atrium session. Atrium 
 	"  atrium peek <session>            read another session's pane without attaching\n" +
 	"  atrium send <session> <message>  queue a prompt for another session\n" +
 	"  atrium new <title> [prompt]      create a session: worktree, branch, agent\n" +
+	"  atrium kill <session>            retire a session (conditions below)\n" +
+	"  atrium pause <session>           park a session, keeping its branch\n" +
 	"\n" +
 	"  Always pass `send` its message as an argument. Left off, it reads the message\n" +
 	"  from stdin instead, which on a terminal waits forever.\n" +
@@ -86,16 +88,57 @@ const guidePage = "You are an AI agent running inside an Atrium session. Atrium 
 	"\n" +
 	"  When the follow-up should run on a given model, pin it at creation instead\n" +
 	"  of asking for it in the prompt: `--model`, `--effort` and `--permission-mode`\n" +
-	"  set claude's flags on the new session, and are refused when what would run\n" +
-	"  is not claude. `--account` pins which configured Claude account it runs on,\n" +
+	"  set claude's flags on the new session. They need a claude somewhere in what\n" +
+	"  is being created: a lone non-claude session is refused, and so is a fan-out\n" +
+	"  with no claude member — but a MIXED fan-out is accepted, and the pins ride\n" +
+	"  only its claude members while the rest are left untouched, with no warning.\n" +
+	"  `--account` pins which configured Claude account it runs on,\n" +
 	"  by name; do not write `CLAUDE_CONFIG_DIR` into the program to do that —\n" +
 	"  whether on `--program` or in your config.json — which runs the session on one\n" +
 	"  account and records another.\n" +
+	"\n" +
+	"  A claude session is normally handed a skill for this: `/atrium:spawn` walks\n" +
+	"  the same choices — what to pin, whether to start from your own branch, and\n" +
+	"  what the first prompt has to say — and asks before creating anything. Every\n" +
+	"  gate around that is fail-open, so if it does not resolve, `atrium doctor`'s\n" +
+	"  Agent skills section names the gate that declined, per configured program.\n" +
+	"  Every other agent makes the choices by hand.\n" +
 	"\n" +
 	"  A title is a branch: the branch and tmux names derive from it, and a title\n" +
 	"  whose names are already taken is refused rather than quietly suffixed — with\n" +
 	"  one exception, `--variants`, which `atrium new --help` owns. An over-long\n" +
 	"  title is refused too, and the error names the limit.\n" +
+	"\n" +
+	"RETIRING A SESSION\n" +
+	"\n" +
+	"  When a session you are coordinating has finished, retire it yourself rather\n" +
+	"  than leaving it for the person at the keyboard. A session nobody closes is\n" +
+	"  not just a row in a list: every Atrium start brings it back online, and if\n" +
+	"  its pane has died in the meantime that means launching its agent again.\n" +
+	"\n" +
+	"  `kill` removes the worktree and deletes the branch, and refuses unless that\n" +
+	"  is provably safe: no uncommitted changes, nothing unpushed, and the agent\n" +
+	"  idle. It recomputes those rather than trusting what was last recorded, and a\n" +
+	"  session it cannot establish them for is refused too: a paused, starting or\n" +
+	"  direct one has no worktree to read, and some agents show nothing in the pane\n" +
+	"  to say a turn is running. The refusal names the condition, and there is no\n" +
+	"  flag to override it; that is the keyboard's call.\n" +
+	"\n" +
+	"  `pause` is what to reach for when `kill` refuses. It stops the agent and\n" +
+	"  frees the worktree but keeps the branch, committing whatever was uncommitted\n" +
+	"  first, so nothing git tracks is discarded and no tree condition is checked.\n" +
+	"  Freeing the worktree does delete it, though, so files git ignores that live\n" +
+	"  inside it — a local .env, a build cache, installed dependencies — are gone\n" +
+	"  for good, and resume rebuilds the worktree without them.\n" +
+	"\n" +
+	"  Name the session, do not describe it. Both verbs resolve a title or a tmux\n" +
+	"  name and refuse a substring of one, unlike `peek` and `send` — and neither\n" +
+	"  will retire the session you are running in. Retiring your own pane kills the\n" +
+	"  agent writing the report, so nobody learns what happened.\n" +
+	"\n" +
+	"  Either way you are asking, not doing: both spool a request the running\n" +
+	"  Atrium carries out, so they report what they queued. `atrium kill --help`\n" +
+	"  owns when that lands and how to block until it has.\n" +
 	"\n" +
 	"NOT YOURS TO RUN\n" +
 	"\n" +

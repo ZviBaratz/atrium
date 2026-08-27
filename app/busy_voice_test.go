@@ -70,12 +70,18 @@ func TestBusyLabels_Voice(t *testing.T) {
 }
 
 // TestBusyLabels_KillNamesItsTarget is the asymmetry that will otherwise get
-// "fixed" into consistency: kill names the session, pause and resume do not.
+// "fixed" into consistency: among the KEYPRESS paths, kill names the session and pause
+// and resume do not.
 //
-// Pause and resume always act on the highlighted row, which the user is looking
+// Pressed pause and resume always act on the highlighted row, which the user is looking
 // at. Kill does not — confirmKill takes an explicit instance because the
 // in-session chord and the auto-open path both target a specific session
 // regardless of what is selected. There the object is load-bearing.
+//
+// Scoped to the keypress paths because the rule is about what the user is looking at,
+// and a retirement the retire drain dispatched is one nobody is looking at: it names its
+// session for either verb (executeRetirement), which is the same reasoning arriving at
+// the opposite label. Do not "fix" that one to match these.
 func TestBusyLabels_KillNamesItsTarget(t *testing.T) {
 	h, inst := newKillHome(t)
 

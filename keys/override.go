@@ -83,7 +83,10 @@ func (p Problem) Error() string {
 // wrong, which is exactly when they must still work.
 var reserved = map[string]string{
 	"ctrl+c": "quit is matched before the keymap, so it still works when a rebind does not",
-	"esc":    "esc backs out of scroll mode, a filter and every overlay, ahead of dispatch",
+	// Short on purpose: the keybindings modal clips a report line at
+	// app/custom_commands.go's reportLineBudget, and an enumeration of esc's
+	// rungs (see escLadder, app package) does not survive the clip.
+	"esc":    "esc backs out of scroll, focus, filters and overlays",
 	"ctrl+l": "ctrl+l is the manual repaint, and has to work while the screen is corrupted",
 	"`":      "the backtick is the screensaver's, and is dispatched outside the registry",
 	// ctrl+[ IS esc on a terminal without key disambiguation, and 0x1b is the
