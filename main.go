@@ -354,12 +354,14 @@ var (
 			"against that account's expect_account, and flags separate accounts that turn out to share\n" +
 			"one login — the state in which sessions silently bill an account nobody routed them to.\n" +
 			"Account pool parity asks the third question those two cannot: whether members that are\n" +
-			"genuinely different logins are actually substitutes. It diffs the plugins, marketplaces\n" +
-			"and MCP servers each member's config dir declares, including two members that configure\n" +
-			"the same name to point somewhere different, because rotation never consults capability,\n" +
-			"so a session placed on a member lacking an integration just quietly goes without one. A\n" +
-			"config dir is claude's user settings source alone, so a checkout or a managed policy file\n" +
-			"can still change what a session runs under; it reads files only, so it measures\n" +
+			"genuinely different logins are actually substitutes. It diffs the plugins, marketplaces,\n" +
+			"MCP servers and claude.ai connector setting each member's config dir declares, including\n" +
+			"two members that configure the same name to point somewhere different, because rotation\n" +
+			"never consults capability, so a session placed on a member lacking an integration just\n" +
+			"quietly goes without one. A config dir is claude's user settings source alone, so a\n" +
+			"checkout or a managed policy file can still change what a session runs under; the MCP\n" +
+			"axis is the dir-wide mcpServers key and not claude's per-project local scope; it reads\n" +
+			"files only, so it measures\n" +
 			"configuration and not what claude.ai has granted; and a member it could not measure is\n" +
 			"reported rather than counted as having nothing.\n" +
 			"Terminal background detection reports which rung of the light/dark ladder can answer here,\n" +
