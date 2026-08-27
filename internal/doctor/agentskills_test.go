@@ -179,6 +179,9 @@ func TestRenderAgentSkillsDeclineReasons(t *testing.T) {
 			"claude": noFlag("claude"), "/old/claude": noFlag("/old/claude"),
 		},
 		want: "no claude program gets the skill",
+		// The arm this exercises printed "invoked as" unconditionally, so the report
+		// contradicted itself one line after the status. The loop's blanket assertion
+		// below is what holds it.
 	}, {
 		name:     "an unwritable directory names the write",
 		programs: []string{"claude"},
@@ -197,6 +200,13 @@ func TestRenderAgentSkillsDeclineReasons(t *testing.T) {
 			}
 			assert.NotContains(t, out, "disableSideloadFlags",
 				"the remedy for a refusal that cannot happen in this state")
+			// Every case here is a not-injected one, so nothing will answer the
+			// invocation. Blanket rather than per-case: the row is printed from two
+			// places — renderOne and the multi-claude arm — and the arm shipped without
+			// the gate while renderOne had it, which a per-case assertion on the shape
+			// that happened to be tested would not have caught.
+			assert.NotContains(t, out, "invoked as",
+				"what to type, for a skill no session gets")
 		})
 	}
 }
@@ -246,4 +256,8 @@ func TestRenderAgentSkillsSplitsDisagreeingClaudes(t *testing.T) {
 	// Some session here IS handed the flag, so the managed-policy refusal is reachable and
 	// its remedy belongs on the page — the opposite of every all-declined state above.
 	assert.Contains(t, out, "disableSideloadFlags")
+	// And the invocation is owed for the same reason, which is why the row is gated on
+	// "any program injecting" rather than on all of them: typing it reaches the sessions
+	// of the claude that got the skill.
+	assert.Contains(t, out, "invoked as", "the invocation works for the program that got it")
 }
