@@ -1,0 +1,12 @@
+Rich's settings.json and .claude.json, except that this dir DENIES a server it also
+configures. claude matches a denial by serverName, so slack is configured here and
+unreachable, and the fixture exists to hold availableMCPServers to that: the MCP axis
+must report linear alone. Read as the configured set, this dir would be reported as a
+substitute for rich when it cannot run one of rich's two servers.
+
+Not byte-for-byte rich, and the second difference is load-bearing rather than
+incidental: the local-scope entry under projects.<path> is named scratch-denied, for
+the reason rich/README gives. Normalising the two local-scope names together — the
+tidy-up "identical apart from one key" invites — would retire that detector, and a
+regression that started folding the local scope back in would produce identical sets
+on both dirs and stay invisible.

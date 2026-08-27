@@ -1,0 +1,1054 @@
+package doctor
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/ZviBaratz/atrium/config"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// fixtureDir is an absolute path to one of the config dirs under testdata. Absolute
+// because ReadDirCapabilities refuses a relative dir, which is the guard the fixture
+// tests below would otherwise trip over instead of exercising.
+func fixtureDir(t *testing.T, name string) string {
+	t.Helper()
+	abs, err := filepath.Abs(filepath.Join("testdata", "capability", name))
+	require.NoError(t, err)
+	return abs
+}
+
+// pooled builds one pool whose members are the named fixture dirs, read by the real
+// reader. Member names are the fixture names, so assertions read as "rich" and "bare".
+func pooled(t *testing.T, names ...string) *config.Config {
+	t.Helper()
+	cfg := &config.Config{}
+	for _, n := range names {
+		cfg.ClaudeAccounts = append(cfg.ClaudeAccounts, config.ClaudeAccount{
+			Name: n, ConfigDir: fixtureDir(t, n), Pool: "quantivly",
+		})
+	}
+	return cfg
+}
+
+// named is a measured dimension holding these names and no comparable targets.
+func named(names ...string) config.DimensionState {
+	targets := map[string]string{}
+	for _, n := range names {
+		targets[n] = ""
+	}
+	return config.DimensionState{Measured: true, Targets: targets}
+}
+
+// measuredCaps is a dir that answered every dimension, so a test that means to be
+// about one difference is not also about three unmeasured ones.
+func measuredCaps(plugins, marketplaces, mcp []string) config.DirCapabilities {
+	return config.DirCapabilities{
+		Plugins:      named(plugins...),
+		Marketplaces: named(marketplaces...),
+		MCPServers:   named(mcp...),
+		Connectors:   config.ConnectorsOn,
+	}
+}
+
+// The fixture dirs are read by the REAL config.ReadDirCapabilities, so the shapes
+// this section depends on are checked against files on disk rather than against a
+// hand-written fake. Several tests below do the same; this one pins what each fixture
+// holds, so a change to a fixture fails here rather than somewhere downstream.
+func TestReadDirCapabilitiesFixtures(t *testing.T) {
+	cases := []struct {
+		dir          string
+		plugins      []string
+		marketplaces []string
+		mcp          []string
+		mcpKnown     bool
+		connectors   config.ConnectorState
+		ok           bool
+	}{{
+		// Denies a server it does not configure, so the available set is untouched.
+		dir:          "rich",
+		plugins:      []string{"linear@quantivly", "superpowers@obra"},
+		marketplaces: []string{"obra", "quantivly"},
+		mcp:          []string{"linear", "slack"},
+		mcpKnown:     true,
+		connectors:   config.ConnectorsOn,
+		ok:           true,
+	}, {
+		dir:          "bare",
+		plugins:      []string{"superpowers@obra"},
+		marketplaces: []string{"obra"},
+		mcp:          []string{},
+		mcpKnown:     true,
+		connectors:   config.ConnectorsOff,
+		ok:           true,
+	}, {
+		// The same names as rich, every one of them pointing somewhere else.
+		dir:          "rewired",
+		plugins:      []string{"linear@quantivly", "superpowers@obra"},
+		marketplaces: []string{"obra", "quantivly"},
+		mcp:          []string{"linear", "slack"},
+		mcpKnown:     true,
+		connectors:   config.ConnectorsOn,
+		ok:           true,
+	}, {
+		// Configures both servers and denies one by serverName, so the available set
+		// is the smaller one. Read as the configured set, this dir would pass as a
+		// substitute for rich while unable to run one of rich's two servers.
+		dir:          "denied",
+		plugins:      []string{"linear@quantivly", "superpowers@obra"},
+		marketplaces: []string{"obra", "quantivly"},
+		mcp:          []string{"linear"},
+		mcpKnown:     true,
+		connectors:   config.ConnectorsOn,
+		ok:           true,
+	}, {
+		// A serverCommand denial: enforced by claude, and not expressible as a server
+		// name, so the axis is unknown rather than the configured set.
+		dir:          "cmddenial",
+		plugins:      []string{"linear@quantivly", "superpowers@obra"},
+		marketplaces: []string{"obra", "quantivly"},
+		mcpKnown:     false,
+		connectors:   config.ConnectorsOn,
+		ok:           true,
+	}, {
+		// The ordinary onboarded dir: .claude.json and no settings.json. Its plugin,
+		// marketplace and connector axes are claude's defaults — measured and empty,
+		// not unknown — which is what stops an identical pair of these from rendering
+		// four "unverified" lines.
+		dir:          "nosettings",
+		plugins:      []string{},
+		marketplaces: []string{},
+		mcp:          []string{"linear", "slack"},
+		mcpKnown:     true,
+		connectors:   config.ConnectorsOn,
+		ok:           true,
+	}, {
+		// settings.json and no .claude.json: three dimensions answerable, the MCP one
+		// unknown rather than empty.
+		dir:          "nomcp",
+		plugins:      []string{"linear@quantivly", "superpowers@obra"},
+		marketplaces: []string{"obra", "quantivly"},
+		mcpKnown:     false,
+		connectors:   config.ConnectorsOn,
+		ok:           true,
+	}, {
+		dir: "malformed",
+		ok:  false,
+	}, {
+		dir: "notadir",
+		ok:  false,
+	}}
+
+	for _, tc := range cases {
+		t.Run(tc.dir, func(t *testing.T) {
+			got, ok := config.ReadDirCapabilities(fixtureDir(t, tc.dir))
+			require.Equal(t, tc.ok, ok, "caps %+v", got)
+			if !tc.ok {
+				return
+			}
+			require.True(t, got.Plugins.Measured)
+			require.True(t, got.Marketplaces.Measured)
+			assert.Equal(t, tc.plugins, got.Plugins.Names())
+			assert.Equal(t, tc.marketplaces, got.Marketplaces.Names())
+			assert.Equal(t, tc.mcpKnown, got.MCPServers.Measured, "MCP measured flag")
+			if tc.mcpKnown {
+				assert.Equal(t, tc.mcp, got.MCPServers.Names())
+			}
+			assert.Equal(t, tc.connectors, got.Connectors)
+		})
+	}
+}
+
+// The recorded decision, held to the fixture that would break it: the bare dir's
+// .claude.json lists four connectors under claudeAiMcpEverConnected and configures
+// no MCP server at all. That array is a local client record — a stateless connector
+// is written into it off a cached init response, with no upstream grant — so reading
+// it would report an unauthorized account as authorized and take the parity section
+// quiet on exactly the drift it exists to find.
+func TestCapabilitiesIgnoreEverConnected(t *testing.T) {
+	caps, ok := config.ReadDirCapabilities(fixtureDir(t, "bare"))
+	require.True(t, ok)
+	require.True(t, caps.MCPServers.Measured,
+		"the dir must have answered, or an empty list proves nothing")
+	assert.Empty(t, caps.MCPServers.Names(), "claudeAiMcpEverConnected leaked into MCPServers")
+
+	// Control: the fixture really does name those four, in the spelling claude writes
+	// them — a "claude.ai " prefix — so a regression that starts reading the array has
+	// something to be caught by.
+	raw, err := readFixtureFile(t, "bare", ".claude.json")
+	require.NoError(t, err)
+	for _, connector := range []string{
+		"claude.ai Gmail", "claude.ai Google Calendar",
+		"claude.ai Google Drive", "claude.ai Linear",
+	} {
+		assert.Contains(t, raw, connector,
+			"fixture no longer records the connectors this test exists to ignore")
+	}
+}
+
+// End-to-end over the fixtures: a pool of two real dirs, read by the real reader,
+// diffed and rendered. The rich dir enables both plugins, knows both marketplaces,
+// configures two MCP servers and has connectors on; the bare dir has one plugin, one
+// marketplace, no MCP servers and connectors off.
+func TestCheckParityOverFixtures(t *testing.T) {
+	warns := CheckParity(pooled(t, "rich", "bare"), config.ReadDirCapabilities)
+	out := RenderParity(warns)
+
+	assert.Contains(t, out, "Account pool parity:")
+	assert.Contains(t, out, `plugin "linear@quantivly": "rich" has it, "bare" does not`)
+	assert.Contains(t, out, `marketplace "quantivly": "rich" has it, "bare" does not`)
+	assert.Contains(t, out, `MCP server "linear": "rich" has it, "bare" does not`)
+	assert.Contains(t, out, `MCP server "slack": "rich" has it, "bare" does not`)
+	assert.Contains(t, out, `"bare" disables claude.ai connectors in its own settings.json and "rich" does not`)
+
+	// Shared by both dirs, and pointing at the same place in both, so not a parity
+	// problem and not a line.
+	assert.NotContains(t, out, "superpowers@obra")
+	assert.NotContains(t, out, `marketplace "obra"`)
+	// The plugin the rich fixture carries as false is not enabled there, and the bare
+	// fixture does not name it at all: both lack it, so it is not drift.
+	assert.NotContains(t, out, "retired@obra")
+
+	// The dimensions are walked in a fixed order, so the block does not reshuffle.
+	order := make([]string, 0, len(warns))
+	for _, w := range warns {
+		order = append(order, w.Dimension.Noun()+"/"+w.Feature)
+	}
+	assert.Equal(t, []string{
+		"plugin/linear@quantivly",
+		"marketplace/quantivly",
+		"MCP server/linear",
+		"MCP server/slack",
+		"capability/", // the connector warning is about no single dimension
+	}, order)
+}
+
+// Two dirs can hold every capability under the same name and still not be
+// substitutes: the rewired fixture points the same two marketplaces and the same two
+// MCP servers at a different repo, a local path, a different URL and a different
+// command. Comparing names alone certified that pool as interchangeable.
+func TestCheckParityReportsDivergentTargets(t *testing.T) {
+	warns := CheckParity(pooled(t, "rich", "rewired"), config.ReadDirCapabilities)
+	out := RenderParity(warns)
+
+	// The groups that agree are named, not just the set of members involved, so the
+	// reader can see which side to change.
+	assert.Contains(t, out, `marketplace "obra" is configured differently — same name, different target: "rich" vs "rewired"`)
+	assert.Contains(t, out, `marketplace "quantivly" is configured differently — same name, different target: "rich" vs "rewired"`)
+	assert.Contains(t, out, `MCP server "linear" is configured differently — same name, different target: "rich" vs "rewired"`)
+	assert.Contains(t, out, `MCP server "slack" is configured differently — same name, different target: "rich" vs "rewired"`)
+
+	// Both dirs enable the same plugins, and a plugin's value is a bool with nothing
+	// to point at, so there is no target to diverge and no line about one.
+	assert.NotContains(t, out, "plugin")
+	// Nothing is missing on either side, so no member is told it lacks anything.
+	assert.NotContains(t, out, "has it")
+
+	assert.Len(t, warns, 4)
+}
+
+// A denied server is not a capability the dir has, so the denial belongs to the MCP
+// axis rather than to one of its own. Driven through the real reader over the denied
+// fixture, which configures both servers and denies one by serverName.
+//
+// The earlier shape compared the denial LISTS as a separate dimension and got both
+// directions wrong: a member that configures and denies a server was reported as
+// having it, and two members that both deny one were reported as drifting over a
+// server neither can run.
+func TestCheckParityFoldsDenialsIntoAvailability(t *testing.T) {
+	warns := CheckParity(pooled(t, "rich", "denied"), config.ReadDirCapabilities)
+	out := RenderParity(warns)
+
+	// rich can run slack; denied configures it and blocks it. One line, in the
+	// vocabulary of what a session can actually do.
+	assert.Contains(t, out, `MCP server "slack": "rich" has it, "denied" does not`)
+	// Not a second line in a second vocabulary.
+	assert.NotContains(t, out, "denied for")
+	// linear is configured identically in both and denied in neither.
+	assert.NotContains(t, out, `MCP server "linear"`)
+	// rich denies a server NEITHER member configures. It is not a capability anyone
+	// has, so it is not drift and not a line.
+	assert.NotContains(t, out, "sketchy")
+	require.Len(t, warns, 1, "rendered:\n%s", out)
+	assert.Equal(t, config.DimensionMCPServer, warns[0].Dimension)
+}
+
+// Two members that both deny the same configured server agree about what they can do,
+// so the pool is in parity and the section stays silent. Under the old separate-axis
+// comparison this was a reported difference.
+func TestCheckParityBothDenyingIsParity(t *testing.T) {
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "a", ConfigDir: fixtureDir(t, "denied"), Pool: "p"},
+		{Name: "b", ConfigDir: fixtureDir(t, "denied2"), Pool: "p"},
+	}}
+	warns := CheckParity(cfg, config.ReadDirCapabilities)
+	assert.Empty(t, warns, "rendered:\n%s", RenderParity(warns))
+}
+
+// A denial this build cannot express takes the MCP axis with it, because the
+// configured set is no longer the available set. The cmddenial fixture denies by
+// serverCommand, which claude enforces and which does not map onto a server name.
+func TestCheckParityUnnameableDenialLeavesMCPUnknown(t *testing.T) {
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "rich", ConfigDir: fixtureDir(t, "rich"), Pool: "p"},
+		{Name: "cmd", ConfigDir: fixtureDir(t, "cmddenial"), Pool: "p"},
+	}}
+	warns := CheckParity(cfg, config.ReadDirCapabilities)
+	out := RenderParity(warns)
+
+	assert.Contains(t, out, `MCP server parity is unverified: "cmd" could not be compared on it`)
+	// The member must not be credited with the servers it configures, since one of
+	// them is blocked by a rule this build cannot name. The fixture is rich plus that
+	// one key, so ANY per-name line here is a fabrication — and `MCP server "` with the
+	// quote is what only a per-name line prints.
+	assert.NotContains(t, out, `MCP server "`)
+
+	// And only that axis is lost. The two dirs agree on plugins and marketplaces, so
+	// those must be compared and found equal rather than dragged down with the MCP one.
+	assert.NotContains(t, out, "plugin parity is unverified")
+	assert.NotContains(t, out, "marketplace parity is unverified")
+	require.Len(t, warns, 1, "rendered:\n%s", out)
+}
+
+// The false positive this shape exists to prevent. mcpServers lives only in
+// .claude.json, so the nomcp dir has an UNKNOWN MCP set, not an empty one. Reported
+// as empty it was accused of lacking both of its sibling's servers, and the remedy
+// told the user to align two dirs when the honest answer was that one of them had
+// never been onboarded.
+func TestCheckParityUnmeasuredDimensionIsNotDrift(t *testing.T) {
+	warns := CheckParity(pooled(t, "rich", "nomcp"), config.ReadDirCapabilities)
+	require.Len(t, warns, 1, "only the unanswered dimension: %s", RenderParity(warns))
+
+	assert.Equal(t, ParityUnmeasured, warns[0].Kind)
+	assert.Equal(t, config.DimensionMCPServer, warns[0].Dimension)
+	assert.Equal(t, []string{"nomcp"}, warns[0].Lack)
+	assert.Empty(t, warns[0].Have, "an unmeasured dimension is not evidence of anything")
+
+	out := RenderParity(warns)
+	assert.Contains(t, out, `MCP server parity is unverified: "nomcp" could not be compared on it`)
+	// The two dirs configure the same plugins and marketplaces, so those are silent —
+	// and critically, nomcp is never said to LACK a server.
+	assert.NotContains(t, out, `MCP server "linear"`)
+	assert.NotContains(t, out, "has it")
+	// The remedy is about the unanswered question, not about aligning two dirs that
+	// were never found to disagree.
+	assert.Contains(t, out, "not evidence of parity")
+	assert.NotContains(t, out, "Align the config dirs")
+}
+
+// A member whose dir cannot be read must get a line of its own. The section is
+// silent when a pool is in parity, so dropping the unreadable member would make
+// "we compared these and they agree" indistinguishable from "we could not look".
+func TestCheckParityNamesUnreadableMembers(t *testing.T) {
+	warns := CheckParity(pooled(t, "rich", "bare", "malformed", "notadir"), config.ReadDirCapabilities)
+
+	var unreadable []ParityWarning
+	for _, w := range warns {
+		if w.Kind == ParityUnreadable {
+			unreadable = append(unreadable, w)
+		}
+	}
+	require.Len(t, unreadable, 2)
+	assert.Equal(t, []string{"malformed"}, unreadable[0].Lack)
+	assert.Equal(t, []string{"notadir"}, unreadable[1].Lack)
+	assert.Empty(t, unreadable[0].Have, "an unreadable member is not evidence of anything")
+
+	out := RenderParity(warns)
+	assert.Contains(t, out, `capabilities unreadable for "malformed"`)
+	assert.Contains(t, out, `capabilities unreadable for "notadir"`)
+	// The line names WHICH directory came up empty, so it is diagnosable without
+	// cross-referencing config.json.
+	assert.Contains(t, out, fixtureDir(t, "notadir"))
+
+	// Unreadable members do not stop the readable ones being compared, and the report
+	// carries both remedies: one for the real difference, one for the two dirs nothing
+	// could be read from.
+	assert.Contains(t, out, `plugin "linear@quantivly"`)
+	assert.Contains(t, out, "Align the config dirs")
+	assert.Contains(t, out, "not evidence of parity")
+}
+
+// A pool with only one READABLE member still reports the unreadable ones — that is
+// the whole reason they get a line — but has nothing to diff the survivor against,
+// so it must not invent a comparison out of one set. The survivor here has an
+// unmeasured dimension, which is what makes this exercise the guard: without it the
+// pool would additionally be told its MCP parity is unverified, repeating in a second
+// sentence what the unreadable line already said.
+func TestCheckParityOneReadableMemberDiffsNothing(t *testing.T) {
+	warns := CheckParity(pooled(t, "nomcp", "malformed"), config.ReadDirCapabilities)
+	require.Len(t, warns, 1, "rendered: %s", RenderParity(warns))
+	assert.Equal(t, ParityUnreadable, warns[0].Kind)
+	assert.Equal(t, []string{"malformed"}, warns[0].Lack)
+
+	out := RenderParity(warns)
+	assert.NotContains(t, out, "unverified")
+	assert.NotContains(t, out, "Align the config dirs")
+	assert.Contains(t, out, "not evidence of parity")
+}
+
+// Membership comes from config.PoolMembers, the function rotation itself resolves
+// through — which also counts an account with no pool of its own whose NAME another
+// account uses as its pool. Scanning locally for Pool != "" skipped that anchor, left
+// one member, and printed nothing for the one pool where rotation was live.
+func TestCheckParityIncludesTheUnpooledAnchor(t *testing.T) {
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "work", ConfigDir: "/a"},
+		{Name: "work-alt", ConfigDir: "/b", Pool: "work"},
+	}}
+	// Control: rotation really does treat these two as one pool, so the section is
+	// obliged to have an opinion about them.
+	require.Len(t, cfg.PoolMembers("work"), 2)
+
+	warns := CheckParity(cfg, staticReader(map[string]config.DirCapabilities{
+		"/a": measuredCaps([]string{"linear@quantivly"}, nil, nil),
+		"/b": measuredCaps(nil, nil, nil),
+	}))
+	require.Len(t, warns, 1)
+	assert.Equal(t, "work", warns[0].Pool)
+	assert.Equal(t, "linear@quantivly", warns[0].Feature)
+	assert.Equal(t, []string{"work"}, warns[0].Have, "the anchor keeps its own name")
+	assert.Equal(t, []string{"work-alt"}, warns[0].Lack)
+}
+
+// An unpooled account whose name nothing references is a singleton, and a pool of
+// one has nothing to be interchangeable with — neither is compared, however wildly
+// the rest of the config differs from it.
+func TestCheckParityIgnoresSingletons(t *testing.T) {
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "lonely", ConfigDir: "/a", Pool: "solo"},
+		{Name: "ungrouped", ConfigDir: "/b"},
+	}}
+	// Control: neither account shares a pool with anyone, which is the premise the
+	// assertion rests on rather than something it should discover.
+	require.Len(t, cfg.PoolMembers("solo"), 1)
+	require.Len(t, cfg.PoolMembers("ungrouped"), 1)
+
+	warns := CheckParity(cfg, staticReader(map[string]config.DirCapabilities{
+		"/a": measuredCaps([]string{"only-a@m"}, nil, nil),
+		"/b": measuredCaps([]string{"only-b@m"}, nil, nil),
+	}))
+	assert.Empty(t, warns)
+}
+
+// Two members whose sets are the same SIZE but not the same content. A diff that
+// compared cardinality would call this pool in parity and print nothing.
+func TestCheckParityEqualSizedDifferentSets(t *testing.T) {
+	warns := CheckParity(twoMemberPool("/a", "/b"), staticReader(map[string]config.DirCapabilities{
+		"/a": measuredCaps([]string{"only-a@m"}, nil, []string{"alpha"}),
+		"/b": measuredCaps([]string{"only-b@m"}, nil, []string{"beta"}),
+	}))
+	out := RenderParity(warns)
+
+	require.Len(t, warns, 4, "each of the four names is a difference: %s", out)
+	assert.Contains(t, out, `plugin "only-a@m": "a" has it, "b" does not`)
+	assert.Contains(t, out, `plugin "only-b@m": "b" has it, "a" does not`)
+	assert.Contains(t, out, `MCP server "alpha": "a" has it, "b" does not`)
+	assert.Contains(t, out, `MCP server "beta": "b" has it, "a" does not`)
+}
+
+// Pools appear in the config order of their first member, members keep config order,
+// and names within a dimension are alphabetical — so an unchanged config renders an
+// unchanged section rather than reshuffling between runs.
+func TestCheckParityIsOrdered(t *testing.T) {
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "b", ConfigDir: "/b", Pool: "second"},
+		{Name: "a", ConfigDir: "/a", Pool: "second"},
+		{Name: "c", ConfigDir: "/c", Pool: "first"},
+		{Name: "d", ConfigDir: "/d", Pool: "first"},
+	}}
+	warns := CheckParity(cfg, staticReader(map[string]config.DirCapabilities{
+		"/a": measuredCaps([]string{"zeta@m", "alpha@m"}, nil, nil),
+		"/b": measuredCaps(nil, nil, nil),
+		"/c": measuredCaps(nil, nil, []string{"srv"}),
+		"/d": measuredCaps(nil, nil, nil),
+	}))
+
+	require.Len(t, warns, 3)
+	// "second" is declared first, so it reports first — pool ordering follows the
+	// config, not the pool name.
+	assert.Equal(t, "second", warns[0].Pool)
+	assert.Equal(t, "alpha@m", warns[0].Feature, "names within a dimension sort alphabetically")
+	assert.Equal(t, []string{"a"}, warns[0].Have)
+	assert.Equal(t, []string{"b"}, warns[0].Lack, "members keep config order")
+	assert.Equal(t, "second", warns[1].Pool)
+	assert.Equal(t, "zeta@m", warns[1].Feature)
+	assert.Equal(t, "first", warns[2].Pool)
+	assert.Equal(t, "srv", warns[2].Feature)
+}
+
+// Three-member pools, so the verb agreement and the multi-member lists are actually
+// rendered rather than resting on one-element slices that agree either way.
+func TestCheckParityRendersMultiMemberLists(t *testing.T) {
+	caps := map[string]config.DirCapabilities{
+		"/a": measuredCaps([]string{"shared@m", "lonely@m"}, nil, nil),
+		"/b": measuredCaps([]string{"shared@m"}, nil, nil),
+		"/c": measuredCaps([]string{"shared@m"}, nil, nil),
+	}
+	out := RenderParity(CheckParity(twoMemberPool("/a", "/b", "/c"), staticReader(caps)))
+	assert.Contains(t, out, `plugin "lonely@m": "a" has it, "b" and "c" do not`)
+
+	caps["/b"] = measuredCaps([]string{"shared@m", "lonely@m"}, nil, nil)
+	out = RenderParity(CheckParity(twoMemberPool("/a", "/b", "/c"), staticReader(caps)))
+	assert.Contains(t, out, `plugin "lonely@m": "a" and "b" have it, "c" does not`)
+}
+
+// A member riding the ambient env has no dir of its own, which is a different fact
+// from a dir that would not read: the identity section skips such an account
+// outright, and reporting it as an unreadable directory printed an empty
+// parenthetical and a remedy for a path that does not exist.
+func TestCheckParityNamesAmbientMembers(t *testing.T) {
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "ambient", Pool: "p"},
+		{Name: "work", ConfigDir: "/w", Pool: "p"},
+	}}
+	warns := CheckParity(cfg, staticReader(map[string]config.DirCapabilities{
+		"/w": measuredCaps([]string{"a@m"}, nil, nil),
+	}))
+	require.Len(t, warns, 1)
+	assert.Equal(t, ParityNoConfigDir, warns[0].Kind)
+	assert.Equal(t, []string{"ambient"}, warns[0].Lack)
+	assert.Empty(t, warns[0].Dir, "there is no dir here to name")
+
+	out := RenderParity(warns)
+	assert.Contains(t, out, `"ambient" injects no CLAUDE_CONFIG_DIR`)
+	assert.Contains(t, out, "give that member its own config_dir")
+	// Never the unreadable-dir wording, and never an empty parenthetical.
+	assert.NotContains(t, out, "unreadable")
+	assert.NotContains(t, out, "()")
+}
+
+// config.json is hand-editable and the only name-uniqueness guard runs in the
+// accounts overlay, so two members can share a name or carry none. Rendered raw they
+// produced `"work" has it, "work" does not` — the section that exists to make a bad
+// pool diagnosable being the one place a duplicate name made it undiagnosable.
+func TestCheckParityDisambiguatesCollidingNames(t *testing.T) {
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "work", ConfigDir: "/a", Pool: "p"},
+		{Name: "work", ConfigDir: "/b", Pool: "p"},
+		{Name: "", ConfigDir: "/c", Pool: "p"},
+	}}
+	warns := CheckParity(cfg, staticReader(map[string]config.DirCapabilities{
+		"/a": measuredCaps([]string{"linear@quantivly"}, nil, nil),
+		"/b": measuredCaps(nil, nil, nil),
+		"/c": measuredCaps(nil, nil, nil),
+	}))
+	require.Len(t, warns, 1)
+
+	out := RenderParity(warns)
+	assert.Contains(t, out, `"work at /a" has it`)
+	assert.Contains(t, out, `"work at /b"`)
+	assert.Contains(t, out, `"unnamed account at /c"`)
+	// The self-contradictory rendering this test exists to prevent.
+	assert.NotContains(t, out, `"work" has it, "work"`)
+}
+
+// A connector setting nothing could read is not "on" and not "off". Folded into
+// either bucket it would fabricate a split against a member that agrees, or hide a
+// real one.
+func TestCheckParityConnectorsUnknownIsItsOwnLine(t *testing.T) {
+	on := measuredCaps(nil, nil, nil)
+	unknown := measuredCaps(nil, nil, nil)
+	unknown.Connectors = config.ConnectorsUnknown
+
+	warns := CheckParity(twoMemberPool("/a", "/b"), staticReader(map[string]config.DirCapabilities{
+		"/a": on, "/b": unknown,
+	}))
+	require.Len(t, warns, 1)
+	assert.Equal(t, ParityConnectorsUnknown, warns[0].Kind)
+	assert.Equal(t, []string{"b"}, warns[0].Lack)
+
+	out := RenderParity(warns)
+	assert.Contains(t, out, `no claude.ai connector state was recorded for "b"`)
+	assert.NotContains(t, out, "in its own settings.json")
+	assert.Contains(t, out, "not evidence of parity")
+	assert.NotContains(t, out, "Align the config dirs")
+}
+
+// Dormant cases. A nil reader is how a caller that has not wired one renders exactly
+// as it did before this section existed, and an aligned pool prints nothing at all.
+func TestCheckParityDormantAndClean(t *testing.T) {
+	cfg := pooled(t, "rich", "bare")
+
+	assert.Nil(t, CheckParity(cfg, nil), "a nil reader must report nothing")
+	assert.Nil(t, CheckParity(nil, config.ReadDirCapabilities))
+	assert.Equal(t, "", RenderParity(nil))
+
+	same := measuredCaps([]string{"a@m"}, nil, []string{"linear"})
+	aligned := CheckParity(twoMemberPool("/a", "/b"), staticReader(map[string]config.DirCapabilities{
+		"/a": same, "/b": same,
+	}))
+	assert.Empty(t, aligned, "two identically configured dirs are in parity")
+	assert.Equal(t, "", RenderParity(aligned))
+
+	// And the same over real files: a dir compared with itself is in parity, which is
+	// what makes the section's silence meaningful.
+	assert.Empty(t, CheckParity(pooled(t, "rich", "rich"), config.ReadDirCapabilities))
+}
+
+// Two accounts naming one directory cost a single read. Beyond the saving, it means
+// they cannot be made to disagree with each other by a file rewritten between two
+// reads.
+func TestCheckParityReadsEachDirOnce(t *testing.T) {
+	reads := map[string]int{}
+	counting := func(dir string) (config.DirCapabilities, bool) {
+		reads[dir]++
+		return measuredCaps([]string{"a@m"}, nil, nil), true
+	}
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "one", ConfigDir: "/shared", Pool: "p"},
+		{Name: "two", ConfigDir: "/shared/", Pool: "p"},
+		{Name: "three", ConfigDir: "/shared", Pool: "p"},
+	}}
+	assert.Empty(t, CheckParity(cfg, counting))
+	// "/shared/" is the same dir spelled differently; NormalizedConfigDir cleans it,
+	// so it must not cost a second read or read as a second directory.
+	assert.Equal(t, map[string]int{"/shared": 1}, reads)
+}
+
+// Each remedy is chosen by what the report actually holds, and a report can hold both
+// kinds at once. Deciding it all-or-nothing across the whole report meant one real
+// difference anywhere suppressed the "check the file parses" line for every member
+// nothing could be read from, leaving them with a remedy that did not apply.
+func TestRenderParityHintsFollowTheWarnings(t *testing.T) {
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "bad1", ConfigDir: "/bad1", Pool: "brokenpool"},
+		{Name: "bad2", ConfigDir: "/bad2", Pool: "brokenpool"},
+		{Name: "g1", ConfigDir: "/g1", Pool: "okpool"},
+		{Name: "g2", ConfigDir: "/g2", Pool: "okpool"},
+	}}
+	out := RenderParity(CheckParity(cfg, staticReader(map[string]config.DirCapabilities{
+		"/g1": measuredCaps([]string{"p@m"}, nil, nil),
+		"/g2": measuredCaps(nil, nil, nil),
+	})))
+
+	assert.Contains(t, out, `capabilities unreadable for "bad1" (/bad1)`)
+	assert.Contains(t, out, `plugin "p@m": "g1" has it, "g2" does not`)
+	// Both remedies, each once however many warnings called for it.
+	assert.Contains(t, out, "Align the config dirs")
+	assert.Contains(t, out, "not evidence of parity")
+	assert.Equal(t, 1, strings.Count(out, "Align the config dirs"))
+	assert.Equal(t, 1, strings.Count(out, "not evidence of parity"))
+}
+
+// The rendered hint promises only what Atrium does. Rotation really does not consult
+// capability — SelectPoolMember weighs availability alone — so the section tells the
+// user to fix their dirs rather than implying Atrium will route around the gap.
+func TestRenderParityHintOffersNoRouting(t *testing.T) {
+	out := RenderParity(CheckParity(pooled(t, "rich", "bare"), config.ReadDirCapabilities))
+	require.NotEmpty(t, out)
+	assert.Contains(t, out, "it does not consult capability")
+	assert.Contains(t, out, "Align the config dirs, or split the pool.")
+	assert.Equal(t, 1, strings.Count(out, "Align the config dirs"))
+}
+
+// Kind's zero value is not a real warning. Sharing iota 0 with a reportable kind
+// meant a warning built without one rendered as that kind's sentence, quietly
+// mislabelling whatever it actually held; an obviously wrong line is better than a
+// plausible wrong one.
+func TestRenderParityUnsetKindIsVisiblyWrong(t *testing.T) {
+	out := RenderParity([]ParityWarning{{Pool: "p", Feature: "x", Have: []string{"a"}, Lack: []string{"b"}}})
+	assert.Contains(t, out, "internal error: parity warning with no kind")
+	assert.NotContains(t, out, "unreadable")
+	assert.NotContains(t, out, "has it")
+	// It is neither a difference nor an unanswered question, so it earns no remedy.
+	assert.NotContains(t, out, "Align the config dirs")
+	assert.NotContains(t, out, "not evidence of parity")
+
+	// And a kind from outside the set at all, which is the arm the switch's default
+	// exists for once the zero value has its own.
+	out = RenderParity([]ParityWarning{{Pool: "p", Kind: ParityKind(99), Feature: "x"}})
+	assert.Contains(t, out, "internal error: parity warning with unknown kind 99")
+	assert.NotContains(t, out, "no kind")
+}
+
+// One member with no comparable target must not change the verdict by where the pool
+// lists it. Comparing as it went, these same three members answered differently in a
+// different order — the same config rendering two ways between runs.
+func TestCheckParityDivergenceIsOrderIndependent(t *testing.T) {
+	withTarget := func(target string) config.DirCapabilities {
+		caps := measuredCaps(nil, nil, nil)
+		caps.MCPServers = config.DimensionState{
+			Measured: true, Targets: map[string]string{"linear": target},
+		}
+		return caps
+	}
+	caps := map[string]config.DirCapabilities{
+		"/a": withTarget(`{"url":"https://one.example"}`),
+		"/b": withTarget(""), // configured, but nothing comparable came back
+		"/c": withTarget(`{"url":"https://two.example"}`),
+	}
+	// Control: a and c really do disagree, so the pool has something to report.
+	pair := CheckParity(twoMemberPool("/a", "/c"), staticReader(caps))
+	require.Len(t, pair, 1)
+	require.Equal(t, ParityDivergent, pair[0].Kind)
+
+	// b joining changes nothing, wherever the pool lists it. Order-independence used to
+	// be bought by answering "no divergence" on the first member with nothing to
+	// compare, which deleted the difference a and c really have — a MORE permissive
+	// member removing a warning, in the section whose silence means the pool agrees.
+	// Leaving b out of the partition instead gives the same verdict in every order, and
+	// keeps it.
+	for _, order := range [][]string{{"/a", "/b", "/c"}, {"/b", "/a", "/c"}, {"/a", "/c", "/b"}} {
+		warns := CheckParity(twoMemberPool(order...), staticReader(caps))
+		require.Len(t, warns, 1, "order %v: %+v", order, warns)
+		assert.Equal(t, ParityDivergent, warns[0].Kind, "order %v", order)
+		// And b is named on neither side: nothing about it can be compared, so it
+		// cannot be reported as agreeing with either.
+		assert.Equal(t, [][]string{{"a"}, {"c"}}, warns[0].Groups, "order %v", order)
+		assert.NotContains(t, RenderParity(warns), `"b"`, "order %v", order)
+	}
+}
+
+// staticReader answers from a table, so a test never touches a real config dir.
+func staticReader(caps map[string]config.DirCapabilities) config.CapabilityReadFunc {
+	return func(dir string) (config.DirCapabilities, bool) {
+		c, ok := caps[dir]
+		return c, ok
+	}
+}
+
+// twoMemberPool builds a one-pool config whose member names are the last path
+// element of each dir, so assertions read as "a" and "b". It takes any number of
+// dirs; the name is about the smallest useful pool, not a limit.
+func twoMemberPool(dirs ...string) *config.Config {
+	cfg := &config.Config{}
+	for _, d := range dirs {
+		cfg.ClaudeAccounts = append(cfg.ClaudeAccounts, config.ClaudeAccount{
+			Name: filepath.Base(d), ConfigDir: d, Pool: "p",
+		})
+	}
+	return cfg
+}
+
+// readFixtureFile returns one fixture file's raw text, for the control assertions
+// that prove a fixture still contains what a test exists to ignore.
+func readFixtureFile(t *testing.T, dir, name string) (string, error) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(fixtureDir(t, dir), name))
+	return string(data), err
+}
+
+// The unmeasured line states whether a comparison happened, because with three or
+// more members one CAN happen without the unmeasured member in it. A single sentence
+// saying "nothing was compared" was printed directly above the comparison it denied.
+func TestUnmeasuredLineSaysWhetherAnythingWasCompared(t *testing.T) {
+	blind := measuredCaps(nil, nil, nil)
+	blind.Plugins = config.DimensionState{}
+
+	t.Run("two members, one blind: nothing was compared", func(t *testing.T) {
+		out := RenderParity(CheckParity(twoMemberPool("/a", "/b"), staticReader(
+			map[string]config.DirCapabilities{
+				"/a": measuredCaps([]string{"p@m"}, nil, nil),
+				"/b": blind,
+			})))
+		assert.Contains(t, out, `plugin parity is unverified: "b" could not be compared on it, so nothing was compared`)
+		assert.NotContains(t, out, "has it", "there was no second measured member to compare against")
+	})
+
+	t.Run("three members, one blind: the other two were compared", func(t *testing.T) {
+		cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+			{Name: "a", ConfigDir: "/a", Pool: "p"},
+			{Name: "b", ConfigDir: "/b", Pool: "p"},
+			{Name: "c", ConfigDir: "/c", Pool: "p"},
+		}}
+		out := RenderParity(CheckParity(cfg, staticReader(map[string]config.DirCapabilities{
+			"/a": measuredCaps([]string{"p@m"}, nil, nil),
+			"/b": measuredCaps(nil, nil, nil),
+			"/c": blind,
+		})))
+		assert.Contains(t, out, `plugin parity is unverified: "c" could not be compared on it, and "a" and "b" were compared without it`)
+		// The comparison the old sentence denied had happened.
+		assert.Contains(t, out, `plugin "p@m": "a" has it, "b" does not`)
+		assert.NotContains(t, out, "nothing was compared")
+	})
+}
+
+// A dir that would not open and an axis that could not be compared are different
+// problems with different remedies. One hint told the reader to check that files
+// "are present and parse" — the wrong diagnosis for the second, where the file is
+// present, parses fine, and claude reads it as happily as this does.
+func TestUnansweredRemediesSplitByCause(t *testing.T) {
+	// The phrase unique to each remedy, so a test asserting one is not satisfied by
+	// the other's opening sentence, which they share.
+	const (
+		dirRemedy  = "Check the dir exists"
+		axisRemedy = "denies an MCP server by command or"
+	)
+
+	unreadable := RenderParity(CheckParity(twoMemberPool("/a", "/b"), func(dir string) (config.DirCapabilities, bool) {
+		if dir == "/b" {
+			return config.DirCapabilities{}, false
+		}
+		return measuredCaps(nil, nil, nil), true
+	}))
+	assert.Contains(t, unreadable, dirRemedy)
+	assert.NotContains(t, unreadable, axisRemedy)
+	// The dir that produces this most often is one claude was never run in, where all
+	// three checks above pass and none of them helps. The remedy that does has to be
+	// named, or the reader is handed a list of things that are already true.
+	assert.Contains(t, unreadable, "CLAUDE_CONFIG_DIR=<dir> claude")
+	assert.Contains(t, unreadable, "/login")
+
+	blind := measuredCaps(nil, nil, nil)
+	blind.Plugins = config.DimensionState{}
+	unrecognised := RenderParity(CheckParity(twoMemberPool("/a", "/b"), staticReader(
+		map[string]config.DirCapabilities{"/a": measuredCaps(nil, nil, nil), "/b": blind})))
+	assert.Contains(t, unrecognised, axisRemedy)
+	assert.NotContains(t, unrecognised, dirRemedy)
+	// An axis also goes unmeasured when the FILE recording it is absent — .claude.json
+	// in any dir configured but never logged into. Asserting a setting was present sent
+	// that reader to check the value of a setting that is not there, in a line naming no
+	// setting either.
+	assert.NotContains(t, unrecognised, "A setting was present")
+	assert.Contains(t, unrecognised, "records that axis is absent")
+
+	// Both causes at once get BOTH remedies, since a report can hold both.
+	//
+	// Three members, not two. With one dir unreadable and one blind, a two-member
+	// pool leaves a single readable member and diffPool returns at its own guard
+	// before any dimension is walked — so the second cause never fires and this case
+	// asserted the first remedy against a report that could only ever hold it. The
+	// third member is what leaves two readable dirs for diffDimension to reach.
+	both := RenderParity(CheckParity(twoMemberPool("/a", "/b", "/c"), func(dir string) (config.DirCapabilities, bool) {
+		switch dir {
+		case "/b":
+			return config.DirCapabilities{}, false
+		case "/c":
+			return blind, true
+		}
+		return measuredCaps(nil, nil, nil), true
+	}))
+	assert.Contains(t, both, dirRemedy)
+	assert.Contains(t, both, axisRemedy, "a report holding both causes printed only one remedy")
+
+	// Whichever cause fired, the reader is told the gap is not parity.
+	for _, out := range []string{unreadable, unrecognised, both} {
+		assert.Contains(t, out, "not evidence of parity")
+	}
+}
+
+// A member that cannot be compared must not be able to DELETE a difference the others
+// have. This is the shape that made it visible: two dirs pinning one plugin to
+// different versions, and a third that enables it with a bare `true`, which carries no
+// target. The pool goes from a correct warning to complete silence when the third
+// member is added — a more permissive member removing a warning, in the one section
+// whose contract is that silence means the members agree.
+func TestAPermissiveMemberCannotEraseADivergence(t *testing.T) {
+	withPlugin := func(target string) config.DirCapabilities {
+		caps := measuredCaps(nil, nil, nil)
+		caps.Plugins = config.DimensionState{
+			Measured: true, Targets: map[string]string{"x@m": target},
+		}
+		return caps
+	}
+	caps := map[string]config.DirCapabilities{
+		"/a": withPlugin(""),        // enabledPlugins: {"x@m": true}
+		"/b": withPlugin(`["1.0"]`), // pinned to 1.0
+		"/c": withPlugin(`["2.0"]`), // pinned to 2.0
+	}
+
+	pinned := CheckParity(twoMemberPool("/b", "/c"), staticReader(caps))
+	require.Len(t, pinned, 1, "two dirs pinning one plugin differently: %+v", pinned)
+	require.Equal(t, ParityDivergent, pinned[0].Kind)
+
+	withBareTrue := CheckParity(twoMemberPool("/a", "/b", "/c"), staticReader(caps))
+	require.Len(t, withBareTrue, 1, "adding a bare-true member erased the divergence: %+v", withBareTrue)
+	assert.Equal(t, ParityDivergent, withBareTrue[0].Kind)
+	assert.Equal(t, [][]string{{"b"}, {"c"}}, withBareTrue[0].Groups)
+
+	// A pool where every member is uncomparable has nothing to report, which is the
+	// case the early return was right about.
+	assert.Empty(t, CheckParity(twoMemberPool("/a", "/a"), staticReader(caps)))
+}
+
+// The sibling of the case above, and the one that shipped: a member that does not have
+// the capability AT ALL, rather than having it with nothing to compare.
+//
+// Both warnings are true of one name, so emitting the first must not skip the second.
+// Reporting only "b and c have it, a does not" states that b and c are alike over a
+// plugin one of them is pinned to a version the other is not, in the one section whose
+// contract is that silence means agreement — and it does it by ADDING a member, so a
+// pool that reported the divergence correctly goes quiet when it grows.
+func TestALackingMemberDoesNotEraseADivergence(t *testing.T) {
+	withPlugin := func(target string) config.DirCapabilities {
+		caps := measuredCaps(nil, nil, nil)
+		caps.Plugins = config.DimensionState{
+			Measured: true, Targets: map[string]string{"x@m": target},
+		}
+		return caps
+	}
+	caps := map[string]config.DirCapabilities{
+		"/b":       withPlugin(`["1.0"]`),
+		"/c":       withPlugin(`["2.0"]`),
+		"/lacking": measuredCaps(nil, nil, nil), // enables no plugin at all
+	}
+
+	pinned := CheckParity(twoMemberPool("/b", "/c"), staticReader(caps))
+	require.Len(t, pinned, 1, "two dirs pinning one plugin differently: %+v", pinned)
+	require.Equal(t, ParityDivergent, pinned[0].Kind)
+
+	grown := CheckParity(twoMemberPool("/b", "/c", "/lacking"), staticReader(caps))
+	kinds := map[ParityKind]ParityWarning{}
+	for _, w := range grown {
+		kinds[w.Kind] = w
+	}
+	require.Contains(t, kinds, ParityMissing, "the third member's gap went unreported: %+v", grown)
+	require.Contains(t, kinds, ParityDivergent, "adding a member that LACKS the plugin erased the divergence between the two that have it: %+v", grown)
+	assert.Equal(t, [][]string{{"b"}, {"c"}}, kinds[ParityDivergent].Groups)
+	assert.Equal(t, []string{"lacking"}, kinds[ParityMissing].Lack)
+
+	// And it renders as two lines, not as one line that has absorbed the other.
+	out := RenderParity(grown)
+	assert.Contains(t, out, "same name, different target")
+	assert.Contains(t, out, `"lacking" does not`)
+}
+
+// A divergence has to name which member is the odd one out. Reporting every compared
+// member as "configured differently" loses that: two of these three are byte-identical,
+// and the remedy under the line ("align the config dirs") then points at all three
+// when only one is wrong.
+func TestDivergenceNamesTheGroupsThatAgree(t *testing.T) {
+	withURL := func(url string) config.DirCapabilities {
+		caps := measuredCaps(nil, nil, nil)
+		caps.MCPServers = config.DimensionState{
+			Measured: true, Targets: map[string]string{"linear": `{"url":"` + url + `"}`},
+		}
+		return caps
+	}
+	warns := CheckParity(twoMemberPool("/a", "/b", "/c"), staticReader(
+		map[string]config.DirCapabilities{
+			"/a": withURL("https://same.example"),
+			"/b": withURL("https://same.example"),
+			"/c": withURL("https://odd.example"),
+		}))
+	require.Len(t, warns, 1)
+	require.Equal(t, ParityDivergent, warns[0].Kind)
+	assert.Equal(t, [][]string{{"a", "b"}, {"c"}}, warns[0].Groups)
+	assert.Contains(t, RenderParity(warns),
+		`MCP server "linear" is configured differently — same name, different target: "a" and "b" vs "c"`)
+
+	// Three ways of configuring one name is three groups, so the sentence scales
+	// rather than collapsing back to "everyone differs".
+	three := CheckParity(twoMemberPool("/a", "/b", "/c"), staticReader(
+		map[string]config.DirCapabilities{
+			"/a": withURL("https://one.example"),
+			"/b": withURL("https://two.example"),
+			"/c": withURL("https://three.example"),
+		}))
+	require.Len(t, three, 1)
+	assert.Equal(t, [][]string{{"a"}, {"b"}, {"c"}}, three[0].Groups)
+	assert.Contains(t, RenderParity(three), `target: "a" vs "b" vs "c"`)
+}
+
+// The connector line pluralises its verbs, and has to pluralise the possessive with
+// them: two members disabling connectives rendered as doing it "in ITS own
+// settings.json". Only a multi-member Lack list can see this, which is why the
+// original test — one disabling member — could not.
+func TestConnectorLineAgreesWithMoreThanOneDisablingMember(t *testing.T) {
+	caps := func(state config.ConnectorState) config.DirCapabilities {
+		c := measuredCaps(nil, nil, nil)
+		c.Connectors = state
+		return c
+	}
+	out := RenderParity(CheckParity(twoMemberPool("/a", "/b", "/c"), staticReader(
+		map[string]config.DirCapabilities{
+			"/a": caps(config.ConnectorsOn),
+			"/b": caps(config.ConnectorsOff),
+			"/c": caps(config.ConnectorsOff),
+		})))
+	assert.Contains(t, out, `"b" and "c" disable claude.ai connectors in their own settings.json and "a" does not`)
+	assert.NotContains(t, out, "in its own settings.json")
+
+	// One disabling member still reads as one.
+	single := RenderParity(CheckParity(twoMemberPool("/a", "/b"), staticReader(
+		map[string]config.DirCapabilities{
+			"/a": caps(config.ConnectorsOn),
+			"/b": caps(config.ConnectorsOff),
+		})))
+	assert.Contains(t, single, `"b" disables claude.ai connectors in its own settings.json and "a" does not`)
+}
+
+// Qualifying a duplicate name by its dir does not disambiguate two entries that share
+// BOTH — the shape CheckPools flags, so this section is expected to meet it. Left
+// there, the fix for duplicate names reproduced the defect one step further in:
+// `"work at /d" and "work at /d" have it`, one label naming two members.
+func TestCollidingNamesAndDirsStillRenderDistinctly(t *testing.T) {
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "work", ConfigDir: "/d", Pool: "p"},
+		{Name: "work", ConfigDir: "/d", Pool: "p"},
+		{Name: "other", ConfigDir: "/e", Pool: "p"},
+	}}
+	read := staticReader(map[string]config.DirCapabilities{
+		"/d": measuredCaps([]string{"p@m"}, nil, nil),
+		"/e": measuredCaps(nil, nil, nil),
+	})
+	warns := CheckParity(cfg, read)
+	require.Len(t, warns, 1)
+	require.Equal(t, ParityMissing, warns[0].Kind)
+
+	assert.Equal(t, []string{"work at /d, pool entry 1", "work at /d, pool entry 2"}, warns[0].Have)
+	assert.Equal(t, []string{"other"}, warns[0].Lack)
+
+	// Two blank-named members on the ambient env collide the same way, and each still
+	// gets a line the reader can tell from the other.
+	ambient := CheckParity(&config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Pool: "p"}, {Pool: "p"},
+	}}, read)
+	require.Len(t, ambient, 2)
+	assert.NotEqual(t, ambient[0].Lack, ambient[1].Lack, "two members rendered as one label")
+}
+
+// "It was left out of the comparison" asserts a comparison. With two members and one
+// unreadable there is no second member to compare against, so diffPool runs nothing
+// and the sentence named something that never happened.
+func TestUnreadableLineSaysWhetherAnythingWasCompared(t *testing.T) {
+	read := func(dir string) (config.DirCapabilities, bool) {
+		if dir == "/bad" {
+			return config.DirCapabilities{}, false
+		}
+		return measuredCaps(nil, nil, nil), true
+	}
+
+	two := RenderParity(CheckParity(twoMemberPool("/a", "/bad"), read))
+	assert.Contains(t, two, `capabilities unreadable for "bad" (/bad), so nothing was compared`)
+	assert.NotContains(t, two, "left out")
+
+	// With a comparison still standing, the line says so and names what was compared —
+	// the distinction the unmeasured line already drew.
+	three := RenderParity(CheckParity(twoMemberPool("/a", "/b", "/bad"), read))
+	assert.Contains(t, three,
+		`capabilities unreadable for "bad" (/bad) — it was left out, and "a" and "b" were compared without it`)
+}
+
+// RenderParity picks a remedy from a switch over Kind with no default, so a kind added
+// with a line() case and no hint arm prints a ⚠ with nothing under it. Nothing else
+// reads the const range: the per-kind tests each name one kind, and the unset-kind test
+// checks only the two values that are not kinds. config guards the parallel risk with
+// TestDimensionsIsTheWholeConstRange.
+func TestEveryParityKindRendersALineAndAHint(t *testing.T) {
+	for kind := parityKindUnset + 1; kind <= parityKindLast; kind++ {
+		warn := ParityWarning{
+			Pool: "p", Kind: kind, Dimension: config.DimensionPlugin, Feature: "x@m",
+			Dir: "/d", Have: []string{"a"}, Lack: []string{"b"},
+			Compared: []string{"a", "c"}, Groups: [][]string{{"a"}, {"b"}},
+		}
+		out := RenderParity([]ParityWarning{warn})
+		assert.NotContains(t, out, "internal error", "kind %d renders no line", int(kind))
+		assert.Contains(t, out, "→", "kind %d renders no remedy", int(kind))
+		assert.Contains(t, out, "Account pool parity:\n", "kind %d: no section header")
+	}
+
+	// Nothing past the sentinel, which is the hole the loop above cannot see. A kind
+	// appended at the natural place — the bottom of the const block — is not reached
+	// by it, so one shipped with a line() case and no hint arm printed a ⚠ with no →
+	// under it and the suite stayed green. config's dimensionLast is guarded this way
+	// and this was not; the sentinel relocated the remembering rather than removing
+	// it, and only this assertion collects on that.
+	past := ParityWarning{Pool: "p", Kind: parityKindLast + 1}
+	assert.Contains(t, past.line(), "unknown kind",
+		"ParityKind(%d) renders a line of its own, so a kind exists past parityKindLast "+
+			"and the sweep above never reaches it", int(parityKindLast+1))
+}

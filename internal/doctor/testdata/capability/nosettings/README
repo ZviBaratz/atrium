@@ -1,0 +1,8 @@
+The ordinary onboarded dir: logged in, never customised. claude writes .claude.json at
+login and creates settings.json only when something is configured, so this shape is the
+common case rather than an edge one.
+
+An ABSENT settings.json is an answer here, not a gap — claude's defaults are no plugins,
+no extra marketplaces, no denials and connectors on. The fixture exists because gating
+those axes on the file existing turned this dir into four "unverified" lines against an
+identical sibling, and masked a real connector split behind one of them.

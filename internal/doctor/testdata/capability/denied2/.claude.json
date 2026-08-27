@@ -1,0 +1,33 @@
+{
+  "numStartups": 12,
+  "oauthAccount": {
+    "emailAddress": "denied2@example.com",
+    "accountUuid": "u-denied2"
+  },
+  "claudeAiMcpEverConnected": [
+    "claude.ai Gmail",
+    "claude.ai Google Calendar",
+    "claude.ai Google Drive",
+    "claude.ai Linear"
+  ],
+  "mcpServers": {
+    "linear": {
+      "type": "http",
+      "url": "https://mcp.linear.app/mcp"
+    },
+    "slack": {
+      "type": "http",
+      "url": "https://slack.example/mcp"
+    }
+  },
+  "projects": {
+    "/home/tester/Projects/atrium": {
+      "mcpServers": {
+        "scratch-denied2": {
+          "type": "http",
+          "url": "https://local-scope.example/mcp"
+        }
+      }
+    }
+  }
+}

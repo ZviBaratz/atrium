@@ -353,6 +353,16 @@ var (
 			"which login each configured account's config_dir is actually signed in as, checks it\n" +
 			"against that account's expect_account, and flags separate accounts that turn out to share\n" +
 			"one login — the state in which sessions silently bill an account nobody routed them to.\n" +
+			"Account pool parity asks the third question those two cannot: whether members that are\n" +
+			"genuinely different logins are actually substitutes. It diffs the plugins, marketplaces,\n" +
+			"MCP servers and claude.ai connector setting each member's config dir declares, including\n" +
+			"two members that configure the same name to point somewhere different, because rotation\n" +
+			"never consults capability, so a session placed on a member lacking an integration just\n" +
+			"quietly goes without one. A config dir is claude's user settings source alone, so a\n" +
+			"checkout or a managed policy file can still change what a session runs under; the MCP\n" +
+			"axis is the dir-wide mcpServers key and not claude's per-project local scope; it reads\n" +
+			"files only, so it measures configuration and not what claude.ai has granted; and a\n" +
+			"member it could not measure is reported rather than counted as having nothing.\n" +
 			"Terminal background detection reports which rung of the light/dark ladder can answer here,\n" +
 			"for anyone whose theme: auto did not adapt: it reads COLORFGBG, and names OSC 11 as the\n" +
 			"rung that outranks it but cannot be probed from a one-shot command — that query needs the\n" +
@@ -504,6 +514,30 @@ var (
 			if pools := doctor.RenderPools(doctor.CheckPools(config.LoadConfig())); pools != "" {
 				fmt.Println()
 				fmt.Print(pools)
+			}
+
+			// Account pool parity: the third way to ask the same question, and the
+			// only one that can see two genuinely distinct logins that are not
+			// substitutes for each other. Identity catches one login wearing two
+			// names; pools catches two names on one dir; parity diffs what each
+			// member's dir DECLARES — plugins, marketplaces, the MCP servers it can
+			// run once its own denials are taken out, and whether it switches
+			// claude.ai connectors off — since rotation spends the pool's
+			// interchangeability promise on every unpinned session without ever
+			// checking it. The connector axis is the one the original incident was,
+			// so leaving it out of a list of what this diffs describes a section that
+			// cannot produce the line that motivated it. Two things bound the claim: a config dir is claude's
+			// user settings source alone, so a checkout or a policy file can still
+			// decide what a session runs under, and grant state is in no file, so a
+			// pool whose members differ only in what claude.ai granted them reads as
+			// being in parity here. Local file reads, up to two per pooled dir
+			// (settings.json, .claude.json) and no subprocess, so no probe budget —
+			// though like the two sections above it resolves config through
+			// config.LoadConfig, which SEEDS config.json when absent. The probe is
+			// read-only; `atrium doctor` as a whole is not.
+			if parity := doctor.RenderParity(doctor.CheckParityInstalled()); parity != "" {
+				fmt.Println()
+				fmt.Print(parity)
 			}
 
 			// Custom commands: an entry that fails validation is dropped rather than

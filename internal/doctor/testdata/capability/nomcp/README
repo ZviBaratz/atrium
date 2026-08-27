@@ -1,0 +1,6 @@
+A config dir holding settings.json and no .claude.json. Its plugins, marketplaces
+and connector setting are answerable; its MCP servers are not, because mcpServers
+lives only in .claude.json. The fixture exists so a test can prove that dimension
+comes back UNMEASURED rather than empty — reported as empty, this dir would look
+like a member that configures no MCP servers and would be accused of drift against
+any sibling that configures one.

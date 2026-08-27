@@ -1,0 +1,5 @@
+{
+  "enabledPlugins": { "superpowers@obra": true },
+  "extraKnownMarketplaces": { "obra": { "source": { "source": "github", "repo": "obra/superpowers" } } },
+  "disableClaudeAiConnectors": true
+}

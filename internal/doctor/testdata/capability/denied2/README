@@ -1,0 +1,8 @@
+A second dir with the same capabilities as denied, including the same serverName
+denial, and a different login in .claude.json — two genuinely distinct accounts that
+ARE substitutes.
+
+It exists so a test can prove the section stays silent here. Two members that both
+deny one configured server agree about what a session placed on either can do; the
+earlier comparison put the denial on an axis of its own and reported this pair as
+drifting over a server neither of them can run.

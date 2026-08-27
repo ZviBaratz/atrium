@@ -45,6 +45,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/session/tmux"
 	"github.com/stretchr/testify/require"
 )
@@ -472,6 +473,119 @@ func evidenceCases() []evidenceCase {
 			names:   []string{"unreadable"},
 			why:     "a path statfs could not answer for has no headroom figure, not a zero one",
 		},
+
+		// The account-pool parity section, whose negative claim is stronger than the
+		// others': the rest print "none", this one prints NOTHING AT ALL when a pool is
+		// in parity. So its failure mode is silence, and `names` is what carries these
+		// rows — an empty section trivially satisfies every `forbids`.
+		//
+		// Its completeness channels are NOT reflection-audited. One reason, and it is
+		// enough on its own: they live on config.DimensionState, and evidenceScanPackages
+		// covers this package and session/tmux, not config.
+		//
+		// Naming is a second, narrower obstacle. DimensionState.Measured would have to be
+		// spelled into evidenceFlagWords to be matched, and that word cannot be added:
+		// doctor.Filesystem.Measured is a PATH, not a channel, so
+		// TestEveryEvidenceChannelIsCovered would immediately demand a row claiming it is
+		// one. Nothing deeper than that is true here — Measured's polarity is ordinary.
+		// The Known fields on PressureResult and Filesystem read exactly the same way,
+		// false meaning unknown, which is why an earlier version of this comment arguing
+		// that no audited word could express that polarity was simply wrong.
+		//
+		// What guards these instead is the rows below plus config's own table tests; a
+		// fourth axis on config.DirCapabilities is caught by
+		// TestDimensionsIsTheWholeConstRange there, not here.
+		{
+			name:   "a pool member's config dir will not read",
+			covers: nil,
+			render: func(t *testing.T) string {
+				return RenderParity(CheckParity(parityPool(), func(dir string) (config.DirCapabilities, bool) {
+					if dir == "/b" {
+						return config.DirCapabilities{}, false
+					}
+					return parityFullyMeasured(), true
+				}))
+			},
+			forbids: []string{"in parity"},
+			names:   []string{"capabilities unreadable for", "/b", "not evidence of parity"},
+			why:     "a dir nothing could be read from is not a dir that agrees with its sibling, and this section's way of saying 'they agree' is to print nothing",
+		},
+		{
+			name:   "one axis of one member could not be measured",
+			covers: nil,
+			render: func(t *testing.T) string {
+				return RenderParity(CheckParity(parityPool(), func(dir string) (config.DirCapabilities, bool) {
+					caps := parityFullyMeasured()
+					if dir == "/b" {
+						caps.MCPServers = config.DimensionState{} // the file that records them was absent
+					}
+					return caps, true
+				}))
+			},
+			// The shape a dimension read as empty rather than unknown would print: the
+			// member accused of lacking what its sibling has.
+			forbids: []string{"has it"},
+			names:   []string{"MCP server parity is unverified", "not evidence of parity"},
+			why:     "mcpServers lives only in .claude.json, so a member without one has an unknown server set and must not be reported as configuring none",
+		},
+		{
+			// A denial claude enforces and this build cannot express — a serverCommand
+			// entry — travels through the same channel as an unreadable server list,
+			// because availableMCPServers folds the two together. The row drives it
+			// through the REAL reader so the fold is what is being tested: read as the
+			// configured set, this member would be credited with the server it blocks.
+			name:   "a member denies a server in a way this build cannot name",
+			covers: nil,
+			render: func(t *testing.T) string {
+				cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+					{Name: "a", ConfigDir: fixtureDir(t, "rich"), Pool: "p"},
+					{Name: "b", ConfigDir: fixtureDir(t, "cmddenial"), Pool: "p"},
+				}}
+				return RenderParity(CheckParity(cfg, config.ReadDirCapabilities))
+			},
+			forbids: []string{`MCP server "`},
+			names:   []string{"MCP server parity is unverified", "not evidence of parity"},
+			why:     "a denial this build cannot express, dropped rather than reported, credits the member with a server claude blocks for it",
+		},
+		{
+			name:   "a member has no recorded connector state at all",
+			covers: nil,
+			render: func(t *testing.T) string {
+				return RenderParity(CheckParity(parityPool(), func(dir string) (config.DirCapabilities, bool) {
+					caps := parityFullyMeasured()
+					if dir == "/b" {
+						caps.Connectors = config.ConnectorsUnknown
+					}
+					return caps, true
+				}))
+			},
+			// Folded into either bucket it would fabricate a split, or hide one.
+			forbids: []string{"in its own settings.json"},
+			names:   []string{"no claude.ai connector state was recorded", "not evidence of parity"},
+			why:     "ConnectorsUnknown is the zero value, and a DirCapabilities nobody filled in must render as a fault rather than as connectors on",
+		},
+	}
+}
+
+// parityPool is the smallest pool that can be compared: two members, distinct dirs.
+func parityPool() *config.Config {
+	return &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "a", ConfigDir: "/a", Pool: "p"},
+		{Name: "b", ConfigDir: "/b", Pool: "p"},
+	}}
+}
+
+// parityFullyMeasured is a dir that answered every axis and configures one server, so a
+// row that fails ONE source is about that source rather than about four silent ones.
+func parityFullyMeasured() config.DirCapabilities {
+	measuredEmpty := config.DimensionState{Measured: true, Targets: map[string]string{}}
+	return config.DirCapabilities{
+		Plugins:      measuredEmpty,
+		Marketplaces: measuredEmpty,
+		MCPServers: config.DimensionState{
+			Measured: true, Targets: map[string]string{"linear": `{"url":"https://mcp.linear.app/mcp"}`},
+		},
+		Connectors: config.ConnectorsOn,
 	}
 }
 

@@ -1,0 +1,15 @@
+A denial claude enforces and this build cannot express. deniedMcpServers entries carry
+exactly one of serverName, serverCommand or serverUrl; a serverCommand entry blocks by
+argv, which does not map onto the server NAMES the parity comparison is stated in.
+
+The stdio server is why this fixture answers UNMEASURED rather than merely dropping
+the denial. An argv-keyed denial can only reach a server declared with a command, so
+one sitting beside an http-only dir subtracts provably nothing and leaves the set
+knowable; it is the sketchy entry that puts a server in reach of this file's denial and
+makes "which of these names survives" the question this build cannot answer. Reported
+as the configured set, this dir would be credited with a server it blocks.
+
+It is rich's settings.json and .claude.json with that denial swapped in and that server
+added, so a test pinning the MCP axis is about the denial rather than about unrelated
+drift. Two differences from rich are deliberate and neither is incidental: this one,
+and the local-scope entry named scratch-cmddenial that rich/README describes.

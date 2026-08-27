@@ -6,14 +6,12 @@ import (
 	"testing"
 )
 
-// claudeDirWith writes body as <tmp>/.claude.json and returns the (absolute) dir.
-func claudeDirWith(t *testing.T, body string) string {
+// claudeDirWith is capDirWith for the case most of this file wants: a dir holding one
+// .claude.json and nothing else. Absolute, because ReadAccountIdentity refuses a
+// relative dir.
+func claudeDirWith(t *testing.T, contents string) string {
 	t.Helper()
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, ".claude.json"), []byte(body), 0o600); err != nil {
-		t.Fatalf("write .claude.json: %v", err)
-	}
-	return dir
+	return capDirWith(t, map[string]*string{".claude.json": body(contents)})
 }
 
 func TestReadAccountIdentity(t *testing.T) {

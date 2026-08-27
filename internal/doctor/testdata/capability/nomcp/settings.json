@@ -1,0 +1,12 @@
+{
+  "enabledPlugins": {
+    "superpowers@obra": true,
+    "linear@quantivly": true,
+    "retired@obra": false
+  },
+  "extraKnownMarketplaces": {
+    "obra": { "source": { "source": "github", "repo": "obra/superpowers" } },
+    "quantivly": { "source": { "source": "github", "repo": "quantivly/conventions" } }
+  },
+  "disableClaudeAiConnectors": false
+}

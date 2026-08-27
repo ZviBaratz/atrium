@@ -83,7 +83,7 @@ func CheckAccountIdentity(cfg *config.Config, r config.IdentityReadFunc) Account
 	}
 
 	var report AccountIdentityReport
-	read := cachedRead(r) // one cache for the whole report, not one per account
+	read := cachedByDir(r) // one cache for the whole report, not one per account
 	for _, a := range cfg.ClaudeAccounts {
 		state, actual := a.CheckIdentity(read)
 		if state == config.IdentityNoDir {
@@ -103,22 +103,28 @@ func CheckAccountIdentity(cfg *config.Config, r config.IdentityReadFunc) Account
 	return report
 }
 
-// cachedRead memoises r per directory for the life of one report, so two accounts
-// naming one directory cost a single read — and, more to the point, cannot be made
-// to disagree with each other by a file rewritten between two of them.
-func cachedRead(r config.IdentityReadFunc) config.IdentityReadFunc {
+// cachedByDir memoises a per-directory read for the life of one report, so two
+// accounts naming one directory cost a single read — and, more to the point, cannot
+// be made to disagree with each other by a file rewritten between two of them.
+//
+// Generic over what is read because the identity and parity sections each need it and
+// had a line-for-line copy: same map, same double-read window, two places to fix.
+// Note what the guarantee does NOT cover — it holds within one section, and the two
+// sections cache separately, so a re-login between them can still be reported by one
+// and not the other.
+func cachedByDir[T any](read func(string) (T, bool)) func(string) (T, bool) {
 	type result struct {
-		id config.AccountIdentity
-		ok bool
+		val T
+		ok  bool
 	}
 	seen := map[string]result{}
-	return func(dir string) (config.AccountIdentity, bool) {
+	return func(dir string) (T, bool) {
 		got, cached := seen[dir]
 		if !cached {
-			got.id, got.ok = r(dir)
+			got.val, got.ok = read(dir)
 			seen[dir] = got
 		}
-		return got.id, got.ok
+		return got.val, got.ok
 	}
 }
 
