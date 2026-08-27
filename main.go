@@ -604,20 +604,32 @@ func knownAgentBinList() string {
 }
 
 // rootLong is the human-facing page behind `atrium --help`. It is deliberately
-// short: what Atrium is, the two commands a first run needs, the one command
-// that is NOT for a human, and where the reference lives. Every backticked
-// command it names is held to rootCmd's registered set by
-// TestRootLongNamesOnlyRegisteredCommands.
+// short: what Atrium is, which agents it drives, the two commands a first run
+// needs, the one command that is NOT for a human, and where the reference
+// lives. Every backticked command it names is held to rootCmd's registered set
+// by TestRootLongNamesOnlyRegisteredCommands.
+//
+// It carries the agent list as well as the Short, because cobra's default help
+// template renders `{{with (or .Long .Short)}}` and nothing here calls
+// SetHelpTemplate: a command with both shows only the Long, so a Short naming
+// the agents reaches nobody. The list gets its own indented line rather than
+// being folded into the sentence — it is the one part of this text whose length
+// the registry decides, and a hand-wrapped line around it would be wrong the
+// moment an adapter is added. TestRootHelpFitsEightyColumns is what says so.
 func rootLong() string {
-	return "Atrium runs several AI coding agents at once. Each session is a branch in its own\n" +
-		"git worktree, driven by an agent in its own tmux session, so parallel work never\n" +
-		"collides — and you supervise all of it from one list.\n" +
+	return "Atrium runs several AI coding agents at once:\n" +
+		"\n" +
+		"  " + supportedAgentSentence() + ".\n" +
+		"\n" +
+		"Each session is a branch in its own git worktree, driven by an agent in its own\n" +
+		"tmux session, so parallel work never collides — and you supervise all of it from\n" +
+		"one list.\n" +
 		"\n" +
 		"Start with `atrium doctor`, which checks what a first run needs and says what to\n" +
 		"fix; then run `atrium` with no arguments to open the TUI.\n" +
 		"\n" +
-		"`atrium guide` is not for you: it prints the headless-CLI briefing an agent reads\n" +
-		"from inside a session it was handed.\n" +
+		"`atrium guide` is not for you: it prints the headless-CLI briefing an agent\n" +
+		"reads from inside a session it was handed.\n" +
 		"\n" +
 		"Documentation: https://github.com/ZviBaratz/atrium#readme"
 }

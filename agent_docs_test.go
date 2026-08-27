@@ -7,6 +7,7 @@ import (
 
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/session/agent"
+	"github.com/mattn/go-runewidth"
 	"github.com/stretchr/testify/require"
 )
 
@@ -146,14 +147,28 @@ func TestAgentHintsNameEveryKnownBin(t *testing.T) {
 		})
 	}
 
-	// The Short is held to the whole derived sentence, not merely to containing
-	// each name: that is what fails on a hand-written list, which is how the one
-	// this replaced came to advertise an agent no adapter has ever supported.
+	// Both halves of the root command, held to the whole derived sentence rather
+	// than merely to containing each name: that is what fails on a hand-written
+	// list, which is how the one this replaced came to advertise an agent no
+	// adapter has ever supported.
+	//
+	// The Long is the half a user actually reads. Cobra's default help template is
+	// `{{with (or .Long .Short)}}` and nothing in this repo calls SetHelpTemplate,
+	// so a command carrying both renders only its Long — which is why asserting
+	// this on the Short alone would guard text `atrium --help` never prints.
 	t.Run("atrium --help", func(t *testing.T) {
-		require.Contains(t, rootCmd.Short, supportedAgentSentence(),
-			"the root Short no longer renders the registry's agents verbatim")
-		for _, name := range agent.DisplayNames() {
-			require.Contains(t, rootCmd.Short, name, "the root Short does not name %q", name)
+		for _, tc := range []struct {
+			half string
+			text string
+		}{
+			{"Long", rootCmd.Long},
+			{"Short", rootCmd.Short},
+		} {
+			require.Contains(t, tc.text, supportedAgentSentence(),
+				"the root %s no longer renders the registry's agents verbatim", tc.half)
+			for _, name := range agent.DisplayNames() {
+				require.Contains(t, tc.text, name, "the root %s does not name %q", tc.half, name)
+			}
 		}
 	})
 }
@@ -161,6 +176,21 @@ func TestAgentHintsNameEveryKnownBin(t *testing.T) {
 // backtickedCommand matches an `atrium <name>` invocation inside backticks — the
 // form the root help uses to point at a command.
 var backtickedCommand = regexp.MustCompile("`atrium ([a-z][a-z-]*)`")
+
+// TestRootHelpFitsEightyColumns is TestGuideFitsEightyColumns' rule applied to the
+// root help, and it exists for the one line rootLong does not author: the agent
+// list is as long as the registry makes it. Eighty is a typographic budget rather
+// than a rendering guarantee — cobra reflows nothing, so an over-long line is
+// soft-wrapped by the terminal wherever it happens to end.
+//
+// Display width, not rune count: the text carries em dashes, which are East-Asian
+// Ambiguous.
+func TestRootHelpFitsEightyColumns(t *testing.T) {
+	for _, line := range strings.Split(rootCmd.Long, "\n") {
+		require.LessOrEqual(t, runewidth.StringWidth(line), 80,
+			"line exceeds the 80-column budget and will reflow: %q", line)
+	}
+}
 
 // TestRootLongNamesOnlyRegisteredCommands is TestGuideNamesOnlyRegisteredCommands
 // for the page a HUMAN reads. `atrium --help` is the first thing a new user runs,
